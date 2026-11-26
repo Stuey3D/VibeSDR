@@ -540,6 +540,10 @@ struct RadioConfig {
      *     config keeps whatever it holds (maxFps 0 + fftRate 20 = Smoother · 20). A file holding only ONE
      *     of the two predates that and is read the way the old defaults read it — see legacyFps(). */
     double maxBw = 0, maxFps = 10, fftRate = 10;
+    /** ★★★ beta96 b96-setupux "Use the server's frame rate" — true: this radio runs at ServerConfig::fpsDefault (its own
+     *  maxFps / fftRate are kept underneath, untouched, for the day the owner picks a value again). ABSENT = false, so an
+     *  existing config keeps its per-radio rate: identical behaviour after the update. */
+    bool   fpsFollow = false;
     int    uncompressed = 0;
     bool   releaseWhenIdle = false;
     double idleGrace = 300;
@@ -941,6 +945,12 @@ struct ServerConfig {
      *  ★ RadioConfig::uncompressed is kept only so an older file still loads; the machine value is
      *    what is applied. */
     int         uncompressed = 0;
+    /** ★★★ beta96 b96-setupux THE MACHINE'S FRAME RATE (Stuart 11-26: "a machine-wide default on the server tab … AND a
+     *  per-radio override beside the sample rate" — 20 fps for 2 MS/s RTLs, 5–10 for a 56 MS/s B210). The waterfall rate
+     *  (maxFps = fftRate) every radio with RadioConfig::fpsFollow runs at. 10 = the new-server default (2026-10-20). A radio
+     *  WITHOUT fpsFollow keeps its own maxFps / fftRate exactly as before — and every radio saved before beta96 has no
+     *  fpsFollow key, so an upgrade changes no radio's rate. Applied in effectiveFor (the one flatten every path uses). */
+    double      fpsDefault = 10;
     /** ★★★ THE SPECTRUM SLOWDOWN WHEN NOBODY IS LOOKING, and it belongs to the MACHINE: it is
      *  about the CPU and the uplink this server has, both of which are shared by every radio on
      *  it. Not to be confused with RadioConfig::releaseWhenIdle, which hands a DEVICE to another
@@ -1160,6 +1170,15 @@ std::string publicLabel(const std::string& in);
 std::string radioId(const std::string& serial);
 
 Config effectiveFor(const ServerConfig& srv, const RadioConfig& radio);
+
+/** ★★★ beta96 b96-setupux THE FRAME RATE THIS RADIO RUNS AT — the machine's (fpsDefault) when it follows the server, else
+ *  its own (fftRate held under its maxFps ceiling, as the engine runs it). Pure, so test-config-radios proves it, and hwinfo
+ *  publishes the same answer (`fpsEff`). */
+inline double effectiveFps(const ServerConfig& srv, const RadioConfig& r) {
+    if (r.fpsFollow) return (srv.fpsDefault >= 1 && srv.fpsDefault <= 60) ? srv.fpsDefault : 10;
+    const double rate = r.fftRate > 0 ? r.fftRate : 10;
+    return (r.maxFps > 0 && r.maxFps < rate) ? r.maxFps : rate;
+}
 
 /** Read `path`. Returns false and leaves `cfg` untouched if the file is absent or unreadable;
  *  a malformed file is reported in `err` and treated as absent — a receiver must not stay

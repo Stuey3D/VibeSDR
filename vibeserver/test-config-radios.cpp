@@ -923,6 +923,42 @@ int main() {
         ok(m == 10 && f == 10, "legacyFps: neither saved leaves the new defaults");
     }
 
+    /* ★★★ beta96 b96-setupux THE MACHINE'S FRAME RATE + A PER-RADIO OVERRIDE (Stuart 11-26). Two radios: one follows the
+     *  server's default, one keeps its own. An old file (no fpsFollow, no fpsDefault) changes nothing. */
+    std::printf("\nThe server's frame rate, followed or overridden per radio (beta96)\n");
+    {
+        ServerConfig s; std::string e;
+        ok(fromJson(R"({"radios":[{"serial":"A","maxFps":20,"fftRate":20},{"serial":"B","maxFps":5,"fftRate":5}]})", s, e),
+           "an old two-radio file (20 and 5, no fpsDefault / fpsFollow)", e);
+        ok(s.fpsDefault == 10 && !s.radios[0].fpsFollow && !s.radios[1].fpsFollow, "★ absent = no radio follows; the default is 10");
+        ok(effectiveFps(s, s.radios[0]) == 20 && effectiveFps(s, s.radios[1]) == 5, "★ identical behaviour: A runs 20, B runs 5");
+        Config ea = effectiveFor(s, s.radios[0]), eb = effectiveFor(s, s.radios[1]);
+        ok(ea.fftRate == 20 && ea.maxFps == 20 && eb.fftRate == 5 && eb.maxFps == 5, "the flatten hands each worker its own rate");
+
+        ok(fromJson(R"({"fpsDefault":20,"radios":[{"serial":"A","fpsFollow":true,"maxFps":10,"fftRate":10},{"serial":"B","fpsFollow":false,"maxFps":5,"fftRate":5}]})", s, e),
+           "the page saves: server 20, A follows, B overrides at 5 (the B210 shape)", e);
+        ea = effectiveFor(s, s.radios[0]); eb = effectiveFor(s, s.radios[1]);
+        ok(ea.fftRate == 20 && ea.maxFps == 20, "★ A (following) runs at the server's 20 — rate AND ceiling",
+           std::to_string(ea.fftRate) + "/" + std::to_string(ea.maxFps));
+        ok(eb.fftRate == 5 && eb.maxFps == 5, "★ B (override) keeps 5 whatever the server says");
+        ok(s.radios[0].fftRate == 10 && s.radios[0].maxFps == 10, "A's own 10 is kept underneath, untouched");
+        ok(effectiveFps(s, s.radios[0]) == 20 && effectiveFps(s, s.radios[1]) == 5, "effectiveFps agrees (hwinfo's fpsEff)");
+
+        ServerConfig back; ok(fromJson(toJson(s), back, e) && back.fpsDefault == 20 && back.radios[0].fpsFollow
+           && !back.radios[1].fpsFollow && back.radios[0].fftRate == 10, "★ all of it survives a save and reload", e);
+        ok(fromJson(R"({"fpsDefault":5})", back, e) && back.fpsDefault == 5 && effectiveFor(back, back.radios[0]).fftRate == 5
+           && effectiveFor(back, back.radios[1]).fftRate == 5, "the server's rate changed to 5: A follows it to 5, B stays 5", e);
+        ok(fromJson(R"({"fpsDefault":10})", back, e) && effectiveFor(back, back.radios[1]).fftRate == 5,
+           "server 10: the override still wins");
+        ServerConfig bad; ok(fromJson(R"({"fpsDefault":0,"radios":[{"serial":"Z","fpsFollow":true}]})", bad, e) && bad.fpsDefault == 10
+           && effectiveFps(bad, bad.radios[0]) == 10, "a hand-edited fpsDefault 0 falls back to 10, never a stalled waterfall");
+        ok((bad = ServerConfig{}, fromJson(R"({"fpsDefault":500,"radios":[{"serial":"Z"}]})", bad, e)) && bad.fpsDefault == 10,
+           "…and 500 too");
+        RadioConfig fresh; ok(!fresh.fpsFollow, "a struct-default radio does not follow (the page chooses for a new one)");
+        RadioConfig own; own.fftRate = 20; own.maxFps = 8; ServerConfig sc;
+        ok(effectiveFps(sc, own) == 8, "own rate 20 under a ceiling of 8 runs at 8 (as the engine does)");
+    }
+
     /* ★★★ V12: ADS-B AS THE LANDING + KEEP IT RUNNING — every hop a per-radio field takes, because this file has lost
      *  one at each of them before (dabRateBoost at the flatten, the band lists at the API writer, landingDab* twice). */
     std::printf("\nADS-B landing and keep-running travel every hop\n");

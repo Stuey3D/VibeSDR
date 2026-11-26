@@ -935,6 +935,9 @@ static std::string         g_vsRadioSecret;
 static std::atomic<int>    g_vsPort{0};
 static std::atomic<double> g_vsMaxBandwidth{0.0};      // <=0 = no cap
 static std::atomic<double> g_vsMaxFftRate{0.0};
+// ★★★ beta96 b96-setupux the frame rate's source (setVibeServerFpsSource) — published in hwinfo, 0 = not told (Android)
+static std::atomic<double> g_vsFpsEff{0.0}, g_vsFpsServer{0.0};
+static std::atomic<bool>   g_vsFpsFollow{false};
 /** ★ The spectrum rate this machine is MEASURED to deliver, or -1 when nobody is listening. Fed by
  *  the SPEC RATE audit and shown beside the rate selector so a slow box explains itself. */
 static std::atomic<double> g_specAchievedFps{-1.0};        // <=0 = server default (20 fps)
@@ -27982,6 +27985,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // 0 here = the server's default (20 fps), i.e. no owner-imposed cap.
         { double mr = g_serveOnLan.load() ? g_vsMaxFftRate.load() : 0.0;
           j += ",\"maxFftRate\":" + std::to_string((long long)(mr > 0 ? mr : 0)); }
+        // ★★★ beta96 b96-setupux WHICH frame rate applies, and where it comes from: the radio's own value or the server's
+        //     default ("Use the server's frame rate"). Only once told (a Linux radio process); absent = the old answer.
+        if (const double fe = g_vsFpsEff.load(); fe > 0) {
+            char fb[96];
+            std::snprintf(fb, sizeof fb, ",\"fpsEff\":%g,\"fpsFollow\":%s,\"fpsServer\":%g", fe,
+                          g_vsFpsFollow.load() ? "true" : "false", g_vsFpsServer.load());
+            j += fb;
+        }
         // ★★ NR AND NOTCH ARE GLOBAL AND STICKY — the same reason lockedRate is here.
         // They live on the Impl and survive a listener leaving, so the NEXT listener
         // inherits whatever the last one set while their own UI renders its defaults.
@@ -44672,6 +44683,9 @@ void LocalSdrShim::summonClient() {
 }
 void LocalSdrShim::setVibeServerLimits(double maxBandwidthHz, double maxFftRate) {
     g_vsMaxBandwidth.store(maxBandwidthHz); g_vsMaxFftRate.store(maxFftRate);
+}
+void LocalSdrShim::setVibeServerFpsSource(double effFps, bool follow, double serverFps) {
+    g_vsFpsEff.store(effFps); g_vsFpsFollow.store(follow); g_vsFpsServer.store(serverFps);
 }
 void LocalSdrShim::setVibeServerCompressAudio(bool on) { g_vsCompressAudio.store(on); }
 void LocalSdrShim::setVibeServerUncompressedAudio(int mode) { g_vsUncompressedAudio.store(mode); }
