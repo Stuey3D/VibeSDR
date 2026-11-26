@@ -316,7 +316,7 @@ inline const std::vector<Control>& controlTable() {
         { "allowPick allowLo allowHi blockPick blockLo blockHi", D_ANY, P_ADV },
         { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList landKindPlain landKindDab landKindMap bgKindManual bgKindWhole bgModeList", D_RADIO, 0 },   // ★★★ beta96 the landing map; b96-bgsplit the landing choice + the background mode
         { "fmDeemph fmStereo fmNr fmIms fmCeq fmAutoBw fmNb fmReturn fmRemember", D_RADIO, 0 },
-        { "antRangePreset antFilterPreset antPortNames", D_ANY,   0 },
+        { "antRangePreset antFilterPreset antPortNames antRanges antFilters", D_ANY, 0 },   // ★ beta96 (Stuart 11-26): + the ROW containers — their generated inputs have no id, so androidKeeps read the container: without these ids the rows were hidden and "+ Add range / + Add filter" added rows nobody could see
         { "swYes swNo swBroker swUser swPass swLocked swAntennas", D_ANY, 0 },
         { "antennaMap antennaPortLocked",                D_RSP,   0 },
         { "ppm",                                         D_RTL | D_RSP, 0 },

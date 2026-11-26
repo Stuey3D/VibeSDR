@@ -406,7 +406,7 @@ int main(int argc, char** argv) {
             {"afServe","r:adsbFeed"},{"afPort","r:adsbFeed"},{"afOpen","r:adsbFeed"},{"afPush","r:adsbFeed"},   // ★★ beta96
             {"fmDeemph","r:fmDeemph"},{"fmStereo","r:fmStereo"},{"fmNr","r:fmNr"},{"fmIms","r:fmIms"},{"fmCeq","r:fmCeq"},
             {"fmAutoBw","r:fmAutoBw"},{"fmNb","r:fmNb"},{"fmReturn","r:fmRemember"},{"fmRemember","r:fmRemember"},
-            {"antRangePreset","r:antennaRanges"},{"antFilterPreset","r:antennaFilters"},{"antPortNames","r:antennaNames"},
+            {"antRangePreset","r:antennaRanges"},{"antFilterPreset","r:antennaFilters"},{"antPortNames","r:antennaNames"},{"antRanges","r:antennaRanges"},{"antFilters","r:antennaFilters"},   // ★ beta96 the row containers (Stuart 11-26)
             {"swYes","r:antennaSwitch"},{"swNo","r:antennaSwitch"},{"swBroker","r:antennaSwitch"},{"swUser","r:antennaSwitch"},
             {"swPass","r:antennaSwitch"},{"swLocked","r:antennaPortLocked"},{"swAntennas","r:antennaMap"},
             {"antennaMap","r:antennaMap"},{"antennaPortLocked","r:antennaPortLocked"},{"ppm","r:ppm"},{"ppb","r:ppb"},{"biasT","r:biasT"},
