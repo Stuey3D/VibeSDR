@@ -347,6 +347,9 @@ Stage 7 (`src/utils/amateurMap.ts` — one rule for the web window, the app page
 
 ## RESUME HERE
 
+★ beta96 b96-mapchat: the SHARED TUNER line + CHAT, TUNE (one chip + list) / SHOW, the dial lock and AIR & SEA LIVE (the
+menu consolidation) are in docs/v12/MAP-SHARED.md. VIEWS' AVIATION / SHIPPING are now ONE AIR & SEA viewer key.
+
 **State 2026-11-26 evening (branch `b96-maps2`, b96-integrate merged in at 76331e652, not pushed).** Everything in the beta96
 maps brief is built: the app's AMATEUR tabs, stored sondes / VOR stations from the gallery (server card + clients), MESH from
 every ISM band, the dead #ndbTop / #ndbLive CSS gone. Nothing has been run on a device.
