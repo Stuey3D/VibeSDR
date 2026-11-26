@@ -29,6 +29,13 @@
 //    is the size of `.part`, and the last failure is a small `.error` file — all visible to every
 //    process, not just the one that was asked.
 //
+// ★★★ ANDROID: THE BIG PACKS ARE READ STRAIGHT OUT OF THE APK (beta96). The APK stores the three .pmtiles
+//     uncompressed (mapgl-assets.gradle noCompress), so each is one contiguous run of bytes inside base.apk.
+//     VibeMapGL.kt hands us (APK path, entry offset, entry length) per pack through setBundleSlice() and no
+//     longer unpacks them — ~30 MB of storage saved. A bundle file with a slice is served from that run; every
+//     other bundle file (fonts, scripts, icons, the style) still comes from the unpacked bundle dir. Same URL,
+//     same Range/206, same ?r= stripping: the listener cannot tell.
+//
 // ★ Path safety is decided on the DECODED path, before anything is joined to a directory:
 //   no "..", no backslash, no NUL, no leading '/', no dot-files, and only the subtrees in §1.
 #pragma once
@@ -78,8 +85,13 @@ using Downloader = std::function<bool(const std::string&, const std::string&,
                                       std::function<void(int64_t, int64_t)>)>;
 
 // ── state ──────────────────────────────────────────────────────────────────────────────────────
+/** ★ A bundle file that lives INSIDE another file (an Android APK entry stored uncompressed): `length` bytes
+ *  from `offset` of `path`. See setBundleSlice(). */
+struct Slice { std::string path; int64_t offset = 0; int64_t length = 0; };
+
 struct State {
     std::mutex           mtx;
+    std::vector<std::pair<std::string, Slice>> slices;   // bundle rel name → where its bytes are (Android)
     std::string          bundleDir;       // explicit; empty = search (see bundleDir())
     bool                 bundleSearched = false;
     std::string          bundleFound;
@@ -237,6 +249,47 @@ inline Where resolve(const std::string& encoded, std::string& rel) {
         rel = p; return Where::Bundle;
     }
     return Where::None;
+}
+
+// ── Android: bundle files inside the APK ───────────────────────────────────────────────────────
+/** ★★★ Serve bundle file `rel` (e.g. "vibemap-basic.pmtiles") from `length` bytes at `offset` of `path` — an APK
+ *  entry stored uncompressed — instead of from the bundle dir. CHECKED before it is trusted: `rel` must be a bundle
+ *  name, the run must lie inside the file, and a .pmtiles run must start with the 7-byte "PMTiles" magic (a
+ *  compressed entry would not). False + `why` = refused; the caller then unpacks that file as before.
+ *  Called again with the same `rel` replaces the old slice (the APK path changes when the app is updated). */
+inline bool setBundleSlice(const std::string& rel, const std::string& path, int64_t offset, int64_t length,
+                           std::string* why = nullptr) {
+    auto fail = [&](const std::string& m) { if (why) *why = m; return false; };
+    std::string r;
+    if (resolve(rel, r) != Where::Bundle || r != rel) return fail("not a bundle file name: " + rel);
+    if (offset < 0 || length <= 0) return fail("bad offset/length");
+    struct stat sb{};
+    if (path.empty() || ::stat(path.c_str(), &sb) != 0 || !S_ISREG(sb.st_mode))
+        return fail("cannot stat " + path + " (" + strerror(errno) + ")");
+    if (offset > (int64_t)sb.st_size || length > (int64_t)sb.st_size - offset)
+        return fail("the run " + std::to_string(offset) + "+" + std::to_string(length) + " is outside " + path);
+    if (endsWith(rel, ".pmtiles")) {
+        const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) return fail("cannot open " + path + " (" + strerror(errno) + ")");
+        char magic[7] = {0};
+        const ssize_t n = ::pread(fd, magic, 7, (off_t)offset);
+        ::close(fd);
+        if (n != 7 || std::memcmp(magic, "PMTiles", 7) != 0)
+            return fail(rel + " is not stored uncompressed at that offset (no PMTiles magic)");
+    }
+    std::lock_guard<std::mutex> lk(st().mtx);
+    for (auto& e : st().slices) if (e.first == rel) { e.second = Slice{path, offset, length}; return true; }
+    st().slices.emplace_back(rel, Slice{path, offset, length});
+    return true;
+}
+inline void clearBundleSlices() {
+    std::lock_guard<std::mutex> lk(st().mtx);
+    st().slices.clear();
+}
+inline bool bundleSlice(const std::string& rel, Slice& out) {
+    std::lock_guard<std::mutex> lk(st().mtx);
+    for (const auto& e : st().slices) if (e.first == rel) { out = e.second; return true; }
+    return false;
 }
 
 inline const char* contentTypeFor(const std::string& name) {
@@ -504,50 +557,57 @@ inline bool removeDetail(std::string& err) {
 inline bool removeDetail() { std::string e; return removeDetail(e); }
 
 // ── serving ────────────────────────────────────────────────────────────────────────────────────
-#ifndef VIBE_MAPGL_NO_NET
-inline void sendPlain(const std::shared_ptr<net::Socket>& sock, const char* status,
-                      const std::string& body, const std::string& extra = {}) {
-    sock->sendstr(std::string("HTTP/1.1 ") + status +
-                  "\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\n" +
-                  extra + "Connection: close\r\nContent-Length: " + std::to_string(body.size()) +
-                  "\r\n\r\n" + body);
-    sock->close();
+/** Plain-text answer through any sink with sendstr()/close() (net::Socket, or a test's recorder). */
+template <class Out>
+inline void sendPlainTo(Out& out, const char* status, const std::string& body, const std::string& extra = {}) {
+    out.sendstr(std::string("HTTP/1.1 ") + status +
+                "\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\n" +
+                extra + "Connection: close\r\nContent-Length: " + std::to_string(body.size()) +
+                "\r\n\r\n" + body);
+    out.close();
 }
 
-/** Serve GET/HEAD /mapgl/<encoded>. `range` is the raw Range header value ("" when absent).
- *  Always answers and closes. Streams in chunks; never holds a file in memory.
- *  ★★ `paced`: somebody is LISTENING, so the body goes out through vibebulk's shared budget and
- *     never ahead of their audio (see vibe_bulk_pace.h). With nobody listening there is nothing
- *     to protect and the map loads at full speed. Required, not defaulted — the caller decides. */
-inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& encoded,
-                  const std::string& range, bool head, bool paced) {
+/** The whole of GET/HEAD /mapgl/<encoded>, written to `out` (sendstr / send / close — net::Socket's shape).
+ *  Socket-free so a test can drive it: serve() below is this with a real socket and the bulk pacer.
+ *  `chunk` = body write size; `pace` (may be null) is called before each chunk. Reads with pread() from a
+ *  base offset, so a bundle file inside the APK (setBundleSlice) and a plain file take the same path. */
+template <class Out>
+inline void serveTo(Out& out, const std::string& encoded, const std::string& range, bool head,
+                    size_t chunk = 64 * 1024, void (*pace)(size_t) = nullptr) {
     std::string rel;
     const Where w = resolve(encoded, rel);
-    const std::string base = w == Where::Bundle ? bundleDir() : w == Where::Data ? dataDir() : "";
-    if (w == Where::None) { sendPlain(sock, "404 Not Found", "no such map file\n"); return; }
-    if (base.empty()) {
-        sendPlain(sock, "404 Not Found", w == Where::Data
+    if (w == Where::None) { sendPlainTo(out, "404 Not Found", "no such map file\n"); return; }
+    // ★★ An APK entry first (Android): its bytes are a run inside the APK, not a file of its own.
+    Slice sl;
+    const bool inApk = w == Where::Bundle && bundleSlice(rel, sl);
+    const std::string base = inApk ? std::string() : w == Where::Bundle ? bundleDir() : dataDir();
+    if (!inApk && base.empty()) {
+        sendPlainTo(out, "404 Not Found", w == Where::Data
             ? "the High Detail Maps are not installed on this server\n"
             : "no GPU map files are installed on this server\n");
         return;
     }
-    const std::string path = base + "/" + rel;
-    FILE* f = ::fopen(path.c_str(), "rb");
+    const std::string path = inApk ? sl.path : base + "/" + rel;
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat sb{};
-    if (!f || ::fstat(fileno(f), &sb) != 0 || !S_ISREG(sb.st_mode)) {
-        if (f) ::fclose(f);
-        sendPlain(sock, "404 Not Found", w == Where::Data
+    if (fd < 0 || ::fstat(fd, &sb) != 0 || !S_ISREG(sb.st_mode) ||
+        (inApk && sl.offset + sl.length > (int64_t)sb.st_size)) {
+        if (fd >= 0) ::close(fd);
+        if (inApk) fprintf(stderr, "VibeServer: mapgl: %s inside %s is gone (%s)\n", rel.c_str(), path.c_str(),
+                           strerror(errno));
+        sendPlainTo(out, "404 Not Found", w == Where::Data
             ? "the High Detail Maps are not installed on this server\n"
             : "this server does not carry that map file\n");
         return;
     }
-    const int64_t size = (int64_t)sb.st_size;
+    const int64_t origin = inApk ? sl.offset : 0;
+    const int64_t size = inApk ? sl.length : (int64_t)sb.st_size;
     int64_t first = 0, last = size - 1;
     const Range r = parseRange(range, size, first, last);
     if (r == Range::Unsatisfiable) {
-        ::fclose(f);
-        sendPlain(sock, "416 Range Not Satisfiable", "",
-                  "Content-Range: bytes */" + std::to_string(size) + "\r\nAccept-Ranges: bytes\r\n");
+        ::close(fd);
+        sendPlainTo(out, "416 Range Not Satisfiable", "",
+                    "Content-Range: bytes */" + std::to_string(size) + "\r\nAccept-Ranges: bytes\r\n");
         return;
     }
     const int64_t len = r == Range::Partial ? last - first + 1 : size;
@@ -563,20 +623,45 @@ inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& e
         hdr += "Content-Range: bytes " + std::to_string(first) + "-" + std::to_string(last) + "/" +
                std::to_string(size) + "\r\n";
     hdr += "Connection: close\r\nContent-Length: " + std::to_string(len) + "\r\n\r\n";
-    if (sock->sendstr(hdr) < 0 || head || len == 0) { ::fclose(f); sock->close(); return; }
-    if (first > 0 && ::fseeko(f, (off_t)first, SEEK_SET) != 0) { ::fclose(f); sock->close(); return; }
-    std::vector<uint8_t> buf(paced ? vibebulk::kChunk : 64 * 1024);
-    int64_t left = len;
+    if (out.sendstr(hdr) < 0 || head || len == 0) { ::close(fd); out.close(); return; }
+    std::vector<uint8_t> buf(chunk ? chunk : 64 * 1024);
+    int64_t pos = origin + first, left = len;
     while (left > 0) {
         const size_t want = (size_t)std::min<int64_t>(left, (int64_t)buf.size());
-        const size_t n = ::fread(buf.data(), 1, want, f);
-        if (n == 0) break;
-        if (paced) vibebulk::pace(n);
-        if (sock->send(buf.data(), n) < 0) break;   // ★ peer went away (a pan cancels reads)
+        const ssize_t n = ::pread(fd, buf.data(), want, (off_t)pos);
+        if (n <= 0) break;
+        if (pace) pace((size_t)n);
+        if (out.send(buf.data(), (size_t)n) < 0) break;   // ★ peer went away (a pan cancels reads)
+        pos += n;
         left -= (int64_t)n;
     }
-    ::fclose(f);
-    sock->close();
+    ::close(fd);
+    out.close();
+}
+
+#ifndef VIBE_MAPGL_NO_NET
+/** net::Socket held by shared_ptr, as serveTo() wants it. */
+struct SockOut {
+    const std::shared_ptr<net::Socket>& s;
+    int sendstr(const std::string& x) { return s->sendstr(x); }
+    int send(const uint8_t* d, size_t n) { return s->send(d, n); }
+    void close() { s->close(); }
+};
+inline void sendPlain(const std::shared_ptr<net::Socket>& sock, const char* status,
+                      const std::string& body, const std::string& extra = {}) {
+    SockOut o{sock};
+    sendPlainTo(o, status, body, extra);
+}
+
+/** Serve GET/HEAD /mapgl/<encoded>. `range` is the raw Range header value ("" when absent).
+ *  Always answers and closes. Streams in chunks; never holds a file in memory.
+ *  ★★ `paced`: somebody is LISTENING, so the body goes out through vibebulk's shared budget and
+ *     never ahead of their audio (see vibe_bulk_pace.h). With nobody listening there is nothing
+ *     to protect and the map loads at full speed. Required, not defaulted — the caller decides. */
+inline void serve(const std::shared_ptr<net::Socket>& sock, const std::string& encoded,
+                  const std::string& range, bool head, bool paced) {
+    SockOut o{sock};
+    serveTo(o, encoded, range, head, paced ? vibebulk::kChunk : 64 * 1024, paced ? &vibebulk::pace : nullptr);
 }
 #endif  // VIBE_MAPGL_NO_NET
 
