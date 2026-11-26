@@ -82,6 +82,11 @@ await session('ais', AIS, 162000000, 96100000, 'wfm', async ({ ev, send, shot, u
   ok(/\bAIS\b/.test(opts || ''), `the demodulator menu offers AIS: ${opts}`);
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'AIS'); b && b.click(); return !!b; })()`);
   ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'the ship map opens');
+  // ★★★ beta96 AIS mode's map IS the AIR & SEA map, AIS live: the title, EXIT AIS and the SHIPS tab come from the mode
+  ok(await until(`document.querySelector('.trkView:not([hidden]) .ttl')?.textContent === 'AVIATION & MARITIME \u00b7 AIS 161.975 + 162.025 MHz'`, 4000),
+     `beta96: the AIR & SEA map, AIS live (${await ev(`document.querySelector('.trkView:not([hidden]) .ttl')?.textContent`)})`);
+  ok(await ev(`document.querySelector('.trkView:not([hidden]) .exit')?.textContent`) === 'EXIT AIS', 'beta96: EXIT AIS (the map is the mode)');
+  ok(await ev(`window.__vibeAirSea && window.__vibeAirSea().mode`) === 'ais', 'beta96: the current mode is AIS');
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkRow').length >= 5`, 30000), `ships listed: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow b')].map(x => x.textContent).join(' | ')`)}`);
   ok(/TEST SHIP/.test(await ev(`document.querySelector('.trkView:not([hidden]) .rows')?.textContent`) || ''), 'the rows name the ships');
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk').length >= 5`, 20000), `ships on the map: ${await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk').length`)} markers`);
@@ -101,6 +106,7 @@ await session('ais', AIS, 162000000, 96100000, 'wfm', async ({ ev, send, shot, u
   await sleep(600);
   await ev(`document.querySelector('.trkView:not([hidden]) .exit').click()`);
   ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'EXIT AIS closes the map');
+  ok(await ev(`!window.__vibeAirSea || !window.__vibeAirSea().open`), 'beta96: the map the mode opened went with the mode');
   await sleep(1500);
   const after = await ev(`document.getElementById('mFreq')?.textContent`);
   ok(/96\.100/.test(after || ''), `the dial is back: ${after}`);
