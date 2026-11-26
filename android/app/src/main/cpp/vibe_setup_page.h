@@ -8449,7 +8449,9 @@ function fill() {
   $("gallerySaveLive").checked = cfg.gallerySaveLive !== false;
   // ★★ V12 beta94 the community map — absent = OFF (what an older config means)
   if ($("communityMap")) $("communityMap").checked = cfg.communityMap === true;
-  if ($("mapViewers")) { $("mapViewers").value = String(Number.isFinite(cfg.mapViewers) ? cfg.mapViewers : 20); $("mapTimeMin").value = String(Number.isFinite(cfg.mapTimeMin) ? cfg.mapTimeMin : 0); asMapCost(); }
+  if ($("mapViewers")) { $("mapViewers").value = String(Number.isFinite(cfg.mapViewers) ? cfg.mapViewers : 20); $("mapTimeMin").value = String(Number.isFinite(cfg.mapTimeMin) ? cfg.mapTimeMin : 0); asMapCost();
+    for (const id of ["mapViewers", "mapTimeMin"]) if (!$(id).__asWired) { $(id).__asWired = 1; $(id).addEventListener("input", asMapCost); }   // ★ wired where loaded, never a top-level document listener (the bg/satpass/ism tests eval that stretch with a bare document)
+  }
   // ★★ V12 beta96 server-level aircraft feeds + the flight-tracker hub (absent = none / off)
   if ($("feedsCard")) feedsLoad(cfg);
   if ($("adsbFeedCard")) afLoad(cfg);
@@ -9672,7 +9674,6 @@ function asMapCost() {
     + (n ? "At " + n + " viewers that is about <b>" + Math.round(n * AS_MAP_KBS) + " KB/s</b> (" + mbit(n * AS_MAP_KBS) + " Mbit/s) of upload at 150 aircraft."
          : "With no limit, every extra viewer adds that much.");
 }
-document.addEventListener("input", (e) => { if (e.target && (e.target.id === "mapViewers" || e.target.id === "mapTimeMin")) asMapCost(); });
 function feedsLoad(cfg) {
   feedsModel = feedsRowsFrom(cfg && cfg.aircraftFeeds);
   if (!$("feedFmt").__wired) {
