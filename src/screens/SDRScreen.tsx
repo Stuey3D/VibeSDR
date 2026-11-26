@@ -78,8 +78,12 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
-import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
+import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';
+// ★★★ beta96 SCHEDULE A PASS (Stuart 11-26) — one set of rules with the web (src/services/satSchedule.ts)
+import { SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_REMIND_NOTE, SatSchedule, satPassKey, satSchedDegradedText,
+         satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine,
+         type SatSchedPrev, type SatSchedRun } from '../services/satSchedule';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
+import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindWhy,
          SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
@@ -2897,8 +2901,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     (v == null ? AsyncStorage.removeItem(SAT_SHOW_KEY) : AsyncStorage.setItem(SAT_SHOW_KEY, v)).catch(() => {});
   }, []);
   const satSetToasts = useCallback((ts: SatRemindToast[]) => { satToastsRef.current = ts; setSatToasts(ts); }, []);
-  const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); }, [satSetToasts]);
-  const satRemBusy = satRemN > 0 || satToasts.length > 0;
+  // ★★★ beta96 the session ending also ends a schedule's run (nothing put back for the next user); the stored schedule stays
+  const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); satSchedRunRef.current = SAT_SCHED_IDLE; }, [satSetToasts]);
+  /* ★★★ beta96 SCHEDULE — kept per server in this app's storage (SAT_SCHED_KEY); runs only while the app is open and
+   *  connected (in-app banners, no OS notification module — Stuart's 1.6 decision). The tick is set further down, where
+   *  the pick, the tune and the mode switches are in scope. */
+  const satSchedRef = useRef(new SatSchedule());
+  const [satSchedV, setSatSchedV] = useState(0);
+  const satSchedRunRef = useRef<SatSchedRun>(SAT_SCHED_IDLE);
+  const satSchedFiredRef = useRef(new Set<string>());
+  const [satSchedNote, setSatSchedNote] = useState('');
+  const satSchedTickRef = useRef<(now: number, conn: boolean) => void>(() => {});
+  const satSchedSave = useCallback(() => {
+    setSatSchedV((v) => v + 1);
+    AsyncStorage.setItem(SAT_SCHED_KEY, satSchedRef.current.toJSON()).catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem(SAT_SCHED_KEY).then((v) => { satSchedRef.current = SatSchedule.fromJSON(v, Date.now() / 1000); setSatSchedV((x) => x + 1); }).catch(() => {});
+  }, []);
+  const satSchedHere = satSchedRef.current.all(satSrvKey).length > 0;
+  const satRemBusy = satRemN > 0 || satToasts.length > 0 || satSchedHere || !!satSchedRunRef.current.key;
   useEffect(() => {
     if (!satRemBusy) return;
     const t = setInterval(() => {
@@ -2912,6 +2934,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       for (const r of satRemRef.current.due(now, lead, conn)) {
         ts = [{ r, why: satRemindWhy(satListRef.current, r) }, ...ts];
       }
+      satSchedTickRef.current(now, conn);   // ★★★ beta96 the schedule's second (it may add banners: read them back)
+      ts = satToastsRef.current === ts ? ts : satToastsRef.current;
       ts = ts.filter((x) => now < x.r.los);   // ★ a pass that is over takes its banner with it
       satSetToasts(ts);
       setSatRemN(satRemRef.current.size);
@@ -8400,6 +8424,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         satListRef.current = l; setSatList(l);
         if (satRemRef.current.size) { satRemRef.current.refresh(satSrvKeyRef.current, l); setSatRemN(satRemRef.current.size); }   // ★ 1.6 a new element set moves the reminder
+        if (satSchedRef.current.all(satSrvKeyRef.current).length) { satSchedRef.current.refresh(satSrvKeyRef.current, l); satSchedSave(); }   // ★★★ beta96 … and a scheduled pass
       },
       /* ★ 1.7 the pick's pass path — its geo is the dotted orbit (an older server sends none: no line) */
       onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current && satBoxNoradRef.current === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null); },
@@ -15211,15 +15236,96 @@ export default function SDRScreen({ route, navigation }: Props) {
       satPendingRef.current = { norad: t.r.norad, tx: t.r.tx }; setSatPending({ norad: t.r.norad, tx: t.r.tx }); setSatWhy(''); drop();
     }
   };
+  /* ★★★ beta96 SCHEDULE OR REMIND — by whether tuning moves anyone else (satSchedule.ts satSession), from the server's words:
+   *  sat_list's pickPrivate, the dial message (only on a shared tuner) and its listeners, the owner's locked range; this
+   *  app's own radio = a loopback session (no localHost). */
+  const satSess = satSession({ pickPrivate: satList?.source?.pickPrivate, localHw: isLocal && !route.params.localHost,
+                               locked: hwLockedCentre > 0, sharedDial, listeners: dialState?.listeners });
+  void satSchedV;   // ★ re-render on a schedule change
+  /** ★★★ beta96 one second of the schedule (the interval above calls it): prune, degraded reminders, the runner step, act. */
+  satSchedTickRef.current = (now: number, conn: boolean) => {
+    const b = satSchedRef.current;
+    const n0 = b.size; b.prune(now); if (b.size !== n0) satSchedSave();
+    const entries = b.all(satSrvKey);
+    if (!conn || (!entries.length && !satSchedRunRef.current.key)) return;
+    if (entries.some((e) => e.aos - now < 40 && e.los > now) && now - satRemListAt.current > 30) {
+      satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
+    }
+    const l = satListRef.current;
+    if (!l) return;   // ★ nothing decided without the server's word
+    const kind = satSession({ pickPrivate: l.source?.pickPrivate, localHw: isLocal && !route.params.localHost, locked: hwLockedCentre > 0,
+                              sharedDial, listeners: dialStateRef.current?.listeners ?? dialState?.listeners }).kind;
+    if (kind === 'remind') {
+      const due = satSchedRemindDue(entries, now, satRemLeadRef.current, satSchedFiredRef.current);
+      if (due.length) satSetToasts([...due.map((r) => ({ r, why: satRemindWhy(l, r), note: SAT_SCHED_REMIND_NOTE })), ...satToastsRef.current]);
+    }
+    const pk = satPickedRef.current;
+    const here: SatSchedPrev = { hz: status.frequency, mode: status.mode, sat: satOnRef.current, pick: pk ? { norad: pk.norad, tx: pk.tx } : null };
+    const st = satSchedStep(satSchedRunRef.current, entries, now, { pick: here.pick }, here, kind);
+    satSchedRunRef.current = st.run;
+    const a = st.act;
+    const c = client.current as unknown as { satPick?: (n: number, t: number, d: boolean) => boolean } | null;
+    if (a.act === 'tune') {
+      const name = a.e.label ? `${a.e.name} · ${a.e.label}` : a.e.name;
+      const why = satSchedWhy(l, a.e);
+      if (why) { setSatSchedNote(`Scheduled ${name}: ${why}`); return; }
+      satEnterRef.current();
+      if (!satOnRef.current) { setSatSchedNote(`Scheduled ${name}: SATELLITE could not be opened`); return; }
+      if (pk && pk.norad === a.e.norad && pk.tx === a.e.tx) { setSatSchedNote(''); return; }
+      if (askGate()) { setSatSchedNote(`Scheduled ${name}: held — this dial asks before tuning`); return; }
+      if (c?.satPick?.(a.e.norad, a.e.tx, satAutoDoppler)) { satPendingRef.current = { norad: a.e.norad, tx: a.e.tx }; setSatPending({ norad: a.e.norad, tx: a.e.tx }); setSatWhy(''); setSatSchedNote(''); }
+    } else if (a.act === 'back') {
+      const pv = a.prev;
+      if (pv.sat && pv.pick) {   // ★ they were on a satellite: pick it again
+        satEnterRef.current();
+        if (satOnRef.current && !askGate() && c?.satPick?.(pv.pick.norad, pv.pick.tx, satAutoDoppler)) { satPendingRef.current = pv.pick; setSatPending(pv.pick); }
+        return;
+      }
+      satModeOff();
+      if (pv.sat) satEnterRef.current();   // ★ in SATELLITE with nothing picked: back in, nothing picked
+      if (pv.hz > 0) onTuneHz(pv.hz, (pv.mode || undefined) as SDRMode | undefined);
+    } else if (a.act === 'end') {
+      setSatSchedNote(a.why === 'shared' ? 'Another listener joined this dial — the schedule stopped tuning; the radio stays where it is' : '');
+    }
+  };
+  /** ★★★ beta96 the row's SCHEDULE key: schedule that pass, or cancel it (cancelled mid-pass: it stays, nothing put back). */
+  const satSchedToggle = (norad: number, tx: number, aos: number) => {
+    markInteract();
+    const b = satSchedRef.current;
+    const ex = b.find(satSrvKey, norad, tx, aos);
+    if (ex) {
+      b.cancel(ex.key);
+      if (satSchedRunRef.current.key === ex.key) satSchedRunRef.current = { ...satSchedRunRef.current, took: true, prev: null };
+    } else {
+      const now = Date.now() / 1000;
+      const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx && r.next?.aos === aos);
+      if (!row || satPassKey(satList, row, satSess.kind) !== 'schedule') return;
+      if (!b.add(satSrvKey, row, now)) { setSatWhy(SAT_SCHED_FULL); return; }
+    }
+    setSatSchedNote('');
+    satSchedSave();
+  };
+  const satSchedEntries = satSchedRef.current.all(satSrvKey);
+  const satSchedPlanNow = satSchedPlan(satSchedEntries);
+  const satSchedLines = [
+    satSess.kind === 'schedule' && satSchedEntries.some((e) => (satSchedPlanNow.get(e.key)?.over.length ?? 0) > 0) ? SAT_SCHED_OVERLAP_RULE : '',
+    satSess.kind === 'remind' ? satSchedDegradedText(satSchedEntries.length) : '',
+    satSess.kind === 'schedule' ? satSchedNowText(satSchedRunRef.current, satSchedEntries, satSchedPlanNow, Date.now() / 1000) : '',
+    satSchedNote,
+  ].filter(Boolean);
   /** ★★ 1.6 the row's REMIND key: hold one for its next pass, or cancel it. */
   const satRemToggle = (norad: number, tx: number) => {
     markInteract();
     const held = satRemRef.current.find(satSrvKey, norad, tx);
+    // ★★★ beta96 a scheduled pass shown as a reminder (someone else on the dial): FORGET cancels it
+    const nx0 = satModeRows(satList, Date.now() / 1000).find((r) => r.sat.norad === norad && r.i === tx && !r.later)?.next;
+    const se = !held && nx0 ? satSchedRef.current.find(satSrvKey, norad, tx, nx0.aos) : undefined;
+    if (se) { satSchedRef.current.cancel(se.key); satSchedSave(); return; }
     if (held) satRemRef.current.cancel(held.key);
     else {
       const now = Date.now() / 1000;
       const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx);
-      if (!row || !satRemindOffered(satList, row)) return;
+      if (!row || satPassKey(satList, row, satSess.kind) !== 'remind') return;
       if (!satRemRef.current.add(satSrvKey, row, now)) setSatWhy('Twenty reminders are held already — cancel one first');
     }
     setSatRemN(satRemRef.current.size);
@@ -16753,6 +16859,17 @@ export default function SDRScreen({ route, navigation }: Props) {
           skyRadio={skyRadioFromBase(connectBase)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
+          passKind={satSess.kind}
+          sessionLine={satSessionLine(satSess, 'app')}
+          sched={{
+            find: (n, t, aos) => satSchedRef.current.find(satSrvKey, n, t, aos),
+            slot: (k) => satSchedPlanNow.get(k),
+            all: satSchedEntries,
+            lines: satSchedLines,
+            degraded: satSess.kind === 'remind',
+            onToggle: satSchedToggle,
+            onPrio: (k) => { markInteract(); if (satSchedRef.current.prioritise(k)) satSchedSave(); },
+          }}
           remindsAll={() => satRemRef.current.all().filter((r) => r.server === satSrvKey)}
           remindLead={satRemLead}
           onRemind={satRemToggle}

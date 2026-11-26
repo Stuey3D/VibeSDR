@@ -21,7 +21,7 @@
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import {
-  GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeGlyph, globeLayers, satReadoutLayout, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead, satRemindOffered,
+  GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeGlyph, globeLayers, satReadoutLayout, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead,
   satRemindText, satRemindWhy, satTelemetryAbsentText, satTelemetryHead, satTelemetryHex, satTelemetryLine, satTelemetryMerge, satTxDetail, satUplinkText, satTxModeLabel,
   satMapOverlay, type SatMapOverlay, type SatReminder, type SatTelemetry,
   globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satHzText, satListEveryMs, satModeRows,
@@ -40,6 +40,10 @@ import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFo
          parseOrbcommPkt, parseOrbcommStatus, type OrbFollow, type OrbView } from '../../../src/services/orbcomm';
 import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — the app's words and rules (src/services/xpdr.ts)
+// ★★★ beta96 SCHEDULE A PASS (src/services/satSchedule.ts — one set of rules with the app)
+import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_PRIO_WHAT, SAT_SCHED_REMIND_NOTE, SAT_SCHED_SET_WHAT,
+         SatSchedule, satPassKey, satSchedDegradedText, satSchedKeyText, satSchedNowText, satSchedPlan, satSchedPrioText, satSchedRemindDue, satSchedRowText,
+         satSchedStep, satSchedWhy, satSession, satSessionLine, type SatSchedPrev, type SatSchedRun, type SatSessionFacts } from '../../../src/services/satSchedule';
 import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyModeOf, skyModesHtml, skyPlotMerge, skyPlotQuery, skyPlotSvg, skySceneFor, skySummaryFor, SKY_LEGEND, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../../../src/utils/skyPlot';
 
@@ -89,6 +93,15 @@ export interface SatPanelDeps {
   orbMax?: (k: number) => void;
   skyGet?: (path: string) => Promise<string | null>;
   skyRadio?: () => string;
+  /** ★★★ beta96 SCHEDULE: what decides SCHEDULE / REMIND (the server's words: dial, listeners, locked — pickPrivate is the
+   *  list's own), where the listener is now (frequency, mode), and going back there after LOS (an ordinary tune). */
+  session?: () => SatSessionFacts;
+  here?: () => { hz: number; mode: string };
+  back?: (hz: number, mode: string) => void;
+}
+/** ★★★ beta96 a schedule is stored for this server — main.ts makes the panel at start-up so it runs with the mode off. */
+export function satSchedStored(server: string): boolean {
+  try { return SatSchedule.fromJSON(localStorage.getItem(SAT_SCHED_KEY), Date.now() / 1000).all(server).length > 0; } catch { return false; }
 }
 /** ★ 1.9: what the MAP key hands the DIGI MODES map (b90-maps' DigiMapOpts shape) — its APRS layer, and an overlay of the
  *  pass's orbit, footprint and the bird ("ISS PASS"); the stations carry "via ISS" from the server (aprs …sat). */
@@ -210,6 +223,11 @@ const CSS = `
 #satPanel .sat-rw{display:flex;gap:6px;align-items:stretch}
 #satPanel .sat-rw .sat-row{flex:1 1 auto;min-width:0}
 #satPanel .sat-rem{flex:0 0 auto;align-self:center;font-size:11px !important;padding:2px 7px !important;min-height:30px;letter-spacing:.04em;white-space:nowrap}
+/* ★★★ beta96 SCHEDULE: the row's schedule line, the keys' pair, the session / overlap / status lines */
+#satPanel .sat-row .sat-s{grid-column:1/-1;color:var(--amber);font-size:12px}
+#satPanel .sat-row .sat-s.skip{color:var(--text-dim)}
+#satPanel .sat-sk{display:flex;flex-direction:column;gap:4px;align-self:center}
+#satPanel .sat-sline{font-size:12px;margin:6px 0 2px}
 #satPanel .sat-lead{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:6px 0 2px;font-size:12px}
 #satPanel .sat-lead button{min-height:26px;padding:1px 8px}
 #satPanel .sat-key{font-size:11px;text-align:center;margin-top:2px}
@@ -315,7 +333,13 @@ export class SatPanel {
   private tlm: SatTelemetry | null = null;
   /** ★★ 1.6 REMIND — held in this page only (never stored, never on the server); the pop-ups that have fired */
   private rem = new SatReminders();
-  private toasts: Array<{ r: SatReminder; why: string; shownAt: number }> = [];
+  private toasts: Array<{ r: SatReminder; why: string; shownAt: number; note?: string }> = [];
+  /** ★★★ beta96 SCHEDULE — kept in this browser per server (SAT_SCHED_KEY); the run (where the radio is, what goes back);
+   *  the degraded reminders already fired; the last thing the schedule has to say */
+  private sched = new SatSchedule();
+  private schedRun: SatSchedRun = SAT_SCHED_IDLE;
+  private schedFired = new Set<string>();
+  private schedNote = '';
   private remTimer = 0;
   private rowsKey = '';                    // ★ the timetable's markup with the countdowns left out — see render()
   private rowWhen: HTMLElement[] = [];     // ★ each row's countdown, written in place between rebuilds
@@ -410,6 +434,8 @@ export class SatPanel {
     this.remEl.addEventListener('click', (e) => this.onToastClick(e));
     try { this.lead = satRemindLead(localStorage.getItem('vibe.satRemindLead')); } catch { /* private window: the default */ }
     try { this.showF = satShowParse(localStorage.getItem(SAT_SHOW_KEY)); } catch { /* private window: All */ }
+    try { this.sched = SatSchedule.fromJSON(localStorage.getItem(SAT_SCHED_KEY), this.now()); } catch { /* private window: none */ }
+    queueMicrotask(() => this.remSchedule());   // ★★★ beta96 a stored schedule runs with the mode off
     // ★ fixed to the window at #decBox's anchor (--decBoxBottom: above the control card; the waterfall runs to the bottom)
     document.body.appendChild(this.el);
     this.el.addEventListener('click', (e) => this.onClick(e));
@@ -529,6 +555,7 @@ export class SatPanel {
     const wasFetching = this.list?.source?.fetching;
     this.list = l;
     this.rem.refresh(this.srv(), l);   // ★ a new element set moves a reminder with its pass
+    if (this.sched.all(this.srv()).length) { this.sched.refresh(this.srv(), l); this.schedSave(); this.remSchedule(); }   // ★★★ beta96 … and a scheduled pass
     if (wasFetching && !l.source?.fetching) this.listAt = 0;
     if (this.open) this.render();
   }
@@ -652,7 +679,11 @@ export class SatPanel {
   /** ★ 1.9 the packet decoder heard a station with a position — the MAP key may appear */
   stationsChanged() { if (this.open) this.paintPick(); }
   /** ★ 1.6 Leaving the server / the session ending cancels every reminder for it (and its pop-ups). */
-  remindClear() { this.rem.clearServer(this.srv()); this.toasts = []; this.paintToasts(); this.remSchedule(); if (this.open) this.render(); }
+  remindClear() { this.rem.clearServer(this.srv()); this.toasts = []; this.schedRun = SAT_SCHED_IDLE; this.paintToasts(); this.remSchedule(); if (this.open) this.render(); }
+  /** ★★★ beta96 the passes scheduled on this server (tests) */
+  scheduled() { return this.sched.all(this.srv()); }
+  /** ★★★ beta96 the session's key kind now (tests) */
+  sessionKind() { return this.session().kind; }
   /** the reminders held (tests, and the page's own checks) */
   reminders(): SatReminder[] { return this.rem.all(); }
   readout(): SatReadout | null { return this.ro && this.ro.state !== 'OFF' ? this.ro : null; }
@@ -687,6 +718,8 @@ export class SatPanel {
     if (act === 'showq') { this.setShow(satShowWithQ(this.showF, (b.dataset.q || null) as SatShowQ | null)); return; }
     if (act === 'showsat') { this.setShow(satShowToggle(this.showF, this.list, Number(b.dataset.norad))); return; }
     if (act === 'remind') { this.remindToggle(Number(b.dataset.norad), Number(b.dataset.tx)); return; }
+    if (act === 'sched') { this.schedToggle(Number(b.dataset.norad), Number(b.dataset.tx), Number(b.dataset.aos)); return; }
+    if (act === 'prio') { if (this.sched.prioritise(b.dataset.key || '')) { this.schedSave(); this.render(); } return; }
     if (act === 'lead') {
       this.lead = satRemindLead(b.dataset.v);
       try { localStorage.setItem('vibe.satRemindLead', String(this.lead)); } catch { /* not kept: fine */ }
@@ -803,25 +836,47 @@ export class SatPanel {
     if (!this.list) h = `<div class="sat-dim">Asking the server…</div>`;
     else if (!allRows.length) h = `<div class="sat-dim">${esc(this.list.why || (this.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server'))}</div>`;
     else if (!rows.length) h = `<div class="sat-dim">${esc(satShowEmptyText(this.showF, allRows, this.keepNorad()))}</div>`;
-    let anyRemind = false;
+    let anyRemind = false, anySched = false;
     const whens: string[] = [];
+    // ★★★ beta96 SCHEDULE / REMIND by whether tuning moves anyone else (satSession); the plan says what overlaps did
+    const sess = this.session();
+    const srvK = this.srv();
+    const sEntries = this.sched.all(srvK);
+    const plan = satSchedPlan(sEntries);
     for (const r of rows.slice(0, 160)) {   // ★ 2026-11-24 every pass is a row now (was 40)
       const sel = !r.later && ((this.picked && this.picked.norad === r.sat.norad && this.picked.tx === r.i) || (this.pending && this.pending.norad === r.sat.norad && this.pending.tx === r.i));
       const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
       const inactive = r.tx.status === 'inactive' ? ' · INACTIVE' : '';
       // ★★ 1.6 REMIND — only where a pick disturbs nobody (the server's pickPrivate), on a hearable row with a pass to come;
       //    hidden, not greyed, everywhere else
-      const offer = !r.later && satRemindOffered(this.list, r);   // ★ 2026-11-24 REMIND on the current-or-next pass only
-      const held = offer ? this.rem.find(this.srv(), r.sat.norad, r.i) : undefined;
+      const pk = satPassKey(this.list, r, sess.kind);   // ★★★ beta96 REMIND (shared dial) / SCHEDULE (nobody else moved) / none
+      const offer = pk === 'remind';
+      const se = r.next ? this.sched.find(srvK, r.sat.norad, r.i, r.next.aos) : undefined;
+      const held = offer ? (this.rem.find(srvK, r.sat.norad, r.i) ?? (se ? { key: se.key } : undefined)) : undefined;   // ★ a degraded schedule reads as a reminder
       anyRemind ||= offer;
+      anySched ||= pk === 'schedule';
+      const slot = se ? plan.get(se.key) : undefined;
       h += `<div class="sat-rw"><button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
         + (r.grey ? ` aria-disabled="true" data-why="${esc(r.why)}" title="${esc(r.why)}"` : ` title="${esc((r.tx.note || r.tx.label) + ' — tune there' + (this.autoDoppler ? ' and correct the Doppler' : ''))}"`)
         + `><span class="sat-n">${esc(name)}</span><span class="sat-w">\u0000${whens.push(satWhenText(r, now)) - 1}\u0000</span>`
-        + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span></button>`
+        + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span>`
+        + (se ? `<span class="sat-s${slot?.state === 'skipped' ? ' skip' : ''}">${esc(sess.kind === 'remind' ? 'SCHEDULED · reminds you (another listener is on this dial)' : satSchedRowText(se, slot, sEntries))}</span>` : '')
+        + `</button>`
         + (offer ? `<button class="sat-rem${held ? ' on' : ''}" data-act="remind" data-norad="${r.sat.norad}" data-tx="${r.i}" aria-pressed="${!!held}"`
             + ` title="${esc(held ? SAT_REMIND_FORGET_WHAT : SAT_REMIND_SET_WHAT)}" aria-label="${esc(held ? SAT_REMIND_FORGET_WHAT : 'Remind me before this pass')}">${esc(satRemindKeyText(!!held))}</button>` : '')
+        // ★★★ beta96 SCHEDULE / CANCEL, and PRIORITISE on a scheduled pass that overlaps another
+        + (pk === 'schedule' && r.next ? `<span class="sat-sk"><button class="sat-rem${se ? ' on' : ''}" data-act="sched" data-norad="${r.sat.norad}" data-tx="${r.i}" data-aos="${r.next.aos}" aria-pressed="${!!se}"`
+            + ` title="${esc(se ? SAT_SCHED_CANCEL_WHAT : SAT_SCHED_SET_WHAT)}" aria-label="${esc(se ? SAT_SCHED_CANCEL_WHAT : 'Schedule this pass: tune at AOS, back after LOS')}">${esc(satSchedKeyText(!!se))}</button>`
+            + (se && slot?.over.length ? `<button class="sat-rem${se.prio ? ' on' : ''}" data-act="prio" data-key="${esc(se.key)}" aria-pressed="${!!se.prio}" title="${esc(SAT_SCHED_PRIO_WHAT)}">${esc(satSchedPrioText(!!se.prio))}</button>` : '')
+            + `</span>` : '')
         + `</div>`;
     }
+    // ★★★ beta96 why it is SCHEDULE / REMIND here, the overlap rule, the degraded note, and the schedule's own state
+    if (anySched || anyRemind) { const sl = satSessionLine(sess, 'web'); if (sl) h += `<div class="sat-sline sat-dim">${esc(sl)}</div>`; }
+    if (sess.kind === 'schedule' && sEntries.some((e) => (plan.get(e.key)?.over.length ?? 0) > 0)) h += `<div class="sat-sline sat-dim">${esc(SAT_SCHED_OVERLAP_RULE)}</div>`;
+    if (sess.kind === 'remind' && sEntries.length) h += `<div class="sat-sline">${esc(satSchedDegradedText(sEntries.length))}</div>`;
+    { const nt = sess.kind === 'schedule' ? satSchedNowText(this.schedRun, sEntries, plan, now) : ''; if (nt) h += `<div class="sat-sline">${esc(nt)}</div>`; }
+    if (this.schedNote) h += `<div class="sat-sline">${esc(this.schedNote)}</div>`;
     if (anyRemind) h += `<div class="sat-lead sat-dim"><span>REMIND</span>${[1, 2, 5, 10].map((v) => `<button data-act="lead" data-v="${v}" class="${v === this.lead ? 'on' : ''}" aria-pressed="${v === this.lead}">${v}</button>`).join('')}<span>min before it rises · this page only</span></div>`;
     if (this.list?.time === 'system') h += `<div class="sat-dim">TIME: SYSTEM — this server's clock has not been checked against a time server</div>`;
     /* ★★ beta91 (Stuart, Safari: "i think the satellite box is causing the stutters on the waterfall"): the timetable was
@@ -1074,8 +1129,12 @@ export class SatPanel {
     const srv = this.srv(), now = this.now();
     const held = this.rem.find(srv, norad, tx);
     if (held) { this.rem.cancel(held.key); this.remSchedule(); this.render(); return; }
+    // ★★★ beta96 a scheduled pass shown as a reminder (someone else on the dial): FORGET cancels it
+    const nx = satModeRows(this.list, now).find((r) => r.sat.norad === norad && r.i === tx && !r.later)?.next;
+    const se = nx ? this.sched.find(srv, norad, tx, nx.aos) : undefined;
+    if (se) { this.sched.cancel(se.key); this.schedSave(); this.remSchedule(); this.render(); return; }
     const row = satModeRows(this.list, now).find((r) => r.sat.norad === norad && r.i === tx);
-    if (!row || !satRemindOffered(this.list, row)) return;
+    if (!row || satPassKey(this.list, row, this.session().kind) !== 'remind') return;
     if (!this.rem.add(srv, row, now)) { this.refusal = 'Twenty reminders are held already — cancel one first'; this.render(); return; }
     // ★ the browser's permission is asked on the first REMIND press, never on load
     try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* no notifications here */ }
@@ -1083,7 +1142,7 @@ export class SatPanel {
   }
   /** the reminders' own clock: one second while any is held or any pop-up is up; none otherwise */
   private remSchedule() {
-    const need = this.rem.size > 0 || this.toasts.length > 0;
+    const need = this.rem.size > 0 || this.toasts.length > 0 || this.sched.all(this.srv()).length > 0 || !!this.schedRun.key;
     if (need && !this.remTimer) this.remTimer = window.setInterval(() => this.remTick(), 1000);
     if (!need && this.remTimer) { clearInterval(this.remTimer); this.remTimer = 0; }
   }
@@ -1104,6 +1163,7 @@ export class SatPanel {
         }
       } catch { /* no notifications here */ }
     }
+    this.schedTick(now, connected);   // ★★★ beta96
     this.toasts = this.toasts.filter((t) => now < t.r.los);   // ★ a pass that is over takes its pop-up with it
     this.paintToasts();
     this.remSchedule();
@@ -1120,6 +1180,7 @@ export class SatPanel {
       const ends = t.why ? '' : satRemindEnds(picked, pickedName, t.r);
       h += `<div class="sat-toast" role="alert" data-key="${esc(t.r.key)}"><div>${esc(t.why ? satRemindText(t.r, now).replace(/ — LISTEN\?$/, '') : satRemindText(t.r, now))}</div>`
         + (t.why ? `<div class="sat-tw">${esc(t.why)}</div>` : ends ? `<div class="sat-tw">${esc(ends)}</div>` : '')
+        + (t.note ? `<div class="sat-tw">${esc(t.note)}</div>` : '')
         + `<div class="sat-tb">${t.why ? '' : `<button class="on" data-act="listen" data-key="${esc(t.r.key)}">LISTEN</button>`}`
         + `<button data-act="dismiss" data-key="${esc(t.r.key)}">DISMISS</button></div></div>`;
     });
@@ -1146,6 +1207,74 @@ export class SatPanel {
       this.toasts.splice(i, 1);
     }
     this.paintToasts(); this.remSchedule(); this.render();
+  }
+
+  // ── ★★★ beta96 SCHEDULE A PASS ───────────────────────────────────────────────────────────────────────────────────
+  private session() { return satSession({ ...(this.deps.session?.() ?? {}), pickPrivate: this.list?.source?.pickPrivate }); }
+  private schedSave() { try { localStorage.setItem(SAT_SCHED_KEY, this.sched.toJSON()); } catch { /* not kept: it still runs this visit */ } }
+  private schedToggle(norad: number, tx: number, aos: number) {
+    const srv = this.srv(), now = this.now();
+    const ex = this.sched.find(srv, norad, tx, aos);
+    if (ex) {
+      this.sched.cancel(ex.key);
+      if (this.schedRun.key === ex.key) this.schedRun = { ...this.schedRun, took: true, prev: null };   // ★ cancelled mid-pass: stays, nothing put back
+    } else {
+      const row = satModeRows(this.list, now).find((r) => r.sat.norad === norad && r.i === tx && r.next?.aos === aos);
+      if (!row || satPassKey(this.list, row, this.session().kind) !== 'schedule') return;
+      if (!this.sched.add(srv, row, now)) { this.refusal = SAT_SCHED_FULL; this.render(); return; }
+      try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') void Notification.requestPermission(); } catch { /* none here */ }
+    }
+    this.schedNote = '';
+    this.schedSave(); this.remSchedule(); this.render();
+  }
+  /** One second of the schedule: prune, fire degraded reminders, step the runner, act. Nothing while disconnected. */
+  private schedTick(now: number, connected: boolean) {
+    const srv = this.srv();
+    const n0 = this.sched.size; this.sched.prune(now); if (this.sched.size !== n0) this.schedSave();
+    const entries = this.sched.all(srv);
+    if (!connected || (!entries.length && !this.schedRun.key)) return;
+    // ★ a fresh list shortly before a scheduled pass (pickPrivate, reach and the pass time are re-read from it)
+    if (entries.some((e) => e.aos - now < 40 && e.los > now) && now * 1000 - this.listAt > 30000) { this.deps.list(); this.listAt = now * 1000; }
+    if (!this.list) return;   // ★ nothing decided without the server's word
+    const kind = this.session().kind;
+    if (kind === 'remind')
+      for (const r of satSchedRemindDue(entries, now, this.lead, this.schedFired)) this.toasts.unshift({ r, why: satRemindWhy(this.list, r), shownAt: now, note: SAT_SCHED_REMIND_NOTE });
+    const d = this.deps.here?.() ?? { hz: 0, mode: '' };
+    const here: SatSchedPrev = { hz: d.hz, mode: d.mode, sat: this.on, pick: this.picked ? { norad: this.picked.norad, tx: this.picked.tx } : null };
+    const st = satSchedStep(this.schedRun, entries, now, { pick: here.pick }, here, kind);
+    this.schedRun = st.run;
+    const a = st.act;
+    if (a.act === 'tune') {
+      const name = a.e.label ? `${a.e.name} · ${a.e.label}` : a.e.name;
+      const why = satSchedWhy(this.list, a.e);
+      if (why) { this.schedNote = `Scheduled ${name}: ${why}`; return; }
+      if (!this.on) { if (this.deps.enter) this.deps.enter(); else this.show(); }
+      if (!this.on) { this.schedNote = `Scheduled ${name}: SATELLITE could not be opened`; return; }
+      if (this.picked && this.picked.norad === a.e.norad && this.picked.tx === a.e.tx) { this.schedNote = ''; return; }
+      if (this.deps.pick(a.e.norad, a.e.tx, this.autoDoppler)) { this.pending = { norad: a.e.norad, tx: a.e.tx }; this.refusal = ''; this.schedNote = ''; }
+      else this.schedNote = `Scheduled ${name}: held — this dial asks before tuning`;
+      try {
+        if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          const nf = new Notification('VibeSDR · scheduled pass', { body: `Tuned to ${name}`, tag: a.e.key });
+          nf.onclick = () => { try { window.focus(); } catch { /* */ } nf.close(); };
+        }
+      } catch { /* no notifications here */ }
+    } else if (a.act === 'back') {
+      this.schedBack(a.prev);
+    } else if (a.act === 'end') {
+      this.schedNote = a.why === 'shared' ? 'Another listener joined this dial — the schedule stopped tuning; the radio stays where it is' : '';
+    }
+  }
+  /** After LOS: back to what the listener was on — their satellite, or the frequency and mode (an ordinary tune). */
+  private schedBack(prev: SatSchedPrev) {
+    if (prev.sat && prev.pick) {
+      if (!this.on) { if (this.deps.enter) this.deps.enter(); else this.show(); }
+      if (this.on && this.deps.pick(prev.pick.norad, prev.pick.tx, this.autoDoppler)) this.pending = prev.pick;
+      return;
+    }
+    if (this.on && !prev.sat) this.exit();
+    else if (this.on) { this.deps.drop(); this.clearPick(); this.deps.left(); }   // ★ they were in SATELLITE with no pick: stay in, nothing picked
+    if (prev.hz > 0) this.deps.back?.(prev.hz, prev.mode);
   }
 
   /** ★ The half-globe: a 2D canvas (no WebGL, no tiles) — the dome, a 30° graticule (fainter than the land), the pass's

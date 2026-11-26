@@ -65,7 +65,7 @@ import { type VorMapReport } from '../../../src/services/vorMap';
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { SatPanel, satSchedStored } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -10719,7 +10719,10 @@ let satCap: { ok: boolean; why: string } | null = null;
 let satPanel: SatPanel | null = null;
 /** ★ SATELLITE has the receiver — safe to call from code above this declaration, even during start-up (the VTS). */
 function satActiveSafe(): boolean { try { return !!satPanel?.active; } catch { return false; } }
-function satReadCap(j: any) { satCap = satCapFrom(j); satPanel?.setCap(satCap); }
+function satReadCap(j: any) {
+  satCap = satCapFrom(j); satPanel?.setCap(satCap);
+  if (satCap && !satPanel && satSchedStored(location.host)) satPanelGet();   // ★★★ beta96 a stored schedule runs with the mode off
+}
 function satPanelGet(): SatPanel | null {
   if (!satCap) return satPanel;
   if (!satPanel) {
@@ -10763,6 +10766,11 @@ function satPanelGet(): SatPanel | null {
       },
       skyGet: galleryText,
       skyRadio: () => skyRadioFromBase(BASE_PATH),
+      /* ★★★ beta96 SCHEDULE (satSchedule.ts): the server's words on who else the dial moves — the dial message (only on a
+       *  shared tuner), the listener count (users), the owner's locked range — and where this listener is, and going back. */
+      session: () => ({ sharedDial: dialModeNow !== 'exclusive', listeners: listenerCount > 0 ? listenerCount : undefined, locked: hwLockedCentre > 0 }),
+      here: () => ({ hz: Math.round(spec?.frequency ?? 0), mode: String(spec?.mode ?? '') }),
+      back: (hz, mode) => { if (spec && hz > 0) { spec.tune(clampTune(hz), (mode || spec.mode) as SDRMode, { recenter: true, retarget: true }); updateViewOverlays(); } },
     });
     satPanel.setCap(satCap);
   }

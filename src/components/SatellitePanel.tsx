@@ -40,7 +40,9 @@ import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
-import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeGlyph, globeLayers, globeLandInk, globeArrowPath, globeLabels, satReadoutLayout, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
+import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_PRIO_WHAT, satPassKey, satSchedKeyText, satSchedPrioText, satSchedRowText,
+         type SatSchedEntry, type SatSchedSlot, type SatSessionKind } from '../services/satSchedule';
+import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeGlyph, globeLayers, globeLandInk, globeArrowPath, globeLabels, satReadoutLayout, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -103,6 +105,19 @@ export interface SatellitePanelProps {
   remindLead?: number;
   onRemind?: (norad: number, tx: number) => void;
   onRemindLead?: (min: number) => void;
+  /** ★★★ beta96 SCHEDULE / REMIND (services/satSchedule.ts): the session's kind (absent = none: no key), its line, and the
+   *  schedule — find a pass's entry, the plan's slot for it, the lines under the list, the key presses. */
+  passKind?: SatSessionKind;
+  sessionLine?: string;
+  sched?: {
+    find: (norad: number, tx: number, aos: number) => SatSchedEntry | undefined;
+    slot: (key: string) => SatSchedSlot | undefined;
+    all: SatSchedEntry[];
+    lines: string[];
+    degraded: boolean;
+    onToggle: (norad: number, tx: number, aos: number) => void;
+    onPrio: (key: string) => void;
+  };
   /** ★ 1.9 the MAP key (a packet downlink, once a station with a position is heard) → the DIGI MODES map's APRS layer */
   mapOffered?: boolean;
   onMap?: () => void;
@@ -260,7 +275,7 @@ const HalfGlobe = React.memo(HalfGlobeView, (a, b) =>
 /* ★★★ SATELLITE-BEST 1.6 — THE REMIND BANNER (Stuart 11-21: in-app banner only, no OS notification module). Each fired
  *  reminder its own banner, newest on top, three at most ("+2 more"); LISTEN enters SATELLITE and picks through the
  *  ordinary pick (ask-before-tuning); a pass that can no longer be picked says why and offers no LISTEN. */
-export interface SatRemindToast { r: SatReminder; why: string }
+export interface SatRemindToast { r: SatReminder; why: string; /** ★★★ beta96 a scheduled pass firing as a reminder says so */ note?: string }
 export function SatRemindBanner({ toasts, nowSec, picked, pickedName, top, onListen, onDismiss }: {
   toasts: SatRemindToast[]; nowSec: number; picked: { norad: number; tx: number } | null; pickedName?: string; top: number;
   onListen: (key: string) => void; onDismiss: (key: string) => void;
@@ -276,6 +291,7 @@ export function SatRemindBanner({ toasts, nowSec, picked, pickedName, top, onLis
           <View key={t.r.key} style={s.remToast} accessibilityRole="alert" accessibilityLiveRegion="polite">
             <Text style={s.txt}>{line}</Text>
             {!!(t.why || ends) && <Text style={s.remWhy}>{t.why || ends}</Text>}
+            {!!t.note && <Text style={s.remWhy}>{t.note}</Text>}
             <View style={s.remKeys}>
               {!t.why && <DecoderKey label="LISTEN" active onPress={() => onListen(t.r.key)} accessibilityLabel={`Listen: ${line}`} />}
               <DecoderKey label="DISMISS" onPress={() => onDismiss(t.r.key)} accessibilityLabel="Dismiss this reminder" />
@@ -711,9 +727,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
             : rows.slice(0, 160).map((r) => {
                 const on = !r.later && !!sel && sel.norad === r.sat.norad && sel.tx === r.i;   // ★ 2026-11-24 a later pass: no highlight
                 const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
-                // ★★ 1.6 REMIND — only where a pick disturbs nobody (pickPrivate), hearable, a pass to come; hidden otherwise
-                const offer = !r.later && !!p.onRemind && !greyed && satRemindOffered(p.list, r);
-                const held = offer && !!p.remindHeld?.(r.sat.norad, r.i);
+                // ★★★ beta96 REMIND on a shared dial, SCHEDULE where nobody else is moved (satPassKey); hidden otherwise
+                const pk = greyed ? null : satPassKey(p.list, r, p.passKind ?? 'none');
+                const se = r.next && p.sched ? p.sched.find(r.sat.norad, r.i, r.next.aos) : undefined;
+                const slot = se ? p.sched!.slot(se.key) : undefined;
+                const offer = pk === 'remind' && !!p.onRemind;
+                const held = offer && (!!p.remindHeld?.(r.sat.norad, r.i) || !!se);   // ★ a degraded schedule reads as a reminder
                 return (
                   <View key={`${r.sat.norad}.${r.i}.${r.pass?.aos ?? 0}`} style={s.rw}>
                   <Pressable
@@ -729,7 +748,20 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                       {/* ★★ the pass's rating (satPassQuality — its highest elevation), shaded like n2yo's legend (Stuart 11-21) */}
                       {!r.grey && !!r.pass && <Text>{' · '}<Text style={[s.q, s[`q_${satPassQuality(r.pass.maxEl)}`]]}>{` ${satPassText(r.pass)} `}</Text></Text>}
                     </Text>
+                    {/* ★★★ beta96 a scheduled pass: when it tunes, and what an overlap did to it */}
+                    {!!se && <Text style={[s.detail, slot?.state === 'skipped' ? undefined : s.up]}>
+                      {p.sched!.degraded ? 'SCHEDULED · reminds you (another listener is on this dial)' : satSchedRowText(se, slot, p.sched!.all)}</Text>}
                   </Pressable>
+                  {pk === 'schedule' && !!p.sched && !!r.next && (
+                    <View style={[s.remKey, s.schedKeys]}>
+                      <DecoderKey label={satSchedKeyText(!!se)} active={!!se} onPress={() => p.sched!.onToggle(r.sat.norad, r.i, r.next!.aos)}
+                                  accessibilityLabel={se ? `${name}: ${SAT_SCHED_CANCEL_WHAT}` : `Schedule ${name}: tune at AOS, back after LOS — while the app is open and connected`} />
+                      {!!se && !!slot?.over.length && (
+                        <DecoderKey label={satSchedPrioText(!!se.prio)} active={!!se.prio} onPress={() => p.sched!.onPrio(se.key)}
+                                    accessibilityLabel={`${name}: ${SAT_SCHED_PRIO_WHAT}`} />
+                      )}
+                    </View>
+                  )}
                   {offer && (
                     <View style={s.remKey}>
                       <DecoderKey label={satRemindKeyText(held)} active={held} onPress={() => p.onRemind!(r.sat.norad, r.i)}
@@ -739,7 +771,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>
                 );
               }))}
-          {listOpen && !!p.onRemind && !greyed && rows.some((r) => satRemindOffered(p.list, r)) && (
+          {/* ★★★ beta96 why it is SCHEDULE / REMIND here, the overlap rule, the degraded note and the schedule's state */}
+          {listOpen && !greyed && !!p.sessionLine && rows.some((r) => satPassKey(p.list, r, p.passKind ?? 'none')) && (
+            <Text style={[s.detailNp, s.schedLine]}>{p.sessionLine}</Text>
+          )}
+          {listOpen && (p.sched?.lines ?? []).map((ln, i) => <Text key={`sl${i}`} style={[s.detail, s.schedLine]}>{ln}</Text>)}
+          {listOpen && !!p.onRemind && !greyed && rows.some((r) => satPassKey(p.list, r, p.passKind ?? 'none') === 'remind') && (
             <View style={s.leadRow}>
               <Text style={s.detailNp}>REMIND</Text>
               {SAT_REMIND_LEADS.map((v) => (
@@ -810,6 +847,8 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   sum:     { fontFamily: F, fontSize: 12, letterSpacing: 1, color: T.value },
   rw:      { flexDirection: 'row', alignItems: 'center' },
   remKey:  { paddingRight: 6 },
+  schedKeys: { gap: 4 },                                  // ★★★ beta96 SCHEDULE over PRIORITISE
+  schedLine: { paddingHorizontal: 10, paddingTop: 4 },
   leadRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 },
   detailNp:{ fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted },
   // ★★ 2026-11-24 ORBCOMM

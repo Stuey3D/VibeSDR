@@ -1196,7 +1196,10 @@ export const SAT_REMIND_SET_WHAT = 'A pop-up shortly before this pass rises — 
 /** ★ The re-check as it fires: why it can no longer be picked ('' = it can). The server's own words where it gave them. */
 export function satRemindWhy(l: SatList | null, r: Pick<SatReminder, 'norad' | 'tx' | 'name'>): string {
   if (!l) return '';
-  if (l.source?.pickPrivate !== true) return SAT_REMIND_SHARED_WHY;
+  /* ★★★ beta96 (Stuart 11-26: "Shared VFOs keep the remind system") REMIND is the SHARED DIAL's key now — where tuning would
+   *  move everyone, a pass reminds instead of tuning by itself (satSchedule.ts satSession). Its LISTEN is the listener's own
+   *  pick, through ask-before-tuning like a tap on the row, so a shared dial no longer blocks it here. Where nobody else
+   *  is affected the row's key is SCHEDULE. (SAT_REMIND_SHARED_WHY stays for callers that still say it.) */
   const sat = l.sats.find((s) => s.norad === r.norad);
   const t = sat?.tx[r.tx];
   if (!sat || !t) return `${r.name} is no longer listed on this server`;
