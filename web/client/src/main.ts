@@ -10601,13 +10601,16 @@ function asRender() {
   const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l));
   const first: LiveLayerId[] = asBox === 'navtex' ? ['navst', 'warnings', 'weather'] : asBox === 'dsc' ? ['dsc'] : asBox === 'hfdl' ? ['hfdl', 'hfdlst'] : [];
   const present = livePresent('airsea', have, live, aviationAny || asBox === 'hfdl' ? ['airports'] : [], first);
-  const on = (id: LiveLayerId) => liveLayerOn(id, present, asToggled, live);
+  // ★ SEA AREAS is offered everywhere (Stuart 11-26), but with nothing maritime here it starts OFF — chart lines over an
+  //   aviation-only view are clutter until somebody asks for them
+  const tog = present.some((id) => SEA_ID_SET.has(id)) || asToggled.areas !== undefined ? asToggled : { ...asToggled, areas: false };
+  const on = (id: LiveLayerId) => liveLayerOn(id, present, tog, live);
   v.setToggles(liveChips(present, live), Object.fromEntries(present.map((id) => [id, on(id)])));
   v.setProfile(liveProfile('airsea', present, on));
   v.setCamera(live.layers.some((l) => SEA_ID_SET.has(l)) ? 'track' : 'aircraft');
   // ── aviation (aviationMap.ts avCompose, unchanged: our toggles in its terms) ──
   const avFocus: AvFocus = mode === 'datalink' ? 'datalink' : mode === 'hfdl' ? 'hfdl' : 'adsb';
-  const avc = avCompose(avOn ? avReport : null, avShared, avFocus, avLayersFrom(asToggled, present, live) as AvLayers, rx, 'web');
+  const avc = avCompose(avOn ? avReport : null, avShared, avFocus, avLayersFrom(tog, present, live) as AvLayers, rx, 'web');
   // ── maritime (shipCompose, our presence and toggles) ──
   const shipPresent = present.map((id) => shipLayerOf(id)).filter((x): x is ShipLayerId => !!x);
   const shipOnF = (id: ShipLayerId) => on(SHIP_ID[id]);

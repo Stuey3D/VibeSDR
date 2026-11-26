@@ -401,6 +401,9 @@ const CSS = `
 .trkTop .rng .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkTop .tgl .btn[aria-pressed="true"]{background:#7fc8ff;border-color:#7fc8ff}
 .trkTop .rng[hidden],.trkKey[hidden]{display:none}
+.trkTop .tgl{max-width:100%;overflow-x:auto;scrollbar-width:none}
+.trkTop .tgl::-webkit-scrollbar{display:none}
+.trkTop .tgl .btn{flex:none}
 .trkTop .tgl .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
 .trkTop .tgl .grp:first-child{margin-left:0}
 .trkTop .tgl .btn.live{box-shadow:inset 0 -3px 0 #ff5a4d}

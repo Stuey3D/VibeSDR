@@ -104,7 +104,7 @@ async function session(tag, clip, centre, freq, mode, run, runDir) {
   }
 }
 
-console.log('── the AVIATION MAP in the web client (two radios, one table) ──');
+console.log('── the AIR & SEA MAP (beta96, docs/v12/ONE-MAP.md) in the web client (two radios, one table) ──');
 const A = await radioA();
 try {
   await session('avm', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, until }) => {
@@ -113,21 +113,36 @@ try {
     await sleep(700);
     await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'DATALINK'); b && b.click(); return !!b; })()`);
     ok(await until(`!!${V}`, 6000), 'DATALINK opens its view');
-    ok(/AVIATION MAP · DATALINK/.test(await ev(`${V}?.querySelector('.ttl')?.textContent`) || ''), `…the AVIATION MAP (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+    ok(/^AVIATION & MARITIME · DATALINK$/.test(await ev(`${V}?.querySelector('.ttl')?.textContent`) || ''), `…the AIR & SEA map, DATALINK live (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+    ok(await ev(`${V}.querySelector('.exit').textContent`) === 'EXIT DATALINK', 'EXIT DATALINK (the map is the mode)');
     await until(`[...${V}.querySelectorAll('button')].some(b => b.textContent.trim() === 'VDL2' && b.dataset.rng)`, 8000);
     await ev(`[...${V}.querySelectorAll('[data-rng]')].find(b => b.textContent.trim() === 'VDL2')?.click()`);
+    // ★★ beta96 DATALINK opens on MESSAGES (the feed, newest first) with the aircraft sort LATEST
+    ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'messages'`, 4000), 'DATALINK opens on the MESSAGES tab');
+    ok(await until(`[...${V}.querySelectorAll('.trkRow.trkMsg')].length >= 3`, 45000), `MESSAGES: the feed (${await ev(`${V}.querySelectorAll('.trkRow.trkMsg').length`)} messages)`);
+    { const ts = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow.trkMsg .ag')].map(e => e.textContent))`) || '[]');
+      ok(ts.every((t, i) => i === 0 || t <= ts[i - 1]), `MESSAGES newest first (${ts.slice(0, 5).join(' ')})`); }
+    ok(!(await ev(`/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(${V}.querySelector('.rows').textContent)`)), '★ MESSAGES: labels only, never a body (not the owner)');
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
+    ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'aircraft'`, 3000), 'the AIRCRAFT tab');
+    ok(await ev(`${V}.querySelector('.trkList .hd .srt [aria-pressed="true"]')?.textContent`) === 'LATEST', 'DATALINK: the aircraft sort is LATEST');
     const rowsTxt = () => ev(`${V}?.querySelector('.rows')?.textContent || ''`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '') && /VDL2 \\+ ADS-B|ADS-B \\+ VDL2/.test(${V}?.querySelector('.rows')?.textContent || '')`, 45000),
        `radio A's ADS-B joins radio B's datalink: ${(await rowsTxt()).slice(0, 300)}`);
     const n4 = await ev(`[...${V}.querySelectorAll('.trkRow')].filter(r => r.dataset.key === 'a:4CA97B').length`);
     ok(n4 === 1, `4CA97B is ONE row (${n4})`);
-    ok(await ev(`[...${V}.querySelectorAll('.sec')].some(s => /OTHER SOURCES/.test(s.textContent))`), 'a section for the other sources on this server');
-    ok(await ev(`(() => { const secs = [...${V}.querySelectorAll('.rows > *')]; const i = secs.findIndex(e => e.classList.contains('sec') && /OTHER/.test(e.textContent)); return i >= 0 && secs.slice(i).some(e => e.dataset && e.dataset.key === 'a:400F11'); })()`),
-       '400F11 (ADS-B only, radio A) is under OTHER SOURCES');
-    await until(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',') === 'VDL2,ACARS,ADS-B,ADS-C,AIRPORTS'`, 15000);
+    ok(await ev(`[...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:400F11')`), '400F11 (ADS-B only, radio A) is on the AIRCRAFT list beside the datalink\'s');
+    // ★ NEAREST: the rows by range (the receiver's own position)
+    await ev(`${V}.querySelector('.trkList .hd .srt [data-srt="nearest"]').click()`);
+    { const nm = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow')].map(r => parseFloat((r.querySelector('.rg')?.textContent || '').replace(/[^0-9.]/g, ''))).filter(x => x === x))`) || '[]');
+      ok(nm.length >= 2 && nm.every((x, i) => i === 0 || x >= nm[i - 1]), `NEAREST: by range (${nm.join(', ')} NM)`); }
+    ok(await ev(`localStorage.getItem('vibesdr.airSeaSort')`) === 'nearest', '…remembered');
+    await until(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',').startsWith('VDL2,ACARS,ADS-C,ADS-B,AIRPORTS')`, 15000);
     const tg = await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',')`);
-    ok(/^VDL2,ACARS,ADS-B,ADS-C,AIRPORTS$/.test(tg || ''), `the layer keys: ${tg} (no HFDL: nothing heard there)`);
-    ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].every(b => b.getAttribute('aria-pressed') === 'true')`), 'every layer on by default (AIRPORTS too)');
+    ok(/^VDL2,ACARS,ADS-C,ADS-B,AIRPORTS(,SEA AREAS)?$/.test(tg || ''), `the layer keys, the live ones first: ${tg} (no HFDL: nothing heard there)`);
+    ok(await ev(`JSON.stringify([...${V}.querySelectorAll('[data-tgl].live')].map(b => b.textContent.trim()))`) === JSON.stringify(['VDL2', 'ACARS', 'ADS-C']), 'the DATALINK\'s layers marked LIVE');
+    ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].filter(b => b.textContent.trim() !== 'SEA AREAS').every(b => b.getAttribute('aria-pressed') === 'true')`), 'every layer on by default (AIRPORTS too)');
+    ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].every(b => b.textContent.trim() !== 'SEA AREAS' || b.getAttribute('aria-pressed') === 'false')`), 'SEA AREAS (where offered) off by default with nothing maritime here');
     // ★★ beta90 the aircraft are the ADS-B layer's (adsblayer.js): its controls, its rings, every aircraft drawn by it
     const AC = `(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1)`;
     ok(await until(`${AC} >= 2`, 15000), `beta90: aircraft drawn by the ADS-B layer: ${await ev(AC)}`);
@@ -169,7 +184,7 @@ try {
     ok(await ev(`(window.__vibeTrkProfile || 'aero') === 'aero'`), `AIRPORTS on: the 'aero' basemap (${await ev(`window.__vibeTrkProfile`)})`);
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'AIRPORTS').click()`);
     ok(await until(`window.__vibeTrkProfile === 'aero-plain'`, 4000), `AIRPORTS off: 'aero-plain' (${await ev(`window.__vibeTrkProfile`)})`);
-    ok(await until(`(() => { try { return JSON.parse(localStorage.getItem('vibesdr.avMapLayers')).airports === false; } catch { return false; } })()`, 2000), 'remembered');
+    ok(await until(`(() => { try { return JSON.parse(localStorage.getItem('vibesdr.airSeaLayers')).airports === false; } catch { return false; } })()`, 2000), 'remembered');
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'AIRPORTS').click()`);
     ok(await until(`window.__vibeTrkProfile === 'aero'`, 4000), 'AIRPORTS back on: aero');
     const key = await ev(`${V}?.querySelector('.trkKey')?.textContent || ''`);
@@ -185,11 +200,25 @@ try {
     await ev(`${V}.querySelector('.exit').click()`);
     ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'EXIT DATALINK closes the view');
     await sleep(1500);
+    // ★★ beta96 a MODE CHANGE while the map is open: the chrome follows (the map is recomputed, never left on DATALINK)
+    ok(!(await ev(`/DATALINK/.test(document.querySelector('.trkView')?.querySelector('.ttl')?.textContent || '')`)) || await ev(`document.querySelector('.trkView').hidden`), 'the map is not left titled DATALINK');
     // the HFDL decoder box's MAP: the same map, standalone, HFDL first
     await ev(`document.querySelector('#decodersPanel [data-dec="hfdl"]')?.click()`);
     ok(await until(`getComputedStyle(document.getElementById('hfdlMapBtn')).display !== 'none'`, 4000), 'the HFDL box has MAP');
     await ev(`document.getElementById('hfdlMapBtn').click()`);
-    ok(await until(`!!${V} && /^AVIATION MAP$/.test(${V}.querySelector('.ttl')?.textContent || '')`, 5000), 'MAP opens the AVIATION MAP (standalone)');
+    ok(await until(`!!${V} && /^AVIATION & MARITIME · HFDL$/.test(${V}.querySelector('.ttl')?.textContent || '')`, 5000), `MAP opens the AIR & SEA map, HFDL live (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+    ok(await ev(`${V}.querySelector('.exit').textContent`) === 'CLOSE MAP', '…CLOSE MAP (the decoder carries on)');
+    ok(await ev(`${V}.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab`) === 'messages', '…on MESSAGES');
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
+    // ★★ tap an aircraft → MESSAGES filtered to it
+    await until(`[...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:4CA97B')`, 8000);
+    await ev(`[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === 'a:4CA97B')?.click()`);
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="messages"]').click()`);
+    ok(await until(`!${V}.querySelector('.trkList .filt').hidden && [...${V}.querySelectorAll('.trkRow.trkMsg')].length > 0 && [...${V}.querySelectorAll('.trkRow.trkMsg')].every(r => r.dataset.focus === 'a:4CA97B')`, 4000),
+       `tap an aircraft → MESSAGES shows only its messages (${await ev(`${V}.querySelector('.trkList .filt')?.textContent`)})`);
+    await ev(`${V}.querySelector('.trkList .filt button').click()`);
+    ok(await until(`${V}.querySelector('.trkList .filt').hidden && [...${V}.querySelectorAll('.trkRow.trkMsg')].some(r => r.dataset.focus !== 'a:4CA97B')`, 3000), '× ALL: every message again');
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
     const tg2 = await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',')`);
     ok(/^HFDL,HFDL STATIONS,/.test(tg2 || '') && /ADS-B/.test(tg2 || ''), `HFDL first (what it was opened for), the others after: ${tg2}`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '')`, 8000), 'the other radios\' aircraft are on it');
