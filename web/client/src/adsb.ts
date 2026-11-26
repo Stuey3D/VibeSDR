@@ -277,10 +277,15 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
     const trk = num(a.tracked_nm);
     const tracked = trk != null && trk >= 1 ? `<small class="trk">tracked ${Math.round(trk)} NM</small>` : '';
     const em = emergency(a);
+    const bars = barsHtml(adsbBars(a.rssi));
     const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
     return `<div class="adsbRow${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
-      + `<span class="id"><b>${flagHtml(a.country)}${esc(call || a.r || hex.toUpperCase())}${barsHtml(adsbBars(a.rssi))}${tag}</b><small>${adsbSecondLine(a, hex, sq, imgBase)}</small></span>`
+      // ★★ beta95 (Stuart 11-25: rows with an operator logo lost their bars): ONLY the name ellipsises; the bars and the
+      //    MIL/emergency tag sit beside it in a span that never shrinks, so a squeezed row loses letters, never the bars.
+      + `<span class="id"><span class="l1"><b>${flagHtml(a.country)}${esc(call || a.r || hex.toUpperCase())}</b>`
+      + `${bars || tag ? `<span class="ex">${bars}${tag}</span>` : ''}</span>`
+      + `<small>${adsbSecondLine(a, hex, sq, imgBase)}</small></span>`
       + `<span class="alt"${altStyle}>${esc(altText(a.alt_baro))}${trend}</span>`
       + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
       + `<span class="rng">${where}${tracked}</span>`
