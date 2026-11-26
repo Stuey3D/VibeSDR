@@ -139,11 +139,11 @@ export function simpleStartConfig(o: { name: string; mdnsName: string; rate: num
                                        pin?: string; rawIq?: number }) {
   const name = String(o.name || '').trim() || 'VibeSDR';
   const rate = Math.max(0, Math.round(o.rate || 0));
-  const pin = pinTyped(o.pin ?? '');
   return {
     simple: true,
-    simplePin: pin,
-    simpleRawIq: o.rawIq === 1 ? 1 : 0,
+    // ★ only when the screen has them (Simple's own); a start that does not (remote setup's) leaves the stored ones alone
+    ...(o.pin !== undefined ? { simplePin: pinTyped(o.pin) } : {}),
+    ...(o.rawIq !== undefined ? { simpleRawIq: o.rawIq === 1 ? 1 : 0 } : {}),
     name,
     mdnsName: String(o.mdnsName || '').trim(),
     // ★ 0 = listeners choose their span: start at the radio's top rate (its own list), never pin.

@@ -18,8 +18,9 @@ type Props = {
   running: { ip: string; port: number } | null;
   mdnsHost: string;
   starting: boolean;
-  /** The screen's own refusal (no admin password) — the key says it, in red, rather than starting. */
-  startBlockedBy?: string;
+  /** ★★★ beta96 a START that was just refused: the one line naming what is missing, under the key (red). Never shown
+   *  while browsing — only after the owner pressed START (Stuart 11-26). The key itself stays green. */
+  refusal?: string;
   onStart: () => void;
   onStop: () => void;
   onServerType?: () => void;
@@ -43,10 +44,12 @@ export default function ServerTopBar(p: Props) {
       ) : p.starting ? (
         <View style={{ padding: 22, alignItems: 'center' }}><ActivityIndicator color={C.ok} /></View>
       ) : (
-        <ServerKey big first color={p.startBlockedBy ? C.danger : C.ok} dim={C.textDim}
-          border={p.startBlockedBy ? C.danger : C.ok} fill={p.startBlockedBy ? C.dangerBg : C.okBg} fontFamily={F}
+        <ServerKey big first color={C.ok} dim={C.textDim} border={C.ok} fill={C.okBg} fontFamily={F}
           focused={hl === 0} onFocusHere={() => setHl(0)} testID="topbar-start"
-          title={p.startBlockedBy ? p.startBlockedBy : '▶ START SERVER'} onPress={p.onStart} />
+          title="▶ START SERVER" onPress={p.onStart} />
+      )}
+      {!p.running && !!p.refusal && (
+        <Text testID="topbar-refusal" style={{ color: C.danger, fontFamily: F, fontSize: 14, lineHeight: 19, marginTop: 8 }}>{p.refusal}</Text>
       )}
       {!!line && (
         <Text testID="topbar-remote-line" style={{ color: C.textDim, fontFamily: F, fontSize: 13, lineHeight: 18, marginTop: 8 }}>{line}</Text>

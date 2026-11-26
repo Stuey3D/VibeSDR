@@ -38,7 +38,7 @@ export async function storeFacts(): Promise<StoreFacts | null> {
 
 /** ★ Start a VibeServer Simple: only its four go to the server, which merges them into the store (VibeServerOps). */
 export async function startSimpleServer(o: { name: string; mdnsName: string; rate: number; topRate: number; fps: number;
-                                             pin: string; rawIq: number }) {
+                                             pin?: string; rawIq?: number }) {
   const cfg = simpleStartConfig(o);
   return await Local.startVibeServer(cfg) as { ip: string; port: number; name: string };
 }

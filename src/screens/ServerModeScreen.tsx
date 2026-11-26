@@ -265,9 +265,11 @@ import DeviceReset from '../components/DeviceReset';
 import { saveAdminPasswordOnDevice, savePinOnDevice } from '../services/serverChoiceStore';
 import { mdnsLabel } from '../utils/serverChoice';
 // ★★★ beta96 b96-setupux the screen in collapsible sections, in Stuart's order (src/utils/setupSections.ts)
-import SetupSection, { SectionAllRow } from '../components/SetupSection';
+import SetupSection, { SectionAllRow, SetupTabs } from '../components/SetupSection';
 import { EMPTY_MEMO, RADIO_ORDER, SECTIONS_KEY, SERVER_ORDER, locationMust, mustCleared, opModeSummary, orderSections, parseStored,
-         sectionOpen, setAllSections, toggleSection, type SectionMemo } from '../utils/setupSections';
+         sectionOpen, setAllSections, toggleSection, type SectionMemo,
+         secState, startRefusal, triedAfterStart, triedPrune, reopenFor, FULL_TABS, radioTabLabel, type FullTab,
+         type SectionGroup } from '../utils/setupSections';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -567,7 +569,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   // and a phone serves ONE (it cannot power three over OTG), so "Full" would promise a parity it
   // cannot deliver (Stuart, 2026-08-12). It adds no process and no second port: everything it
   // offers is applied to the radio this app is already running.
-  const [advanced, setAdvanced]   = useState(false);
+  /* ★★★ beta96 (Stuart 11-26) FULL'S OLD "SIMPLE / ADVANCED" TOGGLE IS GONE. With the tabbed page every setting is in its
+   *  section, and "Simple" now means only the entry's VibeServer Simple (Local Network Only). What it decided is decided
+   *  where it belongs: ONE LISTENER or MANY is "Listeners" (maxUsers) and "Operating mode" (radioUse) on the RADIO tab.
+   *  Full is therefore always what Advanced was — EXCEPT with the web client off, where the admin page (log, banning) has no
+   *  way to be reached, so those parts stay off exactly as the old toggle forced them (Stuart 2026-08-19). */
+  const [webServer, setWebServer] = useState(true);
+  const advanced = webServer;
   const [landingMsg, setLandingMsg] = useState('');
   const [landingUrl, setLandingUrl] = useState('');
   const [landingLbl, setLandingLbl] = useState('');
@@ -766,6 +774,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     AsyncStorage.getItem(SECTIONS_KEY).then((v) => setSecMemo((m) => ({ ...m, stored: parseStored(v) }))).catch(() => {});
   }, []);
   const secPersist = (m: SectionMemo) => { setSecMemo(m); AsyncStorage.setItem(SECTIONS_KEY, JSON.stringify(m.stored)).catch(() => {}); };
+  /* ★★★ beta96 (Stuart 11-26) FULL IS TABBED — SERVER | RADIO, like the web Setup page — and a section is RED only after a
+   *  START it stopped (secTried: the keys START was refused for; each stays red until fixed, then forgotten). */
+  const [fullTab, setFullTab] = useState<FullTab>('server');
+  const [secTried, setSecTried] = useState<Record<string, boolean>>({});
+  const [startRefused, setStartRefused] = useState('');
   /** ★ "Start automatically when power returns" — offered only on Android 5.0–7.0 (VibeBootStart.MAX_SDK), where
    *  Android may give the radio back after a restart (Kiko's Moto G, 2026-10-02). Stored natively: the boot
    *  receiver reads it with no JS running. */
@@ -1458,7 +1471,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
   </>);
 
-  const [webServer, setWebServer] = useState(true);
+  // ★ beta96 `webServer` is declared above, beside `advanced` (which follows it)
   const [locMode, setLocMode]     = useState<LocationMode>('off');
   const [locCity, setLocCity]     = useState('');
   /** ★★ "Update this server's location as I move about" — vibeServer.ts resolveMovingLocation. Default OFF. */
@@ -1767,7 +1780,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const glk = g(K.gainLocks); if (glk != null) setGainLocks(glk); }
           { const gsp = g(K.gainSplits); if (gsp != null) setGainSplits(gsp); }
           { const lim = g(K.limitMin); if (lim != null) setLimitMin(Number(lim) || 0); }
-          { const fm = g(K.advanced); if (fm != null) setAdvanced(fm === '1'); }
+          // ★ beta96 vs_advanced is no longer read: Full is always the full screen (see `advanced` above)
           // — the radio's front end —
           { const tb = g(K.tunerBwAuto); if (tb != null) setTunerBwAuto(tb === '1'); }
           setGainCurves(s(K.gainCurves));
@@ -2297,6 +2310,26 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *   exist anywhere they can read it.
    */
   const needsAdminPw = !adminPw.trim();
+
+  /* ★★★ beta96 WHAT STOPS A START — Start's own refusals, each with its section (the three-state rules,
+   *  src/utils/setupSections.ts RULES.app.block): the admin password, the flight-tracker entry, a background profile the
+   *  engine refuses, an Icom CI-V address the radio could not have. One list, read by START (pressStart) and the headers. */
+  const civBad = isIcom && parseCivHex(icomCivTxt) === null;
+  const startBlocks: Array<{ key: string; group: SectionGroup; title: string; block: string }> = protoEff !== 'vibeserver' ? [] : [
+    { key: 'security', group: 'server', title: 'Admin password and PIN',
+      block: needsAdminPw ? 'No admin password: the server will not start without one' : '' },
+    { key: 'adsbFeed', group: 'server', title: 'Share ADS-B with flight trackers', block: afProblem },
+    { key: 'hardware', group: 'radio', title: isIcom ? 'Icom transceiver' : 'This radio\u2019s hardware',
+      block: civBad ? 'The Icom\u2019s CI-V address is two hex digits (94 on an IC-7300), or empty for the radio\u2019s own' : '' },
+    { key: 'background', group: 'radio', title: 'Background decoding', block: bgProblem },
+  ];
+  const blockOf = (k: string) => startBlocks.find((b) => b.key === k)?.block ?? '';
+  const blockSig = startBlocks.map((b) => b.key + '=' + (b.block ? 1 : 0)).join(',');
+  // ★ fixed = forgotten: broken again later is calm until the next START
+  useEffect(() => {
+    setSecTried((t) => triedPrune(t, (k) => !!blockOf(k)));
+    if (!startBlocks.some((b) => b.block)) setStartRefused('');
+  }, [blockSig]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Warn if the OS has BACKGROUND-RESTRICTED us, before we start serving.
@@ -2907,14 +2940,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  admin password / PIN change (no old password: the device is the proof) and RESET ALL SETTINGS sit at the bottom. */
   const pressStart = () => {
     if (protoEff !== 'vibeserver') { navigation.replace('RtlTcpServer', { name: name.trim() || 'VibeSDR RTL-SDR', advertise }); return; }
-    if (isIcom && parseCivHex(icomCivTxt) === null) {
-      setError('The Icom\u2019s CI-V address is two hex digits (94 on an IC-7300), or empty for the radio\u2019s own.');
+    /* ★★★ beta96 (Stuart 11-26) START WITH A SETTING MISSING: refused with one line naming it; that tab is selected, its
+     *  section opened and marked red with "!" and the reason (and any other blocker red too). Never shown while browsing. */
+    const ref = startRefusal(startBlocks);
+    if (ref) {
+      const keys = ref.all.map((b) => b.key);
+      setSecTried((t) => triedAfterStart(t, keys));
+      setSecMemo((m) => reopenFor(m, keys));
+      setFullTab(ref.first.group);
+      setStartRefused(ref.line);
+      setError(ref.line);
       return;
     }
-    if (needsAdminPw) {
-      setError('Set an admin password (below, or with "Change admin password / PIN" at the bottom), then Start.');
-      return;
-    }
+    setStartRefused('');
     if (!starting) void start();
   };
   const scInk = { text: C.text, textDim: C.textDim, key: C.key, keyAct: C.keyAct, border: C.border, borderBright: C.borderBright,
@@ -4032,7 +4070,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   //     way to reach it (Stuart, 2026-08-19).
                   // ★ Switched back rather than left dangling: a mode that silently does nothing
                   //   is worse than one that visibly turns itself off.
-                  if (!v && advanced) { setAdvanced(false); AsyncStorage.setItem(K.advanced, '0'); }
+                  // ★ beta96 `advanced` follows this switch (no toggle any more)
                 }}
                   trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
               </View>
@@ -4110,53 +4148,6 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 placeholder="Default: the name obtained from the USB port" placeholderTextColor={C.placeholder}
                 style={[styles.input, { marginTop: 8, color: C.text, fontFamily: F, borderColor: C.border }]} />
             </View>
-  </>);
-  const secBody_mode = (<>
-            {/* ★★★ THE MODE SWITCH SITS WHERE IT CHANGES SOMETHING — immediately above the radio
-                controls, because that is the only half of this screen it affects. It used to lead
-                the whole page, which read as though it governed everything below it; the SERVER
-                settings are identical in both modes, and putting a mode question above them
-                implied a choice that was not there (Stuart, 2026-08-17: "the simple and advanced
-                toggle needs to be above the radio controls since the server controls are identical
-                in both modes").
-                It sat at the BOTTOM, under the last setting, where it read as one more option
-                rather than the choice the page is organised around (Stuart, 2026-08-12: "the
-                simple and full button is at the bottom and doesnt change the GUI"). */}
-            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>MODE</Text>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              {([false, true] as const).map(v => (
-                <TouchableOpacity key={String(v)} disabled={v && !webServer}
-                  onPress={() => { setAdvanced(v);
-                                   AsyncStorage.setItem(K.advanced, v ? '1' : '0'); }}
-                  style={[styles.card, { flex: 1, borderColor: advanced === v ? C.keySelBorder : C.border,
-                                         backgroundColor: advanced === v ? C.keySelBg : 'transparent',
-                                         // ★ Greyed, not hidden: an option that vanishes leaves the
-                                         //   owner wondering whether it ever existed.
-                                         opacity: (v && !webServer) ? 0.4 : 1 }]}>
-                  <Text style={{ color: advanced === v ? C.keySel : C.key, fontFamily: F, fontSize: 14 }}>
-                    {v ? 'Advanced' : 'Simple'}
-                  </Text>
-                  <Text style={[styles.hint, { color: advanced === v ? C.textOnSel : C.textDim, fontFamily: F, marginTop: 4 }]}>
-                    {v ? 'Shared, managed, public' : 'Plug in and share'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-              {!webServer
-                ? 'Advanced needs the web client: the admin page — the connection log, '
-                  + 'per-address monitoring and banning — is served to a browser, so with the '
-                  + 'web client off there is no way to reach any of it. Turn it back on to choose '
-                  + 'Advanced.'
-                : advanced
-                ? 'Adds shared listening, tuning and gain limits, and the admin page — '
-                  + 'per-address monitoring, banning and a connection log, reachable from a browser '
-                  + 'wherever you are. An admin password is REQUIRED: that page can ban people and '
-                  + 'change your radio.'
-                : 'One listener at a time with the whole radio, and nothing to decide beyond the '
-                  + 'settings above. Choose Advanced to share it between several people, or to '
-                  + 'limit where they may tune.'}
-            </Text>
   </>);
   const secBody_howUsed = (advanced && !isIcom) ? (<>
             {/* ★★★ IN ADVANCED, THIS QUESTION COMES FIRST BECAUSE IT DECIDES THE REST. A shared
@@ -5829,14 +5820,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /* ── ★★★ beta96 b96-setupux the sections: title, the one line, the RED "!" (the refusals start() and the server make —
    *     the admin password Start insists on, the flight-tracker entry Start refuses, PSK Reporter's "Not sending: it needs
    *     your callsign", the satellite engine's "no location set"), and the body above. ── */
-  type SecDef = { key: string; title: string; summary: string; must: string; body: React.ReactNode };
+  /* ★★★ beta96 three states: `must` = what STOPS a start (startBlocks — red only after a START it stopped), `advise` = worth
+   *  setting, the server runs without it (amber). Neither = green. */
+  type SecDef = { key: string; title: string; summary: string; must: string; advise?: string; body: React.ReactNode };
   /* ★★★ b96-serverchoice HOOKS: `serverChoiceTop` is drawn at the very top of the screen (the TOP BAR); a section put in
    *  `serverChoiceSections.devicePassword` is drawn in the SERVER group at SERVER_ORDER's 'devicePassword' slot (after the
    *  benchmark and protocol, before the admin password and PIN). Both empty on this branch. */
   // ★ SC beta96 filled: START first (the same checks as the bottom START — pressStart) and the device-only password / PIN.
   const serverChoiceTop: React.ReactNode = (
     <ServerTopBar C={C} F={F} running={null} mdnsHost="" starting={starting}
-      startBlockedBy={protoEff === 'vibeserver' && needsAdminPw ? 'Set an admin password to serve' : undefined}
+      refusal={startRefused || undefined}
       onStart={pressStart} onStop={() => {}} hasAdminPassword={!needsAdminPw} remoteOn={remoteAccess}
       onServerType={!vibeServerOnly ? undefined : () => navigation.replace('ServerChoice', { choose: true })} />
   );
@@ -5854,12 +5847,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     ...(serverChoiceSections.devicePassword ? [serverChoiceSections.devicePassword] : []),
     { key: 'security', title: 'Admin password and PIN', body: vs ? secBody_security : null,
       summary: [adminPw.trim() ? 'Admin password set' : 'No admin password', pinMode === 'off' ? 'no PIN' : 'PIN on'].join(' · '),
-      must: needsAdminPw ? 'No admin password: the server will not start without one' : '' },
+      must: blockOf('security'),
+      advise: remoteAccess ? '' : 'Remote settings off: settings can only be changed on this device' },
     { key: 'network', title: 'On your network', body: secBody_localName,
       summary: (advertise ? 'Advertised as ' : 'Hidden · ') + (name.trim() || 'VibeSDR'), must: '' },
     { key: 'location', title: 'Where this receiver is', body: vs ? secBody_location : null,
       summary: locMoving ? 'On the move' : locMode === 'manual' ? locCity.trim() : 'Not set',
-      must: locationMust(locMode, !!locCity.trim(), !!locMoving) },
+      must: '', advise: locationMust(locMode, !!locCity.trim(), !!locMoving) },
     { key: 'proxy', title: 'Behind a reverse proxy', body: vs ? secBody_proxy : null,
       summary: proxies.trim() ? 'Trusting ' + proxies.trim() : 'No proxy', must: '' },
     { key: 'webClient', title: 'Web client', body: vs ? secBody_webClient : null,
@@ -5868,10 +5862,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       summary: communityMap ? 'Sharing to the community map' : 'Not sharing', must: '' },
     { key: 'adsbFeed', title: 'Share ADS-B with flight trackers', body: vs ? secBody_adsbFeed : null,
       summary: [afModel.serve ? `Beast out :${afModel.port}` : '', afModel.push ? 'Feeding trackers' : ''].filter(Boolean).join(' · ') || 'Off',
-      must: afProblem },
+      must: blockOf('adsbFeed') },
     { key: 'pskr', title: 'PSK Reporter', body: vs ? secBody_pskr : null,
       summary: pskrOn ? 'On · ' + (pskrCall || '?') + (wsprnetOn ? ' · WSPRnet' : '') : 'Off',
-      must: pskrOn && !pskrCall.trim() ? 'PSK Reporter needs a receiver name (your callsign)' : '' },
+      must: '', advise: pskrOn && !pskrCall.trim() ? 'PSK Reporter needs a receiver name (your callsign)' : '' },
     { key: 'audio', title: 'Audio', body: vs ? secBody_audio : null,
       summary: (['Off — everyone gets Opus', 'Listener’s choice', 'Only as a fallback for old browsers'] as const)[uncomp] ?? '', must: '' },
     { key: 'frameRate', title: 'Frame rate', body: vs ? secBody_fps : null,
@@ -5897,7 +5891,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     { key: 'hardware', title: isIcom ? 'Icom transceiver' : 'This radio’s hardware',
       body: (<>{radioUseEff === 'locked' && rateBlock}{secBody_hardware}</>),
       summary: isIcom ? (radio?.model || '') : [rate > 0 ? benchRateWords(rate) : 'Listeners choose the span', isRtl ? (rtlAgc ? 'AGC' : 'gain set') : ''].filter(Boolean).join(' · '),
-      must: '' },
+      must: blockOf('hardware') },
     { key: 'whereTune', title: 'Where listeners may tune', body: secBody_whereTune,
       summary: !rangeCount(allowRanges) && !rangeCount(blockRanges) ? 'Anywhere the radio reaches'
         : [rangeCount(allowRanges) ? `${rangeCount(allowRanges)} allowed` : '', rangeCount(blockRanges) ? `${rangeCount(blockRanges)} blocked` : ''].filter(Boolean).join(' · '),
@@ -5913,7 +5907,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         : landingHz > 0 ? `${Math.round(landingHz / 100) / 10} kHz ${String(landingMode).toUpperCase()}` : 'Where the last listener left it',
       must: '' },
     { key: 'background', title: 'Background decoding', body: !isIcom ? secBody_bg : null,
-      summary: bgWhole ? (bgChosen.length ? keepName(bgChosen, BG_ISM_WORDS) : String(bgWhole)) : 'Manual', must: '' },
+      summary: bgWhole ? (bgChosen.length ? keepName(bgChosen, BG_ISM_WORDS) : String(bgWhole)) : 'Manual', must: blockOf('background') },
     { key: 'fmDefaults', title: 'Broadcast FM defaults', body: secBody_fmDefaults,
       summary: fmDef.remember ? 'Remembers the last listener’s' : 'Returns to these', must: '' },
     { key: 'timeLimit', title: 'Time limit per listener', body: secBody_timeLimit,
@@ -5926,13 +5920,24 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       summary: keepAlive ? 'Keep radio alive' : 'Stop after five minutes', must: '' },
     { key: 'zoom', title: 'Zoom detail', body: secBody_zoom, summary: zoomSpec ? 'Real bins at deep zoom' : 'Off', must: '' },
   ];
-  const secShownNow = [...serverSecs, ...radioSecs].filter((s) => !!s.body);
-  const secRender = (list: SecDef[], order: readonly string[]) => orderSections(list.filter((s) => !!s.body), order).map((s) => (
-    <SetupSection key={s.key} sectionKey={s.key} title={s.title} summary={s.summary} must={s.must}
-      open={sectionOpen(secMemo, s.key, s.must)}
-      onToggle={(k) => secPersist(toggleSection(secMemo, k, s.must))}
+  /* ★★★ beta96 the TAB in front of you (SERVER | RADIO); RTL-TCP has no radio tab (no radio settings of its own). */
+  const tabNow: FullTab = vs ? fullTab : 'server';
+  const redOf = (s: SecDef) => secState({ summary: s.summary, block: s.must, advise: s.advise ?? '', tried: !!secTried[s.key] });
+  const secShownNow = (tabNow === 'server' ? serverSecs : radioSecs).filter((s) => !!s.body);
+  const secRender = (list: SecDef[], order: readonly string[]) => orderSections(list.filter((s) => !!s.body), order).map((s) => {
+    const st = redOf(s);
+    return (
+    <SetupSection key={s.key} sectionKey={s.key} title={s.title} summary={st.line} must={st.must} tone={st.tone}
+      open={sectionOpen(secMemo, s.key, st.must)}
+      onToggle={(k) => secPersist(toggleSection(secMemo, k, st.must))}
       onMustCleared={(k) => setSecMemo((m) => mustCleared(m, k))} C={C} F={F}>{s.body}</SetupSection>
-  ));
+    );
+  });
+  /** The tab's mark: red when a START was refused for a section on it, amber when one advises, green otherwise. */
+  const tabTone = (t: FullTab) => {
+    const tones = (t === 'server' ? serverSecs : radioSecs).filter((s) => !!s.body).map((s) => redOf(s).tone);
+    return tones.includes('red') ? 'red' : tones.includes('amber') ? 'amber' : 'green';
+  };
 
 
   // ── Config view ───────────────────────────────────────────────────────────
@@ -5997,17 +6002,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           </View>
         )}
         {/* ★★★ beta96 b96-setupux OPEN ALL / CLOSE ALL — every section on this screen */}
+        {/* ★★★ beta96 (Stuart 11-26) SERVER | RADIO — the web Setup page's tabs: one switch at the top, each tab its own
+            collapsible sections in Stuart's order. The RADIO tab is this device's radio. */}
+        {vs && (
+          <SetupTabs C={C} F={F} tab={tabNow} onTab={setFullTab}
+            tabs={FULL_TABS.map((t) => ({ id: t.id, label: t.id === 'radio' ? radioTabLabel(radioLabel.trim() || radio?.model || '') : t.label,
+                                          tone: tabTone(t.id) }))} />
+        )}
         <SectionAllRow C={C} F={F}
-          onAll={(open) => secPersist(setAllSections(secMemo, secShownNow.map((s) => ({ key: s.key, must: s.must })), open))} />
-        <Text style={[styles.section, { color: C.heading, fontFamily: F, marginTop: 14 }]}>SERVER SETTINGS</Text>
-        {secRender(serverSecs, SERVER_ORDER)}
+          onAll={(open) => secPersist(setAllSections(secMemo, secShownNow.map((s) => ({ key: s.key, must: redOf(s).must })), open))} />
+        {tabNow === 'server' && secRender(serverSecs, SERVER_ORDER)}
         {protoEff === 'vibeserver' ? (
           <>
-            {secBody_mode}
-            <Text style={[styles.section, { color: C.heading, fontFamily: F, marginTop: 22 }]}>
-              RADIO SETTINGS
-            </Text>
-            {secRender(radioSecs, RADIO_ORDER)}
+            {tabNow === 'radio' && secRender(radioSecs, RADIO_ORDER)}
             {/* ★★★ WARN WHILE SERVING, AND ONLY THEN. The phone is a SIMPLE-mode server: plug in
                 and share, which is the behaviour people like, so a password is NOT forced here.
                 But an owner who never opened this screen met the consequence as a stranger's
@@ -6028,10 +6035,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   that is usually nobody but you, and no password is needed.{'\n\n'}
                   A listening PIN above is the other half: the PIN decides who may LISTEN, the
                   password decides who may CHANGE the radio.{'\n\n'}
-                  Serving to the internet? Switch to ADVANCED at the top. It is built for it — an
-                  admin password is required there, and it adds the controls that go with being
-                  public: per-address monitoring and banning, tuning and gain limits, and a
-                  connection log you can read from a browser wherever you are.
+                  Serving to the internet? Keep the web client on: it brings the controls that go
+                  with being public — per-address monitoring and banning, tuning and gain limits,
+                  and a connection log you can read from a browser wherever you are.
                 </Text>
               </View>
             )}
@@ -6066,29 +6072,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                    green serve now button red with the text set an admin password to serve".
                 ★ Still pressable, and pressing it says where to go — the password field is far
                   enough down that "set one" is not obviously actionable on a phone. */}
+            {/* ★★★ beta96 (Stuart 11-26) NOT RED WHILE BROWSING ANY MORE: the bottom START is green and runs the top one's
+                checks (pressStart) — a missing setting is said when START is pressed: its tab selected, its section opened
+                red with "!" and the reason, and one line naming it (above, and here). */}
             <TouchableOpacity
-              style={[styles.startBtn, needsAdminPw
-                ? { borderColor: C.danger, backgroundColor: C.dangerBg }
-                : { borderColor: C.ok,     backgroundColor: C.okBg }]}
-              onPress={() => {
-                // ★ An Icom's CI-V address must be one the radio could have — the box says why, under it.
-                if (isIcom && parseCivHex(icomCivTxt) === null) {
-                  setError('The Icom\u2019s CI-V address is two hex digits (94 on an IC-7300), or empty for the radio\u2019s own.');
-                  return;
-                }
-                if (needsAdminPw) {
-                  setError('Set an admin password below, then Start. It is what stops a listener '
-                         + 'reaching the admin page and changing your radio — and it is what '
-                         + 'makes this server safe to put on the internet.');
-                  return;
-                }
-                void start();
-              }} disabled={starting}>
+              style={[styles.startBtn, { borderColor: C.ok, backgroundColor: C.okBg }]}
+              onPress={pressStart} disabled={starting}>
               {starting
                 ? <ActivityIndicator color={C.ok} />
-                : <Text style={{ color: needsAdminPw ? C.danger : C.ok, fontFamily: F, fontSize: 16 }}>
-                    {needsAdminPw ? 'Set an admin password to serve' : '▶ Start VibeServer'}
-                  </Text>}
+                : <Text style={{ color: C.ok, fontFamily: F, fontSize: 16 }}>▶ Start VibeServer</Text>}
             </TouchableOpacity>
           </>
         ) : (

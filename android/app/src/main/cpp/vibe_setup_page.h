@@ -230,6 +230,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 .card.sec.secOpen > .secHead{margin-bottom:10px}
 .card.sec h2.secOrig{display:none}
 .card.sec.secMust{border-color:var(--bad)}
+/* \u2605\u2605\u2605 beta96 (Stuart 11-26) THREE STATES, calm until a save: a small mark before the title — green (set up / nothing
+   needed), amber (worth setting, the server runs without it) — and RED with "!" only after a Save that it stopped. */
+.secHead .secMark{flex:none;width:9px;height:9px;border-radius:50%;margin-top:7px;background:var(--line)}
+.card.sec.secOk > .secHead .secMark{background:var(--good)}
+.card.sec.secWarn > .secHead .secMark{background:var(--amber)}
+.card.sec.secWarn > .secHead .secSum{color:var(--amber)}
+.card.sec.secMust > .secHead .secMark{background:var(--bad)}
 .card.sec.secMust > .secHead .secTitle,.card.sec.secMust > .secHead .secChev{color:var(--bad)}
 .card.sec.secMust > .secHead .secSum{color:#ff9b9b;white-space:normal}
 #secAllRow{display:flex;gap:8px;justify-content:flex-end;margin:0 0 10px}
@@ -9610,7 +9617,7 @@ if ($("beastAddGo")) {
   $("beastAddrSave").onclick = async () => {
     const r0 = radio();
     const why = beastAddrWhy($("beastAddr").value);
-    if (why) { $("beastAddrMsg").textContent = "Not changed — " + why + "."; return; }
+    if (why) { $("beastAddrMsg").textContent = "Not changed — " + why + "."; secTried("radio:ads-b-beast-feed"); return; }
     try {
       const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), { method: "POST",
         body: JSON.stringify({ action: "beastaddr", serial: r0.serial, beastIn: $("beastAddr").value.trim() }) });
@@ -12060,10 +12067,8 @@ $("saveRadioBtn").onclick = async () => {
   const list = radioList();
   if (!list.length) return;
   // ★ This posts the whole machine too (collect()), so the same address rule holds here.
-  if (dirReachStops()) return;
-  if (modesStop()) return;   // ★★★ beta96 never a radio with no modes
-  if (pskrStops()) return;
-  if (afStops()) return;   // ★★ beta96 a wrong flight-tracker entry is said, not saved
+  // ★★★ beta96 the save path's refusals, each one's section shown RED on its own tab (secSaveStops)
+  if (secSaveStops(false)) return;
   // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
   await hwPending;
@@ -12151,13 +12156,18 @@ function pskrWhy() {
   const c = pskrCallValue();
   if (/^[A-Za-z0-9\/-]{3,20}$/.test(c) && /[A-Za-z]/.test(c)) {
     if (!$("wsprnetOn").checked || wsprnetCallOk(wsprnetCallValue() || c.toUpperCase())) return {};
-    return { box: "wsprnetCall", short: "WSPRnet needs a callsign" };
+    // \u2605\u2605\u2605 beta96 a TYPED WSPRnet callsign that is not one blocks the save; an empty one only advises (amber)
+    return { box: "wsprnetCall", short: "WSPRnet needs a callsign", blocking: !!wsprnetCallValue() };
   }
-  return { box: "pskrCall", short: "PSK Reporter needs a receiver name (your callsign)" };
+  /* \u2605\u2605\u2605 beta96 (Stuart 11-26) "PSK Reporter ticked with no callsign" is AMBER: the server runs and simply sends nothing
+   *  (vibeserver_config.h: nothing is sent without pskrCall) — the app's Start never refused it either. A name TYPED but not
+   *  a valid one is an invalid field the save refuses (RED). */
+  return { box: "pskrCall", short: c ? "PSK Reporter: that receiver name is not valid" : "PSK Reporter needs a receiver name (your callsign)",
+           blocking: !!c };
 }
 function pskrStops() {
   const w = pskrWhy();
-  if (!w.box) return false;
+  if (!w.box || !w.blocking) return false;
   if (w.box === "wsprnetCall") {
     $("saveErr").textContent = "Not saved \u2014 WSPRnet needs a callsign: enter one under \u201cAlso send WSPR spots to WSPRnet\u201d, or switch that off.";
     $("wsprnetCall").scrollIntoView({behavior: "smooth", block: "center"}); $("wsprnetCall").focus();
@@ -12225,10 +12235,9 @@ function dirReachStops() {
 
 $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
-  if (dirReachStops()) return;
-  if (modesStop()) return;   // ★★★ beta96 never a radio with no modes
-  if (pskrStops()) return;
-  if (afStops()) return;   // ★★ beta96 a wrong flight-tracker entry is said, not saved
+  // ★★★ beta96 the save path's refusals, each one's section shown RED on its own tab (secSaveStops); radios never set up
+  //     turn red too (they will not be on air after this restart) — said, not refused: the other radios still go on air
+  if (secSaveStops(true)) return;
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
   // ★★★ WAIT FOR THE FORM TO BELONG TO THIS RADIO. stashRadio() refuses to read a form that is
@@ -12453,8 +12462,8 @@ function secEnsure() {
     h.classList.add("secOrig");
     const b = document.createElement("button");
     b.type = "button"; b.className = "secHead"; b.setAttribute("aria-expanded", "false");
-    b.innerHTML = '<span class="secChev" aria-hidden="true">▸</span><span class="secTxt"><span class="secTitle"></span>'
-      + '<span class="secSum"></span></span>';
+    b.innerHTML = '<span class="secChev" aria-hidden="true">▸</span><span class="secMark" aria-hidden="true"></span>'
+      + '<span class="secTxt"><span class="secTitle"></span><span class="secSum"></span></span>';
     b.querySelector(".secTitle").textContent = title;
     // ★ e.detail is 0 for a click made by Enter / Space / a remote's OK — then the focus goes INTO the section it opened
     b.addEventListener("click", (e) => secToggle(card, undefined, e.detail === 0));
@@ -12593,23 +12602,67 @@ const SEC_SUM = {
   "radio:time-limit": () => { const m = parseInt(secV("sessionLimit"), 10) || 0; return m ? m + " min · " + secT("sessionLimitMode") : "No limit"; },
 };
 
-/* ── what each section MUST have — the save path's refusals and the server's facts (see the header above) ── */
+/* ── ★★★ beta96 (Stuart 11-26) THREE STATES — GREEN set up / nothing needed · AMBER worth setting, the server runs without it ·
+ *  RED "!" a setting that PREVENTS the save (the save path's own refusals: dirWhy, modesWhy, afWhy, beastAddrWhy, a typed
+ *  PSK Reporter / WSPRnet name that is not one) — shown red ONLY after a SAVE / APPLY & RESTART it stopped, on its own tab,
+ *  opened, and red until it is fixed. Until a save is tried a blocking section is AMBER (calm), like any advice.
+ *  ★ ONE RULE SET WITH THE APP (src/utils/setupSections.ts RULES — scripts/test_setup_sections.ts compares the names):
+ *    blocking  dir · modes · flight-trackers · beast · pskr-invalid · radio-never-set-up
+ *    advisory  location · pskr-no-callsign · radio-not-detected
+ *  ★ A radio never set up is blocking in the sense that it will not be on air after the restart — the master save marks it
+ *    red but does not refuse (the other radios go on air). */
 function secLocationWhy() {
   if (ANDROID) return "";   // ★ a phone's location is the phone's own (the device card)
   const has = (secV("lat") && secV("lon")) || /^[A-Ra-r]{2}[0-9]{2}/.test(secV("locator")) || secC("locFollow");
   return has ? "" : "Location not set: satellites and maps need it";
 }
-const SEC_MUST = {
-  "server:where-this-receiver-is": secLocationWhy,
+const SEC_BLOCK = {
   "server:advertise-on-vibesdr-net": () => dirWhy(),
-  "server:psk-reporter": () => pskrWhy().short || "",
+  "server:psk-reporter": () => { const w = pskrWhy(); return w.blocking ? w.short : ""; },
   "radio:sdr-display-name": () => curRadio >= 0 && radio().enabled !== false && !radio().configured ? "Not set up yet: save this radio to put it on air" : "",
-  "radio:radio": () => SDR_ALARM.has(radio().serial) ? "Not detected: see the notice above" : "",
   "radio:ads-b-beast-feed": () => radio().driver === "beast" && beastAddrWhy(secV("beastAddr")) ? "Beast feed address missing or wrong: " + beastAddrWhy(secV("beastAddr")) : "",
   "radio:modes-and-decoders": () => modesWhy(radio()),
   "radio:share-ads-b-with-flight-trackers": () => afWhy(),
 };
-
+const SEC_ADVISE = {
+  "server:where-this-receiver-is": secLocationWhy,
+  "server:psk-reporter": () => { const w = pskrWhy(); return w.box && !w.blocking ? w.short : ""; },
+  "radio:radio": () => SDR_ALARM.has(radio().serial) ? "Not detected: see the notice above" : "",
+};
+/** The rule names (for the test that holds web and app to one list). */
+const SEC_RULES = { block: ["dir", "modes", "flight-trackers", "beast", "pskr-invalid", "radio-never-set-up"],
+                    advise: ["location", "pskr-no-callsign", "radio-not-detected"] };
+/** ctx|key of every section a save was STOPPED on (or, for a radio never set up, saved past) — red until fixed. */
+let SEC_TRIED = {};
+function secTried(key, ctx) { SEC_TRIED[(ctx || secCtx()) + "|" + key] = 1; secRefresh(); }
+/** Select tab `i` (-1 = SERVER) the way a click does — the form is stashed, nothing typed is lost. */
+function secGoTab(i) {
+  if (curRadio === i) return;
+  const b = document.querySelector('#radioTabs [data-i="' + i + '"], [data-i="' + i + '"]');
+  if (b) b.click();
+}
+/** The section, opened and in view (its "!" decides it is open — secWantOpen). */
+function secShow(key) {
+  secRefresh();
+  const card = secCards().find(c => c.dataset.sec === key);
+  if (!card) return;
+  secPaint(card, true);
+  try { card.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { /* old browser */ }
+}
+/** ★★★ THE SAVE GATE (both Save buttons): the save path's refusals in their order; the first one found selects its tab, opens
+ *  its section red with "!" and the reason, and the save is refused with its own line (saveErr). `master`: the Save that
+ *  restarts — radios never set up are marked red as well (not refused). */
+function secSaveStops(master) {
+  const stop = (tab, key, say) => { secGoTab(tab); secTried(key); say(); secShow(key); return true; };
+  if (dirWhy()) return stop(-1, "server:advertise-on-vibesdr-net", dirReachStops);
+  const list = radioList();
+  for (let i = 0; i < list.length; i++)
+    if (modeDrawn().has(modeRadioKey(list[i], i)) && modesWhy(list[i])) return stop(i, "radio:modes-and-decoders", modesStop);
+  if (pskrWhy().blocking) return stop(-1, "server:psk-reporter", pskrStops);
+  if (afWhy()) return stop(curRadio, "radio:share-ads-b-with-flight-trackers", afStops);
+  if (master) { list.forEach((r, i) => { if (r.enabled !== false && !r.configured) SEC_TRIED[i + "|" + (r.serial || "") + "|radio:sdr-display-name"] = 1; }); secRefresh(); }
+  return false;
+}
 let secPending = 0;
 function secSchedule() {
   if (secPending) return;
@@ -12621,9 +12674,15 @@ function secRefresh() {
   for (const card of secCards()) {
     const key = card.dataset.sec, b = secHeadOf(card);
     if (!b) continue;
-    let must = "", sum = "";
-    try { must = SEC_MUST[key] ? (SEC_MUST[key]() || "") : ""; } catch (e) { must = ""; }
+    let block = "", advise = "", sum = "";
+    try { block = SEC_BLOCK[key] ? (SEC_BLOCK[key]() || "") : ""; } catch (e) { block = ""; }
+    try { advise = SEC_ADVISE[key] ? (SEC_ADVISE[key]() || "") : ""; } catch (e) { advise = ""; }
     try { sum = SEC_SUM[key] ? (SEC_SUM[key]() || "") : ""; } catch (e) { sum = ""; }
+    // ★★★ beta96 red only after a save it stopped, and until fixed; a fixed one forgets the attempt
+    const tk = secCtx() + "|" + key;
+    if (!block && SEC_TRIED[tk]) delete SEC_TRIED[tk];
+    const must = block && SEC_TRIED[tk] ? block : "";
+    const warn = must ? "" : (block || advise);
     if (card.__must !== must || card.__mustCtx !== secCtx()) {
       // ★ fixed under the owner's hands (same tab), never a tab switch to a radio without the problem
       if (card.__must && !must && card.__mustCtx === secCtx() && card.classList.contains("secOpen")) card.__stayOpen = secCtx();
@@ -12631,7 +12690,10 @@ function secRefresh() {
     }
     const red = !!must;
     if (card.classList.contains("secMust") !== red) card.classList.toggle("secMust", red);
-    const text = red ? "! " + must : sum;
+    if (card.classList.contains("secWarn") !== !!warn) card.classList.toggle("secWarn", !!warn);
+    if (card.classList.contains("secOk") !== (!red && !warn)) card.classList.toggle("secOk", !red && !warn);
+    card.dataset.secState = red ? "red" : warn ? "amber" : "green";
+    const text = red ? "! " + must : warn ? warn : sum;
     const el = b.querySelector(".secSum");
     if (el.textContent !== text) el.textContent = text;
     secPaint(card, secWantOpen(card));
