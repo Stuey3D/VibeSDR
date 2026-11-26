@@ -975,6 +975,27 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           directory (with a tunnel or an https address) for the map to find it.</div>
       </div>
 
+      <!-- ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's LIMITS (Stuart 11-26: "so people on limited or sketchy connections can host
+           it"; vibe_airsea_viewers.h, docs/v12/ADSB-FEED.md). The landing page's AIR & SEA MAP takes no radio, so the radios'
+           listener limits never counted it. ServerConfig::mapViewers (default 20, 0 = no limit) and mapTimeMin (0 = none).
+           The hint quotes the measured cost per viewer (asMapCost) and the total at the number chosen. -->
+      <div class="card" id="airSeaCard">
+        <h2>Air &amp; sea map</h2>
+        <p class="why">The landing page&rsquo;s <b>AIR &amp; SEA MAP</b> shows this server&rsquo;s aircraft, ships, radiosondes and
+          VOR stations to anyone, live, without taking a radio. Each person looking at it uses some of your upload.</p>
+        <label><span class="lbl">Map viewers</span>
+          <input type="number" id="mapViewers" min="0" max="1000" step="1" value="20" style="max-width:110px">
+          <div class="hint">How many may have the map open at once. 0 = no limit. The next one is told &ldquo;The map is full
+            &mdash; try again shortly&rdquo;. Counted per open map, not per address, so a household or a mobile network sharing
+            one address is counted properly. You, signed in as the owner, are never turned away.</div></label>
+        <label><span class="lbl">Map time limit</span>
+          <input type="number" id="mapTimeMin" min="0" max="1440" step="1" value="0" style="max-width:110px"> minutes
+          <div class="hint">How long one address may keep the map open. 0 = no limit. A minute before the end the map says so;
+            at the end it stops. A new tab or a reload does not start the clock again: the address has to be away for as long
+            as the limit.</div></label>
+        <div class="hint" id="mapCostHint"></div>
+      </div>
+
       <!-- ★★ V12 beta96 AIRCRAFT FEEDS — SERVER-LEVEL SOURCES (Stuart 11-26: "feeds are NOT radios"; vibe_feeds.h,
            docs/v12/ADSB-FEED.md). Another receiver's aircraft into this server's shared table: every radio's AIR & SEA map and
            the community map show them, labelled. Stored as ServerConfig::aircraftFeeds (a JSON list). The form shows only what
@@ -8400,6 +8421,7 @@ function fill() {
   $("gallerySaveLive").checked = cfg.gallerySaveLive !== false;
   // ★★ V12 beta94 the community map — absent = OFF (what an older config means)
   if ($("communityMap")) $("communityMap").checked = cfg.communityMap === true;
+  if ($("mapViewers")) { $("mapViewers").value = String(Number.isFinite(cfg.mapViewers) ? cfg.mapViewers : 20); $("mapTimeMin").value = String(Number.isFinite(cfg.mapTimeMin) ? cfg.mapTimeMin : 0); asMapCost(); }
   // ★★ V12 beta96 server-level aircraft feeds + the flight-tracker hub (absent = none / off)
   if ($("feedsCard")) feedsLoad(cfg);
   if ($("adsbFeedCard")) afLoad(cfg);
@@ -9607,6 +9629,22 @@ function feedsDraw() {
     $("feedAddMsg").textContent = "Removed \u2014 press Save to keep it.";
   });
 }
+/* ★★ V12 beta96 THE AIR & SEA MAP's LIMITS — the fields' values (clamped as the server clamps them) and the cost hint.
+ *  ★★★ The per-viewer figures are MEASURED (docs/v12/ADSB-FEED.md §The standalone map's limits — test-web-airsea-standalone
+ *      and test-aircraft-delta on a synthetic 150-aircraft sky, M5 Pro): AS_MAP_KBS at ~150 aircraft, AS_MAP_KBS_QUIET at ~30,
+ *      AS_MAP_OPEN_KB once when the map opens (the page's map data). Update them with the measurement. */
+const AS_MAP_KBS = 1.6, AS_MAP_KBS_QUIET = 0.4, AS_MAP_OPEN_KB = 900;
+function asMapNum(id, def, max) { const el = $(id); if (!el) return def; const v = parseInt(el.value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(max, v)) : def; }
+function asMapCost() {
+  const el = $("mapCostHint"); if (!el) return;
+  const n = asMapNum("mapViewers", 20, 1000);
+  const mbit = (kbs) => (kbs * 8 / 1000).toFixed(kbs * 8 >= 10000 ? 0 : 1);
+  el.innerHTML = "Measured: each viewer uses about <b>" + AS_MAP_KBS + " KB/s</b> with 150 aircraft on the map (about " + AS_MAP_KBS_QUIET
+    + " KB/s with 30), plus about " + AS_MAP_OPEN_KB + " KB once as the map opens. "
+    + (n ? "At " + n + " viewers that is about <b>" + Math.round(n * AS_MAP_KBS) + " KB/s</b> (" + mbit(n * AS_MAP_KBS) + " Mbit/s) of upload at 150 aircraft."
+         : "With no limit, every extra viewer adds that much.");
+}
+document.addEventListener("input", (e) => { if (e.target && (e.target.id === "mapViewers" || e.target.id === "mapTimeMin")) asMapCost(); });
 function feedsLoad(cfg) {
   feedsModel = feedsRowsFrom(cfg && cfg.aircraftFeeds);
   if (!$("feedFmt").__wired) {
@@ -10429,6 +10467,7 @@ function stashServer() {
   cfg.galleryPublic = $("galleryPublic").checked;
   cfg.gallerySaveLive = $("gallerySaveLive").checked;
   if ($("communityMap")) cfg.communityMap = $("communityMap").checked;
+  if ($("mapViewers")) { cfg.mapViewers = asMapNum("mapViewers", 20, 1000); cfg.mapTimeMin = asMapNum("mapTimeMin", 0, 1440); }   // ★★ beta96 the AIR & SEA map's limits
   if ($("feedsCard") && !feedsWhy()) cfg.aircraftFeeds = feedsBlob(feedsModel);   // ★★ beta96 server-level aircraft feeds
   if ($("adsbFeedCard") && afCfg && !afCollect().error) cfg.adsbShare = afCollect().blob;   // ★★ beta96 the flight-tracker hub
   if ($("communityModes")) cfg.communityOff = [...document.querySelectorAll("#communityModes [data-cm]")].filter((b) => !b.checked).map((b) => b.dataset.cm).join(",");
@@ -10477,6 +10516,7 @@ function collect() {
     galleryPublic:    $("galleryPublic").checked,
     gallerySaveLive:  $("gallerySaveLive").checked,
     communityMap:     $("communityMap") ? $("communityMap").checked : false,   // ★★ V12 beta94 the community map
+    ...($("mapViewers") ? { mapViewers: asMapNum("mapViewers", 20, 1000), mapTimeMin: asMapNum("mapTimeMin", 0, 1440) } : {}),   // ★★ beta96 the AIR & SEA map's limits
     ...($("feedsCard") && !feedsWhy() ? { aircraftFeeds: feedsBlob(feedsModel) } : {}),   // ★★ beta96 server-level aircraft feeds
     ...($("adsbFeedCard") && afCfg && !afCollect().error ? { adsbShare: afCollect().blob } : {}),   // ★★ beta96 the flight-tracker hub
     communityOff:     $("communityModes") ? [...document.querySelectorAll("#communityModes [data-cm]")].filter((b) => !b.checked).map((b) => b.dataset.cm).join(",") : "",
@@ -12582,6 +12622,8 @@ const SEC_SUM = {
   "server:advertise-on-vibesdr-net": () => secC("dirList") ? "Listed" + (secV("dirName") ? " as " + secV("dirName") : "") : "Not listed",
   "server:ssh": () => WIFI && WIFI.ssh ? secOnOff(WIFI.ssh.on, "On") : "",
   "server:vibesdr-community-map": () => secOnOff(secC("communityMap"), "Sharing to the community map", "Not sharing"),
+  "server:air-sea-map": () => { const n = asMapNum("mapViewers", 20, 1000), m = asMapNum("mapTimeMin", 0, 1440);
+    return (n ? "Up to " + n + " viewers" : "No viewer limit") + (m ? " · " + m + " min each" : ""); },
   "server:psk-reporter": () => secC("pskrOn") ? "On · " + (pskrCallValue() || "?") + (secC("wsprnetOn") ? " · WSPRnet" : "") : "Off",
   "server:share-ads-b-with-flight-trackers": () => [secC("afServe") ? "Beast out :" + (secV("afPort") || "30005") : "", secC("afPush") ? "Feeding trackers" : ""].filter(Boolean).join(" · ") || "Off",
   "server:aircraft-feeds-from-other-receivers": () => feedsModel.length ? feedsModel.map(f => f.name || feedsTitle(f)).join(" · ") : "None",

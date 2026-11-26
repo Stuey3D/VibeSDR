@@ -1190,6 +1190,18 @@ export function adsbFeedLines(d: any): string[] {
   if (!d.adsb && !d.input && !(Array.isArray(d.sources) && d.sources.length)) out.push('ADS-B is not running on this server now, so nothing is being sent.');
   return out;
 }
+/** ★★ beta96 THE STANDALONE AIR & SEA MAP's viewers (vibe_airsea_viewers.h, in admin/adsbfeed's `mapViewers`): the lines for
+ *  the admin page — viewers now against the owner's limit, the time limit, who. */
+export function mapViewerLines(m: any): string[] {
+  if (!m || typeof m !== 'object' || typeof m.now !== 'number') return [];
+  const vs: any[] = Array.isArray(m.viewers) ? m.viewers : [];
+  if (!m.now && !(Array.isArray(m.today) && m.today.length)) return [];
+  const out = [`${m.now} ${m.now === 1 ? 'viewer' : 'viewers'} now${Number(m.max) ? ` of ${m.max} allowed` : ' (no limit)'}${Number(m.minutes) ? ` \u00b7 ${m.minutes} min each` : ''}`];
+  for (const v of vs.slice(0, 50)) out.push(`${v.ip}${v.cc ? ` (${v.cc})` : ''} \u00b7 open ${dur(Number(v.forSecs) || 0)}`);
+  return out;
+}
+/** ★★ beta96 today's visits to the standalone map, as connection-log rows — counted in VISITORS / TYPICAL VISIT (machineStats). */
+let mapVisits: any[] = [];
 let feedBusy = false;
 async function renderAdsbFeed(): Promise<void> {
   const box = document.getElementById('admAdsbFeed');
@@ -1200,9 +1212,14 @@ async function renderAdsbFeed(): Promise<void> {
     let d: any = null;
     try { const r = await fetch(`${base()}/vibeserver/admin/adsbfeed?${await qCached()}`, { cache: 'no-store' }); if (r.ok) d = await r.json(); } catch { d = null; }
     const has = d && !d.none && (d.on || d.input || (Array.isArray(d.sources) && d.sources.length));
-    box.innerHTML = !has ? '' : `<div class="admScanRow"><b>AIRCRAFT FEEDS AND FLIGHT TRACKERS</b>`
+    const mv = mapViewerLines(d?.mapViewers);
+    mapVisits = Array.isArray(d?.mapViewers?.today) ? d.mapViewers.today.slice(0, 2000).map((v: any) => ({
+      ip: String(v.ip || ''), cc: String(v.cc || ''), at: Number(v.at) || 0, end: Number(v.end) || 0, session: `map:${v.ip}:${v.at}`, agent: 'AIR & SEA map', radio: 'AIR & SEA map' })) : [];
+    box.innerHTML = (!has ? '' : `<div class="admScanRow"><b>AIRCRAFT FEEDS AND FLIGHT TRACKERS</b>`
       + adsbFeedLines(d).map((l) => `<p class="wrap">${esc(l)}</p>`).join('')
-      + `<p class="dim wrap">Set up on the Setup page, SERVER tab. Only what aircraft broadcast is sent; HFDL, VDL2 and ACARS feeds are never sent to flight trackers; MLAT is not supported.</p></div>`;
+      + `<p class="dim wrap">Set up on the Setup page, SERVER tab. Only what aircraft broadcast is sent; HFDL, VDL2 and ACARS feeds are never sent to flight trackers; MLAT is not supported.</p></div>`)
+      + (!mv.length ? '' : `<div class="admScanRow"><b>AIR &amp; SEA MAP (NO RADIO)</b>` + mv.map((l) => `<p class="wrap">${esc(l)}</p>`).join('')
+      + `<p class="dim wrap">The landing page's map. Limits on the Setup page, SERVER tab, Air &amp; sea map.</p></div>`);
   } finally { feedBusy = false; }
 }
 
@@ -1835,8 +1852,10 @@ async function refresh() {
         .flatMap((r) => (r.data?.connections ?? []).map((x: any) => ({ ...x, radio: r.radio })))
         .sort((a: any, b: any) => (b.at || 0) - (a.at || 0)),
     };
+    // ★★ beta96 the standalone AIR & SEA map's visits count as visitors too (they take no radio, so no radio logs them)
+    const statConns = mapVisits.length ? [...conns.connections, ...mapVisits] : conns.connections;
     failures = 0;
-    renderHealth(st, statAll, conns.connections);
+    renderHealth(st, statAll, statConns);
     renderGraphs(hist, st.sys?.power?.dips);
     // ★★★ SIMPLE vs FULL. The gated panels are about MANAGING STRANGERS — who is connected,
     //     blocking them, where they came from. On a household receiver they are noise, and
