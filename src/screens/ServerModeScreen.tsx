@@ -243,6 +243,7 @@ import {
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
 import { rateGuardLine, type RateGuardState } from '../services/rateGuard';
+import * as NM from '../utils/newModes';   // ★★★ beta96 new modes off on a restricted radio
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -502,19 +503,9 @@ function benchProfileBlocks(j: any): { head: string; lines: string[]; usb?: stri
 }
 
 
-/** ★★ beta93 THE NEW-MODE DEFAULTS — the engine's rule (vibe_decoder_reach.h newModeOff) and the Setup page's
- *  (NEW_MODE_DEFAULTS): a whole-radio mode added after the owner switched every listening mode off starts OFF, so an
- *  only-mode radio (ADS-B only) stays one after an update. The owner's tap wins either way ("+vormap" on, "vormap" off). */
-const NEW_MODE_DEFAULTS: Record<string, string> = {
-  vormap: 'Off by default on this radio: it was set up with every listening mode switched off before VOR MAP existed',
-};
-const NEW_MODE_DEMODS = ['wfm', 'nfm', 'am', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'usb', 'lsb', 'cwu', 'cwl',
-                         'drm', 'freedv', 'm17', 'dvsig'];
-const NEW_MODE_WHOLE = ['dab', 'adsb', 'ism', 'ndb', 'ais', 'avdata', 'sondes'];
-export function newModeOff(id: string, own: Set<string>): boolean {
-  return !!NEW_MODE_DEFAULTS[id] && !own.has(id) && !own.has('+' + id) && NEW_MODE_DEMODS.every((d) => own.has(d))
-    && NEW_MODE_WHOLE.some((w) => !own.has(w));   // ★ another whole-radio mode still on (every one off = VOR only, on purpose)
-}
+/* ★★★ beta96 the NEW-MODE rule lives in ../utils/newModes (the server's vibe_decoder_reach.h newModesState): a switch an
+ *  update added stays OFF on a restricted or single-mode radio until the owner ticks it. docs/v12/NEW-MODES-OFF.md */
+export { newModeOff } from '../utils/newModes';
 
 export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const { font: F } = themeFor();
@@ -670,6 +661,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  switch. SAME off by default outside the Americas, DAB off by default in them. Only a DEFAULT — the owner's tap always
    *  wins: off is the id in the list as ever, ON against the default is "+id". Empty = region unknown (no position). */
   const [regionDefaults, setRegionDefaults] = useState<Record<string, string>>({});
+  /** ★★★ beta96 the switches' generations, from the engine (modeGens) — which modes an update added. */
+  const [modeGens, setModeGens] = useState<NM.ModeGens>(NM.NO_MODE_GENS);
+  const [modeAllNote, setModeAllNote] = useState('');
+  const [modeUndo, setModeUndo] = useState<string | null>(null);   // ★ ALL ON / ALL OFF: the list before, one tap back
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
   /** Modes and decoders switched off on this receiver, comma separated — see BLOCKABLE. */
@@ -1159,11 +1154,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                              radio?.model ?? '');
   const bgDriver = radio?.driver ?? 'rtl';
   const bgOff = (() => {
-    const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
-    const off = new Set([...own].filter((t) => t[0] !== '+'));
-    for (const id of Object.keys(regionDefaults)) if (!own.has(id) && !own.has('+' + id)) off.add(id);
-    for (const id of Object.keys(NEW_MODE_DEFAULTS)) if (newModeOff(id, own)) off.add(id);
-    return off;
+    return NM.enforcedOff(NM.ownSet(blockedModes), regionDefaults, modeGens);   // ★★★ beta96 the engine's list
   })();
   const bgR = bgReach(bgDriver, autoDs, directSampling === 'off' ? 0 : 1);
   const bgReachNow = { ismOk: bgR.ismOk && !bgOff.has('ism'), aisOk: bgR.aisOk && !bgOff.has('ais'),
@@ -1841,6 +1832,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             if (j && Array.isArray(j.regionDefaults)) for (const d of j.regionDefaults)
               if (d && typeof d.id === 'string' && typeof d.why === 'string') out[d.id.replace(/[^0-9a-z+-]/g, '').slice(0, 16)] = d.why.slice(0, 200);
             setRegionDefaults(out);
+            setModeGens(NM.parseModeGens(j));   // ★★★ beta96
           } catch { /* an older engine: no region defaults, nothing off by default */ }
         })();
         // ★ The block list comes from the ENGINE's table — the stored value is an index into it.
@@ -5209,10 +5201,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   const tree = full.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).filter((m) => modeCapShown(full, m));
                   const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
                   // ★★ V12 off here only by its REGION DEFAULT — the owner has said nothing either way
-                  const regionOff = (id: string) => (!!regionDefaults[id] && !own.has(id) && !own.has('+' + id)) || newModeOff(id, own);
-                  // ★ the list as the server ENFORCES it: the owner's, plus the region defaults, minus the "+id" words
-                  const off = new Set([...own].filter((t) => t[0] !== '+'));
-                  for (const id of [...Object.keys(regionDefaults), ...Object.keys(NEW_MODE_DEFAULTS)]) if (regionOff(id)) off.add(id);
+                  // ★ the list as the server ENFORCES it: the owner's, plus the region and new-mode defaults, minus their words
+                  const off = NM.enforcedOff(own, regionDefaults, modeGens);
                   const kids = (id: string) => tree.filter((m) => m.parent === id);
                   const deepOwn = own.has('ft8+deep') ? 1 : own.has('ft8-deep') ? -1 : 0;
                   const deepAuto = ft8DeepAutoFrom(benchRows);
@@ -5232,9 +5222,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     //    default never overwrites it.
                     const wasOff = m.on ? !set.has(m.id) : off.has(m.id);
                     if (m.on) { if (wasOff) set.add(m.id); else set.delete(m.id); }
-                    else if (wasOff) { set.delete(m.id); if (regionDefaults[m.id] || NEW_MODE_DEFAULTS[m.id]) set.add('+' + m.id); }
+                    else if (wasOff) { set.delete(m.id); if (regionDefaults[m.id] || NM.modeIsNew(m.id, set, modeGens)) set.add('+' + m.id); }
                     else { set.delete('+' + m.id); set.add(m.id); }
-                    const v = [...set].join(',');
+                    // ★★★ beta96 a tap = the owner has seen this list (stamp), and never a radio with no modes at all
+                    const v = NM.stamp([...set].join(','), modeGens, regionDefaults);
+                    if (!m.on && !wasOff && NM.noneLeft(v, regionDefaults, modeGens)) {
+                      setModeAllNote(`Not switched off \u2014 ${m.label} is the last mode on, and a server needs one.`);
+                      return;
+                    }
+                    setModeAllNote('');
                     setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
                     // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so.
                     if (m.id === 'dab' && !wasOff && landingDabCh >= 0) {
@@ -5324,7 +5320,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     const k = kids(m.id);
                     const self = !m.on && off.has(m.id) ? m : null;
                     const rdWhy = m.on ? undefined : regionDefaults[m.id]
-                      || (NEW_MODE_DEFAULTS[m.id] && (own.has('+' + m.id) || newModeOff(m.id, own)) ? NEW_MODE_DEFAULTS[m.id] : undefined);
+                      || (NM.modeIsNew(m.id, own, modeGens)   // ★★★ beta96 a switch this update added
+                        ? (NM.newModeOff(m.id, own, modeGens) ? 'NEW (off until you tick it)' : 'NEW in this update') : undefined);
                     const box = rdWhy ? (
                       <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
                         {chip(m, inert)}
@@ -5397,11 +5394,76 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       </View>
                     );
                   };
+                  /* ★★★ beta96 NEW MODES + ALL ON / ALL OFF (docs/v12/NEW-MODES-OFF.md). Every tap here is kept at once (this
+                   *  screen has no Save), so ALL ON / ALL OFF leave an UNDO beside them — a mis-tap is one tap back. */
+                  const nmState = NM.newModesState(own, modeGens);
+                  const added = NM.newModeIds(own, modeGens).filter((id) => tree.some((m) => m.id === id));
+                  const addedOff = added.filter((id) => NM.newModeOff(id, own, modeGens));
+                  const label = (id: string) => (full.find((m) => m.id === id) || { label: id }).label;
+                  const keepCsv = (v: string) => { setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v); };
+                  const plainIds = (all: boolean) => (all ? full : tree).filter((m) => !m.on && !m.node).map((m) => m.id);
+                  const landingId = landingAdsb ? 'adsb' : landingDabCh >= 0 ? 'dab' : (landingMode === 'cw' ? 'cwu' : landingMode);
+                  const allSet = (on: boolean) => {
+                    // ★ ON: what this radio draws; OFF: every switch (hidden ones too, so one whole-radio mode left IS single-mode)
+                    const v0 = NM.allSet(blockedModes, on, plainIds(!on), landingId, regionDefaults, modeGens);
+                    if (v0 == null) { setModeAllNote('Not changed \u2014 a radio needs one mode left on. Set where new listeners start, then All off keeps that one.'); return; }
+                    setModeUndo(blockedModes);
+                    keepCsv(NM.stamp(v0, modeGens, regionDefaults));
+                    setModeAllNote(on ? 'Every mode switched on.' : `Everything off except ${label(landingId)}, where new listeners start.`);
+                    if (!on && landingId !== 'dab' && landingDabCh >= 0) setDabLanding(-1, 0, '');
+                  };
+                  const btn = (key: string, text: string, onPress: () => void, active = false, disabled = false) => (
+                    <TouchableOpacity key={key} onPress={onPress} disabled={disabled} accessibilityRole="button" accessibilityLabel={text}
+                      accessibilityState={{ selected: active, disabled }}
+                      style={{ paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, borderWidth: 1,
+                               borderColor: active ? C.keyBorderAct : C.keyBorder, opacity: disabled ? 0.45 : 1 }}>
+                      <Text style={{ color: active ? C.keyAct : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{text}</Text>
+                    </TouchableOpacity>
+                  );
+                  const polOn = !nmState.single && (nmState.policy > 0 || (nmState.policy === 0 && !nmState.restricted));
                   return (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-                      {/* ★ On an Icom, WFM, DAB and Advanced RDS do not exist (an IQ demodulator's, and no Icom row in
-                          icom_models.h has a WFM mode), so a chip to block them would block nothing. */}
-                      {tree.filter((m) => !m.parent).map(draw)}
+                    <View>
+                      {added.length > 0 && (
+                        <View style={{ marginTop: 8, gap: 6 }}>
+                          <Text style={[styles.hint, { color: C.text, fontFamily: F }]}>
+                            {`This update added ${added.length === 1 ? 'a new switch' : added.length + ' new switches'}: ${added.map(label).join(', ')}. `
+                              + (addedOff.length === added.length ? 'They are off until you tap them (marked NEW below).'
+                                 : addedOff.length ? 'Those marked NEW below are off until you tap them.' : 'They are on.')}
+                          </Text>
+                          <View style={{ flexDirection: 'row' }}>
+                            {btn('nmKeep', 'Keep as shown', () => keepCsv(NM.stamp(blockedModes, modeGens, regionDefaults)))}
+                          </View>
+                        </View>
+                      )}
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                        {btn('allOn', 'All on', () => allSet(true))}
+                        {btn('allOff', 'All off', () => allSet(false))}
+                        {modeUndo != null && btn('allUndo', 'Undo', () => { keepCsv(modeUndo); setModeUndo(null); setModeAllNote(''); })}
+                      </View>
+                      {!!modeAllNote && (
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>{modeAllNote}</Text>
+                      )}
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                        {/* ★ On an Icom, WFM, DAB and Advanced RDS do not exist (an IQ demodulator's, and no Icom row in
+                            icom_models.h has a WFM mode), so a chip to block them would block nothing. */}
+                        {tree.filter((m) => !m.parent).map(draw)}
+                      </View>
+                      {modeGens.now > 0 && (
+                        <View style={{ marginTop: 10, gap: 6 }}>
+                          <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>When an update adds new modes</Text>
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                            {btn('nmOn', 'Switch them on', () => keepCsv(NM.setPolicy(blockedModes, 'on')), polOn, nmState.single)}
+                            {btn('nmOff', 'Leave them off until I tap them', () => keepCsv(NM.setPolicy(blockedModes, 'off')), !polOn, nmState.single)}
+                          </View>
+                          <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                            {nmState.single
+                              ? 'This radio offers one mode, so new modes always stay off \u2014 listeners cannot leave that mode.'
+                              : nmState.policy ? 'Your choice.'
+                              : nmState.restricted ? 'Automatic: you have switched some modes off, so new ones stay off until you tap them.'
+                              : 'Automatic: nothing is switched off, so new ones come in on.'}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                   );
                 })()}
