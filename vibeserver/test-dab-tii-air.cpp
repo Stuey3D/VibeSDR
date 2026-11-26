@@ -29,7 +29,10 @@ static int fails = 0;
 
 /* ★ Per verdict, the LIST as a panel draws it (TiiTrack, 2026-11-15): `tii` = on the air, `tiiHeld` = signal lost.
  *  seen: verdicts a code was listed on the air in; first: the verdict it was first listed (live or held); held: ever held. */
-struct Run { int verdicts = 0; std::map<std::string, int> seen, first; std::set<std::string> held; };
+struct Run { int verdicts = 0; std::map<std::string, int> seen, first; std::set<std::string> held;
+             /* ★★ 2026-11-25: every NAMED line must carry the directory's ERP and height (erpKw, htM, htRef) — the
+              *  Ofcom record has both for every site these captures name. */
+             int named = 0, namedWithSpecs = 0; };
 
 static bool replay(const std::string& path, double secs, const DabTxDb& db, Run& out) {
     FILE* fp = std::fopen(path.c_str(), "rb");
@@ -65,7 +68,13 @@ static bool replay(const std::string& path, double secs, const DabTxDb& db, Run&
             const size_t sp = j.find("\"sub\":", p); const int s = std::atoi(j.c_str() + sp + 6);
             const size_t close = j.find('}', p), ss = j.find("\"site\":\"", p);
             std::string site = "?";
-            if (ss != std::string::npos && ss < close) { const size_t a = ss + 8; site = j.substr(a, j.find('"', a) - a); }
+            if (ss != std::string::npos && ss < close) {
+                const size_t a = ss + 8; site = j.substr(a, j.find('"', a) - a);
+                const std::string obj = j.substr(p, close - p);
+                ++out.named;
+                if (obj.find("\"erpKw\":") != std::string::npos && obj.find("\"htM\":") != std::string::npos
+                    && obj.find("\"htRef\":\"agl\"") != std::string::npos) ++out.namedWithSpecs;
+            }
             const std::string key = std::to_string(m) + "/" + std::to_string(s) + " " + site;
             if (!out.first.count(key)) out.first[key] = out.verdicts;
             if (hs != std::string::npos && p > hs) out.held.insert(key); else out.seen[key]++;
@@ -106,6 +115,7 @@ int main() {
             printf("     %-28s listed from verdict %d, on the air in %d%s\n", kv.first.c_str(), kv.second,
                    r.seen.count(kv.first) ? r.seen.at(kv.first) : 0, r.held.count(kv.first) ? ", held at times" : "");
         CHECK(r.verdicts >= 25, "a verdict about every 0.8 s (the whole 25 s capture)");
+        CHECK(r.namedWithSpecs == r.named, "every named line carries erpKw, htM and htRef \"agl\" in the JSON");
         /* ★ Confirmation (kTiiTrackConfirm of kTiiTrackWindow): a steady site is listed on about its seventh verdict and
          *  on the air in every one after; nothing is listed before the seventh. */
         for (const auto& kv : r.first) {

@@ -27,7 +27,7 @@ import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSh
 import { DecoderShell, decoderBodyInset, useDecoderTokens, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
-import { dabLicensedTail, type DabState } from '../services/dabTypes';
+import { dabLicensedTail, dabTxSpecsTail, type DabState } from '../services/dabTypes';
 import { DAB_BLOCKS, DAB_PTY, dabBlockAt } from '../services/dabBlocks';
 import { lookupStationLogo, tidyStationName } from '../services/stationLogo';
 import { receiverIso } from '../services/rdsCountry';
@@ -914,6 +914,9 @@ export default function DabPanel(p: DabPanelProps) {
                           + (e.t.c === 2 ? ' · one of several on a shared Sub Id' : '')
                           + (e.t.area && e.t.area !== e.t.site ? ` (${e.t.area})` : '')
                           + (e.t.km !== undefined && e.t.km >= 0 ? ` · ${(e.t.km * 0.621371).toFixed(e.t.km < 16 ? 1 : 0)} mi` : '')
+                          /* ★★ The regulator's ERP and height (2026-11-25) — shared words with the web. The row is a
+                              Marquee, so nothing drops on a narrow window: it scrolls. */
+                          + (e.t.site ? dabTxSpecsTail(e.t) : '')
                           + (e.lost ? ' · signal lost' : ` · ${e.t.db.toFixed(1).padStart(4, '\u2007')} dB`)
                           + (e.t.ambiguous ? ' · ambiguous' : '')}
                      tone={e.lost ? 'warn' : undefined} />
@@ -929,6 +932,7 @@ export default function DabPanel(p: DabPanelProps) {
             <Row key={l.code + i} label={i === 0 ? 'Licensed sites' : ''}
                  value={`${l.site}${l.area && l.area !== l.site ? ` (${l.area})` : ''}`
                       + (l.km >= 0 ? ` · ${(l.km * 0.621371).toFixed(l.km < 16 ? 1 : 0)} mi` : '')
+                      + dabTxSpecsTail(l)
                       + dabLicensedTail(l)} />
           ))}
           {/* ★ Always present, whatever it says: a row that comes and goes with its value rebuilds

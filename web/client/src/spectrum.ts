@@ -441,8 +441,8 @@ export interface DabState {
   /*  ★★ `o` (2026-11-15): the line's place in the server's list (the order codes were confirmed). `tiiHeld`: the listed
    *    codes NOT on the air now ("signal lost"), at their last reading, until the server expires them (5 min,
    *    vibe_dab_tii.h TiiTrack). Its presence means the server keeps the list: a panel draws it and remembers nothing. */
-  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number }[];
-  tiiHeld?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number }[];
+  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number; erpKw?: number; htM?: number; htRef?: string }[];
+  tiiHeld?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number; erpKw?: number; htM?: number; htRef?: string }[];
   /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
    *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
   mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];
@@ -484,7 +484,7 @@ export interface DabState {
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** A regulator's licensed sites for this ensemble (nearest first when the receiver's position is known).
    *  `code` is the TII ("" when the source has none); `src` whose record it is — absent = Ofcom (older servers). */
-  licensed?: { site: string; area: string; code: string; km: number; src?: string }[];
+  licensed?: { site: string; area: string; code: string; km: number; src?: string; erpKw?: number; htM?: number; htRef?: string }[];
   /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?h= (or ?seq= from an older server) — see dabSlide.ts. */
   slide?: { seq: number; mime: string; bytes: number; name: string; h?: string };   // ★ h: dab=2 only — see dabSlide.ts
   motGroups?: number; motCrcFail?: number; motObjects?: number;

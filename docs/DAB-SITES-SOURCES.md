@@ -33,6 +33,48 @@ python3 scripts/dab-sites/import_nl_rdi.py     # irregular; finds the current da
 python3 scripts/dab-sites/test_dabsites.py     # fixtures only, no network
 ```
 
+## Power and height (added 2026-11-25)
+
+Stuart asked for each site's power and aerial height in the DAB panel, so that it is obvious why a
+farther site can be the stronger one (12B: Daventry at 12 mi is 24 dB, Geddington at 13 mi is 4 dB).
+These are only ever the regulator's own published figures, from the same files and under the same
+licences as the sites. A field the source does not publish is left out, never estimated.
+
+| Country | Source | ERP? | Height? | Units, and what the height is measured from |
+|---|---|---|---|---|
+| UK | Ofcom `txparamsdab.csv` | Yes: "In-Use ERP Total" | Yes: "In-Use Ae Ht" | ERP in kW. Height is the aerial above the ground at the site, in metres. |
+| CH | BAKOM GeoJSON | Only where a site carries one service: "power" | No | ERP as "270 W" or "1.2 kW". There is one figure per site, so at a mixed FM and DAB site it is not the DAB figure (Bettingen St. Chrischona reads 180 kW). It is kept only when the site lists one service, which is 156 of 335 sites. |
+| CZ | ČTÚ CSV | Yes: "ERP W" | Yes: "Výška nad mořem" | ERP in W. Height is the site's ground above sea level, in metres. Praha Město, the Žižkov tower, reads 258 m, which is the hill and not the aerial. |
+| NL | RDI text file | Yes: "ERP(kW)" | Yes: "Eff.Hoogte" | ERP in kW. Height is in metres and labelled "effective height", which is RDI's own term. |
+
+The UK figures were refreshed from Ofcom's official file on 2026-11-25:
+<https://www.ofcom.org.uk/siteassets/resources/documents/spectrum/tv-transmitter-guidance/tech-parameters/txparamsdab.csv>,
+linked from the
+[technical parameters page](https://www.ofcom.org.uk/tv-radio-and-on-demand/coverage-and-transmitters/radio-tech-parameters),
+which was last updated on 16 November 2026. The licence is OGL v3.0, as before, and the site rows
+did not change. Ofcom writes the ERP as `9.549,926`. Read as kW with extra digits, that is
+9.549926 kW. Read in continental notation it is 9 549,926 W. Both readings give the same 9.55 kW.
+The DAB file gives no units. In the workbook version of the same data (`txparams.xlsx`), the MF and
+VHF sheets call the same height column "In-Use Aerial Ht". The MF sheet gives its power in kW
+("In-Use EMRP (kW)").
+
+The panel says what each height is measured from:
+
+- "aerial 106 m above ground" for Ofcom and for an owner's list
+- "site 402 m above sea level" for ČTÚ
+- "effective height 332 m" for RDI
+
+Every field is shown on every layout. A Transmitters or Licensed sites line that is wider than the
+panel scrolls, as these lines already did.
+
+Examples from BBC National DAB, 12B (CE15), as the panel shows them:
+
+| Site | TII | ERP | Aerial above ground |
+|---|---|---|---|
+| Daventry (Northants) | 17/02 | 9.55 kW | 106 m (site 199 m above sea level) |
+| Northampton | 17/0F | 2 kW | 30 m (site 127 m) |
+| Geddington (North Northamptonshire) | 17/05 | 5 kW | 49 m (site 118 m) |
+
 ## How it is shown
 
 In the DAB panel (the app and the web client), the **Licensed sites** row now ends with whose record
@@ -71,8 +113,12 @@ A server owner can place their **own** copy of the TII list that FMLIST exports,
 
 The TII column is decimal, main × 100 + sub. The server reads the file at start
 (`vibe_dab_txdb.h loadTxListFile`). It is never uploaded, fetched or redistributed by us, and its
-rows show as "your list". The older `dab-tii-<ecc>.csv` format (`eid,main,sub,site,area,lat,lon`,
-hex) still works.
+rows show as "your list". When the `height` and `kW` columns are filled in, they are shown as the
+aerial height above ground and the ERP. The older `dab-tii-<ecc>.csv` format
+(`eid,main,sub,site,area,lat,lon`, hex) still works. It now also takes two optional columns after
+`lon`: `erp_kw` (the ERP in kW) and `height_m` (the aerial height above ground, in metres). For
+example, `eid,main,sub,site,area,lat,lon,erp_kw,height_m`. Either column may be left empty, and a
+file with seven columns loads exactly as before.
 
 Not built yet: an in-app "Import TII list…" button. Choosing a file on the phone would have to be
 sent to the server that is doing the decoding. That would mean a new authenticated upload route,

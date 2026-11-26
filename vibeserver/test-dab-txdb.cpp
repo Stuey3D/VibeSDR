@@ -4,6 +4,7 @@
 #include "vibe_dab_txdb_ch.h"
 #include "vibe_dab_txdb_cz.h"
 #include "vibe_dab_txdb_nl.h"
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -125,6 +126,69 @@ int main() {
         for (size_t i = 0; i < kDabTx_E1_n; ++i)
             if (kDabTx_E1[i].src != kDabSrcOfcom || kDabTx_E1[i].flags) { CHECK(false, "UK rows default to Ofcom, EId-matched"); break; }
     }
+    // ── ★★ POWER AND HEIGHT (2026-11-25): the regulator's ERP and height reach the lookup and the licensed sites ──
+    {
+        DabTxDb db = makeDb();
+        // BBC National DAB, 12B (CE15) — the three sites of Stuart's panel, from Ofcom's record (16 Nov 2026 file)
+        struct K { int sub; const char* site; float kw; int agl; } uk[] = {
+            { 0x02, "Daventry", 9.5499f, 106 }, { 0x0F, "Northampton", 2.0f, 30 }, { 0x05, "Geddington", 5.0f, 49 } };
+        for (const auto& k : uk) {
+            const DabTxMatch m = db.lookup(0xE1, 0xCE15, 0x17, k.sub, 52.29, -0.85);
+            const std::string msg = std::string(k.site) + ": Ofcom ERP and aerial height above ground";
+            CHECK(m.found && m.site == k.site && std::fabs(m.erpKw - k.kw) < 0.001f && m.heightM == k.agl
+                  && m.heightRef == kDabHtAerialAgl, msg.c_str());
+        }
+        auto ls = db.sitesFor(0xE1, 0xCE15, 52.29, -0.85, 8, "12B");
+        bool sawDav = false;
+        for (const auto& x : ls) if (x.site == "Daventry") sawDav = std::fabs(x.erpKw - 9.5499f) < 0.001f && x.heightM == 106;
+        CHECK(sawDav, "licensed sites carry ERP and height too");
+        // Wrotham, Digital One (11D, C181, 01/07) — a big site, a second check on the column mapping
+        const DabTxMatch w = db.lookup(0xE1, 0xC181, 1, 7, NaN, NaN);
+        CHECK(w.found && w.erpKw > 1.0f && w.heightRef == kDabHtAerialAgl && w.heightM > 0, "Wrotham has an ERP and a height");
+        // ČTÚ: ERP and the SITE's altitude (Beroun, 12C, 0x2005); RDI: ERP and its effective height
+        auto cz = db.sitesFor(0xE2, 0x2005, 50.08, 14.42, 8, "12C");
+        bool czOk = false;
+        for (const auto& x : cz) if (x.site == "Beroun") czOk = std::fabs(x.erpKw - 0.316f) < 0.001f && x.heightM == 402 && x.heightRef == kDabHtSiteAsl;
+        CHECK(czOk, "ČTÚ Beroun: 316 W ERP, site 402 m above sea level");
+        auto nl = db.sitesFor(0xE3, 0x8FFF, 52.0, 5.05, 8, "7D");
+        bool nlOk = false;
+        for (const auto& x : nl) if (x.site == "Lopik") nlOk = std::fabs(x.erpKw - 3.16f) < 0.001f && x.heightM == 332 && x.heightRef == kDabHtEffective;
+        CHECK(nlOk, "RDI Lopik 7D: 3.16 kW ERP, 332 m effective height");
+        // BAKOM publishes no height, and a power only where the site carries one service
+        size_t chH = 0; for (size_t i = 0; i < kDabTx_CH_n; ++i) if (kDabTx_CH[i].heightRef != kDabHtNone) ++chH;
+        CHECK(chH == 0, "no Swiss row claims a height");
+        // ── the JSON fields: present when known, absent when not ──
+        CHECK(dabTxSpecsJson(9.5499f, 106, kDabHtAerialAgl) == ",\"erpKw\":9.55,\"htM\":106,\"htRef\":\"agl\"", "JSON: erpKw, htM, htRef");
+        CHECK(dabTxSpecsJson(0, 0, kDabHtNone).empty(), "JSON: nothing when nothing is published");
+        CHECK(dabTxSpecsJson(0.316f, 402, kDabHtSiteAsl) == ",\"erpKw\":0.316,\"htM\":402,\"htRef\":\"asl\"", "JSON: ČTÚ site altitude");
+        CHECK(dabTxSpecsJson(1.2f, 0, kDabHtNone) == ",\"erpKw\":1.2", "JSON: power alone");
+    }
+    // ── the owner's dab-tii-<ecc>.csv: seven columns as before, and the optional erp_kw,height_m ──
+    {
+        const char* dir = "/tmp";
+        const char* path = "/tmp/dab-tii-e0.csv";
+        FILE* f = std::fopen(path, "w");
+        std::fputs("# eid,main,sub,site,area,lat,lon[,erp_kw,height_m]\n", f);
+        std::fputs("10bc,0c,03,Old Format,Berlin,52.52,13.41\n", f);
+        std::fputs("10bc,0c,04,With Both,Berlin,52.50,13.40,10,368\n", f);
+        std::fputs("10bc,0c,05,Power Only,Berlin,52.49,13.39,2.5,\n", f);
+        std::fputs("10bc,0c,06,Height Only,Berlin,52.48,13.38,,120\n", f);
+        std::fputs("10bc,0c,07,Junk Specs,Berlin,52.47,13.37,abc,-5\n", f);
+        std::fclose(f);
+        DabTxDb db = makeDb();
+        CHECK(db.loadCountryFile(dir, 0xE0) == 5, "a dab-tii csv with and without the new columns loads every row");
+        DabTxMatch m = db.lookup(0xE0, 0x10BC, 12, 3, NaN, NaN);
+        CHECK(m.found && m.site == "Old Format" && m.erpKw == 0 && m.heightRef == kDabHtNone, "seven columns: no figures, none invented");
+        m = db.lookup(0xE0, 0x10BC, 12, 4, NaN, NaN);
+        CHECK(m.found && std::fabs(m.erpKw - 10.0f) < 0.001f && m.heightM == 368 && m.heightRef == kDabHtAerialAgl, "erp_kw and height_m read");
+        m = db.lookup(0xE0, 0x10BC, 12, 5, NaN, NaN);
+        CHECK(m.found && std::fabs(m.erpKw - 2.5f) < 0.001f && m.heightRef == kDabHtNone, "power alone");
+        m = db.lookup(0xE0, 0x10BC, 12, 6, NaN, NaN);
+        CHECK(m.found && m.erpKw == 0 && m.heightM == 120 && m.heightRef == kDabHtAerialAgl, "height alone");
+        m = db.lookup(0xE0, 0x10BC, 12, 7, NaN, NaN);
+        CHECK(m.found && m.erpKw == 0 && m.heightRef == kDabHtNone, "nonsense figures are left out, the row kept");
+        std::remove(path);
+    }
     // ── the owner's own list, FMLIST / AbracaDABra layout ──
     {
         using R = DabTxDb::DabTxListRow;
@@ -133,6 +197,9 @@ int main() {
         CHECK(r.ecc == 0xE0 && r.eid == 0x10BC, "country DE → ECC E0, EId hex");
         CHECK(r.mainId == 12 && r.subId == 3, "TII 1203 is main 12, sub 03 (decimal)");
         CHECK(r.site == "Berlin Alexanderplatz" && r.label == "DR Deutschland" && r.block == "5C", "names and block");
+        CHECK(std::fabs(r.erpKw - 10.0f) < 0.001f && r.heightM == 368 && r.heightRef == kDabHtAerialAgl, "FMLIST kW and height read");
+        R z = DabTxDb::parseTxListLine("1;DE;5C;X;10BC;1203;Nowhere;52.5;13.4;0;0;V;178;");
+        CHECK(z.ok && z.erpKw == 0 && z.heightRef == kDabHtNone, "FMLIST zero/blank kW and height = unknown");
         CHECK(!DabTxDb::parseTxListLine("1;DE;5C;X;10BC;;Nowhere;52.5;13.4;0;0;V;178;1").ok, "no TII → skipped");
         CHECK(!DabTxDb::parseTxListLine("1;DE;5C;X;10BC;1200;Nowhere;52.5;13.4;0;0;V;178;1").ok, "sub 00 → skipped");
         CHECK(!DabTxDb::parseTxListLine("1;DE;5C;X;10BC;1203;Nowhere;abc;13.4;0;0;V;178;1").ok, "bad latitude → skipped");

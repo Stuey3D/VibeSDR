@@ -10,7 +10,9 @@
     OWN copy (vibe_dab_txdb.h loadTxListFile) — that is read on their machine, never shipped by us.
 
 The normalised row is what the C++ table (vibe_dab_txdb.h, struct DabTx) holds:
-    eid, main, sub, site, area, lat, lon, block, src, flags
+    eid, main, sub, site, area, lat, lon, block, src, flags[, erp_kw, height_m, height_ref]
+★★ ERP AND HEIGHT (2026-11-25) only as the regulator publishes them — 0 / HT_NONE when it does not,
+   and the header then writes the row in the old ten-field form. Never estimated.
 A source with no EIds and no TII codes is written with flags=BY_BLOCK and eid = the EId's country
 nibble << 12, and the server matches it on country + the block it is tuned to.
 """
@@ -73,6 +75,12 @@ SOURCES = {
 BY_BLOCK = 0x01
 EID_AND_BLOCK = 0x02
 
+# What a height is measured from — kDabHt* in vibe_dab_txdb.h. The panel says which.
+HT_NONE = 0
+HT_AERIAL_AGL = 1    # the aerial above the ground at the site
+HT_SITE_ASL = 2      # the ground at the site above sea level (ČTÚ)
+HT_EFFECTIVE = 3     # the effective aerial height, as the regulator names it (RDI)
+
 
 def dms(deg, mins, secs) -> float:
     return float(deg) + float(mins) / 60.0 + float(secs) / 3600.0
@@ -94,6 +102,9 @@ class Site:
     src: int = 0
     flags: int = 0
     extra: dict = field(default_factory=dict, compare=False)
+    erp_kw: float = field(default=0.0, compare=False)     # 0 = not published
+    height_m: int = field(default=0, compare=False)
+    height_ref: int = field(default=HT_NONE, compare=False)
 
 
 def is_block(name: str) -> bool:
@@ -127,6 +138,31 @@ def c_safe(s: str) -> str:
     return (s or '').replace('\\', '').replace('"', "'").replace('\n', ' ').strip()
 
 
+def parse_power_kw(s) -> float:
+    """'270 W' → 0.27, '1.2 kW' → 1.2, '1,2 kW' → 1.2; anything else → 0 (not published)."""
+    m = re.match(r'^\s*(\d+(?:[.,]\d+)?)\s*(k?W)\s*$', s or '', re.I)
+    if not m:
+        return 0.0
+    v = float(m.group(1).replace(',', '.'))
+    kw = v if m.group(2).lower() == 'kw' else v / 1000.0
+    return kw if 0 < kw < 10000 else 0.0
+
+
+def number(s, scale=1.0) -> float:
+    """A plain published figure ('316.00', '1.86', '90') × scale; blank, nonsense or ≤ 0 → 0."""
+    try:
+        v = float((s or '').strip().replace(',', '.')) * scale
+    except ValueError:
+        return 0.0
+    return v if v > 0 and v == v else 0.0
+
+
+def fmt_kw(kw: float) -> str:
+    """A C float literal for kW: 0.316 → '0.316f', 5 → '5.0f' (never '5f', which is not C++)."""
+    s = ('%.4f' % kw).rstrip('0') if kw > 0 else '0.'
+    return (s + '0' if s.endswith('.') else s) + 'f'
+
+
 def haversine_km(lat1, lon1, lat2, lon2) -> float:
     r, d = 6371.0088, math.pi / 180
     a = (math.sin((lat2 - lat1) * d / 2) ** 2
@@ -152,8 +188,11 @@ def write_header(path_or_file, rows: list[Site], table: str, source_key: str, no
     w('namespace vibedab {')
     w('inline const DabTx kDabTx_%s[] = {' % table)
     for r in rows:
-        w('    { 0x%04X, %2d, %2d, "%s", "%s", %.5ff, %.5ff, "%s", %d, %d },'
-          % (r.eid, r.main, r.sub, c_safe(r.site), c_safe(r.area), r.lat, r.lon, r.block, r.src, r.flags))
+        tail = ''
+        if r.erp_kw > 0 or r.height_ref != HT_NONE:
+            tail = ', %s, %d, %d' % (fmt_kw(r.erp_kw), r.height_m if r.height_ref != HT_NONE else 0, r.height_ref)
+        w('    { 0x%04X, %2d, %2d, "%s", "%s", %.5ff, %.5ff, "%s", %d, %d%s },'
+          % (r.eid, r.main, r.sub, c_safe(r.site), c_safe(r.area), r.lat, r.lon, r.block, r.src, r.flags, tail))
     w('};')
     w('inline const size_t kDabTx_%s_n = sizeof(kDabTx_%s) / sizeof(kDabTx_%s[0]);' % (table, table, table))
     w('}  // namespace vibedab')

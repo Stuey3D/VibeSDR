@@ -20,7 +20,7 @@ Writes android/app/src/main/cpp/vibe_dab_txdb_cz.h.
 import argparse, csv, io, os, sys, time, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dabsites import SOURCES, BY_BLOCK, EID_AND_BLOCK, Site, is_block, dms, tidy_name, write_header  # noqa: E402
+from dabsites import HT_SITE_ASL, number, SOURCES, BY_BLOCK, EID_AND_BLOCK, Site, is_block, dms, tidy_name, write_header  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 OUT = os.path.join(ROOT, 'android', 'app', 'src', 'main', 'cpp', 'vibe_dab_txdb_cz.h')
@@ -32,6 +32,8 @@ def fetch(url: str) -> str:
     with urllib.request.urlopen(req, timeout=60) as r:
         return r.read().decode('utf-8-sig')
 
+
+ALT = 'Výška nad mořem'   # optional: the site's altitude above sea level, metres
 
 def normalise(text: str) -> list:
     src = SOURCES['ctu']
@@ -75,9 +77,14 @@ def normalise(text: str) -> list:
             continue
         seen.add(key)
         erp = r[ix['ERP W']].strip()
+        # ★ ERP is in watts; "Výška nad mořem" is the SITE's altitude above sea level (Praha Město,
+        #   the Žižkov tower, reads 258 — the ground, not the aerial), so it is labelled as that.
+        alt = number(r[ix[ALT]]) if ALT in ix else 0.0
         rows.append(Site(eid=e, main=0, sub=0, site=site, area=' '.join(r[ix['Program']].split()),
                          lat=round(lat, 5), lon=round(lon, 5), block=block, src=src['id'], flags=flags,
-                         extra={'erp_w': erp}))
+                         extra={'erp_w': erp}, erp_kw=number(erp, 0.001),
+                         height_m=int(round(alt)) if 0 < alt < 5000 else 0,
+                         height_ref=HT_SITE_ASL if 0 < alt < 5000 else 0))
     rows.sort(key=lambda x: (x.eid, x.block, x.site))
     return rows
 

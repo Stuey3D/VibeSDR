@@ -55,8 +55,8 @@ export interface DabState {
   /*  ★★ `o` (2026-11-15): the line's place in the server's list (the order codes were confirmed). `tiiHeld`: the listed
    *    codes NOT on the air now ("signal lost"), at their last reading, until the server expires them (5 min,
    *    vibe_dab_tii.h TiiTrack). Its presence means the server keeps the list: a panel draws it and remembers nothing. */
-  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number }[];
-  tiiHeld?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number }[];
+  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number; erpKw?: number; htM?: number; htRef?: string }[];
+  tiiHeld?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number; o?: number; erpKw?: number; htM?: number; htRef?: string }[];
   /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
    *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
   mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];
@@ -94,7 +94,7 @@ export interface DabState {
   mjd?: number; utc?: string; lto?: number; altHz?: number[];
   /** A regulator's licensed sites for this ensemble (nearest first when the receiver's position is known).
    *  `code` is the TII ("" when the source has none); `src` whose record it is — absent = Ofcom (older servers). */
-  licensed?: { site: string; area: string; code: string; km: number; src?: string }[];
+  licensed?: { site: string; area: string; code: string; km: number; src?: string; erpKw?: number; htM?: number; htRef?: string }[];
   /** The newest slideshow image off the air for the playing service; fetch /vibeserver/dabslide?h= (or ?seq= from an older server) — see dabSlide.ts. */
   slide?: { seq: number; mime: string; bytes: number; name: string; h?: string };   // ★ h: dab=2 only — see dabSlide.ts
   motGroups?: number; motCrcFail?: number; motObjects?: number;
@@ -175,6 +175,37 @@ export function dabSafeText(v: unknown, max = 128): string {
  */
 export function dabLicensedTail(l: { code?: string; src?: string }): string {
   return (l.code ? ` · ${l.code}` : '') + ` · ${l.src || 'Ofcom record'}`;
+}
+
+/**
+ * ★★ A SITE'S POWER AND HEIGHT (2026-11-25). Stuart, on 12B: Daventry at 12 mi was 24 dB and Geddington at 13 mi
+ * 4 dB — the panel should show why. The server sends the regulator's own figures (vibe_dab_txdb.h DabTx):
+ * `erpKw`, and `htM` with `htRef` saying what it is measured from — and the words here say it too, because the
+ * three are not comparable: "agl" the aerial above the ground (Ofcom, an owner's list), "asl" the SITE above sea
+ * level (ČTÚ), "eff" the effective height (RDI's own term). A field the source does not publish is not sent and
+ * not shown; an `htRef` we do not know is not shown either (a height with no reference would be misread).
+ * The rows scroll (marquee) rather than drop anything on a narrow window (Stuart: "nothing needs to drop").
+ * ★ ONE COPY: the app's panel and the web client both build the words here. scripts/test_dab_licensed.ts.
+ */
+export function dabTxPowerText(kw: unknown): string {
+  if (typeof kw !== 'number' || !Number.isFinite(kw) || kw <= 0 || kw >= 10000) return '';
+  if (kw < 1) return `${Math.max(1, Math.round(kw * 1000))} W`;
+  if (kw < 10) { const r = Math.round(kw * 10) / 10; return `${Number.isInteger(r) ? r.toFixed(0) : r.toFixed(1)} kW`; }
+  return `${Math.round(kw)} kW`;
+}
+export function dabTxHeightText(htM: unknown, htRef: unknown): string {
+  if (typeof htM !== 'number' || !Number.isFinite(htM) || htM <= 0 || htM >= 10000) return '';
+  const m = Math.round(htM);
+  switch (htRef) {
+    case 'agl': return `aerial ${m} m above ground`;
+    case 'asl': return `site ${m} m above sea level`;
+    case 'eff': return `effective height ${m} m`;
+    default:    return '';
+  }
+}
+/** " · 9.5 kW · aerial 106 m above ground", or '' when the source publishes neither. */
+export function dabTxSpecsTail(t: { erpKw?: unknown; htM?: unknown; htRef?: unknown }): string {
+  return [dabTxPowerText(t.erpKw), dabTxHeightText(t.htM, t.htRef)].filter(Boolean).map(x => ` · ${x}`).join('');
 }
 
 export function dabServiceStereo(d: Pick<DabState, 'stereo' | 'codecDetail'> | null | undefined): boolean {
@@ -266,6 +297,7 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
   if (Array.isArray(m.tii)) {
     o.tii = cap<NonNullable<DabState['tii']>[number]>(m.tii, 24).map(t => ({
       ...t,
+      htRef: t.htRef !== undefined ? dabSafeText(t.htRef, 4) : undefined,
       site: t.site !== undefined ? dabSafeText(t.site, 48) : undefined,
       area: t.area !== undefined ? dabSafeText(t.area, 48) : undefined,
     }));
@@ -273,6 +305,7 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
   if (Array.isArray(m.tiiHeld)) {
     o.tiiHeld = cap<NonNullable<DabState['tiiHeld']>[number]>(m.tiiHeld, 24).map(t => ({
       ...t,
+      htRef: t.htRef !== undefined ? dabSafeText(t.htRef, 4) : undefined,
       site: t.site !== undefined ? dabSafeText(t.site, 48) : undefined,
       area: t.area !== undefined ? dabSafeText(t.area, 48) : undefined,
     }));
@@ -281,6 +314,7 @@ export function parseDabMessage(m: Record<string, unknown>): DabState {
     o.licensed = cap<NonNullable<DabState['licensed']>[number]>(m.licensed, 16).map(l => ({
       ...l, site: dabSafeText(l.site, 48), area: dabSafeText(l.area, 48), code: dabSafeText(l.code, 16),
       src: l.src !== undefined ? dabSafeText(l.src, 24) : undefined,
+      htRef: l.htRef !== undefined ? dabSafeText(l.htRef, 4) : undefined,
     }));
   }
   if (Array.isArray(m.announce)) {

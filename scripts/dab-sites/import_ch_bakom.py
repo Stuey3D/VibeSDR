@@ -19,11 +19,16 @@ Writes android/app/src/main/cpp/vibe_dab_txdb_ch.h.
    "Licensed sites" row, matched by the EId's country nibble (4 = Switzerland) and the block we
    are tuned to (kDabTxByBlock in vibe_dab_txdb.h). The ensemble's name goes in `area`, so the
    line reads "Uetliberg (SRG D01) · 3 mi · BAKOM record" and a listener can check it is theirs.
+★★ POWER (2026-11-25): each feature has ONE "power" ("Radiated power (ERP)", "270 W" / "1.2 kW") for the
+   whole site, whatever it carries. It is the DAB figure only when the site lists exactly ONE service —
+   on Bettingen St. Chrischona (four DAB+ blocks and ten FM) it reads 180 kW, which is the FM. So it is
+   kept for single-service sites and left unknown elsewhere: never someone else's figure under DAB.
+   No height is published.
 """
 import argparse, json, os, sys, time, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from dabsites import SOURCES, BY_BLOCK, Site, is_block, lv95_to_wgs84, tidy_name, write_header  # noqa: E402
+from dabsites import SOURCES, BY_BLOCK, Site, is_block, lv95_to_wgs84, parse_power_kw, tidy_name, write_header  # noqa: E402
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 OUT = os.path.join(ROOT, 'android', 'app', 'src', 'main', 'cpp', 'vibe_dab_txdb_ch.h')
@@ -67,6 +72,7 @@ def normalise(geojson: dict) -> list:
         site = tidy_name(p.get('name') or '')
         if not site:
             continue
+        kw = parse_power_kw(p.get('power')) if len(svc) == 1 else 0.0
         for s, pr, ch in zip(svc, prog, chan):
             if 'DAB' not in s.upper():
                 continue
@@ -79,7 +85,7 @@ def normalise(geojson: dict) -> list:
             seen.add(key)
             rows.append(Site(eid=nib, main=0, sub=0, site=site, area=ensemble_name(pr),
                              lat=round(lat, 5), lon=round(lon, 5), block=block,
-                             src=src['id'], flags=BY_BLOCK))
+                             src=src['id'], flags=BY_BLOCK, erp_kw=kw))
     rows.sort(key=lambda r: (r.block, r.site))
     return rows
 
