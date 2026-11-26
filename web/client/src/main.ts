@@ -199,7 +199,11 @@ import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type Cw
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
 import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, mapSharedLine, type AskState } from '../../../src/services/dialChat';
-import { airSeaTuneRows, airSeaTuneChip, TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../../../src/services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE list
+import { airSeaTuneRows, airSeaTuneChip, TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../../../src/services/airSeaTune';
+import { radiosOf } from '../../../src/services/mapScope';
+import { otherRadiosOffered, sessionOffered, otherRadiosOf, radiosSeen, sessionStart, sessionWindow, withSession, FirstSeen, scopeRadioOk, OTHER_RADIOS_KEY,
+         OTHER_RADIOS_LABEL, OTHER_RADIOS_WORDS, SESSION_ID, SESSION_WORDS, type MapScope } from '../../../src/services/mapScope';   // ★★★ beta96 the maps' scope
+import { airSeaScope, airSeaLiveOk } from '../../../src/services/airSeaScope';   // ★★★ beta96 the AIR & SEA map's TUNE list
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost, dataUrl, dataOrigin, assetOrigin, watchDirectFetches, relearnDirectHost } from './origin';
@@ -1020,7 +1024,10 @@ async function loadAudioPolicy(httpBase: string) {
     sdReadCap(j);                // ★ V12 radiosondes (RS41): the same three states, and its bands
     vmReadCap(j);                // ★ V12 the VOR / ILS map: NDB's three states
     { const n = (v: unknown) => (typeof v === 'number' && isFinite(v) && v > 0 ? v : undefined);   // ★★★ beta96 the TUNE list's frequencies
-      asTuneSrc = { ndbLo: n(j.ndbLo), ndbHi: n(j.ndbHi), vormapLo: n(j.vormapLo), vormapHi: n(j.vormapHi) }; }
+      asTuneSrc = { ndbLo: n(j.ndbLo), ndbHi: n(j.ndbHi), vormapLo: n(j.vormapLo), vormapHi: n(j.vormapHi) };
+      // ★★★ beta96 the maps' OTHER RADIOS switch: this radio's id and how many radios the machine has (absent = no switch)
+      mapMine = typeof j.radioId === 'string' && /^[0-9a-z]{1,16}$/.test(j.radioId) ? j.radioId : '';
+      mapRadioCount = typeof j.radioCount === 'number' && isFinite(j.radioCount) ? Math.max(0, Math.min(64, Math.floor(j.radioCount))) : 0; }
     satReadCap(j);               // ★ V12 satellites: `doppler` (a version) / `dopplerWhy` — absent = no entry at all
     // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
     //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
@@ -9988,8 +9995,9 @@ function ismMapOpen(key = '') {
     // ★ beta92 a node remembered from the gallery (no longer in this ISM session) gets the gallery's card: first / last heard
     card: (d) => ('first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos()) : ismMapCard(d, myPos())),
     ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
-    onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
+    onRange: (id) => { if (id === SESSION_ID) { ismSess = true; ismMapRender(); return; } ismSess = false; ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
   });
+  if (!ismMapView.open) { ismSessSt = sessionStart(null, `ism:${ismReport?.band || ''}`, Math.floor(Date.now() / 1000), true); ismSess = false; }   // ★★★ beta96 re-entry
   // ★ a link to a node outside the chosen range widens it, so the node asked for is there
   if (key && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === key), ismMapRange).length) {
     ismMapRange = '24h';
@@ -10011,6 +10019,8 @@ function ismMapOpen(key = '') {
  *  while open (the card is rewritten at most once a minute). A server keeping no gallery: the live ones only, as before. */
 let ismStored: IsmGalNode[] = [];
 let ismStoredBand = '';
+let ismSess = false;   // ★★★ beta96 THIS SESSION on the mesh map (this visit's own)
+let ismSessSt: { mode: string; t0: number } | null = null;
 let ismStoredTimer: ReturnType<typeof setInterval> | null = null;
 const ISM_STORED_SEC = 24 * 3600;
 let ismStoredBusy = false;
@@ -10024,7 +10034,11 @@ async function ismStoredLoad_(band: string) {
   const now = Math.floor(Date.now() / 1000);
   const cards = (await ismGalCards(band)).filter((c) => c.t >= Math.floor((now - ISM_STORED_SEC) / 86400) * 86400);
   const per: IsmGalNode[][] = [];
-  for (const c of cards.slice(0, 2)) { const p = await ismGalFetch(c); if (p) per.push(p.nodes); }   // ★ one at a time: a live server
+  for (const c of cards.slice(0, 2)) {   // ★ one at a time: a live server
+    const p = await ismGalFetch(c);
+    const ri = radiosOf(c.ri);   // ★★★ beta96 the card's radios on its nodes (the OTHER RADIOS switch)
+    if (p) per.push(ri.length ? p.nodes.map((n) => ({ ...n, radios: ri })) : p.nodes);
+  }
   ismStored = ismGalMerge(per, now).filter((n) => n.last >= now - ISM_STORED_SEC);
   ismStoredBand = band;
   ismMapRender();
@@ -10046,6 +10060,12 @@ let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_K
 let shipLayers: ShipLayers = shipLayersOf(lsGet(SHIP_LAYERS_KEY), lsGet(NAV_LAYERS_KEY));
 let shipFocus: ShipFocus = 'navtex';
 let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null; ships: StoredShips | null; dscG: DscPin2[] } = { st: null, w: null, m: null, ships: null, dscG: [] };
+/** ★★★ beta96 the shipping layers' sources as the AIR & SEA map draws them — navLast and the live AIS report, or the same
+ *  through the map's scope (airSeaScope.ts: OTHER RADIOS ON THIS SERVER, THIS SESSION). `dscOk` = this box's own calls. */
+type ShipSrc = { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null; ships: StoredShips | null; dscG: DscPin2[]; ais: AisReport | null; dscOk?: (p: DscPin2) => boolean };
+function shipSrcRaw(): ShipSrc { return { ...navLast, ais: aisOn ? aisReport : null }; }
+/** ★ beta96 the server's clock minus ours when the shipping answers arrived (s) — THIS SESSION moves their times onto ours. */
+let navSkew = 0;
 async function navFetch(range: string): Promise<NavReport | null> {
   try {
     const r = await fetch(galUrl(`/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`), { cache: 'no-store' });
@@ -10121,15 +10141,16 @@ function trkRowHtml(x: { key: string; colour: string; flag?: string; name: strin
     + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
-function shipDscPins(now: number): DscPin2[] {
-  return dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls.list as any), navLast.dscG), now);
+function shipDscPins(now: number, src: ShipSrc = shipSrcRaw()): DscPin2[] {
+  const live = dscPinsFromCalls(dscCalls.list as any);
+  return dscInRange(dscPinsMerge(src.dscOk ? live.filter(src.dscOk) : live, src.dscG), now);
 }
 /** What each layer has on this server now (it decides which toggles are drawn). */
-function shipHave(now: number): ShipHave {
-  const w = navLast.w;
+function shipHave(now: number, src: ShipSrc = shipSrcRaw()): ShipHave {
+  const w = src.w;
   return {
-    ships: shipShips(aisOn ? aisReport as any : null, navLast.ships).length, dsc: shipDscPins(now).length,
-    stations: navLast.st?.stations.length ?? 0, warnings: w ? w.list.length + w.pending : 0, weather: navLast.m?.areas.length ?? 0, aisMode: aisOn,
+    ships: shipShips(src.ais as any, src.ships).length, dsc: shipDscPins(now, src).length,
+    stations: src.st?.stations.length ?? 0, warnings: w ? w.list.length + w.pending : 0, weather: src.m?.areas.length ?? 0, aisMode: aisOn,
     areas: seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m).length,
   };
 }
@@ -10150,12 +10171,14 @@ function shipKeyHtml(present: ShipLayerId[]): string {
 /** ★★ ONE COMPOSITION for both views: the items, the RECEIVED list (a section per layer shown) and the status line.
  *  `liveView`: AIS mode's own view — its live ships are drawn by that view exactly as before (raw vessels), so only the
  *  store's ships it is not hearing now are added here. */
-function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: ShipLayerId[]; on: (id: ShipLayerId) => boolean; many?: boolean }) {
-  const { st: r, w, m } = navLast;
+function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: ShipLayerId[]; on: (id: ShipLayerId) => boolean; many?: boolean; src?: ShipSrc }) {
+  const src = over?.src ?? shipSrcRaw();
+  const { st: r, w, m } = src;
+  const navRange = navRangeNow();   // ★★★ beta96 THIS SESSION: the window that covers it
   const rx = myPos() ?? r?.rx ?? null;
   const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
   // ★★ beta96 the AIR & SEA map passes its own presence and toggles (liveMaps.ts) and reads the rows per layer (its tabs)
-  const present = over?.present ?? shipLayersPresent(shipHave(now), focus);
+  const present = over?.present ?? shipLayersPresent(shipHave(now, src), focus);
   const on = over?.on ?? ((id: ShipLayerId) => shipOn(id, present, shipLayersNow()));
   const items: any[] = [], status: string[] = [];
   const rowsBy: Partial<Record<ShipLayerId, string[]>> = {};
@@ -10166,8 +10189,8 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
     if (!on(id)) continue;
     out = rowsBy[id] = [];
     if (id === 'ships') {
-      const live = aisOn ? aisReport as any : null;
-      const all = shipShips(live, navLast.ships);
+      const live = src.ais as any;
+      const all = shipShips(live, src.ships);
       const extra = liveView ? all.filter((v) => !live || !live.vessels.some((x: any) => x.mmsi === v.mmsi)) : all;
       items.push(...shipItems(extra, rx));
       if (liveView) {
@@ -10175,10 +10198,10 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
       } else {
         out.push(sec('SHIPS'));
         out.push(all.length ? shipRows(all, rx).map(trkRowHtml).join('') : `<div class="trkEmpty">No ship in this time — ships come from AIS (a listener in AIS mode, or a background AIS profile).</div>`);
-        const s = shipStatus(all, navLast.ships, live); if (s) status.push(s);
+        const s = shipStatus(all, src.ships, live); if (s) status.push(s);
       }
     } else if (id === 'dsc') {
-      const pins = shipDscPins(now);
+      const pins = shipDscPins(now, src);
       items.push(...dscPinItems(pins, rx, now, 'web'));
       out.push(sec('DSC'));
       out.push(pins.length ? dscPinRows(pins, rx, now).map(trkRowHtml).join('') : `<div class="trkEmpty">${escapeHtml(DSC_SHIP_EMPTY)}</div>`);
@@ -10264,8 +10287,9 @@ async function navPoll(now = false) {
   if (!asView?.open) return;
   const seq = ++navPollSeq;
   if (now) asView?.note(navBuilding(navLast.w) || '');
-  const got = await navFetchAll(navRange);
+  const got = await navFetchAll(navRangeNow());
   if (seq !== navPollSeq || !asView?.open) return;
+  { const sn = got.ships?.now || got.st?.now || got.w?.now || got.m?.now; if (sn) navSkew = sn - Date.now() / 1000; }   // ★ beta96
   navLast = { st: got.st ?? navLast.st, w: got.w ?? navLast.w, m: got.m ?? navLast.m, ships: got.ships ?? navLast.ships, dscG: got.dscG.length ? got.dscG : navLast.dscG };
   navDraw();
   navTimer = setTimeout(() => { void navPoll(); }, navLast.w && navLast.w.pending > 0 ? 2000 : 30_000);
@@ -10348,7 +10372,21 @@ function ismMapRender() {
   const stored = r0 && r0.band === ismStoredBand
     ? ismStored.filter((n) => !(n.node && liveIds.has(`${n.kind}|n|${n.node.slice(0, 16)}`)) && !(n.name && liveIds.has(`${n.kind}|m|${n.name}`)))
     : [];
-  const r = r0 ? { ...r0, devices: ismInRange([...r0.devices, ...stored], ismMapRange) } : null;   // ★ the time filter
+  // ★★★ beta96 THE SCOPE (mapScope.ts): OTHER RADIOS hides another radio's remembered nodes (this radio's live ones are its
+  //     own); THIS SESSION keeps only what was first heard since the map was opened for this band
+  const nowC = Math.floor(Date.now() / 1000);
+  const onRadio = !!spec && (window as any).__vibeMapStandalone !== true;
+  ismSessSt = sessionStart(ismSessSt, `ism:${r0?.band || ''}`, nowC, false);
+  const seen = radiosSeen([ismStored]);
+  const othersOk = otherRadiosOffered({ mine: mapMine, radioCount: mapRadioCount, viewer: !onRadio, seen });
+  const sessOk = sessionOffered({ viewer: !onRadio, onRadio });
+  const isc: MapScope = { mine: mapMine, others: !othersOk || mapOthers, t0: sessOk && ismSess && ismSessSt ? ismSessSt.t0 : 0 };
+  const storedS = stored.filter((n) => scopeRadioOk(n.radios, isc) && (!isc.t0 || n.first >= isc.t0 - 2));
+  const liveS = isc.t0 ? (r0?.devices ?? []).filter((d) => nowC - d.age >= isc.t0 - 2) : (r0?.devices ?? []);
+  const r = r0 ? { ...r0, devices: isc.t0 ? [...liveS, ...storedS] : ismInRange([...liveS, ...storedS], ismMapRange) } : null;   // ★ the time filter
+  ismMapView.setRanges(withSession(ISM_LIVE_RANGES, sessOk), isc.t0 ? SESSION_ID : ismMapRange, '', ISM_RANGE_HINT_LIVE + (sessOk ? ' THIS SESSION: ' + SESSION_WORDS + '.' : ''));
+  ismMapView.setScope(othersOk ? { label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS, on: mapOthers } : null, (on) => mapOthersSet(on, ismMapRender));
+  ismMapView.setScopeNote(asScopeWords(isc, othersOk));
   const items = r ? r.devices.filter(ismOnMap) : [];
   ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
   // ★★★ beta96 TUNE (Stuart 11-26): ISM's bands move the radio — labelled, live one pressed, under the ask / lock rules
@@ -10451,6 +10489,7 @@ function avReadCap(j: any) {
  *  AVIATION MAP open it standalone (CLOSE MAP). Layers with no aircraft are absent; AIRPORTS is on by default. */
 const AV_LAYERS_KEY = 'vibesdr.avMapLayers';
 let avShared: SharedAircraft | null = null;
+let avSkew = 0;   // ★★★ beta96 aircraft.json's clock minus ours when it arrived (s)
 let avPollT: ReturnType<typeof setTimeout> | null = null;
 let avPollSeq = 0;
 async function avSharedFetch(): Promise<SharedAircraft | null> {
@@ -10466,7 +10505,7 @@ async function avPoll() {
   const seq = ++avPollSeq;
   const got = await avSharedFetch();
   if (seq !== avPollSeq || !asView?.open) return;
-  if (got) avShared = got;
+  if (got) { avShared = got; avSkew = got.now ? got.now - Date.now() / 1000 : 0; }   // ★ beta96 the skew (THIS SESSION)
   asRender();
   avPollT = setTimeout(() => { void avPoll(); }, 3000);
 }
@@ -10563,7 +10602,13 @@ function asViewOpts() {
     onRange: (id: string) => {
       // ★★★ beta96 the segmented control is the maritime TIME FILTER only (this viewer's own): the DATALINK's and the
       //     SONDES bands move the radio, so they are TUNE keys now (asTuneKeys)
-      navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true);
+      // ★★★ beta96 THIS SESSION beside it (mapScope.ts) — this visit's own, never remembered; ALL (a map with no window of its
+      //     own) only leaves the session
+      if (id === SESSION_ID) { asSess = true; asRender(); void navPoll(true); return; }
+      const wasSess = asSess; asSess = false;
+      if (NAV_RANGES.some((r) => r.id === id) && asNavWin) { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true); }
+      else if (wasSess) void navPoll(true);
+      asRender();
     },
     onToggle: (id: string, on: boolean) => {
       asToggled = { ...asToggled, [id]: on };
@@ -10582,6 +10627,8 @@ function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; 
   if (o.box !== undefined) asBox = o.box;
   if (o.tab) { asOpenedTab = o.tab; asPicked = null; }
   if (o.sort) asSort = o.sort;
+  // ★★★ beta96 THIS SESSION starts again on a fresh opening (re-entry); the pick itself is this visit's (off when re-opened)
+  if (!wasOpen) { asSessSt = sessionStart(null, asMode(), Math.floor(Date.now() / 1000), true); asSess = false; asFirst.clear(); }
   if (!asView) {
     asView = new TrackView(asViewOpts());
     // ★★ tap an aircraft (its row or its icon) → MESSAGES shows its messages only; a message row finds its aircraft
@@ -10671,6 +10718,46 @@ const AS_CHIP_COLOUR: Partial<Record<LiveLayerId, string>> = {
 const AS_LAST_KEY = 'vibesdr.airSeaLast';
 const AIR_SEA_LIVE_WORDS = 'AIR & SEA LIVE — the radio on aircraft or ships (ADS-B, the datalink, AIS, maritime, NDB, VOR, sondes), on one map: its TUNE keys switch between them';
 let asViewer = false;
+/* ★★★ beta96 THE MAPS' SCOPE (mapScope.ts, Stuart 11-26): OTHER RADIOS ON THIS SERVER (on by default, remembered in this
+ *  browser, never sent) and THIS SESSION (this visit's own: first heard since this viewer opened the mode; reset on
+ *  re-entry). Only on a map on a radio — never the viewer. */
+let mapMine = '', mapRadioCount = 0;
+let mapOthers = otherRadiosOf(lsGet(OTHER_RADIOS_KEY));
+let asSess = false;
+let asSessSt: { mode: string; t0: number } | null = null;
+let asNavWin = false;   // ★ the maritime time window is drawn (its keys move navRange; ALL alone does not)
+const asFirst = new FirstSeen();
+function asOnRadio(): boolean { return !!spec && !asViewer && (window as any).__vibeMapStandalone !== true; }
+function mapOthersSet(on: boolean, redraw: () => void) {
+  mapOthers = on;
+  try { if (on) localStorage.removeItem(OTHER_RADIOS_KEY); else localStorage.setItem(OTHER_RADIOS_KEY, '0'); } catch { /* private window */ }
+  redraw();
+}
+/** For drivers (scripts/test-web-map-scope.mjs): the scope as drawn. */
+(window as any).__vibeMapScope = () => ({ mine: mapMine, radios: mapRadioCount, others: mapOthers, session: asSess, t0: asSessSt?.t0 ?? 0, onRadio: asOnRadio() });
+/** ★ The AIR & SEA map's sources through the scope (airSeaScope.ts) — and whether the switch / THIS SESSION are offered. */
+function asScoped(nowC: number) {
+  const seen = radiosSeen([avShared?.aircraft, navLast.ships?.vessels, navLast.st?.stations, navLast.dscG, sdStored, vmStored]);
+  const offered = otherRadiosOffered({ mine: mapMine, radioCount: mapRadioCount, viewer: !asOnRadio(), seen });
+  const sessOk = sessionOffered({ viewer: !asOnRadio(), onRadio: asOnRadio() });
+  const sc: MapScope = { mine: mapMine, others: !offered || mapOthers, t0: sessOk && asSess && asSessSt ? asSessSt.t0 : 0 };
+  const S = airSeaScope({ shared: avShared, sharedSkew: avSkew, ships: navLast.ships, nav: navLast.st, warn: navLast.w, met: navLast.m, dscG: navLast.dscG, navSkew,
+    adsb: adsbReport, ais: aisReport, av: avReport, sd: sdReport, vm: vmReport, sdStored, vmStored }, sc, nowC, asFirst);
+  const ship: ShipSrc = { st: S.nav, w: S.warn, m: S.met, ships: S.ships, dscG: S.dscG, ais: aisOn ? S.ais : null,
+    dscOk: sc.t0 ? (p) => airSeaLiveOk(`dsc:${p.key}`, p.t - navSkew, sc, nowC, asFirst) : undefined };
+  return { S, ship, sc, offered, sessOk };
+}
+/** ★★★ beta96 the shipping polls' window: THIS SESSION's covering window while it is picked on the map, else the viewer's. */
+function navRangeNow(): string {
+  return asSess && asSessSt && asView?.open && asOnRadio() ? sessionWindow(asSessSt.t0, Math.floor(Date.now() / 1000)) : navRange;
+}
+/** The line under the status saying what the scope hides ('' = nothing). */
+function asScopeWords(sc: MapScope, offered: boolean): string {
+  const w: string[] = [];
+  if (offered && !sc.others) w.push('Only this radio\u2019s own decodes');
+  if (sc.t0) w.push(`Only what was first heard since ${new Date(sc.t0 * 1000).toISOString().slice(11, 16)} UTC (this session)`);
+  return w.join(' \u00b7 ');
+}
 /** The air / sea whole-radio modes this radio can run now, in TUNE order. */
 function airSeaModes(): string[] {
   const out: string[] = [];
@@ -10698,13 +10785,10 @@ function airSeaLanding(): string {
   const m = airSeaModes(), last = lsGet(AS_LAST_KEY) || '';
   return m.includes(last) ? last : m.includes('adsb') ? 'adsb' : m[0] || '';
 }
-/** AIR & SEA LIVE pressed: on → leave the live air / sea mode (as every whole-radio key does); off → into the landing mode. */
+/** AIR & SEA LIVE pressed: on → ★★★ beta96 (Stuart 11-26) the map comes back (it is the mode's own screen; leaving is the
+ *  map's EXIT key); off → into the landing mode. */
 function toggleAirSeaLive() {
-  if (airSeaOn()) {
-    if (adsbOn) toggleAdsbMode(); else if (aisOn) aisSetMode(false); else if (avOn) toggleAvMode(); else if (sdOn) toggleSdMode();
-    else if (ndbOn) toggleNdbMode(); else if (vmOn) toggleVmMode();
-    return;
-  }
+  if (airSeaOn()) { asOpen({ by: 'mode' }); return; }
   const m = airSeaLanding();
   if (m) asTune(m === 'av' ? 'av:' : m === 'sd' ? 'sd:' : m);
 }
@@ -10714,6 +10798,9 @@ function openAirSeaViewer() {
   asOpen({ box: '', tab: adsbCap?.ok || avCap?.ok || viewsHave.aircraft ? 'aircraft' : 'ships', viewer: true });
 }
 (window as any).__vibeOpenAirSeaViewer = openAirSeaViewer;
+/* ★★★ beta96 b96-sbsfeed's standalone viewer calls window.openAirSeaViewer(): ONE function under both names, so the two
+ *  branches meet whichever name the caller uses (the map is a viewer either way: no TUNE, no shared line, no scope keys). */
+if (typeof (window as any).openAirSeaViewer !== 'function') (window as any).openAirSeaViewer = openAirSeaViewer;
 /** ★★★ beta96 the TUNE list's rows (airSeaTune.ts — THIS radio's vibeserver.json: its caps, its band tables, the cover rule),
  *  none for the viewer / a page with no radio; a list of one row is no choice (a single-mode server): no chip. */
 let asTuneSrc: { ndbLo?: number; ndbHi?: number; vormapLo?: number; vormapHi?: number } = {};
@@ -10755,24 +10842,31 @@ function asRender() {
   const v = asView;
   if (!v?.open) return;
   const mode = asMode();
+  /* ★★★ beta96 THE SCOPE FIRST (mapScope.ts / airSeaScope.ts): OTHER RADIOS ON THIS SERVER and THIS SESSION filter the DATA,
+   *  so the SHOW counts, the tabs, the items and the rows below all follow from one filter. A mode change is a re-entry. */
+  const nowC = Math.floor(Date.now() / 1000);
+  asSessSt = sessionStart(asSessSt, mode, nowC, false);
+  const { S, ship: shipSrc, sc, offered: othersOffered, sessOk } = asScoped(nowC);
+  const adsbR = S.adsb, aisR = S.ais, avR = S.av, sdR = S.sd, vmR = S.vm, sdSt = S.sdStored, vmSt = S.vmStored, avSh = S.shared;
+  ndbView?.setKeep(sc.t0 ? (b) => airSeaLiveOk(`ndb:${b.hz}`, null, sc, nowC, asFirst) : null);
   const chrome = liveChrome('airsea', mode);
   const live = chrome.live;
   const rx = myPos();
   v.setChrome(chrome.title, chrome.exitLabel);
   // ── what each layer has ──
-  const planesAll = avNowRule(avMerge(avOn ? avReport : null, avShared), avShared).planes;
-  const avh = avHave(planesAll, avShared?.stations ?? []);
+  const planesAll = avNowRule(avMerge(avOn ? avR : null, avSh), avSh).planes;
+  const avh = avHave(planesAll, avSh?.stations ?? []);
   const nowS = navLast.w?.now ?? navLast.m?.now ?? navLast.st?.now ?? Math.floor(Date.now() / 1000);
-  const sh = shipHave(nowS);
+  const sh = shipHave(nowS, shipSrc);
   const have: Partial<Record<LiveLayerId, number>> = {
     adsb: avh.adsb, acars: avh.acars, vdl2: avh.vdl2, hfdl: avh.hfdl, adsc: avh.adsc, hfdlst: avh.stations,
     ships: sh.ships, dsc: sh.dsc, navst: sh.stations, warnings: sh.warnings, weather: sh.weather, areas: sh.areas ?? 0,
     // ★ beta96 stage 8: the VOR map and SONDES while they run (their reports are the mode's own); ★★★ maps2 else what the
     //   gallery remembers of them (storedLayers.ts), faded by age
-    vor: vmOn ? (vmReport ? vmReport.heard : 0) : vmStored.length, sondes: sdOn ? (sdReport ? sdReport.sondes.length : 0) : sdStored.length,
+    vor: vmOn ? (vmR ? (sc.t0 ? vmR.beacons.length : vmR.heard) : 0) : vmSt.length, sondes: sdOn ? (sdR ? sdR.sondes.length : 0) : sdSt.length,
     ndb: ndbOn ? Math.max(1, ndbView?.count() ?? 0) : 0,   // ★ stage 8 NDB while it runs (the mode's own report)
   };
-  const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l) || l === 'vor' || l === 'ndb') || (!vmOn && vmStored.length > 0);
+  const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l) || l === 'vor' || l === 'ndb') || (!vmOn && vmSt.length > 0);
   const first: LiveLayerId[] = asBox === 'navtex' ? ['navst', 'warnings', 'weather'] : asBox === 'dsc' ? ['dsc'] : asBox === 'hfdl' ? ['hfdl', 'hfdlst'] : [];
   const present = livePresent('airsea', have, live, aviationAny || asBox === 'hfdl' ? ['airports'] : [], first);
   // ★ SEA AREAS is offered everywhere (Stuart 11-26), but with nothing maritime here it starts OFF — chart lines over an
@@ -10785,45 +10879,47 @@ function asRender() {
   // ★★★ beta96 SHOW (Stuart 11-26): the layer chips carry their counts and colours, as the community map's
   v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id] })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
+  // ★★★ beta96 OTHER RADIOS ON THIS SERVER: a SHOW chip of its own (only with 2+ sources, only on a radio)
+  v.setScope(othersOffered ? { label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS, on: mapOthers } : null, (on2) => mapOthersSet(on2, asRender));
   // ★★★ beta96 TUNE: ONE chip, the list of what THIS radio can run (none without one)
   asTuneSet(v);
   v.setProfile(liveProfile('airsea', present, on));
   v.setCamera(live.layers.some((l) => SEA_ID_SET.has(l) || l === 'vor' || l === 'sondes' || l === 'ndb') ? 'track' : 'aircraft');
   // ── aviation (aviationMap.ts avCompose, unchanged: our toggles in its terms) ──
   const avFocus: AvFocus = mode === 'datalink' ? 'datalink' : mode === 'hfdl' ? 'hfdl' : 'adsb';
-  const avc = avCompose(avOn ? avReport : null, avShared, avFocus, avLayersFrom(tog, present, live) as AvLayers, rx, 'web');
+  const avc = avCompose(avOn ? avR : null, avSh, avFocus, avLayersFrom(tog, present, live) as AvLayers, rx, 'web');
   // ── maritime (shipCompose, our presence and toggles) ──
   const shipPresent = present.map((id) => shipLayerOf(id)).filter((x): x is ShipLayerId => !!x);
   const shipOnF = (id: ShipLayerId) => on(SHIP_ID[id]);
-  const sc = shipCompose(mode === 'navtex' ? 'navtex' : mode === 'dsc' ? 'dsc' : 'ships', aisOn, { present: shipPresent, on: shipOnF, many: true });
+  const shc = shipCompose(mode === 'navtex' ? 'navtex' : mode === 'dsc' ? 'dsc' : 'ships', aisOn, { present: shipPresent, on: shipOnF, many: true, src: shipSrc });
   /* ★★★ beta96 ADS-B LIVE (stage 4): the report's own aircraft — raw rows, so the card has the squawk, the emergency, the
    *  climb — and they WIN over the shared table's row for the same aircraft (which lags 3 s and carries less). */
   const liveHex = new Set<string>();
   const adsbItems: any[] = [];
-  if (adsbOn && adsbReport && on('adsb')) for (const a of adsbReport.aircraft) {
+  if (adsbOn && adsbR && on('adsb')) for (const a of adsbR.aircraft) {
     const hex = cleanHex(a.hex); if (!hex) continue;
     liveHex.add(hex);
     const lat = Number(a.lat), lon = Number(a.lon);
     if (a.lat != null && a.lon != null && Number.isFinite(lat) && Number.isFinite(lon)) adsbItems.push({ key: `adsb:${hex}`, lat, lon, _adsb: { ...a, hex }, _rk: 1e12 });
   }
   const isLiveAc = (hex: unknown) => liveHex.size > 0 && typeof hex === 'string' && liveHex.has(cleanHex(hex));
-  const liveShips: any[] = aisOn && aisReport && shipOnF('ships') ? aisReport.vessels.filter((x) => x.lat != null && x.lon != null).map((x) => ({ ...x, key: String(x.mmsi), _rk: 1e12 })) : [];
+  const liveShips: any[] = aisOn && aisR && shipOnF('ships') ? aisR.vessels.filter((x) => x.lat != null && x.lon != null).map((x) => ({ ...x, key: String(x.mmsi), _rk: 1e12 })) : [];
   // ★ the live layer's names win the declutter
   const liveAv = live.layers.some((l) => AV_ID_SET.has(l));
   const avItems = (liveAv ? avc.items.map((it: any) => ({ ...it, _rk: (it._rk ?? 0) + 1e12 })) : avc.items).filter((it: any) => !isLiveAc(it?._adsb?.hex));
   /* ★★ beta96 stage 8 the VOR map's stations, radials and fix, and the sondes — their keys prefixed (a VOR's key is its
    *  frequency in Hz and a ship's its MMSI: both nine digits) */
-  const vorItems: any[] = vmOn && on('vor') ? vorMapItems(vmReport).map((it: any) => ({ ...it, key: `vor:${it.key}`, _rk: (Number(it._rk) || 0) + 1e12 })) : [];
-  const sondeIts: any[] = sdOn && on('sondes') ? sondeItems(sdReport).map((x) => ({ ...x, key: `sd:${x.key}`, _ic: sondeIcon(x), _lb: String(x.serial || ''), _cd: sondeCard(x), _rk: 1e12 })) : [];
+  const vorItems: any[] = vmOn && on('vor') ? vorMapItems(vmR).map((it: any) => ({ ...it, key: `vor:${it.key}`, _rk: (Number(it._rk) || 0) + 1e12 })) : [];
+  const sondeIts: any[] = sdOn && on('sondes') ? sondeItems(sdR).map((x) => ({ ...x, key: `sd:${x.key}`, _ic: sondeIcon(x), _lb: String(x.serial || ''), _cd: sondeCard(x), _rk: 1e12 })) : [];
   // ★★★ beta96 maps2 the remembered ones (the gallery) while the mode is not running — faded by age, never live
   const nowStored = Math.floor(Date.now() / 1000);
-  if (!vmOn && on('vor')) vorItems.push(...storedVorItems(vmStored, nowStored));
-  if (!sdOn && on('sondes')) sondeIts.push(...storedSondeItems(sdStored, nowStored));
-  const items = [...adsbItems, ...vorItems, ...sondeIts, ...avItems, ...liveShips, ...sc.items];
+  if (!vmOn && on('vor')) vorItems.push(...storedVorItems(vmSt, nowStored));
+  if (!sdOn && on('sondes')) sondeIts.push(...storedSondeItems(sdSt, nowStored));
+  const items = [...adsbItems, ...vorItems, ...sondeIts, ...avItems, ...liveShips, ...shc.items];
   const otherPlanes = liveHex.size ? avc.planes.filter((p) => !isLiveAc(p.icao)) : avc.planes;
   // ── the MESSAGES feed (every aircraft's last message as it changes; the owner's text where the server sent it) ──
   const bodies = new Map<string, string>();
-  if (avOn && avReport) for (const a of avReport.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
+  if (avOn && avR) for (const a of avR.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
   asMsgs = msgFeedUpdate(asMsgs, asMsgSeen, planesAll.map((p) => ({ key: `a:${p.key}`, who: avName(p), src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age,
     label: p.label, labelName: p.labelName, text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || '') })), Date.now());
   // ── the tabs ──
@@ -10831,8 +10927,8 @@ function asRender() {
   const shipsN = (on('ships') ? sh.ships : 0) + (on('dsc') ? sh.dsc : 0);
   const navN = (on('navst') ? sh.stations : 0) + (on('warnings') ? sh.warnings : 0) + (on('weather') ? sh.weather : 0);
   const tabHave: Partial<Record<LiveTab, number>> = { aircraft: aircraftN, messages: asMsgs.length, ships: shipsN || (aisOn ? 1 : 0), navtex: navN,
-    navaids: vmOn ? Math.max(1, vmReport?.heard ?? 0) : ndbOn ? Math.max(1, ndbView?.count() ?? 0) + (on('vor') ? vmStored.length : 0) : on('vor') ? vmStored.length : 0,
-    sondes: sdOn ? Math.max(1, sdReport?.sondes.length ?? 0) : on('sondes') ? sdStored.length : 0 };
+    navaids: vmOn ? Math.max(1, sc.t0 ? vmR?.beacons.length ?? 0 : vmR?.heard ?? 0) : ndbOn ? Math.max(1, ndbView?.count() ?? 0) + (on('vor') ? vmSt.length : 0) : on('vor') ? vmSt.length : 0,
+    sondes: sdOn ? Math.max(1, sdR?.sondes.length ?? 0) : on('sondes') ? sdSt.length : 0 };
   const tabs = liveTabs('airsea', tabHave, live, asOpenedTab);
   const tab = liveTabPick(tabs, asPicked, live, asOpenedTab) ?? 'aircraft';
   v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
@@ -10844,14 +10940,17 @@ function asRender() {
   const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
   // ── the ranges: the DATALINK's bands while it is on, else the time filter where a maritime layer is drawn ──
-  if (shipPresent.some((id) => id !== 'areas')) v.setRanges(NAV_RANGES, navRange, '', NAV_RANGE_HINT);
+  // ★★★ beta96 THIS SESSION beside the window (a map with no window of its own: ALL | THIS SESSION) — on a radio only
+  asNavWin = shipPresent.some((id) => id !== 'areas');
+  const rngs = withSession(asNavWin ? NAV_RANGES : [], sessOk);
+  if (rngs.length) v.setRanges(rngs, asSess && sessOk ? SESSION_ID : asNavWin ? navRange : 'all', '', asNavWin ? NAV_RANGE_HINT + (sessOk ? ' THIS SESSION: ' + SESSION_WORDS + '.' : '') : SESSION_WORDS);
   else v.setRanges([], '');
   // ── the rows of the tab shown (capped — the 1 GB phones) ──
   let rows = '';
   if (tab === 'aircraft') {
     const byKey = new Map(avc.rows.map((r) => [r.key, r]));
     // ★ ADS-B live: its own list first (squawk, climb, bars, tracked NM — adsb.ts adsbListHtml, keyed as the map's items)
-    const liveList = adsbOn && on('adsb') ? `<div id="adsbList">${adsbListHtml(adsbReport, rx, adsbImageBase(), 'adsb:')}</div>` : '';
+    const liveList = adsbOn && on('adsb') ? `<div id="adsbList">${adsbListHtml(adsbR, rx, adsbImageBase(), 'adsb:')}</div>` : '';
     const sorted = aircraftOrder(otherPlanes.map((p) => {
       const nm = rx && p.lat != null && p.lon != null ? adsbRangeBearing(rx, p.lat, p.lon).nm : null;
       return { key: `a:${p.key}`, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
@@ -10867,27 +10966,28 @@ function asRender() {
       + (m.text ? `<small class="avText">${escapeHtml(m.text)}</small>` : '') + `</span><span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(utcHm(m.t))}</span></div>`).join('')
       || `<div class="trkEmpty">${avOn ? `Listening on every ${escapeHtml(avReport?.bandName || 'datalink')} channel. Messages appear here as they are heard — ACARS and VDL2 are bursts, so a quiet minute is normal.` : 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs — on any radio of this server.'}</div>`;
   } else if (tab === 'ships') {
-    const liveRows = aisOn ? (aisReport ? aisRows(aisReport, rx) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>') : '';
-    rows = (liveRows ? asSec('SHIPS — HEARD NOW') + liveRows : '') + (sc.rowsBy.ships || '') + (sc.rowsBy.dsc || '');
+    const liveRows = aisOn ? (aisR ? aisRows(aisR, rx) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>') : '';
+    rows = (liveRows ? asSec('SHIPS — HEARD NOW') + liveRows : '') + (shc.rowsBy.ships || '') + (shc.rowsBy.dsc || '');
   } else if (tab === 'navtex') {
-    rows = sc.by(['stations', 'weather', 'warnings']);
+    rows = shc.by(['stations', 'weather', 'warnings']);
   } else if (tab === 'navaids') {
     // ★ stage 8 the VOR map's list (the FIX's words first), keyed as its map items
-    rows = vmOn ? vorMapRows(vmReport).replace(/data-key="/g, 'data-key="vor:')   // ★ NDB's list is its own (#ndbList, under the header)
-      : on('vor') && vmStored.length ? asSec('VOR STATIONS — REMEMBERED') + storedVorRows(vmStored, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
+    rows = vmOn ? vorMapRows(vmR).replace(/data-key="/g, 'data-key="vor:')   // ★ NDB's list is its own (#ndbList, under the header)
+      : on('vor') && vmSt.length ? asSec('VOR STATIONS — REMEMBERED') + storedVorRows(vmSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
   } else if (tab === 'sondes') {
-    rows = sdOn ? sondeRows(sdReport).replace(/data-key="/g, 'data-key="sd:')
-      : on('sondes') ? storedSondeRows(sdStored, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
+    rows = sdOn ? sondeRows(sdR).replace(/data-key="/g, 'data-key="sd:')
+      : on('sondes') ? storedSondeRows(sdSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
   }
   // ── the KEY: the aircraft's, the ships' and NAVTEX's for the layers present ──
   const avPresent = present.map((id) => avLayerOf(id)).filter((x): x is AvLayerId => !!x);
   v.setLegend((present.includes('ndb') ? NDB_LEGEND : '') + (present.includes('vor') ? (vmOn ? VORMAP_LEGEND : STORED_VOR_LEGEND) : '') + (present.includes('sondes') && !sdOn ? STORED_SONDE_LEGEND : '')
     + (avPresent.length ? avLegendHtml(avPresent, true) : '') + (shipPresent.length ? shipKeyHtml(shipPresent) : ''));
-  const status = [adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', vmOn ? vorMapStatus(vmReport) : on('vor') ? storedStatus('vormap', vmStored.length) : '',
-                  sdOn ? sondeStatus(sdReport) : on('sondes') ? storedStatus('sondes', sdStored.length) : '', ndbOn && ndbView ? ndbView.status() : '',
-                  aviationAny ? avc.status : '', sc.status].filter(Boolean).join(' · ');
+  const status = [adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', vmOn ? vorMapStatus(vmReport) : on('vor') ? storedStatus('vormap', vmSt.length) : '',
+                  sdOn ? sondeStatus(sdReport) : on('sondes') ? storedStatus('sondes', sdSt.length) : '', ndbOn && ndbView ? ndbView.status() : '',
+                  aviationAny ? avc.status : '', shc.status].filter(Boolean).join(' · ');
   v.update(items, rows, status, aircraftN + shipsN + vorItems.length + sondeIts.length + (ndbOn ? ndbView?.count() ?? 0 : 0), rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
-  v.note(sc.building);
+  v.setScopeNote(asScopeWords(sc, othersOffered));
+  v.note(shc.building);
   syncOnlyMode();
   mapSharedSync();   // ★★★ beta96 the SHARED TUNER line + CHAT, and the dial lock on EXIT / the band keys (after setRanges redrew them)
 }
@@ -19093,6 +19193,13 @@ ${glHead}
      BEACONS) bottom-right, clear of the stats column (left) and the legend (top-right) */
   #amTitle{letter-spacing:2px;color:var(--hi)}
   #layers button.live::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff4b4b;margin-right:5px;vertical-align:1px}
+  #layers .lbl{font-size:10px;color:var(--dim);letter-spacing:0.06em;margin-right:2px}
+  #layers .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:0}
+  #layers .n{margin-left:5px;opacity:0.85}
+  #scope{display:inline-flex;gap:4px;align-items:center}#scope[hidden]{display:none}
+  #scope button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 7px;cursor:pointer}
+  #scope button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
+  #scopeNote{color:var(--amber);font-size:11px}#scopeNote:empty{display:none}
   #amList{right:10px;bottom:30px;width:300px;max-height:42%;display:flex;flex-direction:column;overflow:hidden}
   #amList.hide{display:none}
   #amTabs{display:flex;gap:4px;padding:6px 6px 4px;flex-wrap:wrap;border-bottom:1px solid rgba(255,160,0,0.15)}
@@ -19120,6 +19227,8 @@ ${ST}
     <span id="layers" role="group" aria-label="Layers" hidden></span>
     <span id="wins" role="group" aria-label="Time window" hidden></span>
     <span id="rads" role="group" aria-label="Radio" hidden></span>
+    <span id="scope" role="group" aria-label="Sources" hidden></span>
+    <span id="scopeNote"></span>
     <button type="button" id="fitBtn" title="Auto fit: every station shown and the receiver">FIT</button>
     <label><input type="checkbox" id="tStats" checked>Stats</label>
     <label><input type="checkbox" id="tSummary" checked>Summary</label>
@@ -19160,6 +19269,7 @@ let win = ${safe(open.window)};
 const FOCUS0 = ${safe(open.focus)};
 const APRS_LEG = ${safe(APRS_LEGEND.map((r) => ({ svg: aprsLegendIcon(r, 16).html, words: r.words })))};
 let show = { spots: true, aprs: true, mesh: true, beacons: true, overlay: true };   // ★ beta96 every layer in the window
+const AM_DOT = { spots: '#ffb000', aprs: '#4fc3f7', mesh: '#7ee787', beacons: '#d2a8ff' };   // ★★★ beta96 the SHOW chips' colour dots
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
  *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
@@ -19170,6 +19280,43 @@ let decodesToday = -1, notKeptToday = 0, falseToday = 0, srvTotal = 0, srvTrunc 
  *  beta92) and this page's own live spots show under every radio. */
 let radios = null, radioPick = '';
 const RID = /^[0-9a-z]{1,16}$/;
+/* ★★★ beta96 THE MAPS' SCOPE (src/services/mapScope.ts — the same rule, written out here because this page is its own document):
+ *  OTHER RADIOS ON THIS SERVER — on by default, remembered in this browser (the opener's key: this window shares its
+ *  storage), never sent; off = only THIS radio's own (a station another radio or a feed heard is hidden; an untagged one is
+ *  unknown and stays). Drawn only with 2+ sources. THIS SESSION beside the window: only what was first heard since this map
+ *  was opened (a new live layer is a re-entry). Both only on a map on a radio. */
+const MINE = ${safe(mapMine)};
+const RADIO_COUNT = ${safe(mapRadioCount)};
+const ON_RADIO = ${safe(!!spec)};
+const OTHERS_KEY = ${safe(OTHER_RADIOS_KEY)};
+const OTHERS_LABEL = ${safe(OTHER_RADIOS_LABEL)};
+const OTHERS_WORDS = ${safe(OTHER_RADIOS_WORDS)};
+const SESSION_WORDS = ${safe(SESSION_WORDS)};
+let others = true; try { others = localStorage.getItem(OTHERS_KEY) !== '0'; } catch (e) { /* private window */ }
+let sess = false, t0 = Math.round(Date.now() / 1000), srvSkew = 0;
+const seenAt = new Map();
+function othersOffered() {
+  if (!ON_RADIO || !MINE) return false;
+  if (RADIO_COUNT >= 2) return true;
+  const other = (l) => l && l.some((id) => id !== MINE);
+  for (const s of stored.values()) if (other(s.radios)) return true;
+  for (const x of mesh) if (other(x.radios)) return true;
+  return false;
+}
+function scopeR(r) { return others || !othersOffered() || !r || !r.length || r.indexOf(MINE) >= 0; }
+/** first heard (s, this page's clock): the entry's own where it says, else when this page first saw it */
+function firstAt(key, f) {
+  if (f != null && isFinite(f) && f > 0) return f;
+  if (!seenAt.has(key)) { if (seenAt.size > 6000) seenAt.clear(); seenAt.set(key, Math.round(Date.now() / 1000)); }
+  return seenAt.get(key);
+}
+function sessOk(f) { return !sess || (f != null && f >= t0 - 2); }
+/** the window the store is asked for: THIS SESSION's covering one while it is picked */
+function fwin() {
+  if (!sess) return win;
+  const sp = Math.round(Date.now() / 1000) - t0 + 60;
+  return sp <= 3600 ? '1h' : sp <= 86400 ? '24h' : sp <= 8 * 86400 ? '7d' : sp <= 31 * 86400 ? '30d' : 'all';
+}
 function cleanRadios(list) {
   if (!Array.isArray(list)) return null;
   const out = [];
@@ -19297,12 +19444,12 @@ function winSec() { return win === '1h' ? 3600 : win === '24h' ? 86400 : win ===
 function mergeSpots() {
   const by = new Map();
   const nowMs = srvNow ? srvNow * 1000 : Date.now();
-  const w = winSec();
+  const w = sess ? 0 : winSec();
   // ★ beta96 stage 7 the window holds for a stored station between polls too (the server answers for the window; a station
   //   that ages out of a sliding window leaves at once, as APRS, MESH and BEACONS do — amKeep)
-  for (const s of stored.values()) if (radioOk(s) && amKeep((nowMs - (s.timestamp || 0)) / 1000, win)) by.set(s.callsign, s);   // ★ beta92 the radio filter (a view)
+  for (const s of stored.values()) if (radioOk(s) && scopeR(s.radios) && (sess ? sessOk((s.first || s.timestamp || 0) / 1000 - srvSkew) : amKeep((nowMs - (s.timestamp || 0)) / 1000, win))) by.set(s.callsign, s);   // ★ beta92 the radio filter (a view); ★★★ beta96 the scope
   for (const s of live) {
-    if (w && s.timestamp && s.timestamp < nowMs - w * 1000) continue;
+    if (sess ? !sessOk(firstAt('spot:' + s.callsign, null)) : (w && s.timestamp && s.timestamp < nowMs - w * 1000)) continue;
     const o = by.get(s.callsign);
     if (!o) { by.set(s.callsign, s); continue; }
     if ((s.timestamp || 0) >= (o.timestamp || 0)) {
@@ -19377,7 +19524,7 @@ async function fetchStations(full) {
   if (!SRV || polling) return;
   polling = true;
   try {
-    const q = (SRV.indexOf('?') >= 0 ? '&' : '?') + 'window=' + encodeURIComponent(win) + (!full && srvNow ? '&since=' + (srvNow - 30) : '');
+    const q = (SRV.indexOf('?') >= 0 ? '&' : '?') + 'window=' + encodeURIComponent(fwin()) + (!full && srvNow ? '&since=' + (srvNow - 30) : '');
     const r = await fetch(SRV + q, { cache: 'no-store' });
     if (!r.ok) { if (full) { srvOk = false; stored = new Map(); } return; }
     const j = await r.json();
@@ -19386,6 +19533,7 @@ async function fetchStations(full) {
     if (full) stored = new Map();
     for (const s of cleanStations(j.stations)) stored.set(s.callsign, s);
     srvNow = okNum(j.now) || Math.round(Date.now() / 1000);
+    srvSkew = srvNow - Date.now() / 1000;   // ★ beta96 the store's clock onto ours (THIS SESSION)
     if (j.decodesToday != null) decodesToday = Math.max(0, Math.round(okNum(j.decodesToday)));
     notKeptToday = Math.max(0, Math.round(okNum(j.notKeptToday)));
     falseToday = Math.max(0, Math.round(okNum(j.falseToday)));   // ★ beta92: false decodes the server set aside (DIGI-MAP-FILTER.md)
@@ -19395,7 +19543,7 @@ async function fetchStations(full) {
     radios = cleanRadios(j.radios);
     if (radioPick && !(radios && radios.some((r) => r.id === radioPick))) radioPick = '';
     // ★ a live poll: the ones that aged out of a sliding window go
-    const w = winSec();
+    const w = sess ? 0 : winSec();
     if (w) for (const [k, s] of stored) if (s.timestamp < (srvNow - w) * 1000) stored.delete(k);
   } catch (e) { /* a dropped poll: the next one catches up */ }
   finally { polling = false; mergeSpots(); paintChrome(); render(); }
@@ -19419,24 +19567,46 @@ function paintChrome() {
   have = have.filter((h) => h[0] === liveLayer).concat(have.filter((h) => h[0] !== liveLayer));
   if (overlay) have.push(['overlay', overlay.label]);
   lay.hidden = have.length < 2;
-  lay.innerHTML = have.map((h) => '<button type="button" data-layer="' + esc(h[0]) + '"' + (h[0] === liveLayer ? ' class="live" title="Live now — what this receiver is decoding"' : '')
-    + ' aria-pressed="' + (show[h[0]] ? 'true' : 'false') + '">' + esc(h[1]) + '</button>').join('');
+  // ★★★ beta96 SHOW (Stuart 11-26): this viewer's own filter, labelled — a colour dot, the name, its count (never sent).
+  //     No TUNE here: nothing on this map moves the radio (a spot is a station somebody heard, not a frequency to go to).
+  lay.innerHTML = (have.length >= 2 ? '<span class="lbl" title="What this map shows you — your own view. Nothing here tunes the radio: a spot is a station heard, not a frequency to go to.">SHOW</span>' : '')
+    + have.map((h) => '<button type="button" data-layer="' + esc(h[0]) + '"' + (h[0] === liveLayer ? ' class="live" title="Live now — what this receiver is decoding"' : '')
+    + ' aria-pressed="' + (show[h[0]] ? 'true' : 'false') + '">' + (AM_DOT[h[0]] ? '<span class="dot" style="background:' + AM_DOT[h[0]] + '"></span>' : '') + esc(h[1])
+    + (h[0] === 'overlay' ? '' : '<span class="n">' + esc(n[h[0]] || 0) + '</span>') + '</button>').join('');
   for (const b of lay.querySelectorAll('button')) b.onclick = () => {
     const k = b.dataset.layer; show[k] = !show[k]; paintChrome(); render();
   };
   const ws = document.getElementById('wins');
   ws.hidden = !(srvOk || aprs.length || mesh.length || beacons.length);   // ★ beta96 every layer follows the window
-  ws.innerHTML = WINDOWS.map((w) => '<button type="button" data-win="' + esc(w.id) + '" title="' + esc(w.words) + '" aria-pressed="' + (w.id === win ? 'true' : 'false') + '">' + esc(w.label) + '</button>').join('');
+  ws.innerHTML = WINDOWS.map((w) => '<button type="button" data-win="' + esc(w.id) + '" title="' + esc(w.words) + '" aria-pressed="' + (w.id === win && !sess ? 'true' : 'false') + '">' + esc(w.label) + '</button>').join('')
+    + (ON_RADIO ? '<button type="button" data-win="session" title="' + esc(SESSION_WORDS) + '" aria-pressed="' + (sess ? 'true' : 'false') + '">THIS SESSION</button>' : '');   // ★★★ beta96
   for (const b of ws.querySelectorAll('button')) b.onclick = () => {
-    if (b.dataset.win === win) return;
+    if (b.dataset.win === 'session') { if (sess) return; sess = true; mergeSpots(); paintChrome(); render(); fetchStations(true); return; }
+    if (b.dataset.win === win && !sess) return;
+    sess = false;
     win = b.dataset.win;
     try { if (window.opener) window.opener.postMessage({ type: 'vibesdr-digimap-window', window: win }, OPENER_ORIGIN); } catch (e) { /* the opener went */ }
     paintChrome();
     render();   // ★ beta96 APRS, MESH and BEACONS follow at once (they are this page's); the spots when the store answers
     fetchStations(true);
   };
+  // ★★★ beta96 OTHER RADIOS ON THIS SERVER — off: only this radio (the radio keys go: there is one radio to show)
+  const sc = document.getElementById('scope'), offered = othersOffered();
+  sc.hidden = !offered;
+  sc.innerHTML = offered ? '<button type="button" id="othersBtn" title="' + esc(OTHERS_WORDS) + '" aria-label="' + esc(OTHERS_WORDS) + '" aria-pressed="' + (others ? 'true' : 'false') + '">' + esc(OTHERS_LABEL) + '</button>' : '';
+  const ob = document.getElementById('othersBtn');
+  if (ob) ob.onclick = () => {
+    others = !others;
+    try { if (others) localStorage.removeItem(OTHERS_KEY); else localStorage.setItem(OTHERS_KEY, '0'); } catch (e) { /* private window */ }
+    if (!others) radioPick = '';
+    mergeSpots(); paintChrome(); render();
+  };
+  const notes = [];
+  if (offered && !others) notes.push('Only this radio’s own decodes');
+  if (sess) notes.push('Only what was first heard since ' + new Date(t0 * 1000).toISOString().slice(11, 16) + ' UTC (this session)');
+  document.getElementById('scopeNote').textContent = notes.join(' · ');
   const rs = document.getElementById('rads');
-  rs.hidden = !srvOk || !show.spots || !radios;
+  rs.hidden = !srvOk || !show.spots || !radios || (offered && !others);
   rs.innerHTML = !radios ? '' : ['<button type="button" data-radio="" title="Every radio on this server" aria-pressed="' + (radioPick ? 'false' : 'true') + '">ALL RADIOS</button>']
     .concat(radios.map((r) => '<button type="button" data-radio="' + esc(r.id) + '" title="Only the stations ' + esc(r.name) + ' heard" aria-pressed="'
       + (r.id === radioPick ? 'true' : 'false') + '">' + esc(r.name) + (r.n != null ? ' · ' + esc(r.n) : '') + '</button>')).join('');
@@ -19716,16 +19886,19 @@ function statItems() {
 /* ★★★ beta96 stage 7 THE WINDOW FOR EVERY LAYER (amKeep, src/utils/amateurMap.ts AMATEUR_JS): APRS, MESH and BEACONS
  *  show what was heard in the HEARD IN window — the same window as the spots (whose store answers for it). */
 ${AMATEUR_JS}
-function aprsIn() { return aprs.filter((a) => amKeep(a.age, win)); }
-function meshIn() { return mesh.filter((x) => amKeep(x.age, win)); }
-function beaconsIn() { return beacons.filter((x) => amKeep(x.age, win)); }
+// ★★★ beta96 the scope on every layer: APRS and BEACONS are this radio's own decoders (THIS SESSION only); MESH's remembered
+//     nodes carry their card's radios
+function aprsIn() { return aprs.filter((a) => (sess ? sessOk(firstAt('aprs:' + a.key, null)) : amKeep(a.age, win))); }
+function meshIn() { return mesh.filter((x) => scopeR(x.radios) && (sess ? sessOk(firstAt('mesh:' + x.key, x.fa != null ? Math.round(Date.now() / 1000) - x.fa : null)) : amKeep(x.age, win))); }
+function beaconsIn() { return beacons.filter((x) => (sess ? sessOk(firstAt('bcn:' + x.key, null)) : amKeep(x.age, win))); }
 function amCounts() { return { spots: spots.length, aprs: aprsIn().length, mesh: meshIn().length, beacons: beaconsIn().length }; }
 function cleanMesh(list) {
   if (!Array.isArray(list)) return [];
   return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => ({
     key: okStr(x.key, /[<>&"'\`]/g, 48), name: okStr(x.name, /[<>&"'\`]/g, 40) || '?', net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',
     lat: Math.max(-90, Math.min(90, okNum(x.lat))), lon: Math.max(-180, Math.min(180, okNum(x.lon))), age: Math.max(0, okNum(x.age)),
-    approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live }));
+    approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live,
+    radios: Array.isArray(x.radios) ? x.radios.slice(0, 8).map(String).filter((r) => RID.test(r)) : undefined, fa: x.fa != null && isFinite(Number(x.fa)) ? Math.max(0, Number(x.fa)) : null }));
 }
 function cleanBeacons(list) {
   if (!Array.isArray(list)) return [];
@@ -19768,6 +19941,7 @@ function amList() {
 }
 function render() {
 const nc = amCounts();
+for (const b of document.querySelectorAll('#layers [data-layer]')) { const e = b.querySelector('.n'); if (e && e.textContent !== String(nc[b.dataset.layer] || 0)) e.textContent = String(nc[b.dataset.layer] || 0); }   // ★★★ beta96 SHOW counts
 const shown = (show.spots ? nc.spots : 0) + (show.aprs ? nc.aprs : 0) + (show.mesh ? nc.mesh : 0) + (show.beacons ? nc.beacons : 0);
 document.getElementById('count').textContent = String(shown);
 document.getElementById('countWhat').textContent = shown === 1 ? 'station' : 'stations';
@@ -19808,7 +19982,11 @@ addEventListener('message', (ev) => {
   if ('overlay' in ev.data) overlay = cleanOverlay(ev.data.overlay);
   if ('mesh' in ev.data) mesh = cleanMesh(ev.data.mesh);           // ★ beta96 stage 7
   if ('beacons' in ev.data) beacons = cleanBeacons(ev.data.beacons);
-  if ('live' in ev.data) liveLayer = ['spots', 'aprs', 'mesh', 'beacons'].indexOf(ev.data.live) >= 0 ? ev.data.live : '';
+  if ('live' in ev.data) {
+    const nl = ['spots', 'aprs', 'mesh', 'beacons'].indexOf(ev.data.live) >= 0 ? ev.data.live : '';
+    if (nl !== liveLayer) { t0 = Math.round(Date.now() / 1000); seenAt.clear(); }   // ★★★ beta96 a new live layer = re-entry: THIS SESSION starts again
+    liveLayer = nl;
+  }
   // ★ opened again from somewhere else: that layer shown (and fitted), its tab, that station centred
   if (ev.data.layer === 'aprs' || ev.data.layer === 'spots' || ev.data.layer === 'mesh' || ev.data.layer === 'beacons') {
     const l = ev.data.layer;

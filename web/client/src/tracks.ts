@@ -394,6 +394,8 @@ const CSS = `
 .trkTop .btn.exit{background:#5a1f1f;border-color:#8a3434}
 .trkTop .ttl{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkTop .st{color:#9fb0c2;font-size:12px;flex:1 1 200px;min-width:0}
+.trkTop .scopeNote{color:#ffd34d;font-size:12px;flex:1 0 100%}
+.trkTop .scopeNote[hidden]{display:none}
 .trkTop .scr{display:contents}
 .trkTop .slot-share{display:inline-flex;align-items:center;gap:6px;flex:none}
 .trkTop .slot-share:empty,.trkTop .slot-share>[hidden]{display:none}
@@ -736,6 +738,33 @@ export class TrackView {
       };
     }
   }
+  private scopeSig = '';
+  /** ★★★ beta96 OTHER RADIOS ON THIS SERVER (mapScope.ts): a SHOW chip of its own after the layer chips — this viewer's view,
+   *  never sent, never dial-locked. null = none (one source, the viewer). */
+  setScope(chip: { label: string; words: string; on: boolean } | null, onToggle: (on: boolean) => void) {
+    let host = this.root.querySelector('.trkTop .scope') as HTMLElement | null;
+    if (!host) {
+      host = document.createElement('span');
+      host.className = 'rng scope';
+      host.setAttribute('role', 'group'); host.setAttribute('aria-label', 'Sources');
+      (this.root.querySelector('.trkTop .tgl') as HTMLElement).after(host);
+    }
+    host.hidden = !chip;
+    const sig = chip ? JSON.stringify(chip) : '';
+    if (sig !== this.scopeSig) {
+      this.scopeSig = sig;
+      host.innerHTML = chip ? `<button class="btn chip" type="button" data-scope="others" aria-pressed="${chip.on}" aria-label="${esc(chip.words)}" title="${esc(chip.words)}">${esc(chip.label)}</button>` : '';
+    }
+    const b = host.querySelector('[data-scope]') as HTMLButtonElement | null;
+    if (b) b.onclick = () => onToggle(b.getAttribute('aria-pressed') !== 'true');
+  }
+  /** ★★★ beta96 what the scope hides, under the status line ('' = nothing hidden). */
+  setScopeNote(words: string) {
+    let el = this.root.querySelector('.trkTop .scopeNote') as HTMLElement | null;
+    if (!el) { el = document.createElement('span'); el.className = 'scopeNote'; (this.root.querySelector('.trkTop .st') as HTMLElement).after(el); }
+    el.hidden = !words;
+    if (el.textContent !== words) el.textContent = words;
+  }
   private tuneSig = '';
   private tuneRows: Array<{ id: string; name: string; freq: string; icon: string; group: string; live: boolean; why: string }> = [];
   /** ★★★ beta96 TUNE (Stuart 11-26): ONE collapsible chip in the top bar — "TUNE · VDL2 136.700–136.975 MHz ▾", the live
@@ -755,7 +784,7 @@ export class TrackView {
       pop.className = 'tunePop'; pop.hidden = true; pop.setAttribute('role', 'menu'); pop.setAttribute('aria-label', 'Tune the radio');
       this.root.appendChild(pop);
       const btn = host.querySelector('.tuneChip') as HTMLButtonElement;
-      btn.onclick = () => this.tuneOpen(pop.hidden);
+      btn.onclick = () => this.tuneOpen(pop.hidden === true);
       pop.addEventListener('keydown', (e) => {
         const items = Array.from(pop.querySelectorAll('[data-tune]')) as HTMLElement[];
         const i = items.indexOf(document.activeElement as HTMLElement);
@@ -892,7 +921,7 @@ export class TrackView {
    *  DATALINK's bands) — [] = none. `onRange` is the view's own. */
   setRanges(ranges: Array<{ id: string; label: string; words: string }>, current: string, label = '', hint = '') {
     const sig = JSON.stringify([ranges.map((r) => r.id), label, hint]);
-    let host = this.root.querySelector('.rng:not(.tgl)') as HTMLElement | null;
+    let host = this.root.querySelector('.rng:not(.tgl):not(.scope)') as HTMLElement | null;
     if (sig !== this.rngSig) {
       this.rngSig = sig;
       if (!host) { host = document.createElement('span'); host.className = 'rng'; host.setAttribute('role', 'group'); this.root.querySelector('.ttl')!.after(host); }

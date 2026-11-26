@@ -60,7 +60,10 @@ export function amLiveOf(dec: string | null | undefined, ismOn = false): AmLayer
 }
 
 /** One MESH node as the map draws it (a MeshCore / Meshtastic node with a position). */
-export interface AmMeshPoint { key: string; name: string; net: string; lat: number; lon: number; age: number; approx: boolean; what: string; live: boolean }
+export interface AmMeshPoint { key: string; name: string; net: string; lat: number; lon: number; age: number; approx: boolean; what: string; live: boolean;
+  /** ★★★ beta96 (mapScope.ts) a remembered node's radios (its card's; absent = unknown / this radio's live report) and how long
+   *  ago it was first heard (s; null = not known) — the OTHER RADIOS switch and THIS SESSION */
+  radios?: string[]; fa?: number | null }
 const okTxt = (v: unknown, n: number) => String(v ?? '').replace(/[<>&"'`\\\u0000-\u001f]/g, '').slice(0, n);
 const okNum = (v: unknown, lo: number, hi: number): number | null => { const n = Number(v); return v == null || !Number.isFinite(n) ? null : Math.max(lo, Math.min(hi, n)); };
 const MESH_KINDS = new Set(['meshtastic', 'meshcore']);
@@ -68,19 +71,20 @@ const MESH_KINDS = new Set(['meshtastic', 'meshcore']);
  *  node once (the newest wins), newest first, at most 1000. Anything not a mesh node, or with no position, is left out. */
 export function amMeshPoints(live: readonly any[] | null | undefined, stored: readonly any[] | null | undefined, nowSec: number): AmMeshPoint[] {
   const by = new Map<string, AmMeshPoint>();
-  const add = (d: any, age: number, isLive: boolean) => {
+  const add = (d: any, age: number, isLive: boolean, fa: number | null) => {
     if (!d || !MESH_KINDS.has(String(d.kind))) return;
     const lat = okNum(d.lat, -90, 90), lon = okNum(d.lon, -180, 180);
     if (lat == null || lon == null || (lat === 0 && lon === 0)) return;
     const key = okTxt(d.node || d.id || d.key, 40);
     if (!key) return;
     const p: AmMeshPoint = { key: `mesh:${key}`, name: okTxt(d.long || d.name || d.short || d.node || key, 40), net: d.kind === 'meshcore' ? 'MeshCore' : 'Meshtastic',
-      lat, lon, age: Math.max(0, age), approx: d.approx === 1 || d.approx === true, what: okTxt(d.ntype || d.role || d.hw || '', 40), live: isLive };
+      lat, lon, age: Math.max(0, age), approx: d.approx === 1 || d.approx === true, what: okTxt(d.ntype || d.role || d.hw || '', 40), live: isLive,
+      ...(Array.isArray(d.radios) && radiosOf(d.radios).length ? { radios: radiosOf(d.radios) } : {}), fa };
     const was = by.get(p.key);
     if (!was || p.age < was.age) by.set(p.key, p);
   };
-  for (const d of live ?? []) add(d, okNum(d?.age ?? d?.seen, 0, 1e9) ?? 0, true);
-  for (const d of stored ?? []) add(d, Math.max(0, nowSec - (okNum(d?.last, 0, 1e11) ?? 0)), false);
+  for (const d of live ?? []) add(d, okNum(d?.age ?? d?.seen, 0, 1e9) ?? 0, true, okNum(d?.age, 0, 1e9));
+  for (const d of stored ?? []) { const f = okNum(d?.first, 0, 1e11); add(d, Math.max(0, nowSec - (okNum(d?.last, 0, 1e11) ?? 0)), false, f ? Math.max(0, nowSec - f) : null); }
   return [...by.values()].sort((a, b) => a.age - b.age).slice(0, 1000);
 }
 
