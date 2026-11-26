@@ -141,6 +141,12 @@ export type VibeServerConfig = {
    *  ignored by the server where ADS-B cannot run on the radio. */
   landingAdsb?: boolean;
   adsbKeepRunning?: boolean;
+  /** ★★★ beta96 THE LANDING MAP (vibe_keep_store.h): "avmar" | "", the mode(s) it opens in ("vdl2" | "vdl2,acars" | "adsb" |
+   *  "ais" | "vor") and keep-running. The engine reads them off the config (vsMapFromConfigJson); the ADS-B case is mirrored
+   *  into landingAdsb / adsbKeepRunning above. */
+  landingMap?: string;
+  landingModes?: string;
+  mapKeep?: boolean;
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h). Sent to the engine as its config's
    *  flat fm* keys; absent = the engine's defaults (de-emphasis by region, NR off, the rest on, RETURN). */
   fmDefaults?: FmDefaults;
@@ -390,6 +396,10 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     landingDabService: cfg.landingDabService ?? '',
     landingAdsb: cfg.landingAdsb === true,
     adsbKeepRunning: cfg.landingAdsb === true && cfg.adsbKeepRunning === true,
+    // ★★★ beta96 on EVERY start at definite values (an absent key would leave a kept VDL2 of an earlier start in force)
+    landingMap: cfg.landingMap === 'avmar' && !!cfg.landingModes ? 'avmar' : '',
+    landingModes: cfg.landingMap === 'avmar' ? (cfg.landingModes ?? '') : '',
+    mapKeep: cfg.landingMap === 'avmar' && !!cfg.landingModes && cfg.mapKeep === true,
     ...fmDefaultsKeys(cfg.fmDefaults ?? FM_DEFAULTS),   // ★ on EVERY start, at definite values, like its neighbours
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,

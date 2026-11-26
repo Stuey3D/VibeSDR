@@ -69,6 +69,7 @@ while the server is stopped, so "live" here is the next Start; the engine's tick
 | Broadcast FM defaults (+ remember / return) | `fm*` | ports (verified) | `setVibeServerFmDefaults(cfg)` reads the flat keys. |
 | Antenna port names | `antennaNames` | ports — **fixed** (this branch) | The screen called `NativeModules.VibeLocalSdrModule`, which does not exist (the module is `VibeLocalSDR`), so the radio's ports were never read and the names card never drew. Also the antenna switch's live apply and search. |
 | ADS-B as the landing / keep it running | `landingAdsb`, `adsbKeepRunning` | ports (verified) | |
+| ★ beta96 the landing map + keep-running modes (VDL2, ACARS, ACARS + VDL2, the VOR map, AIS, ADS-B) | `landingMap`, `landingModes`, `mapKeep` (+ the ADS-B pair mirrored) | ports | The screen's card (utils/keepRun.ts, the page's rule); the engine reads the three off the config JSON (`vsMapFromConfigJson`, no new JNI). docs/v12/KEEP-RUNNING.md. |
 | ADS-B at 2.56 MS/s (RTL) | `adsb256` | ports (verified) | |
 | ISM at 2.56 MS/s (RTL) | `ism256` | ports | V12 2026-11-16: the ADS-B switch's twin (MeshCom 433.175 beside LoRa APRS 433.775). |
 | Change the sample rate when a mode needs it + the rate guard | `dabRateBoost` | ports (verified) | |

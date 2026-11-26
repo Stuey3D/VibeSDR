@@ -47,6 +47,10 @@ type Props = {
   decoderMax: number;
   /** ADS-B kept running with nobody connected — it owns the idle radio, so profiles do not run. */
   adsbKeeps: boolean;
+  /** ★★★ beta96 the landing map's kept mode by name ('' = none) — any kept mode owns the idle radio (ADS-B too). */
+  keepName?: string;
+  /** ★★★ beta96 the satellites beside it (utils/keepRun keepSatWords: VDL2 SHARES the 137 MHz capture, the rest pause). */
+  keepSat?: string;
   /** The engine's sentence when the profiles would be refused ('' = good). */
   problem: string;
 };
@@ -344,8 +348,8 @@ export default function BackgroundDecodingSetup(p: Props) {
         <Switch value={model.keepInRange} onValueChange={(v) => set((m) => { m.keepInRange = v; })}
           trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
       </View>
-      {p.adsbKeeps && (
-        <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>ADS-B is kept running on this radio
+      {(!!p.keepName || p.adsbKeeps) && (
+        <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>{p.keepName || 'ADS-B'} is kept running on this radio
           when nobody is connected (Where listeners start), so these profiles do not run. Untick it there to decode in the
           background instead.</Text>
       )}
@@ -389,7 +393,10 @@ export default function BackgroundDecodingSetup(p: Props) {
           moment anybody connects, the pass is given up and the radio is theirs.</Text>
         {/* ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): ADS-B kept running and the passes both run — the server pauses ADS-B
              for a pass and resumes it at LOS (the Setup page's spKeepNote, the same words). */}
-        {p.adsbKeeps && model.sat.on && (
+        {!!p.keepSat && model.sat.on && (
+          <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>{p.keepSat}</Text>
+        )}
+        {!p.keepSat && p.adsbKeeps && model.sat.on && (
           <Text style={[hint, { borderLeftWidth: 3, borderLeftColor: C.warn, paddingLeft: 8 }]}>ADS-B is kept running on
             this radio: a satellite pass takes the radio {'—'} ADS-B pauses for the pass, about 10{'–'}15 min, and resumes
             after. ORBCOMM sky-plot monitoring runs only beside a pass while ADS-B is kept running.</Text>

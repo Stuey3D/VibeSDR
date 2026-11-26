@@ -318,6 +318,8 @@ object VibeServerBoot {
         // ★★ The owner's Broadcast FM defaults (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb) and REMEMBER /
         //    RETURN (fmRemember) — the engine reads those keys off the config itself (vibe_fm_defaults.h), so there is no
         //    second list here to fall out of step. Absent = the defaults (NR off, the rest on, de-emphasis by region).
+        // ★★★ beta96 …and THE LANDING MAP off the same JSON: "landingMap" / "landingModes" / "mapKeep" (VDL2, ACARS, AIS, the VOR
+        //     map kept running — vsMapFromConfigJson in the engine; ADS-B stays with setVibeServerLandingAdsb above, mirrored)
         VibeLocalSDR.setVibeServerFmDefaults(cfg.toString())
         // ★★ The multiplex (and station) it was LEFT on, surviving a restart — see the JNI note.
         VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)

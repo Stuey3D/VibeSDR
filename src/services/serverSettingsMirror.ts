@@ -106,6 +106,9 @@ export const REMOTE_KEYS: RemoteKey[] = [
   { native: 'landingDabService', storage: 'vs_landingdabsvc',  enc: 'str' },
   { native: 'landingAdsb',      storage: 'vs_landingadsb',     enc: 'bool01' },
   { native: 'adsbKeepRunning',  storage: 'vs_adsbkeep',        enc: 'bool01' },
+  { native: 'landingMap',       storage: 'vs_landingmap',      enc: 'str' },      // ★★★ beta96 the landing map
+  { native: 'landingModes',     storage: 'vs_landingmodes',    enc: 'str' },
+  { native: 'mapKeep',          storage: 'vs_mapkeep',         enc: 'bool01' },
   { native: 'biasT',            storage: 'vs_biast',           enc: 'bool01' },
   { native: 'autoDirectSampling', storage: 'vs_autods',        enc: 'bool01' },
   { native: 'bgDecode',         storage: 'vs_bgdecode',        enc: 'str' },

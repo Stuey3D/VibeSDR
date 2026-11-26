@@ -24,7 +24,7 @@ import { loadVibemapSource } from './chunkCache';
 import { loadLeafletInto } from './leafletAsset';
 import { pushBack, padRehighlight } from './gamepad';
 import { betaConfirmText, updateButton, updateOfferText, type UpdateState } from './updateOffer';
-import { bgLines, satPassLines, behindLines } from './adminBg';
+import { bgLines, satPassLines, behindLines, keepRunLines } from './adminBg';
 import { parseDabScan, dabScanLine, parseFmScan, fmScanLine } from '../../../src/services/dabBandScan';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
  *  directory loads as a file (web/mapkit/vibemap.js via gen-vibemap-source.mjs). A <script> with
@@ -485,7 +485,7 @@ function renderBg(radios: Array<{ radio: string; data: any }>) {
     const radio = r.data?.radio ?? {};
     const name = r.radio || (radio.present ? String(radio.driver).toUpperCase() : 'RADIO');
     // ★★★ beta94 the unattended satellite line beside background decoding (Meteor, ORBCOMM, both — and why)
-    for (const l of [bgLines(r.data?.bgDecode), satPassLines(r.data?.satPass), behindLines(r.data?.decodersBehind)]) {   // ★★ beta95 + the pill audit's line
+    for (const l of [keepRunLines(r.data?.keepRun), bgLines(r.data?.bgDecode), satPassLines(r.data?.satPass), behindLines(r.data?.decodersBehind)]) {   // ★★★ beta96 the landing map first   // ★★ beta95 + the pill audit's line
       if (!l) continue;
       blocks.push(`<div class="aBg${l.warn ? ' warn' : ''}"><div class="h"><b>${esc(name)}</b> \u00b7 ${esc(l.head)}</div>`
         + l.rows.map((x) => `<div class="r">${esc(x)}</div>`).join('') + '</div>');
