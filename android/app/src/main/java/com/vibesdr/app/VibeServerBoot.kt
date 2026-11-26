@@ -219,6 +219,9 @@ object VibeServerBoot {
                          // ★★ V12 beta96: …nor share ADS-B (a scan never listens on the Beast port or pushes to a site)
                          "adsbFeed"))
             c.remove(k)
+        // ★★★ beta96 no landing map / kept mode either — PUT empty, not removed: the engine reads the map off the config JSON
+        //     (setVibeServerFmDefaults), and an absent key would leave the owner's kept VDL2 in force for the scan
+        c.put("landingMap", ""); c.put("landingModes", ""); c.put("mapKeep", false); c.put("singleMode", "")
         c.put("advertise", false)
         c.put("maxUsers", 1)
         c.put("centerFreq", 225_648_000.0)   // 12B, as before — DAB entry moves it to the block anyway
@@ -317,6 +320,9 @@ object VibeServerBoot {
         // ★★ The owner's Broadcast FM defaults (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb) and REMEMBER /
         //    RETURN (fmRemember) — the engine reads those keys off the config itself (vibe_fm_defaults.h), so there is no
         //    second list here to fall out of step. Absent = the defaults (NR off, the rest on, de-emphasis by region).
+        // ★★★ beta96 …and THE LANDING MAP off the same JSON: "landingMap" / "landingModes" / "mapKeep" (VDL2, ACARS, AIS, the VOR
+        //     map kept running — vsMapFromConfigJson in the engine; ADS-B stays with setVibeServerLandingAdsb above, mirrored)
+        //     and "singleMode" (the single-mode radio, enforced over blockedModes)
         VibeLocalSDR.setVibeServerFmDefaults(cfg.toString())
         // ★★ The multiplex (and station) it was LEFT on, surviving a restart — see the JNI note.
         VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)

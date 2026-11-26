@@ -175,8 +175,10 @@ int main() {
         const std::string body = a == std::string::npos ? "" : shim.substr(a, 900);
         CHECK(body.find("vibereach::onlyModeLeft([](const char* m) { return vsModeBlocked(m); })") != std::string::npos,
               "onlyModeNow asks onlyModeLeft over the ENFORCED list (vsModeBlocked)");
-        CHECK(shim.find("g_vsBlockedModesCsv = vibereach::effectiveBlocked(csv, g_vsRegionKnown);") != std::string::npos,
-              "the owner's list is enforced through effectiveBlocked");
+        // ★★★ beta96 b96-keeprun: through vsEnforcedBlocked, which is effectiveBlocked + the single-mode radio's blocks
+        CHECK(shim.find("g_vsBlockedModesCsv = vsEnforcedBlocked(csv, g_vsRegionKnown);") != std::string::npos
+              && shim.find("std::string csv = vibereach::effectiveBlocked(owner, region);") != std::string::npos,
+              "the owner's list is enforced through effectiveBlocked (and the single mode on top)");
         CHECK(shim.find("\"blocked\":\" + vsBlockedModesJson()") != std::string::npos || shim.find("vsBlockedModesJson()") != std::string::npos,
               "hwinfo `blocked` is the enforced list");
         for (const char* w : { "vsAdsbWhyNot", "vsIsmWhyNot", "vsNdbWhyNot", "vsAisWhyNot", "vsVormapWhyNot" }) {

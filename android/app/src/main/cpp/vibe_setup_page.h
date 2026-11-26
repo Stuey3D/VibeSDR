@@ -1483,6 +1483,35 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              instantly sees a list of planes and a full map"). Drawn only where ADS-B can run on this radio (adsbLandOffer
              — AGENTS.md); where only a setting stands in the way, #adsbLandNote says which. The keep-running tick box
              lives only beneath the choice, and is OFF unless ticked. One landing at a time: choosing it hides the DAB one. -->
+        <!-- ★★★ beta96 THE LANDING MAP AND ITS KEEP-RUNNING MODES (Stuart 11-26 on the Sony: "I thought I'd be able to set
+             VDL2 as the Sony's background mode"; memory map_landing_toggles.md). One map — Aviation & Maritime — and the mode it
+             opens in, ticked from the SERVER's own list for this radio (hwinfo mapModes): a mode this radio can never do is not
+             drawn (AGENTS.md); one it cannot do now is greyed with the server's reason. At an ordinary rate ONE mode at a time
+             (the rest greyed, with the rate); ACARS + VDL2 together only where the capture holds both (~6.1 MS/s). Picking
+             VDL2 is the whole setup: the centre and every channel come from the mode. beta95's ADS-B landing / keep-running
+             migrated into this unchanged (vibe_keep_store.h). The old ADS-B controls below stay in the page, hidden — their
+             rules (adsbLandOffer) still decide the ADS-B row. -->
+        <div id="mapLandWrap" class="hide">
+          <label style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="mapLandOn">
+            <span>Start new listeners on a <b>map</b>?</span></label>
+          <div id="mapLandBox" class="hide" style="margin-top:10px">
+            <!-- ★★ beta96 (Stuart 11-26): the AMATEUR map's ISM too — 868 MHz all day for MeshCore repeaters, the band from ISM's own plan -->
+            <label><span class="lbl">Map</span>
+              <select id="mapLandWhich"><option value="avmar">Aviation &amp; Maritime</option><option value="amateur">Amateur</option></select></label>
+            <div class="hint">Tick the mode the map opens in. The radio is set up from the mode itself &mdash; VDL2 is every
+              25&nbsp;kHz channel from 136.700 to 136.975&nbsp;MHz, ISM is the band you pick from its own plan &mdash; so there are
+              no frequencies to type. EXIT takes a listener to the frequency below.</div>
+            <div class="hint" id="mapRateNote" style="margin-top:8px"></div>
+            <div id="mapModeList" style="margin-top:6px"></div>
+            <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
+              <input type="checkbox" id="mapKeep">
+              <span id="mapKeepLbl">Keep it running when nobody is connected</span></label>
+            <div class="hint" id="mapKeepNote"></div>
+          </div>
+        </div>
+        <div class="hint" id="mapLandNote"></div>
+        <div id="adsbLegacy" style="display:none">
         <div id="adsbLandWrap" class="hide">
           <label style="display:flex;align-items:center;gap:10px">
             <input type="checkbox" id="adsbLandOn">
@@ -1502,6 +1531,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           </div>
         </div>
         <div class="hint" id="adsbLandNote"></div>
+        </div><!-- /adsbLegacy -->
         <div id="dabLandWrap" class="hide">
           <label style="display:flex;align-items:center;gap:10px">
             <input type="checkbox" id="dabLandOn">
@@ -1533,6 +1563,8 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           listeners start here instead:</div>
         <div class="hint" id="adsbPlainHead" style="display:none;margin-top:10px">EXIT ADS-B goes here, and
           listeners start here whenever ADS-B cannot be opened:</div>
+        <div class="hint" id="mapPlainHead" style="display:none;margin-top:10px">EXIT goes here, and listeners start here
+          whenever the map's mode cannot be opened:</div>
         <div class="row" id="plainLandRow">
           <label><span class="lbl">Frequency (kHz)</span>
             <input type="number" id="landingFreq" step="0.1"></label>
@@ -2083,6 +2115,18 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
         <!-- ★★★ beta96 NEW MODES (docs/v12/NEW-MODES-OFF.md): the one-line notice after an update added switches, and ALL ON /
              ALL OFF for this radio — they change the ticks on screen only; nothing is saved until Save (a mis-tap undoes). -->
+        <!-- ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26): an EXPLICIT choice, not inferred from the ticks (which broke when new
+             modes arrived). The server enforces it over the ticks (vsEnforcedBlocked), which stay as they were underneath, so
+             General gives them back. The list is what THIS radio can do (the server's hwinfo; no dead entries). -->
+        <div id="radioUseWrap" style="margin-top:12px">
+          <span class="lbl">Radio use</span>
+          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="radioUseKind" id="radioUseGeneral" value="general">
+            <span>General: listeners choose from the modes ticked below</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px"><input type="radio" name="radioUseKind" id="radioUseSingle" value="single">
+            <span>Single mode:</span> <select id="singlePick"></select></label>
+          <div class="hint">Use this to lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected decoder is available.</div>
+          <div class="hint" id="singleNote"></div>
+        </div>
         <div id="newModesNote" class="note hide" style="margin-top:10px"></div>
         <div class="row" id="modeAllRow" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
           <button type="button" class="ghost" id="modeAllOn">All on</button>
@@ -2421,6 +2465,8 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
            because it spends its idle time letting the device go.</p>
         <p class="why hide" id="releaseAdsbNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is
           kept running on this radio when nobody is connected, so it is never let go while that is ticked.</p>
+        <!-- ★★★ beta96 any kept mode (mapLandRender writes the mode's name) -->
+        <p class="why hide" id="releaseKeepNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
         <!-- ★★ HOW LONG TO WAIT, because the right answer depends on what else wants the radio.
              It was fixed at five minutes with nothing to change it — long enough that the other
              program is still waiting when somebody gives up (Stuart, 2026-08-08: "5 minutes is a
@@ -2477,6 +2523,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <p class="why hide" id="bgAdsbNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is kept
           running on this radio when nobody is connected (Where new listeners start), so these profiles do not run.
           Untick it there to decode in the background instead.</p>
+        <p class="why hide" id="bgKeepNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
       </div>
       <!-- ★★ V12 beta90 UNATTENDED SATELLITE PASSES (Stuart 2026-11-21: "when a pass is happening the current background
            decode is paused it goes to the meteor pass runs it then switches back to normal background decoding
@@ -2521,6 +2568,8 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <p class="why hide" id="spKeepNote" style="border-left:3px solid var(--amber);padding-left:8px">ADS-B is kept
           running on this radio: a satellite pass takes the radio &mdash; ADS-B pauses for the pass, about 10&ndash;15 min,
           and resumes after. ORBCOMM sky-plot monitoring runs only beside a pass while ADS-B is kept running.</p>
+        <!-- ★★★ beta96 the landing map's kept mode (VDL2 SHARES the 137 MHz capture with a pass; the rest pause) — keepSatWords -->
+        <p class="why hide" id="spMapKeepNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
         <p class="why hide" id="spLockedNote" style="border-left:3px solid var(--amber);padding-left:8px">This radio's range
           is locked, so passes are not followed on it in this version (a pass has to move the radio).</p>
         <!-- ★★★ beta94 the owner's reset of this radio's ORBCOMM sky plot (POST /vibeserver/admin/skyplot-reset, answered by
@@ -4441,9 +4490,81 @@ function loraAllHint() {
   return t;
 }
 
+/* ── ★★★ beta96 THE SINGLE-MODE RADIO (vibe_keep_store.h singleOk / singleBlockOf; the server's vsEnforcedBlocked) ─────────
+ *  radio().singleMode: "" (not chosen yet: derived from the ticks on open — Paul's ADS-B-only radio shows as Single mode:
+ *  ADS-B, saved when the owner saves), "general", or the token ("adsb", "vdl2", "ism:868", "dab", "wfm", "sat" …). */
+function singleBlockOf(t) {
+  if (!t || t === "general") return "";
+  if (t === "sat") return "sat";
+  const m = KEEP_MODES.find(x => x.id === keepBase(t));
+  return m ? m.block : t;
+}
+function singleWords(t) {
+  if (!t || t === "general") return "";
+  if (t === "sat") return "SATELLITES";
+  const named = { dab: "DAB", ndb: "NDB", sondes: "SONDES", wfm: "WFM", nfm: "NFM", am: "AM", usb: "USB", lsb: "LSB", drm: "DRM" };
+  return named[t] || keepTokName(t);
+}
+/** What THIS radio can be single-mode in: [{tok, label, why}] — the server's facts (mapModes, ismHwBands, dab, ndbHw, the caps
+ *  tree, singleSat); a mode it can never do is not listed; the owner's ticks do not matter (single mode overrides them). */
+function singleOptions(r) {
+  const out = [];
+  const F = keepFacts(r);
+  const av = id => F.avail.find(a => a.id === id) || { hw: false };
+  const rateWhy = id => { const a = av(id); return a.why && !/switched off/.test(a.why) ? a.why : ""; };
+  for (const id of ["adsb", "vdl2", "acars", "ais", "vor"]) if (av(id).hw) out.push({ tok: id, label: id === "vdl2" ? "DATALINK: VDL2" : id === "acars" ? "DATALINK: ACARS" : id === "vor" ? "VOR MAP" : keepTokName(id), why: rateWhy(id) });
+  if (av("ism").hw) for (const b of (typeof bgIsmBands === "function" ? bgIsmBands() : [])) out.push({ tok: "ism:" + b.id, label: "ISM " + b.label, why: "" });
+  if (typeof dabLandHwCan === "function" && dabLandHwCan() && DAB_DECODER) out.push({ tok: "dab", label: "DAB", why: "" });
+  const hw = typeof HW !== "undefined" && HW && !HW.offline ? HW : null;
+  if (hw && hw.ndbHw) out.push({ tok: "ndb", label: "NDB", why: "" });
+  const full = typeof modeTree === "function" ? modeTree() : [];
+  const shown = id => { const m = full.find(x => x.id === id); return !!m && (typeof modeCapShown !== "function" || modeCapShown(full, m)); };
+  if (shown("sondes")) out.push({ tok: "sondes", label: "SONDES", why: "" });
+  for (const d of ["wfm", "nfm", "am", "usb", "lsb", "drm"]) if (shown(d)) out.push({ tok: d, label: d.toUpperCase() + " listening only", why: "" });
+  if (hw && hw.singleSat && hw.singleSat.ok) out.push({ tok: "sat", label: "SATELLITES (the radio follows the passes; listeners watch)", why: "" });
+  return out;
+}
+/** The token the owner's TICKS imply (one mode left on) — the migration of a radio that is single-mode by its ticks. */
+function singleFromTicks(r) {
+  const off = new Set(String(r.blockedModes || "").split(/[,;\s]+/).filter(Boolean).map(t => t.toLowerCase()));
+  if (!LISTEN_DEMODS.every(d => off.has(d))) return "";
+  const left = WHOLE_MODES.filter(w => !off.has(w));
+  if (left.length !== 1) return "";
+  const w = left[0];
+  if (w === "avdata") { const ids = keepParse(r.landingModes); return ids[0] === "acars" ? "acars" : "vdl2"; }
+  if (w === "vormap") return "vor";
+  if (w === "ism") { const b = (typeof bgIsmBands === "function" ? bgIsmBands() : [])[0]; return "ism:" + (b ? b.id : "868"); }
+  return w;
+}
+function singleRender() {
+  const wrap = $("radioUseWrap"); if (!wrap) return;
+  const r = radio();
+  if (!r.singleMode) { const d = singleFromTicks(r); if (d) { r.singleMode = d; r._singleDerived = true; } }
+  const single = r.singleMode && r.singleMode !== "general" ? r.singleMode : "";
+  const opts = singleOptions(r);
+  if (single && !opts.some(o => o.tok === single)) opts.unshift({ tok: single, label: singleWords(single), why: "this radio cannot run it now" });
+  wrap.classList.toggle("hide", !opts.length && !single);
+  $("radioUseGeneral").checked = !single; $("radioUseSingle").checked = !!single;
+  const sel = $("singlePick");
+  sel.innerHTML = opts.map(o => `<option value="${esc(o.tok)}"${o.why ? " disabled" : ""}>${esc(o.label)}${o.why ? " — " + esc(o.why) : ""}</option>`).join("");
+  if (single) sel.value = single;
+  sel.disabled = !single;
+  $("singleNote").textContent = !single ? ""
+    : `This radio is single mode: ${singleWords(single)}. ` + (r._singleDerived ? "(Worked out from the modes ticked below — saved when you save.) " : "")
+      + (single === "sat"
+          ? "It follows the satellite passes itself (Unattended satellites, below, says which and their priority); listeners land in SATELLITE and watch — they cannot retune it. The admin may."
+          : "Listeners land in it and cannot leave it (the admin may)" + (singleKeepable(single) ? "; it keeps running when nobody is connected." : ".")
+            + " New modes from updates never appear on this radio.");
+  // ★ the ticks stay as they were (General gives them back), greyed while single mode decides
+  const list = $("modeBlockList"), allRow = $("modeAllRow");
+  if (list) { list.style.opacity = single ? ".4" : ""; list.style.pointerEvents = single ? "none" : ""; }
+  if (allRow) allRow.style.display = single ? "none" : "";
+}
+function singleKeepable(t) { return !!t && t !== "general" && t !== "sat" && KEEP_MODES.some(m => m.id === keepBase(t)) && (keepBase(t) !== "ism" || t.includes(":")); }
 function modeBlockRender() {
   const host = $("modeBlockList");
   if (!host) return;
+  singleRender();   // ★★★ beta96 Radio use: General / Single mode
   // ★★★ beta96 this radio's new switches judged from what its owner had seen when the card opened (newModesFreeze)
   newModesFreeze(radio()); modeDrawn().add(modeRadioKey(radio(), curRadio));
   // ★ moved controls out first, so emptying the list cannot take them with it
@@ -4725,14 +4846,235 @@ function adsbLandShow(r, o) {
   if ($("releaseAdsbNote")) $("releaseAdsbNote").classList.toggle("hide", !keep);
   return on;
 }
+/* ── ★★★ beta96 THE LANDING MAP AND ITS KEEP-RUNNING MODES (vibe_keep_store.h / vibe_keep_run.h) ──────────────────────────
+ *  Stored on the radio as landingMap ("avmar"), landingModes ("vdl2" | "vdl2,acars" | …) and mapKeep; the ADS-B case is
+ *  mirrored into landingAdsb / adsbKeepRunning (an older server reads the same ADS-B landing). keepGate is vibekeep::gate in
+ *  JavaScript — scripts/test-setup-keep-run.mjs runs it on the C++ test's cases. The FACTS come from the server for the radio
+ *  (hwinfo mapModes: could it ever, why not now, the benchmark cost; mapCombo for ACARS + VDL2); the form's own rate and
+ *  blocks are applied on top, so the gate follows the owner's edits before they are saved. */
+const KEEP_MODES = [
+  { id: "adsb",  name: "ADS-B",         group: "aviation", block: "adsb" },
+  { id: "vdl2",  name: "VDL2",          group: "aviation", block: "avdata" },
+  { id: "acars", name: "ACARS",         group: "aviation", block: "avdata" },
+  { id: "vor",   name: "VOR / ILS map", group: "aviation", block: "vormap" },
+  { id: "ais",   name: "AIS",           group: "maritime", block: "ais" },
+  { id: "ism",   name: "ISM",           group: "ism",      block: "ism", map: "amateur" },
+];
+const KEEP_GROUP_WORDS = { aviation: "AVIATION", maritime: "MARITIME", ism: "ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)" };
+function keepMapOf(m) { return m.map || "avmar"; }
+function keepBase(t) { return String(t).split(":")[0]; }
+const KEEP_COMBO_MIN = 6083334;   // ★ the wide band's own figure (vibeavi minRateHz) — the server's mapCombo.minRate wins
+function keepParse(csv) {
+  const got = [];
+  for (let t of String(csv || "").split(/[,;\t\n]/)) {
+    t = t.trim().toLowerCase();
+    if (t === "acars+vdl2") { got.push("acars", "vdl2"); continue; }
+    const b = keepBase(t), band = t.includes(":") ? t.slice(t.indexOf(":") + 1) : "";
+    const m = KEEP_MODES.find(x => x.id === b);
+    if (!m) continue;
+    if (b === "ism" ? /^[a-z0-9]{1,8}$/.test(band) : t === b) got.push(t);   // ★ ISM only with its band: "ism:868"
+  }
+  const out = [];
+  for (const m of KEEP_MODES) { const g = got.find(t => keepBase(t) === m.id); if (g) out.push(g); }
+  return out;
+}
+function keepIsCombo(ids) { return ids.length === 2 && ids.includes("acars") && ids.includes("vdl2"); }
+function keepRateWords(hz) { let s = (hz / 1e6).toFixed(3); s = s.replace(/0+$/, "").replace(/\.$/, ""); return s + " MS/s"; }
+/** vibekeep::gate. avail: [{id, hw, why, pct}]; returns [{id, name, group, drawn, enabled, on, why, pct}]. */
+function keepGate(avail, comboOk, comboWhy, rateHz, chosenIn, comboMin, map) {
+  map = map || "avmar";
+  const av = id => avail.find(a => a.id === id);
+  let toks = keepParse(chosenIn.join(",")).filter(t => { const m = KEEP_MODES.find(x => x.id === keepBase(t)); const a = av(keepBase(t)); return m && keepMapOf(m) === map && a && a.hw && !a.why; });
+  let chosen = toks.map(keepBase);
+  if (chosen.length > 1 && !(keepIsCombo(chosen) && comboOk)) { chosen = chosen.slice(0, 1); toks = toks.slice(0, 1); }
+  const name = id => (KEEP_MODES.find(m => m.id === id) || {}).name || id;
+  return KEEP_MODES.filter(m => keepMapOf(m) === map).map(m => {
+    const o = { id: m.id, tok: toks.find(t => keepBase(t) === m.id) || m.id, name: m.name, group: m.group, drawn: true, enabled: true, on: false, why: "", pct: -1 };
+    const a = av(m.id);
+    if (!a || !a.hw) { o.drawn = false; o.enabled = false; return o; }
+    if (typeof a.pct === "number") o.pct = a.pct;
+    o.on = chosen.includes(m.id);
+    if (a.why) { o.enabled = false; o.why = a.why; return o; }
+    if (o.on || !chosen.length) return o;
+    const partner = chosen.length === 1 && ((chosen[0] === "acars" && m.id === "vdl2") || (chosen[0] === "vdl2" && m.id === "acars"));
+    if (partner && comboOk) return o;
+    o.enabled = false;
+    if (partner) o.why = comboWhy || ("ACARS and VDL2 together need a capture of " + keepRateWords(Math.ceil((comboMin || KEEP_COMBO_MIN) / 1e5) * 1e5) + " or more");
+    else if (chosen.length === 2) o.why = "ACARS + VDL2 already take this radio's capture";
+    else o.why = (rateHz > 0 ? keepRateWords(rateHz) + ": " : "") + "one mode at a time on this radio — " + name(chosen[0]) + " is ticked";
+    return o;
+  });
+}
+function keepCostWords(pct) {
+  if (!(pct >= 0)) return "";
+  return pct < 1 ? "under 1 % of one core (setup benchmark)" : `about ${Math.round(pct)} % of one core (setup benchmark)`;
+}
+/** The facts for THIS radio with the form's edits on top: the server's mapModes where it is running, else the driver. */
+function keepFacts(r) {
+  const f = adsbLandForm();
+  const blocks = modeBlockSet();
+  const drv = String((r && r.driver) || "");
+  const srv = HW && !HW.offline && Array.isArray(HW.mapModes) ? HW.mapModes : null;
+  const rate = f.rate > 0 ? f.rate : (HW && HW.mapRate) || 0;
+  const avail = KEEP_MODES.map(m => {
+    const s = srv ? srv.find(x => x.id === m.id) : null;
+    let hw = s ? !!s.hw : drv !== "icom" && !(m.id === "adsb" && drv === "airspyhf") && !(m.id === "vor" && drv === "airspyhf");
+    let why = s && s.why ? s.why : "";
+    if (m.id === "ism" && !s) hw = drv !== "icom" && drv !== "airspyhf";   // ★ the running server's answer decides when it has one
+    if (m.id === "adsb") {   // ★ ADS-B's own rule with the form's rate and switch (adsbLandOffer — beta95's, unchanged)
+      const o = adsbLandOffer(r, HW, f);
+      hw = o.hw; why = o.offer ? "" : o.why;
+    } else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (Modes offered to listeners).`;
+    else if (s && s.why && /needs a capture|runs at/.test(s.why) && rate > 0 && rate !== (HW && HW.mapRate)) why = "";   // ★ the form's new rate decides
+    return { id: m.id, hw, why, pct: s && typeof s.pct === "number" ? s.pct : -1 };
+  });
+  const c = HW && !HW.offline && HW.mapCombo ? HW.mapCombo : null;
+  const comboMin = c && c.minRate ? c.minRate : KEEP_COMBO_MIN;
+  const comboOk = !blocks.has("avdata") && (rate >= comboMin || !!(c && c.ok));
+  const comboWhy = comboOk ? "" : (rate > 0 ? `ACARS and VDL2 together need a capture of ${keepRateWords(Math.ceil(comboMin / 1e5) * 1e5)} or more — this radio runs at ${keepRateWords(rate)}` : "");
+  return { avail, comboOk, comboWhy, rate, comboMin, comboPct: c && typeof c.pct === "number" ? c.pct : -1 };
+}
+/** The words for the satellites beside a kept mode (the server's satKeepWarn, said before it is saved). */
+function keepTokName(t) {
+  if (keepBase(t) === "ism") { const b = t.slice(4); const x = (typeof bgIsmBands === "function" ? bgIsmBands() : []).find(y => y.id === b); return "ISM " + (x ? x.label : b + " MHz"); }
+  return (KEEP_MODES.find(m => m.id === t) || {}).name || t;
+}
+function keepSatWords(r) {
+  const ids = keepParse(r.landingModes);
+  if (!r.landingMap || !r.mapKeep || !ids.length) return "";
+  const name = keepIsCombo(ids) ? "ACARS + VDL2" : keepTokName(ids[0]);
+  if (ids.length === 1 && ids[0] === "vdl2")
+    return "VDL2 is kept running on this radio: a Meteor or NOAA pass SHARES its 137 MHz capture — VDL2 keeps decoding through the "
+      + "pass (a few seconds' gap as it starts and ends), the tuner's IF filter opens over 136.7–138.0 MHz for the pass and closes "
+      + "after. With ORBCOMM ticked, the sky plot keeps building beside VDL2 all day. (A radio whose capture cannot hold both — an "
+      + "Airspy HF+ — pauses VDL2 for the pass instead.)";
+  return `${name} is kept running on this radio: a satellite pass takes the radio — ${name} pauses for the pass, about `
+    + "10–15 min, and resumes after. ORBCOMM sky-plot monitoring runs only beside a pass while it is kept running.";
+}
+/** Draw it. Returns whether a landing map is in force (the DAB landing then gives way). */
+function mapLandRender() {
+  const wrap = $("mapLandWrap"); if (!wrap) return false;
+  const r = radio();
+  const F = keepFacts(r);
+  const anyHw = F.avail.some(a => a.hw);
+  wrap.classList.toggle("hide", !anyHw);
+  const on = anyHw && (r.landingMap === "avmar" || r.landingMap === "amateur");
+  $("mapLandOn").checked = on;
+  $("mapLandBox").classList.toggle("hide", !on);
+  const map = r.landingMap === "amateur" ? "amateur" : "avmar";
+  if ($("mapLandWhich")) {
+    $("mapLandWhich").value = map;
+    // ★ a map with nothing this radio can run is not offered (an Icom has neither; an HF+ has both)
+    for (const o of $("mapLandWhich").options || []) o.disabled = !F.avail.some(a => a.hw && keepMapOf(KEEP_MODES.find(m => m.id === a.id) || {}) === o.value);
+  }
+  const offers = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, keepParse(r.landingModes), F.comboMin, map);
+  const chosen = offers.filter(o => o.on).map(o => o.tok);
+  const list = $("mapModeList");
+  if (on) {
+    let html = "", group = "";
+    for (const o of offers) {
+      if (!o.drawn) continue;
+      if (o.group !== group) { group = o.group; html += `<div class="lbl" style="margin-top:8px">${esc(KEEP_GROUP_WORDS[group] || group)}</div>`; }
+      const cost = keepCostWords(o.pct);
+      html += `<label style="display:flex;align-items:flex-start;gap:10px;margin-top:4px;${o.enabled ? "" : "opacity:.5"}">`
+        + `<input type="checkbox" data-keep="${o.id}"${o.on ? " checked" : ""}${o.enabled ? "" : " disabled"}>`
+        + `<span>${esc(o.name)}${cost ? ` <span class="hint" style="display:inline">· ${esc(cost)}</span>` : ""}`
+        + (o.why ? `<br><span class="hint" style="display:inline">${esc(o.why)}</span>` : "") + `</span></label>`;
+      // ★★ ISM: the band from ISM's own plan, the ones THIS radio reaches (hwinfo ismHwBands — bgIsmBands); LoRa coverage follows
+      //    ISM's own "every channel" setting (Modes offered to listeners), not this card
+      if (o.id === "ism" && o.on) {
+        const bands = typeof bgIsmBands === "function" ? bgIsmBands() : [];
+        const cur = o.tok.includes(":") ? o.tok.slice(4) : "";
+        html += `<label style="margin:4px 0 0 28px"><span class="lbl">Band</span><select data-keepband="ism">`
+          + bands.map(b => `<option value="${esc(b.id)}"${b.id === cur ? " selected" : ""}>${esc(b.label)}</option>`).join("") + `</select></label>`;
+      }
+    }
+    list.innerHTML = html;
+    for (const sel of list.querySelectorAll("select[data-keepband]")) sel.addEventListener("change", () => { keepSetModes(["ism:" + sel.value]); dabLandRender(); });
+    for (const cb of list.querySelectorAll("input[data-keep]")) cb.addEventListener("change", () => {
+      const cur = keepParse(radio().landingModes);
+      let id = cb.dataset.keep;
+      if (id === "ism") { const bs = typeof bgIsmBands === "function" ? bgIsmBands() : []; const b = bs.find(x => x.id === "868") || bs.find(x => x.id === "433") || bs[0]; id = "ism:" + (b ? b.id : "868"); }
+      const next = cb.checked ? [...cur, id] : cur.filter(x => keepBase(x) !== keepBase(id));
+      keepSetModes(next);
+      dabLandRender();
+    });
+    // ★★ "2.4 MS/s detected: you can choose one of these modes" / "8 MS/s detected: you can choose ACARS & VDL2" (Stuart)
+    $("mapRateNote").textContent = F.rate > 0
+      ? (F.comboOk ? `${keepRateWords(F.rate)} detected: one mode at a time, or ACARS & VDL2 together (this capture holds both).`
+                   : `${keepRateWords(F.rate)} detected: you can choose one of these modes.`) : "";
+  } else { list.innerHTML = ""; $("mapRateNote").textContent = ""; }
+  // keep-running: only beneath the choice, never ticked by default
+  const keep = on && chosen.length > 0 && !!r.mapKeep;
+  $("mapKeep").checked = keep;
+  $("mapKeep").disabled = !chosen.length;
+  const nm = keepIsCombo(chosen) ? "ACARS + VDL2" : chosen.length ? keepTokName(chosen[0]) : "";
+  $("mapKeepLbl").textContent = nm ? `Keep ${nm} running when nobody is connected` : "Keep it running when nobody is connected";
+  const cost = keepCostWords(keepIsCombo(chosen) ? F.comboPct : (offers.find(o => o.on) || {}).pct);
+  $("mapKeepNote").innerHTML = !nm ? "Tick a mode above first." :
+    `A new listener sees a populated map at once, instead of one that fills over the next minutes. <b>It costs CPU all the time</b>`
+    + (cost ? ` (${esc(cost)}; the benchmark sets nothing here — it is your choice)` : "")
+    + " and this radio never idles: it is not parked or handed to another program, and its Background Decoding does not run. "
+    + (chosen.length === 1 && chosen[0] === "vdl2"
+        ? "Unattended satellite passes share VDL2's 137 MHz capture: VDL2 keeps decoding through a Meteor or NOAA pass, and with "
+          + "ORBCOMM ticked the sky plot keeps building beside it."
+        : "Unattended satellite passes still run: a pass takes the radio, the mode pauses for it (about 10–15 min) and resumes after.");
+  // ★ a stored landing the radio cannot run now: say so (the plain landing applies)
+  const stored = keepParse(r.landingModes);
+  const lost = on && stored.length && !chosen.length;
+  $("mapLandNote").textContent = lost ? `This radio cannot run ${stored.map(keepTokName).join(" + ")} with its `
+    + `current settings, so listeners start on ${plainLandingWords()} until it can.` : "";
+  $("mapPlainHead").style.display = on ? "" : "none";
+  if ($("adsbPlainHead")) $("adsbPlainHead").style.display = "none";
+  // ★★ the kept mode owns the idle radio: the Background Decoding and release cards say so, in its name
+  const kn = keep ? nm : "";
+  for (const [id, words] of [["bgKeepNote", `${kn} is kept running on this radio when nobody is connected (Where new listeners start), so these profiles do not run. Untick it there to decode in the background instead.`],
+                             ["releaseKeepNote", `${kn} is kept running on this radio when nobody is connected, so it is never let go while that is ticked.`]]) {
+    if (!$(id)) continue;
+    $(id).textContent = words; $(id).classList.toggle("hide", !kn);
+  }
+  for (const id of ["bgAdsbNote", "releaseAdsbNote"]) if ($(id)) $(id).classList.add("hide");   // ★ the general note says it
+  if ($("bgProfiles")) $("bgProfiles").style.opacity = kn ? ".45" : "";
+  return on && chosen.length > 0;
+}
+/** Write a choice onto the radio — normalised by the gate, the ADS-B pair mirrored (vibekeep::migrate's rule). */
+function keepSetModes(ids) {
+  const r = radio();
+  const F = keepFacts(r);
+  // ★ the newest tick wins where only one fits: put it first, the gate keeps the first
+  const last = ids[ids.length - 1];
+  const ordered = last ? [last, ...ids.filter(x => x !== last)] : ids;
+  const g = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, ordered, F.comboMin, r.landingMap === "amateur" ? "amateur" : "avmar");
+  let keep = g.filter(o => o.on).map(o => o.tok);
+  const mp = r.landingMap === "amateur" ? "amateur" : "avmar";
+  if (!keep.length && ids.length)   // ★ not runnable now: kept as chosen (this map's own modes only), said in mapLandNote
+    keep = keepParse(ids.join(",")).filter(t => keepMapOf(KEEP_MODES.find(m => m.id === keepBase(t)) || {}) === mp).slice(0, 1);
+  r.landingModes = keep.join(",");
+  keepMirror(r);
+}
+function keepMirror(r) {
+  const ids = keepParse(r.landingModes);
+  const known = r.landingMap === "avmar" || r.landingMap === "amateur";
+  if (!known || !ids.length) { r.mapKeep = known ? !!r.mapKeep : false; }
+  r.landingAdsb = r.landingMap === "avmar" && ids.length === 1 && ids[0] === "adsb";
+  r.adsbKeepRunning = r.landingAdsb && !!r.mapKeep;
+}
+/** A radio loaded from an older server (no landingMap): beta95's ADS-B pair becomes the map + ADS-B (vibekeep::migrate). */
+function keepMigrate(r) {
+  if (!r || r.landingMap) return;
+  if (r.landingAdsb) { r.landingMap = "avmar"; r.landingModes = "adsb"; r.mapKeep = !!r.adsbKeepRunning; }
+}
 function dabLandRender() {
   if (typeof afRender === "function" && $("adsbFeedCard") && afRadio) afRender();   // ★ beta96 the same offer gates the card
   const wrap = $("dabLandWrap"); if (!wrap) return;
   const r = radio();
+  keepMigrate(r);
   const hwCan = dabLandHwCan();
   const blocked = modeBlockSet().has("dab");
   // ★ One landing at a time: with ADS-B chosen the DAB toggle steps aside (the shim lets ADS-B win the same way).
-  const adsbOn = adsbLandShow(r, adsbLandOffer(r, HW, adsbLandForm()));
+  adsbLandShow(r, adsbLandOffer(r, HW, adsbLandForm()));
+  // ★★★ beta96 the landing map (ADS-B is one of its modes now): it steps the DAB landing aside the same way
+  const adsbOn = mapLandRender();
   const offer = hwCan && !blocked && !adsbOn;
   wrap.classList.toggle("hide", !offer);
   const on = offer && Number(r.landingDabChannel) >= 0;
@@ -4765,6 +5107,8 @@ function dabLandOnBlockedChange(mode, blockedNow) {
   const r = radio();
   // ★ V12: blocking ADS-B clears its landing too (the note in adsbLandShow then says why it is not offered)
   if (mode === "adsb") { if (blockedNow) { r.landingAdsb = false; r.adsbKeepRunning = false; } dabLandRender(); return; }
+  // ★★★ beta96 a blocked map mode stays chosen but greyed (mapLandNote says the plain landing applies) — redraw
+  if (mode === "avdata" || mode === "ais" || mode === "vormap") { dabLandRender(); return; }
   if (mode !== "dab") return;
   if (blockedNow && Number(r.landingDabChannel) >= 0) {
     r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = "";
@@ -4864,6 +5208,20 @@ function dabLandInit() {
     dabLandRender();
   });
   $("adsbKeep").addEventListener("change", () => { radio().adsbKeepRunning = $("adsbKeep").checked; dabLandRender(); if (typeof spRender === "function") spRender(); });
+  // ★★★ beta96 the landing map: on clears a DAB landing (one landing at a time); off clears the modes and keep-running
+  $("mapLandOn").addEventListener("change", () => {
+    const r = radio();
+    if ($("mapLandOn").checked) { r.landingMap = ($("mapLandWhich") && $("mapLandWhich").value) || "avmar"; r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = ""; }
+    else { r.landingMap = ""; r.landingModes = ""; r.mapKeep = false; }
+    keepMirror(r);
+    dabLandRender(); if (typeof spRender === "function") spRender();
+  });
+  // ★★ the map itself: its modes are its own, so a change starts the choice afresh
+  if ($("mapLandWhich")) $("mapLandWhich").addEventListener("change", () => {
+    const r = radio(); r.landingMap = $("mapLandWhich").value; r.landingModes = ""; r.mapKeep = false; keepMirror(r);
+    dabLandRender(); if (typeof spRender === "function") spRender();
+  });
+  $("mapKeep").addEventListener("change", () => { const r = radio(); r.mapKeep = $("mapKeep").checked; keepMirror(r); dabLandRender(); if (typeof spRender === "function") spRender(); });
   // ★ The offer follows the rate and the rate switch as they change, not only on the next tab switch.
   for (const id of ["rate", "dabRateBoost"]) if ($(id)) $(id).addEventListener("change", dabLandRender);
   // ★ The sentence names the fallback, so it follows the fallback when the owner edits it.
@@ -4956,6 +5314,13 @@ function newModesPolicySet(v) {
 /** The mode new listeners land in on this radio — what ALL OFF keeps on ("" = none it can name). */
 function modeLandingId() {
   const r = radio();
+  if (r.singleMode && r.singleMode !== "general" && typeof singleBlockOf === "function") return singleBlockOf(r.singleMode);   // ★★★ beta96
+  // ★★★ beta96 the landing map's mode (b96-keeprun): VDL2 / ACARS stand on "avdata", then "vormap", "ais", "ism", "adsb"
+  if ((r.landingMap === "avmar" || r.landingMap === "amateur") && typeof keepParse === "function") {
+    const ids = keepParse(r.landingModes);
+    const m = ids.length ? KEEP_MODES.find(x => x.id === keepBase(ids[0])) : null;
+    if (m) return m.block;
+  }
   if (r.landingAdsb) return "adsb";
   const ch = r.landingDabChannel;
   if (ch !== undefined && ch !== null && ch !== "" && Number(ch) >= 0) return "dab";
@@ -4997,6 +5362,16 @@ function modeAllSet(on) {
 }
 if ($("modeAllOn")) $("modeAllOn").addEventListener("click", () => modeAllSet(true));
 if ($("modeAllOff")) $("modeAllOff").addEventListener("click", () => modeAllSet(false));
+// ★★★ beta96 Radio use: General / Single mode
+for (const id of ["radioUseGeneral", "radioUseSingle"])
+  if ($(id)) $(id).addEventListener("change", () => {
+    const r = radio();
+    r._singleDerived = false;
+    if ($("radioUseGeneral").checked) r.singleMode = "general";
+    else { const o = singleOptions(r).find(x => !x.why); r.singleMode = ($("singlePick").value && !$("singlePick").selectedOptions[0]?.disabled ? $("singlePick").value : o ? o.tok : "general"); }
+    modeBlockRender(); dabLandRender();
+  });
+if ($("singlePick")) $("singlePick").addEventListener("change", () => { const r = radio(); r._singleDerived = false; r.singleMode = $("singlePick").value; modeBlockRender(); dabLandRender(); });
 for (const id of ["newModesPolOn", "newModesPolOff"])
   if ($(id)) $(id).addEventListener("change", (e) => { if (e.target.checked) newModesPolicySet(e.target.value); });
 /** ★ Save refused when a drawn radio would have no modes at all (both save buttons ask). */
@@ -5004,6 +5379,7 @@ function modesStop() {
   const list = radioList();
   for (let i = 0; i < list.length; i++) {
     if (!modeDrawn().has(modeRadioKey(list[i], i)) || !modeNoneLeft(list[i].blockedModes)) continue;
+    if (list[i].singleMode && list[i].singleMode !== "general") continue;   // ★★★ beta96 single mode decides, the ticks are underneath
     $("saveErr").textContent = "Not saved — " + (list[i].label || "a radio") + " has every mode switched off, so nobody could listen. "
       + "Tick at least one under “Modes and decoders”.";
     return true;
@@ -8516,7 +8892,11 @@ function spRender() {
   if ($("spFirst")) { $("spFirst").value = spModel.first; $("spFirst").disabled = !spModel.on; }
   const locked = bgRadio && (bgRadio.mode === "locked" || +bgRadio.lockedCentre > 0 || +bgRadio.lockCentre > 0);
   if ($("spLockedNote")) $("spLockedNote").classList.toggle("hide", !locked);
-  if ($("spKeepNote")) $("spKeepNote").classList.toggle("hide", !(spModel.on && bgRadio && bgRadio.landingAdsb && bgRadio.adsbKeepRunning));
+  if ($("spKeepNote")) $("spKeepNote").classList.add("hide");   // ★★★ beta96 spMapKeepNote says it for every kept mode, ADS-B too
+  if ($("spMapKeepNote")) {
+    const w = spModel.on && bgRadio ? keepSatWords(bgRadio) : "";
+    $("spMapKeepNote").textContent = w; $("spMapKeepNote").classList.toggle("hide", !w);
+  }
 }
 let bgRadio = null;   // ★ the radio the editor shows — its mode decides "locked", its users the user slots
 function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: [{ hz: 0, mode: "usb", dec: "navtex" }] }; }
@@ -9371,6 +9751,7 @@ function collectRadio() {
   const drv = radio().driver || "";
   return {
     mode: radio().mode,
+    singleMode: String(radio().singleMode || ""),   // ★★★ beta96 the single-mode radio ("general" = chosen General)
     // ★ The band lists are edited as chips straight onto the radio object, so they are carried
     //   through here rather than read back off a form field that does not exist. Blank in shared
     //   mode, because a locked range is already the limit and a stale list left behind would be
@@ -9392,6 +9773,10 @@ function collectRadio() {
     // ★★ V12 — edited straight onto the radio (adsbLandShow); keep-running never without the landing.
     landingAdsb: !!radio().landingAdsb,
     adsbKeepRunning: !!radio().landingAdsb && !!radio().adsbKeepRunning,
+    // ★★★ beta96 the landing map — edited straight onto the radio (mapLandRender / keepSetModes), the ADS-B pair mirrored
+    landingMap: radio().landingMap === "avmar" || radio().landingMap === "amateur" ? radio().landingMap : "",
+    landingModes: radio().landingMap === "avmar" || radio().landingMap === "amateur" ? String(radio().landingModes || "") : "",
+    mapKeep: (radio().landingMap === "avmar" || radio().landingMap === "amateur") && !!radio().mapKeep,
     ...fmDefCollect(),   // ★ the Broadcast FM defaults card
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,

@@ -860,6 +860,13 @@ public:
      *  meaningful with `land`). Both ignored where ADS-B cannot run on this radio (vsAdsbWhyNot). See the landing block
      *  in the spectrum accept path and adsbKeepTick for the precedence against DAB, background decoding and the park. */
     static void setVibeServerLandingAdsb(bool land, bool keepRunning);
+    /** ★★★ beta96 THE LANDING MAP (vibe_keep_store.h): map "avmar" | "", modes "vdl2" | "acars,vdl2" | "ais" | "vor" | "adsb",
+     *  keep = that mode runs with nobody here. ADS-B stays with setVibeServerLandingAdsb (called first; the config mirrors
+     *  it); this one owns every other mode. Android: read off the config JSON in setVibeServerFmDefaults (no new JNI). */
+    static void setVibeServerMap(const std::string& map, const std::string& modesCsv, bool keep);
+    /** ★★★ beta96 THE SINGLE-MODE RADIO ("" = General): every other mode blocked over the owner's list (vsModeBlocked), the
+     *  mode landed and kept running where keep-running applies, the only-mode lock (onlyModeNow). vibe_keep_store.h. */
+    static void setVibeServerSingle(const std::string& token);
     /** ★★ THE OWNER'S BROADCAST FM DEFAULTS, AND WHETHER THE SERVER REMEMBERS OR RETURNS (vibe_fm_defaults.h).
      *  `json` is a flat object with the config's fm* keys (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb,
      *  fmRemember); absent keys take the defaults. An UNCHANGED set is ignored, so re-applying a config forgets

@@ -349,6 +349,8 @@ flags_for() {
     # ★★★ beta94 the sky plot by POSITION (vibe_skyplot.h cells): grid, aggregation, expiry, ≤ 400 KB, AUTO, the heatmap PNG, reset
     test-skyplot-cells)    echo "-O2" ;;
     test-sat-pass-sched)   echo "-O2 -lpthread" ;;
+    # ★★★ beta96 the landing map + keep-running modes (vibe_keep_run.h): migration, the rate gate, the shared 137 MHz capture
+    test-keep-run)         echo "-O2 -lpthread" ;;
     # ★ ORBCOMM through the server's OWN slice paths (shared FFT + one-pipeline WideTap) at an HF+'s 912/768/456 kS/s, float IQ, a dial move
     test-orbcomm-slice)    echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
@@ -749,6 +751,9 @@ if node scripts/test-setup-mode-rate.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★★ V12 ADS-B AS THE LANDING: drawn only where ADS-B can run, keep-running only beneath it and never ticked by default,
 #    and when ticked the Background Decoding and release cards say the idle radio is ADS-B's.
 if node scripts/test-setup-adsb-landing.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 the landing map + keep-running modes on the Setup page (the gate on the C++ cases, the card drawn) and the app's rule
+if node scripts/test-setup-keep-run.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_keep_run.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 BACKGROUND DECODING's editor (2026-10-22): the page's real code — Nick's profile round-trips, decoders follow the
 #    demodulator, "add another profile" only under a timed one, delete, the dial hint.
 if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

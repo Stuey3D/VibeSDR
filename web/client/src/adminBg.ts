@@ -207,6 +207,10 @@ export interface SatPassStatus {
   keepWarn?: string;
   /** ★ beta95 the pass running now took the radio from that mode (it resumes at LOS). */
   keepPaused?: string;
+  /** ★★★ beta96 kept VDL2 SHARES the pass's 137 MHz capture (it keeps decoding through the pass) — the mode's name. */
+  keepShared?: string;
+  /** ★★★ beta96 the ORBCOMM sky plot rides kept VDL2's capture between passes (no radio taken). */
+  orbRider?: boolean;
 }
 export function satPassLines(sp: SatPassStatus | null | undefined, nowSec = Date.now() / 1000): { head: string; rows: string[]; warn: boolean } | null {
   if (!sp || (sp.state === 'off' && !sp.meteor && !sp.orbcomm && !sp.birds)) return null;
@@ -222,7 +226,9 @@ export function satPassLines(sp: SatPassStatus | null | undefined, nowSec = Date
   }
   if (sp.orbSky) rows.push(`ORBCOMM sky plot · ${sp.orbSky.dots} dot${sp.orbSky.dots === 1 ? '' : 's'} since ${hhmm(sp.orbSky.since)} (positions + SNR, no packets)`);
   if (typeof sp.centre === 'number' && sp.centre > 0 && sp.state === 'running') rows.push(`capture held at ${(sp.centre / 1e6).toFixed(4)} MHz`);
-  if (sp.state === 'running' && sp.keepPaused) rows.push(`${sp.keepPaused} paused for this pass — it resumes after LOS`);
+  if (sp.state === 'running' && sp.keepShared) rows.push(`${sp.keepShared} keeps decoding on this pass's capture — the IF filter is open for the pass and closes after LOS`);
+  else if (sp.state === 'running' && sp.keepPaused) rows.push(`${sp.keepPaused} paused for this pass — it resumes after LOS`);
+  if (sp.orbRider) rows.push('ORBCOMM sky plot riding the kept VDL2 capture (the radio is not taken)');
   if (sp.last) rows.push(`last pass: ${sp.last}`);
   if (sp.orbLast) rows.push(`last: ${sp.orbLast}`);
   if (sp.keepWarn) rows.push(`Warning: ${sp.keepWarn}`);
@@ -241,4 +247,31 @@ export function behindLines(list: string[] | null | undefined): { head: string; 
     rows: [`${l.length === 1 ? 'it' : 'they'} dropped some input in the last minute, so some decodes may be missed \u2014 listeners\u2019 audio is not affected`],
     warn: true,
   };
+}
+
+/* ── ★★★ beta96 THE LANDING MAP / KEEP-RUNNING LINE (adminStatusJson "keepRun", Impl::keepRunJson — Stuart 11-26: "I thought I'd
+ *    be able to set VDL2 as the Sony's background mode"). What new listeners land in, whether it is kept running and is now,
+ *    WHY NOT in the server's words (the rate, a block, a lock), what it costs (the setup benchmark — the default, never a gate)
+ *    and the satellites beside it. Admin only: an idle kept mode is nothing a listener feels. ── */
+export interface KeepRunStatus {
+  map?: string; title?: string; mode?: string; keep?: boolean; on?: boolean;
+  state?: 'running' | 'listeners' | 'cannot' | 'pass' | 'starting' | 'landing';
+  why?: string; cost?: string; heavy?: boolean; shared?: string; paused?: string; orbRider?: boolean; riding?: boolean; centre?: number;
+}
+export function keepRunLines(k: KeepRunStatus | null | undefined): { head: string; rows: string[]; warn: boolean } | null {
+  if (!k || !k.map || !k.mode) return null;
+  const what = k.keep ? `${k.mode} kept running` : `lands in ${k.mode}`;
+  const st = k.state === 'running' ? (k.keep ? 'running (nobody needs to be connected)' : 'running')
+    : k.state === 'listeners' ? (k.on ? 'running, with listeners' : 'listeners have the radio on something else — it comes back when they leave')
+    : k.state === 'pass' ? (k.shared ? `sharing the capture with a satellite pass` : `paused for a satellite pass — it resumes after LOS`)
+    : k.state === 'starting' ? 'starting within a few seconds'
+    : k.state === 'landing' ? 'new listeners land in it'
+    : `cannot run now — ${k.why || 'not on this radio now'}`;
+  const rows: string[] = [];
+  if (k.cost) rows.push(`cost: ${k.cost}${k.heavy ? ' — heavy for this machine; your choice (the benchmark never hides it)' : ''}`);
+  if (typeof k.centre === 'number' && k.centre > 0) rows.push(`capture held at ${(k.centre / 1e6).toFixed(4)} MHz — VDL2 and the ORBCOMM band on one capture`);
+  if (k.orbRider) rows.push('ORBCOMM sky plot building beside it');
+  if (k.riding) rows.push('VDL2 riding the satellite pass\u2019s capture');
+  if (k.state === 'cannot' && k.keep) rows.push('until it can, the radio idles as it would without it (parked, background decoding)');
+  return { head: `${k.title || 'Landing map'} · ${what} · ${st}`, rows, warn: k.state === 'cannot' || !!k.heavy };
 }

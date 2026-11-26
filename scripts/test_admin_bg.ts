@@ -1,5 +1,5 @@
 // test_admin_bg.ts — the admin page's background-decoding line (web/client/src/adminBg.ts, V12 beta 4).
-import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines, bgFullCpuText, behindLines } from '../web/client/src/adminBg.ts';
+import { bgLines, bgVfoLine, bgDuration, bgCpuText, satPassLines, bgFullCpuText, behindLines, keepRunLines } from '../web/client/src/adminBg.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -126,6 +126,26 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
   const dd = bgLines({ ...run, runner: { ...run.runner, depth: 3, depthName: 'one pass a slot' } })!;
   ok(dd.head.endsWith(' · Band decode depth reduced (one pass a slot) — every band still decoding'), `depth: ${dd.head}`);
   ok(!bgLines({ ...run, runner: { ...run.runner, depth: 0, depthName: 'full' } })!.head.includes('depth'), 'full depth: nothing said');
+}
+
+// ★★★ beta96 the landing map / keep-running line, and the shared 137 MHz capture on the satellite line
+ok(keepRunLines(null) === null && keepRunLines({ map: '' }) === null, 'keepRun: no landing map → nothing');
+{
+  const k = keepRunLines({ map: 'avmar', title: 'Aviation & Maritime', mode: 'VDL2', keep: true, on: true, state: 'running',
+                           cost: 'about 9 % of one core (setup benchmark)', orbRider: true, centre: 137179000 })!;
+  ok(k.head === 'Aviation & Maritime \u00b7 VDL2 kept running \u00b7 running (nobody needs to be connected)', 'keepRun head: ' + k.head);
+  ok(k.rows.some((r) => r.startsWith('cost: about 9 %')) && k.rows.some((r) => /137\.1790 MHz/.test(r)) && k.rows.some((r) => /ORBCOMM sky plot building/.test(r)) && !k.warn,
+     'keepRun rows: the cost, the shared centre, the sky plot');
+  const c = keepRunLines({ map: 'avmar', mode: 'ADS-B', keep: true, on: false, state: 'cannot', why: 'ADS-B needs a capture of 2.4 MS/s' })!;
+  ok(c.warn && /cannot run now — ADS-B needs a capture of 2\.4 MS\/s/.test(c.head) && c.rows.some((r) => /idles as it would/.test(r)), 'keepRun cannot: why, warned, what happens instead');
+  const p = keepRunLines({ map: 'avmar', mode: 'VDL2', keep: true, state: 'pass', shared: 'VDL2' })!;
+  ok(/sharing the capture with a satellite pass/.test(p.head), 'keepRun during a shared pass');
+  const h = keepRunLines({ map: 'avmar', mode: 'VOR / ILS map', keep: true, on: true, state: 'running', cost: 'about 72 % of one core (setup benchmark)', heavy: true })!;
+  ok(h.warn && h.rows.some((r) => /never hides it/.test(r)), 'heavy: warned on the admin page, never hidden');
+  const sp = satPassLines({ state: 'running', name: 'METEOR-M2 4', label: 'LRPT', keepShared: 'VDL2', keepPaused: 'VDL2', keepWarn: 'a satellite pass shares the 137 MHz capture with VDL2' })!;
+  ok(sp.rows.some((r) => /VDL2 keeps decoding on this pass's capture/.test(r)) && !sp.rows.some((r) => /paused for this pass/.test(r)), 'satellites: shared, not paused');
+  const sr = satPassLines({ state: 'waiting', now: 'VDL2 is kept running — waiting for a pass', orbRider: true, meteor: true })!;
+  ok(sr.rows.some((r) => /riding the kept VDL2 capture/.test(r)), 'satellites: the sky plot rides kept VDL2');
 }
 
 console.log(`admin bg: ${pass} passed, ${fail} failed`);

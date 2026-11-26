@@ -91,6 +91,10 @@ const TABLE = [
   P(['antRangePreset', 'antFilterPreset'], 'AntennaBandsEditor', 'antennaRanges'),
   P(['adsbLandOn'], 'landingAdsb', 'landingAdsb'),
   P(['adsbKeep'], 'adsbKeep', 'adsbKeepRunning'),
+  // ★★★ beta96 the landing map + keep-running modes (utils/keepRun.ts on the screen; the engine reads them off the config)
+  P(['mapLandOn', 'mapLandWhich'], 'landingMap', 'landingMap'),
+  P(['mapKeep'], 'mapKeep', 'mapKeep'),
+  P(['radioUseGeneral', 'radioUseSingle', 'singlePick'], 'RADIO USE', 'singleMode'),
   P(['dabLandOn', 'dabLandBlock', 'dabLandStation'], 'landingDabCh', 'landingDabChannel'),
   P(['landingFreq', 'demodMode'], 'WHERE LISTENERS START', { sent: 'centerFreq: landingHz', applied: 'setVibeServerLanding(centerFreq, mode)' }),
   P(['fmDeemph', 'fmStereo', 'fmNr', 'fmIms', 'fmCeq', 'fmAutoBw', 'fmNb', 'fmReturn', 'fmRemember'], 'BROADCAST FM DEFAULTS', { sent: 'fmDefaultsKeys(cfg.fmDefaults', applied: 'setVibeServerFmDefaults(cfg.toString())' }),

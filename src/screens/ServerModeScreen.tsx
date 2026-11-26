@@ -10,7 +10,7 @@ import AdsbFeedSetup from '../components/AdsbFeedSetup';   // ★★ V12 beta96 
 import { adsbFeedOffered, adsbFeedStatusLine, collectAdsbFeed, parseAdsbFeed, type AdsbFeedModel } from '../utils/adsbFeed';
 import RspSetupCard from '../components/RspSetupCard';
 import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
-import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
+import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps, BG_ISM_WORDS } from '../services/bgDecode';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
 /** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
  *  V12"). false hides the antenna-switch setup; a server already configured keeps working AND keeps the section, so its
@@ -246,6 +246,7 @@ import {
 } from '../services/icomRadio';
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
+import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse, keepSatWords, keepRateWords, keepBase, keepModeSwitch, singleOptionsLocal, singleFromTicks, singleWords, MAP_AVMAR, MAP_AMATEUR, KEEP_GROUP_WORDS, type KeepMap } from '../utils/keepRun';
 import { rateGuardIsBad, rateGuardLine, type RateGuardState } from '../services/rateGuard';
 import * as NM from '../utils/newModes';   // ★★★ beta96 new modes off on a restricted radio
 
@@ -404,6 +405,8 @@ const K = {
   landingHz: 'vs_landinghz', landingMode: 'vs_landingmode', biasT: 'vs_biast',
   landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
   landingAdsb: 'vs_landingadsb', adsbKeep: 'vs_adsbkeep',
+  landingMap: 'vs_landingmap', landingModes: 'vs_landingmodes', mapKeep: 'vs_mapkeep',   // ★★★ beta96 the landing map
+  singleMode: 'vs_singlemode',   // ★★★ beta96 the single-mode radio ('' = not chosen, 'general', or the token)
   radioLabel: 'vs_radiolabel',
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h), one JSON value — see FmDefaults. */
   fmDefaults: 'vs_fmdefaults',
@@ -974,6 +977,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  is connected, so the list is warm for the next one — continuous CPU, and the idle radio is ADS-B's. */
   const [landingAdsb, setLandingAdsb] = useState(false);
   const [adsbKeep, setAdsbKeep]       = useState(false);
+  /** ★★★ beta96 THE LANDING MAP (utils/keepRun.ts; the Setup page's "Start new listeners on the Aviation & Maritime map"):
+   *  the map on/off, the mode(s) it opens in (VDL2, ADS-B, ACARS, ACARS + VDL2, the VOR map, AIS) and keep-running. ADS-B is
+   *  one of its modes now — landingAdsb / adsbKeep above are MIRRORED from these (an older engine reads the same landing). */
+  const [mapOn, setMapOn]       = useState(false);
+  const [mapWhich, setMapWhich] = useState<KeepMap>('avmar');   // ★★ Aviation & Maritime, or Amateur (ISM — Stuart 11-26)
+  const [mapModes, setMapModes] = useState('');
+  const [mapKeep, setMapKeep]   = useState(false);
+  /** ★★★ beta96 RADIO USE (Stuart 11-26): '' = not chosen (derived from the ticks), 'general', or the single mode's token. */
+  const [singleMode, setSingleMode] = useState('');
   const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
   const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
   const [dabScanBusy, setDabScanBusy]     = useState(false);
@@ -1771,6 +1783,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           setLandingDabSid(Number(s(K.landingDabSid)) || 0);
           setLandingDabSvc(s(K.landingDabSvc));
           setLandingAdsb(g(K.landingAdsb) === '1'); setAdsbKeep(g(K.adsbKeep) === '1');
+          {   // ★★★ beta96 the landing map — beta95's ADS-B pair migrates in once (keepMigrate), unchanged
+            setSingleMode(s(K.singleMode));   // ★★★ beta96
+            const mig = keepMigrate({ map: g(K.landingMap), landingAdsb: g(K.landingAdsb) === '1', adsbKeep: g(K.adsbKeep) === '1' });
+            if (mig) { setMapOn(mig.map); setMapModes(mig.modes); setMapKeep(mig.keep); }
+            else {
+              const lm = g(K.landingMap);
+              setMapOn(lm === MAP_AVMAR || lm === MAP_AMATEUR); setMapWhich(lm === MAP_AMATEUR ? 'amateur' : 'avmar');
+              setMapModes(s(K.landingModes)); setMapKeep(g(K.mapKeep) === '1');
+            }
+          }
           { const ru = g(K.radioUse); if (ru === 'locked' || ru === 'single') setRadioUse(ru); }
           { const lhz = g(K.landingHz); if (lhz != null && Number.isFinite(Number(lhz))) setLandingHz(Number(lhz)); }
           { const lmd = g(K.landingMode); if (lmd) setLandingMode(lmd); }
@@ -2316,13 +2338,44 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const adsbLandOffered = !!radio && radio.driver !== 'airspyhf' && !isIcom && !adsbBlockedNow
     && !(advanced && radioUseEff === 'locked' && maxUsers > 1)
     && (rate === 0 || rate >= 2_400_000 || dabRateBoost);
-  const adsbLandOn = adsbLandOffered && landingAdsb;
-  const adsbKeepOn = adsbLandOn && adsbKeep;
+  /* ── ★★★ beta96 THE LANDING MAP — the gate (one mode at a time; ACARS + VDL2 where the capture holds both) on this radio ── */
+  const keepFacts = keepAvailLocal({ driver: radio?.driver ?? '', isIcom, blockedModes, rate, dabRateBoost,
+                                     ismBands: bgReachNow.ismOk && bgCaps ? bgCaps.ismBands : [],
+                                     lockedOwnVfos: advanced && radioUseEff === 'locked' && maxUsers > 1 });
+  if (!adsbLandOffered) { const a = keepFacts.avail.find((x) => x.id === 'adsb'); if (a && a.hw && !a.why) a.why = 'ADS-B cannot run on this radio with these settings'; }
+  const mapOffers = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, keepParse(mapModes), mapWhich);
+  const mapChosen = mapOffers.filter((o) => o.on).map((o) => o.tok);
+  const mapIsmBands = bgReachNow.ismOk && bgCaps ? bgCaps.ismBands : [];
+  const mapOffered = !!radio && keepFacts.avail.some((a) => a.hw);
+  const mapLandOn = mapOffered && mapOn && mapChosen.length > 0;
+  const mapKeepOn = mapLandOn && mapKeep;
+  const mapLost = mapOn && keepParse(mapModes).length > 0 && !mapChosen.length;
+  /** Write the map; the ADS-B pair mirrors it (an older engine reads the same ADS-B landing). */
+  const setMap = (on: boolean, modes: string, keep: boolean, which: KeepMap = mapWhich) => {
+    const k = on && modes ? keep : false;
+    setMapOn(on); setMapModes(on ? modes : ''); setMapKeep(k); setMapWhich(which);
+    const mir = keepMirror(on && which === 'avmar', on ? modes : '', k);
+    setLandingAdsb(mir.landingAdsb); setAdsbKeep(mir.adsbKeepRunning);
+    AsyncStorage.multiSet([[K.landingMap, on ? which : ''], [K.landingModes, on ? modes : ''], [K.mapKeep, k ? '1' : '0'],
+                           [K.landingAdsb, mir.landingAdsb ? '1' : '0'], [K.adsbKeep, mir.adsbKeepRunning ? '1' : '0']]);
+  };
+  /* ── ★★★ beta96 RADIO USE: General / Single mode — what THIS radio can do (no dead entries), the ticks' own answer as the
+   *  default for a radio single-mode by its ticks (Paul's), the ticks themselves untouched underneath ── */
+  const singleOpts = singleOptionsLocal({
+    avail: keepFacts.avail, ismBands: mapIsmBands, ismWords: BG_ISM_WORDS, dab: dabLandCapable, ndb: bgReachNow.ndbOk,
+    shown: (id) => { const full = modeTree(); const m = full.find((x) => x.id === id); return !!m && modeCapShown(full, m); },
+    sat: !isIcom && !!bgCaps && bgCaps.satPasses.length > 0,
+  });
+  const singleDerived = singleMode === '' ? singleFromTicks(blockedModes, mapModes, mapIsmBands) : '';
+  const singleEff = singleMode && singleMode !== 'general' ? singleMode : singleDerived;
+  const setSingle = (v: string) => { setSingleMode(v); AsyncStorage.setItem(K.singleMode, v); };
+  const adsbLandOn = mapLandOn && mapChosen.length === 1 && mapChosen[0] === 'adsb';
+  const adsbKeepOn = adsbLandOn && mapKeep;
   // ★ One landing at a time: with ADS-B chosen the DAB toggle steps aside (the engine lets ADS-B win the same way).
   // ★ V12 …or off by its region default (the Americas) with the owner not having switched it on ("+dab")
   const dabRegionOff = !!regionDefaults.dab && !dabBlockedNow(blockedModes)
     && !blockedModes.split(/[,;\s]+/).some((t) => t.toLowerCase() === '+dab');
-  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && !adsbLandOn;
+  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && !mapLandOn;   // ★★★ beta96 any map landing
   const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
   /* ── ★★★ V12 THE OWNER'S DAB BAND SCAN — "Scan all DAB blocks" (the Setup page's dabBandRender). Every Band III block
    *  on the idle radio, results as they come, every station found added to this server's bookmarks. Offered where DAB
@@ -2415,7 +2468,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, rttySkimWorkers, antSwitch, antRanges, antFilters, antNames,
-    landingAdsb, adsbKeep, fmDef,
+    landingAdsb, adsbKeep, fmDef, mapOn, mapModes, mapKeep, mapWhich, singleSend: singleEff || singleMode,
     bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, communityMap, communityOff, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
     pskrOn, pskrCall, pskrAntenna, wsprnetOn, wsprnetCall, dmrIdLookup,   // ★★ V12 beta90
     dxJson, afJson, afProblem,   // ★★ beta96
@@ -2464,6 +2517,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★ V12 — keep-running never without the landing; the engine ignores both where ADS-B cannot run.
     landingAdsb: !!live.current.landingAdsb,
     adsbKeepRunning: !!live.current.landingAdsb && !!live.current.adsbKeep,
+    // ★★★ beta96 the landing map — the engine reads these off the config (vsMapFromConfigJson); the ADS-B pair above mirrors it
+    landingMap: live.current.mapOn && live.current.mapModes ? live.current.mapWhich : '',
+    landingModes: live.current.mapOn ? live.current.mapModes : '',
+    mapKeep: !!(live.current.mapOn && live.current.mapModes && live.current.mapKeep),
+    singleMode: live.current.singleSend ?? '',   // ★★★ beta96 the engine reads it off the config (vsMapFromConfigJson)
     fmDefaults: live.current.fmDef,
     radioLabel: live.current.radioLabel,
     // ★★★ V12 background decoding (RadioConfig::bgDecode) and the gallery — VibeServerBoot applies them on every start.
@@ -2655,6 +2713,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
+      [K.landingMap, live.current.mapOn ? live.current.mapWhich : ''], [K.landingModes, live.current.mapOn ? live.current.mapModes : ''],
+      [K.mapKeep, live.current.mapKeep ? '1' : '0'],
       [K.bgDecode, live.current.bgJson], [K.dxScan, live.current.dxJson], [K.adsbFeed, live.current.afJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
       [K.communityMap, live.current.communityMap ? '1' : '0'], [K.communityOff, live.current.communityOff],
@@ -4176,43 +4236,97 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 scan and then a selection box for the station". Only on a radio that can do DAB. */}
             {/* ★★ V12: ADS-B AS THE LANDING, and the keep-running box beneath it (Stuart, 2026-10-24: "a new connection
                 instantly sees a list of planes and a full map"). Only where ADS-B can run on this radio. */}
-            {adsbLandOffered && (
-              <View style={[styles.card, { borderColor: adsbLandOn ? C.keySelBorder : C.border, marginBottom: 8 }]}>
+            {/* ★★★ beta96 THE LANDING MAP AND ITS KEEP-RUNNING MODES (Stuart 11-26: "I thought I'd be able to set VDL2 as the
+                Sony's background mode"). The Setup page's card, the same rule (utils/keepRun.ts): one mode at a time at an
+                ordinary rate, the rest greyed WITH the reason; ACARS + VDL2 where the capture holds both. Picking VDL2 is the
+                whole setup — the centre and every channel come from the mode. ADS-B (beta95's toggle) is one of its modes. */}
+            {mapOffered && (
+              <View style={[styles.card, { borderColor: mapLandOn ? C.keySelBorder : C.border, marginBottom: 8 }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
-                    Use ADS-B (the aircraft map) as the landing page?
+                    Start new listeners on a map?
                   </Text>
-                  <Switch value={adsbLandOn}
+                  <Switch value={mapOn}
                     onValueChange={(v) => {
-                      setLandingAdsb(v); AsyncStorage.setItem(K.landingAdsb, v ? '1' : '0');
+                      setMap(v, v ? mapModes : '', v ? mapKeep : false);
                       if (v) setDabLanding(-1, 0, '');   // ★ one landing at a time
-                      else { setAdsbKeep(false); AsyncStorage.setItem(K.adsbKeep, '0'); }
                     }} />
                 </View>
-                {adsbLandOn && (<>
+                {mapOn && (<>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                    {([['avmar', 'Aviation & Maritime'], ['amateur', 'Amateur']] as [KeepMap, string][])
+                      .filter(([m]) => keepFacts.avail.some((a) => a.hw && (a.id === 'ism') === (m === 'amateur')))
+                      .map(([m, label]) => (
+                        <TouchableOpacity key={m} onPress={() => setMap(true, '', false, m)}
+                          style={[styles.card, { borderColor: mapWhich === m ? C.keySelBorder : C.border, paddingVertical: 6 }]}>
+                          <Text style={{ color: mapWhich === m ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                  </View>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
-                    A new listener goes straight to the full-screen map of aircraft. EXIT ADS-B takes them to the
-                    frequency below.
+                    Tick the mode the map opens in. The radio is set up from the mode itself {'\u2014'} VDL2 is every 25 kHz
+                    channel from 136.700 to 136.975 MHz {'\u2014'} so there are no frequencies to type. EXIT takes a listener
+                    to the frequency below.
                   </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
-                    <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
-                      Keep ADS-B running when nobody is connected
+                  {rate > 0 && (
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                      {keepFacts.comboOk ? `${keepRateWords(rate)} detected: one mode at a time, or ACARS & VDL2 together (this capture holds both).`
+                                         : `${keepRateWords(rate)} detected: you can choose one of these modes.`}
                     </Text>
-                    <Switch value={adsbKeepOn}
-                      onValueChange={(v) => { setAdsbKeep(v); AsyncStorage.setItem(K.adsbKeep, v ? '1' : '0'); }} />
+                  )}
+                  {mapOffers.filter((o) => o.drawn).map((o, i, arr) => (
+                    <React.Fragment key={o.id}>
+                      {(i === 0 || arr[i - 1].group !== o.group) && (
+                        <Text style={{ color: C.section, fontFamily: F, fontSize: 11, marginTop: 8 }}>{KEEP_GROUP_WORDS[o.group] ?? o.group}</Text>
+                      )}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, opacity: o.enabled ? 1 : 0.5 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>{o.name}</Text>
+                          {!!o.why && <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>{o.why}</Text>}
+                        </View>
+                        <Switch value={o.on} disabled={!o.enabled}
+                          onValueChange={(v) => {
+                            const cur = keepParse(mapModes);
+                            // ★ ISM: the band from its own plan — 868 (MeshCore in Europe) where this radio has it, else 433, else the first
+                            const tok = o.id !== 'ism' ? o.id : 'ism:' + (mapIsmBands.includes('868') ? '868' : mapIsmBands.includes('433') ? '433' : mapIsmBands[0] ?? '868');
+                            const next = v ? [tok, ...cur.filter((x) => keepBase(x) !== o.id)] : cur.filter((x) => keepBase(x) !== o.id);
+                            const g = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, next, mapWhich);
+                            setMap(true, g.filter((x) => x.on).map((x) => x.tok).join(','), mapKeep);
+                          }} />
+                      </View>
+                      {o.id === 'ism' && o.on && (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4, marginLeft: 12 }}>
+                          {mapIsmBands.map((b) => (
+                            <TouchableOpacity key={b} onPress={() => setMap(true, 'ism:' + b, mapKeep)}
+                              style={[styles.card, { borderColor: o.tok === 'ism:' + b ? C.keySelBorder : C.border, paddingVertical: 4 }]}>
+                              <Text style={{ color: o.tok === 'ism:' + b ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{BG_ISM_WORDS[b] ?? b + ' MHz'}</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      )}
+                    </React.Fragment>
+                  ))}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, opacity: mapChosen.length ? 1 : 0.5 }}>
+                    <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>
+                      {mapChosen.length ? `Keep ${keepName(mapChosen, BG_ISM_WORDS)} running when nobody is connected` : 'Keep it running when nobody is connected'}
+                    </Text>
+                    <Switch value={mapKeepOn} disabled={!mapChosen.length}
+                      onValueChange={(v) => setMap(true, mapModes, v)} />
                   </View>
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                    A new listener sees every aircraft at once, instead of a map that fills over the next minute. It
-                    costs CPU (and battery) all the time, and the radio never idles or powers down while it is on.
-                    Unattended satellite passes still run: a pass takes the radio, ADS-B pauses for it (about 10{'\u2013'}15
-                    min) and resumes after.
+                    {!mapChosen.length ? 'Tick a mode above first.'
+                      : 'A new listener sees a populated map at once, instead of one that fills over the next minutes. It costs CPU '
+                        + '(and battery) all the time, and the radio never idles or powers down while it is on. '
+                        + (mapChosen.length === 1 && mapChosen[0] === 'vdl2'
+                          ? 'Unattended satellite passes share VDL2\u2019s 137 MHz capture: VDL2 keeps decoding through a Meteor or NOAA pass, and with ORBCOMM ticked the sky plot keeps building beside it.'
+                          : 'Unattended satellite passes still run: a pass takes the radio, the mode pauses for it (about 10\u201315 min) and resumes after.')}
                   </Text>
                 </>)}
               </View>
             )}
-            {!adsbLandOffered && landingAdsb && !isIcom && (
+            {mapLost && !isIcom && (
               <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>
-                {`ADS-B cannot run on this radio with these settings (it needs 2.4 MS/s, or the rate switch), so it will not be the landing \u2014 listeners will start on ${plainLandingWords()} instead.`}
+                {`This radio cannot run ${keepName(keepParse(mapModes))} with these settings, so it will not be the landing \u2014 listeners will start on ${plainLandingWords()} instead.`}
               </Text>
             )}
             {/* ★★ V12 beta94 THE ADS-B RANGE OUTLINE — only while the server runs and has one (an older engine answers 404),
@@ -4247,9 +4361,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </Text>
               </View>
             )}
-            {adsbLandOn && (
+            {mapLandOn && (
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 6 }]}>
-                EXIT ADS-B goes here, and listeners start here whenever ADS-B cannot be opened:
+                {adsbLandOn ? 'EXIT ADS-B goes here, and listeners start here whenever ADS-B cannot be opened:'
+                            : 'EXIT goes here, and listeners start here whenever the map\u2019s mode cannot be opened:'}
               </Text>
             )}
             {dabLandOffered && (
@@ -4862,7 +4977,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   dscOk={!bgOff.has('dsc')} rate={bgRate} lockCentre={bgLockCentre}
                   skimOk={(k) => !isIcom && !bgOff.has(k)}
                   users={advanced ? maxUsers : 1} decoderMax={decoderMax}
-                  adsbKeeps={landingAdsb && adsbKeep} problem={bgProblem} />
+                  adsbKeeps={landingAdsb && adsbKeep} keepName={mapKeepOn ? keepName(mapChosen, BG_ISM_WORDS) : ''}
+                  keepSat={mapKeepOn ? keepSatWords(mapChosen.join(','), true, BG_ISM_WORDS) : ''} problem={bgProblem} />
               </View>
             )}
 
@@ -5235,6 +5351,40 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       refused: a control whose every use fails reads as a broken receiver instead
                       of somebody's decision (AGENTS.md). The server enforces it too, so it holds
                       for an old client or a hand-rolled tool. */}
+                {/* ★★★ beta96 RADIO USE (Stuart 11-26) — the Setup page's radioUseWrap, the same choice */}
+                {singleOpts.length > 0 && (
+                  <View style={{ marginTop: 14 }}>
+                    <Text style={[styles.section, { color: C.section, fontFamily: F }]}>RADIO USE</Text>
+                    {([['general', 'General: listeners choose from the modes ticked below'], ['single', 'Single mode']] as const).map(([k, label]) => {
+                      const on = k === 'general' ? !singleEff : !!singleEff;
+                      return (
+                        <TouchableOpacity key={k} onPress={() => setSingle(k === 'general' ? 'general' : (singleEff || (singleOpts.find((o) => !o.why)?.tok ?? 'general')))}
+                          style={[styles.card, { borderColor: on ? C.keySelBorder : C.border, marginBottom: 6 }]}>
+                          <Text style={{ color: on ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 13 }}>{label}{k === 'single' && singleEff ? ': ' + singleWords(singleEff, BG_ISM_WORDS) : ''}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                      Use this to lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected decoder is available.
+                    </Text>
+                    {!!singleEff && (<>
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                        {singleOpts.map((o) => (
+                          <TouchableOpacity key={o.tok} disabled={!!o.why} onPress={() => setSingle(o.tok)}
+                            style={[styles.card, { borderColor: singleEff === o.tok ? C.keySelBorder : C.border, paddingVertical: 4, opacity: o.why ? 0.5 : 1 }]}>
+                            <Text style={{ color: singleEff === o.tok ? C.keySel : C.keyQuiet, fontFamily: F, fontSize: 12 }}>{o.label}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                        {`This radio is single mode: ${singleWords(singleEff, BG_ISM_WORDS)}. `
+                          + (singleDerived && !singleMode ? '(Worked out from the modes ticked below — kept when you next change it.) ' : '')
+                          + (singleEff === 'sat' ? 'It follows the satellite passes itself; listeners land in SATELLITE and watch.'
+                             : 'Listeners land in it and cannot leave it; new modes from updates never appear on this radio. The ticks below stay as they were for General.')}
+                      </Text>
+                    </>)}
+                  </View>
+                )}
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
                   Modes and decoders — tap to switch off. A decoder's options sit under it.
                 </Text>
@@ -5242,6 +5392,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 {(radioCapsNow?.hints ?? []).map((h) => (
                   <Text key={h} style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>{h}</Text>
                 ))}
+                <View style={singleEff ? { opacity: 0.4 } : undefined} pointerEvents={singleEff ? 'none' : 'auto'}>
                 {(() => {
                   /* ★★★ THE TREE (2026-10-31) — the setup page's, drawn the same way: a decoder's options indented under
                    *  its switch, greyed with the reason while it is off (never hidden). */
@@ -5454,7 +5605,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   const label = (id: string) => (full.find((m) => m.id === id) || { label: id }).label;
                   const keepCsv = (v: string) => { setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v); };
                   const plainIds = (all: boolean) => (all ? full : tree).filter((m) => !m.on && !m.node).map((m) => m.id);
-                  const landingId = landingAdsb ? 'adsb' : landingDabCh >= 0 ? 'dab' : (landingMode === 'cw' ? 'cwu' : landingMode);
+                  // ★★★ beta96 the landing map's mode first (VDL2 / ACARS → avdata, AIS, the VOR map, ISM; ADS-B as before)
+                  const mapSwitch = mapOn ? keepModeSwitch(mapModes) : '';
+                  const landingId = mapSwitch || (landingAdsb ? 'adsb' : landingDabCh >= 0 ? 'dab' : (landingMode === 'cw' ? 'cwu' : landingMode));
                   const allSet = (on: boolean) => {
                     // ★ ON: what this radio draws; OFF: every switch (hidden ones too, so one whole-radio mode left IS single-mode)
                     const v0 = NM.allSet(ownCsv, on, plainIds(!on), landingId, regionDefaults, modeGens);
@@ -5519,6 +5672,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     </View>
                   );
                 })()}
+                </View>
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
                   Dimmed means switched off — listeners are never offered it at all. An option under a switch that is off
                   stays here, dimmed, until its switch is on again.

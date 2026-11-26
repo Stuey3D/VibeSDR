@@ -958,6 +958,75 @@ int main() {
         ok(!none.landingAdsb && !none.adsbKeepRunning, "★ never default on");
     }
 
+    /* ★★★ beta96 THE LANDING MAP + KEEP-RUNNING MODES (vibe_keep_store.h) — every hop, and beta95's ADS-B pair migrating in
+     *  unchanged. */
+    std::printf("\nLanding map + keep-running modes travel every hop; beta95's ADS-B landing migrates unchanged\n");
+    {
+        ServerConfig s;
+        s.configured = true; s.adminPass = "Test123";
+        RadioConfig a; a.serial = "V4L1"; a.driver = "rtlsdr"; a.enabled = a.configured = true;
+        a.landingAdsb = true; a.adsbKeepRunning = true;                          // beta95's words only
+        RadioConfig v; v.serial = "V4L4"; v.driver = "rtlsdr"; v.enabled = v.configured = true;
+        v.landingMap = "avmar"; v.landingModes = "vdl2"; v.mapKeep = true;       // beta96: VDL2 kept
+        RadioConfig r; r.serial = "RSP1B"; r.driver = "sdrplay"; r.enabled = r.configured = true;
+        r.landingMap = "avmar"; r.landingModes = "acars,vdl2"; r.mapKeep = false;
+        s.radios = { a, v, r };
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && back.radios.size() == 3, "three radios round-trip", err);
+        if (back.radios.size() == 3) {
+            const RadioConfig& A = back.radios[0]; const RadioConfig& V = back.radios[1]; const RadioConfig& R = back.radios[2];
+            ok(A.landingMap == "avmar" && A.landingModes == "adsb" && A.mapKeep && A.landingAdsb && A.adsbKeepRunning,
+               "★ beta95's ADS-B + keep reads as the map, ADS-B, kept — and still says landingAdsb/adsbKeepRunning");
+            ok(V.landingMap == "avmar" && V.landingModes == "vdl2" && V.mapKeep && !V.landingAdsb && !V.adsbKeepRunning,
+               "★ VDL2 kept travels; the old ADS-B pair is OFF for it (an older build idles that radio, never lands in ADS-B)");
+            ok(R.landingModes == "vdl2,acars" && !R.mapKeep, "the third radio's ACARS + VDL2 (not kept) is its own");
+            const Config cv = effectiveFor(back, back.radios[1]);
+            ok(cv.landingMap == "avmar" && cv.landingModes == "vdl2" && cv.mapKeep, "★ the flatten carries the map to the worker");
+            Config c2;
+            ok(fromJson(toJson(cv), c2, err, false) && c2.landingModes == "vdl2" && c2.mapKeep && !c2.landingAdsb, "the flat Config round-trips it", err);
+        }
+        // ★ a beta95 page or app saving only the old words: ADS-B off never clears a VDL2 landing it cannot know about…
+        Config live; live.landingMap = "avmar"; live.landingModes = "vdl2"; live.mapKeep = true;
+        ok(fromJson(R"({"landingAdsb":false,"adsbKeepRunning":false})", live, err, false) && live.landingModes == "vdl2" && live.mapKeep,
+           "an old writer's ADS-B off leaves a VDL2 keep alone", err);
+        // …but clears an ADS-B one
+        Config la; la.landingMap = "avmar"; la.landingModes = "adsb"; la.mapKeep = true; la.landingAdsb = la.adsbKeepRunning = true;
+        ok(fromJson(R"({"landingAdsb":false,"adsbKeepRunning":false})", la, err, false) && la.landingMap.empty() && !la.landingAdsb,
+           "an old writer's ADS-B off clears an ADS-B landing", err);
+        // the new words win over the old in the same body
+        Config nw;
+        ok(fromJson(R"({"landingAdsb":true,"adsbKeepRunning":true,"landingMap":"avmar","landingModes":"ais","mapKeep":true})", nw, err, false)
+           && nw.landingModes == "ais" && nw.mapKeep && !nw.landingAdsb, "both sets in one body: the new words decide", err);
+        // a single-radio file with beta95's ADS-B pair migrates onto its one radio
+        ServerConfig m;
+        ok(fromJson(R"({"configured":true,"adminPass":"x","landingAdsb":true,"adsbKeepRunning":false})", m, err)
+           && m.radios.size() == 1 && m.radios[0].landingMap == "avmar" && m.radios[0].landingModes == "adsb" && !m.radios[0].mapKeep,
+           "★ a single-radio beta95 file: ADS-B landing, not kept", err);
+        Config none;
+        ok(none.landingMap.empty() && none.landingModes.empty() && !none.mapKeep, "★ never default on");
+    }
+
+    std::printf("\nThe single-mode radio travels every hop; the owner's ticks stay underneath\n");
+    {
+        ServerConfig s;
+        s.configured = true; s.adminPass = "Test123";
+        RadioConfig p; p.serial = "PAUL"; p.driver = "rtlsdr"; p.enabled = p.configured = true;
+        p.singleMode = "adsb"; p.blockedModes = "dab,ais";
+        RadioConfig g; g.serial = "GEN"; g.driver = "rtlsdr"; g.enabled = g.configured = true;
+        s.radios = { p, g };
+        ServerConfig back;
+        ok(fromJson(toJson(s), back, err) && back.radios.size() == 2 && back.radios[0].singleMode == "adsb" && back.radios[1].singleMode.empty(),
+           "★ singleMode per radio, General by default", err);
+        if (back.radios.size() == 2) {
+            ok(back.radios[0].blockedModes == "dab,ais", "★ the owner's own ticks are kept untouched underneath (General gives them back)");
+            ok(effectiveFor(back, back.radios[0]).singleMode == "adsb", "the flatten carries it to the worker");
+        }
+        Config c;
+        ok(fromJson(R"({"singleMode":"ism:868"})", c, err, false) && c.singleMode == "ism:868", "ISM on its band", err);
+        ok(fromJson(R"({"singleMode":"rm -rf"})", c, err, false) && c.singleMode.empty(), "a token it does not know is General", err);
+        ok(fromJson(R"({"singleMode":"sat"})", c, err, false) && c.singleMode == "sat", "SATELLITES", err);
+    }
+
     // ★★ beta91 a GET body sent back whole: spotReportStatus (read-only status, folded into GET /vibeserver/config) carries
     //    its OWN "radios" list AHEAD of the real one — the radios must come from the top level, never the status rows
     {
