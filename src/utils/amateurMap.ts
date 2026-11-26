@@ -60,6 +60,8 @@ export function amLiveOf(dec: string | null | undefined, ismOn = false): AmLayer
 }
 
 /** One MESH node as the map draws it (a MeshCore / Meshtastic node with a position). */
+/** ★★★ beta96 SHOW (Stuart 11-26): each layer chip's colour dot — the web window and the app alike. */
+export const AM_LAYER_COLOUR: Record<AmLayer, string> = { spots: '#ffb000', aprs: '#4fc3f7', mesh: '#7ee787', beacons: '#d2a8ff' };
 export interface AmMeshPoint { key: string; name: string; net: string; lat: number; lon: number; age: number; approx: boolean; what: string; live: boolean;
   /** ★★★ beta96 (mapScope.ts) a remembered node's radios (its card's; absent = unknown / this radio's live report) and how long
    *  ago it was first heard (s; null = not known) — the OTHER RADIOS switch and THIS SESSION */

@@ -168,7 +168,7 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay, type DigiMapLayer } from './digiMap';
-import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, AMATEUR_JS, type AmLayer, type AmMeshPoint, type AmBeaconPoint } from '../../../src/utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, AMATEUR_JS, AM_LAYER_COLOUR, type AmLayer, type AmMeshPoint, type AmBeaconPoint } from '../../../src/utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';
 import { DIGI_STATS_JS } from '../../../src/utils/digiMapStats';
 import { digiGalCard, digiGalQuery, digiGalItemWindow } from '../../../src/utils/digiMapShared';   // ★ beta92 the gallery's digi map row (the app's same words)   // ★ beta92 the digi map's stats / legend / summary (the app's same code)   // ★ beta92 the digi map's FIT key (the app's same code)
@@ -10740,7 +10740,7 @@ function asScoped(nowC: number) {
   const S = airSeaScope({ shared: avShared, sharedSkew: avSkew, ships: navLast.ships, nav: navLast.st, warn: navLast.w, met: navLast.m, dscG: navLast.dscG, navSkew,
     adsb: adsbReport, ais: aisReport, av: avReport, sd: sdReport, vm: vmReport, sdStored, vmStored }, sc, nowC, asFirst);
   const ship: ShipSrc = { st: S.nav, w: S.warn, m: S.met, ships: S.ships, dscG: S.dscG, ais: aisOn ? S.ais : null,
-    dscOk: sc.t0 ? (p) => airSeaLiveOk(`dsc:${p.key}`, p.t - navSkew, sc, nowC, asFirst) : undefined };
+    dscOk: (p) => airSeaLiveOk(`dsc:${p.key}`, p.t - navSkew, sc, nowC, asFirst) };
   return { S, ship, sc, offered, sessOk };
 }
 /** ★★★ beta96 the shipping polls' window: THIS SESSION's covering window while it is picked on the map, else the viewer's. */
@@ -10844,7 +10844,7 @@ function asRender() {
   asSessSt = sessionStart(asSessSt, mode, nowC, false);
   const { S, ship: shipSrc, sc, offered: othersOffered, sessOk } = asScoped(nowC);
   const adsbR = S.adsb, aisR = S.ais, avR = S.av, sdR = S.sd, vmR = S.vm, sdSt = S.sdStored, vmSt = S.vmStored, avSh = S.shared;
-  ndbView?.setKeep(sc.t0 ? (b) => airSeaLiveOk(`ndb:${b.hz}`, null, sc, nowC, asFirst) : null);
+  ndbView?.setKeep((b) => airSeaLiveOk(`ndb:${b.hz}`, null, sc, nowC, asFirst));   // ★ observes always; filters only in THIS SESSION
   const chrome = liveChrome('airsea', mode);
   const live = chrome.live;
   const rx = myPos();
@@ -19265,7 +19265,7 @@ let win = ${safe(open.window)};
 const FOCUS0 = ${safe(open.focus)};
 const APRS_LEG = ${safe(APRS_LEGEND.map((r) => ({ svg: aprsLegendIcon(r, 16).html, words: r.words })))};
 let show = { spots: true, aprs: true, mesh: true, beacons: true, overlay: true };   // ★ beta96 every layer in the window
-const AM_DOT = { spots: '#ffb000', aprs: '#4fc3f7', mesh: '#7ee787', beacons: '#d2a8ff' };   // ★★★ beta96 the SHOW chips' colour dots
+const AM_DOT = ${safe(AM_LAYER_COLOUR)};   // ★★★ beta96 the SHOW chips' colour dots (amateurMap.ts)
 let stored = new Map(), srvOk = false, srvNow = 0, unplaced = 0;
 /* ★★ beta91 (Stuart: "get the reported totals right"): the server's own counts — every reception today (UTC), the ones the
  *  day's full list could not keep, and how many stations the window holds against how many came in the answer. */
@@ -19445,7 +19445,8 @@ function mergeSpots() {
   //   that ages out of a sliding window leaves at once, as APRS, MESH and BEACONS do — amKeep)
   for (const s of stored.values()) if (radioOk(s) && scopeR(s.radios) && (sess ? sessOk((s.first || s.timestamp || 0) / 1000 - srvSkew) : amKeep((nowMs - (s.timestamp || 0)) / 1000, win))) by.set(s.callsign, s);   // ★ beta92 the radio filter (a view); ★★★ beta96 the scope
   for (const s of live) {
-    if (sess ? !sessOk(firstAt('spot:' + s.callsign, null)) : (w && s.timestamp && s.timestamp < nowMs - w * 1000)) continue;
+    const fs0 = firstAt('spot:' + s.callsign, null);   // ★ observed always (THIS SESSION picked later knows what came before)
+    if (sess ? !sessOk(fs0) : (w && s.timestamp && s.timestamp < nowMs - w * 1000)) continue;
     const o = by.get(s.callsign);
     if (!o) { by.set(s.callsign, s); continue; }
     if ((s.timestamp || 0) >= (o.timestamp || 0)) {
@@ -19884,9 +19885,10 @@ function statItems() {
 ${AMATEUR_JS}
 // ★★★ beta96 the scope on every layer: APRS and BEACONS are this radio's own decoders (THIS SESSION only); MESH's remembered
 //     nodes carry their card's radios
-function aprsIn() { return aprs.filter((a) => (sess ? sessOk(firstAt('aprs:' + a.key, null)) : amKeep(a.age, win))); }
-function meshIn() { return mesh.filter((x) => scopeR(x.radios) && (sess ? sessOk(firstAt('mesh:' + x.key, x.fa != null ? Math.round(Date.now() / 1000) - x.fa : null)) : amKeep(x.age, win))); }
-function beaconsIn() { return beacons.filter((x) => (sess ? sessOk(firstAt('bcn:' + x.key, null)) : amKeep(x.age, win))); }
+// (each entry is OBSERVED on every pass — firstAt — so THIS SESSION picked later knows what came before)
+function aprsIn() { return aprs.filter((a) => { const f = firstAt('aprs:' + a.key, null); return sess ? sessOk(f) : amKeep(a.age, win); }); }
+function meshIn() { return mesh.filter((x) => { const f = firstAt('mesh:' + x.key, x.fa != null ? Math.round(Date.now() / 1000) - x.fa : null); return scopeR(x.radios) && (sess ? sessOk(f) : amKeep(x.age, win)); }); }
+function beaconsIn() { return beacons.filter((x) => { const f = firstAt('bcn:' + x.key, null); return sess ? sessOk(f) : amKeep(x.age, win); }); }
 function amCounts() { return { spots: spots.length, aprs: aprsIn().length, mesh: meshIn().length, beacons: beaconsIn().length }; }
 function cleanMesh(list) {
   if (!Array.isArray(list)) return [];

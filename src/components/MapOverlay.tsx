@@ -93,7 +93,8 @@ import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM, DIGI_WINDOWS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
 import { DIGI_STATS_JS, DIGI_WIDE_PX, digiPanelsOf, type DigiPanelsShown } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
-import { AMATEUR_JS, AM_TAB_LABEL, amTabs, amTabNow, amCountsOf, amListRows, amEmptyWords, type AmAprsIn, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { AMATEUR_JS, AM_TAB_LABEL, AM_LAYER_COLOUR, amTabs, amTabNow, amCountsOf, amListRows, amEmptyWords, type AmAprsIn, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';
+import { FirstSeen, scopeList, scopeSessionOk, sessionWindow, OTHER_RADIOS_LABEL, OTHER_RADIOS_WORDS, SESSION_WORDS, type MapScope } from '../services/mapScope';   // ★★★ beta96 the maps' scope   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import DigiMapKeys from './DigiMapKeys';
 import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the window and panel keys (the pad reaches them)
 /* ★★★ beta92 ONE AUTO FIT FOR EVERY MAP (Stuart 11-23: "all maps to have an auto fit that gently glides the zoom in and out
@@ -198,7 +199,7 @@ interface MapOverlayProps {
           ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string;
           /** ★★ V12 2026-11-01 the NAVTEX map: its layer keys, a card's gallery text (fetched when it opens), and TRANSCRIBE's
            *  TRANSLATE TO for the gallery's own TRANSLATE in the card ('' = the phone's language). */
-          toggles?: Array<{ id: string; label: string; words: string }>; toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;
+          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string }>; toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;   // ★★★ beta96 SHOW counts + dots
           /** ★ beta95 the map's padded view [s, w, n, e], rounded to 2° (the sea areas in view are sent — seaCompose's view) */
           onView?: (box: [number, number, number, number]) => void;
           cardText?: (file: string) => Promise<{ ok: boolean; text: string }>; translateTo?: string;
@@ -238,6 +239,9 @@ interface MapOverlayProps {
   aprsPoints?: unknown[] | null;
   /** ★★★ beta96 stage 7 THE AMATEUR MAP (kind 'digi', the server's): MESH, BEACONS and the live layer (src/utils/amateurMap.ts). */
   amateur?: { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | ''; opened?: AmLayer | '' } | null;
+  /** ★★★ beta96 the AMATEUR map's OTHER RADIOS ON THIS SERVER switch (mapScope.ts): this radio's id, whether the switch is
+   *  drawn (2+ sources), its state and the screen's setter (remembered there). null = no switch. */
+  amScope?: { mine: string; offered: boolean; others: boolean; onOthers: (on: boolean) => void } | null;
   aprsFocus?: string;
   /** ★★ V12 beta90 a caller's overlay on the DIGI MODES MAP (digiMapShared.ts DigiMapOverlay — a satellite pass). */
   digiOverlay?: unknown | null;
@@ -1914,13 +1918,22 @@ if(KIND==='digi'||KIND==='cw'){
     if(v>=-20)return{r:6,op:0.80,glow:false};
     return      {r:4,op:0.55,glow:false};
   }
+  /* ★★★ beta96 THE AMATEUR MAP's SCOPE (src/services/mapScope.ts, pushed by React Native — __amScope): OTHER RADIOS ON THIS
+   *  SERVER off = a station another radio heard is hidden (an untagged one stays); THIS SESSION = first heard since the map
+   *  opened (each entry observed from when this page first saw it, where the store gives no time); SHOW = the layers drawn. */
+  var amSc={mine:'',others:true,t0:0},amSeen={},amSeenN=0,rnShow=false,spotsOn=true;
+  function amScR(r){return amSc.others||!amSc.mine||!r||!r.length||r.indexOf(amSc.mine)>=0;}
+  function amFirstAt(k,f){if(f!=null&&isFinite(f)&&f>0)return f;if(amSeen[k]==null){if(amSeenN>6000){amSeen={};amSeenN=0;}amSeen[k]=Math.round(Date.now()/1000);amSeenN++;}return amSeen[k];}
+  function amSesOk(f){return !amSc.t0||(f!=null&&f>=amSc.t0-2);}
   function passes(s){
+    var sf=amFirstAt('spot:'+s.call,s.first?s.first/1000:null);   // ★ observed always
+    if(!spotsOn||!amScR(s.radios)||(amSc.t0&&!amSesOk(sf)))return false;
     if(!isCW&&fMode&&fMode.value!=='ALL'&&famOf(s.mode,FAMS)!==String(fMode.value).toUpperCase())return false;
     // ★ beta92 the radio filter: a station another radio heard is hidden; one with no radio (unknown) always shows
     if(fRadio&&fRadio.value&&s.radios&&s.radios.length&&s.radios.indexOf(fRadio.value)<0)return false;
     if(fBand&&fBand.value!=='ALL'&&spotBand(s)!==fBand.value)return false;
     var fa=fAge?fAge.value:'ALL';
-    if(fa!=='ALL'){
+    if(fa!=='ALL'&&!amSc.t0){
       var ms={'2m':120000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,'3h':10800000,'24h':86400000,'7d':8*86400000,'30d':31*86400000}[fa]||Infinity;
       if(Date.now()-s.t>ms)return false;
     }
@@ -2023,9 +2036,10 @@ if(KIND==='digi'||KIND==='cw'){
   function aprsSvgOk(v){v=String(v||'');return v.length<4000&&/^<svg [^]*<.svg>$/.test(v)&&!/<scr[i]pt|<foreignObject|[\\s]on[\\w]+[\\s]*=|javascript:|href[\\s]*=/i.test(v)?v:'';}
   function aprsDraw(){
     aprsGroup.clearLayers();
-    var kb=document.getElementById('fAprs'),na=aprsPts.filter(function(a){return amKeep(a.age,amWin());}).length;if(kb){kb.hidden=!na&&amLive!=='aprs';kb.textContent=(amLive==='aprs'?'\u25CF ':'')+'APRS '+na;kb.classList.toggle('on',aprsOn);}
+    var aIn=aprsPts.filter(function(a){var f=amFirstAt('aprs:'+a.key,null);return amSc.t0?amSesOk(f):amKeep(a.age,amWin());});   // ★★★ beta96 the scope
+    var kb=document.getElementById('fAprs'),na=aIn.length;if(kb){kb.hidden=rnShow||(!na&&amLive!=='aprs');kb.textContent=(amLive==='aprs'?'\u25CF ':'')+'APRS '+na;kb.classList.toggle('on',aprsOn);}
     if(!aprsOn)return;
-    aprsPts.filter(function(a){return amKeep(a.age,amWin());}).forEach(function(a){   // ★★ beta96 stage 7 the HEARD IN window, as the spots
+    aIn.forEach(function(a){   // ★★ beta96 stage 7 the HEARD IN window, as the spots
       if(a.trail&&a.trail.length>=2)L.polyline(a.trail,{color:'#88CCEE',weight:1.5,opacity:0.7}).addTo(aprsGroup);
       var svg=aprsSvgOk(a.svg);
       // ★★ beta92 the symbol at 28 px (src/utils/aprsSymbols.ts), its callsign under it from zoom 8 (aprsLabels)
@@ -2059,18 +2073,23 @@ if(KIND==='digi'||KIND==='cw'){
   function amWin(){var v=fAge?String(fAge.value):'ALL';return v==='ALL'?'all':v;}
   function amDraw(){
     var mk=document.getElementById('fMesh'),bk=document.getElementById('fBcn');
-    var mIn=meshOn?amDrawMesh(meshGroup,amMesh,amWin(),amLive==='mesh'):(meshGroup.clearLayers(),[]);
-    var bIn=bcnOn?amDrawBeacons(bcnGroup,amBcn,amWin(),amLive==='beacons',(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null):(bcnGroup.clearLayers(),[]);
-    var nm=amMesh.filter(function(x){return amKeep(x.age,amWin());}).length,nb=amBcn.filter(function(x){return amKeep(x.age,amWin());}).length;
-    if(mk){mk.hidden=!nm&&amLive!=='mesh';mk.textContent=(amLive==='mesh'?'\u25CF ':'')+'MESH '+nm;mk.classList.toggle('on',meshOn);}
-    if(bk){bk.hidden=!nb&&amLive!=='beacons';bk.textContent=(amLive==='beacons'?'\u25CF ':'')+'BEACONS '+nb;bk.classList.toggle('on',bcnOn);}
+    // ★★★ beta96 the scope (amSc): another radio's remembered node hidden when OTHER RADIOS is off; THIS SESSION by first heard
+    var nowS=Math.round(Date.now()/1000),w0=amSc.t0?'ALL':amWin();
+    var mL=amMesh.filter(function(x){var f=amFirstAt(x.key,x.fa!=null?nowS-x.fa:null);return amScR(x.radios)&&(!amSc.t0||amSesOk(f));});
+    var bL=amBcn.filter(function(x){var f=amFirstAt(x.key,null);return !amSc.t0||amSesOk(f);});
+    var mIn=meshOn?amDrawMesh(meshGroup,mL,w0,amLive==='mesh'):(meshGroup.clearLayers(),[]);
+    var bIn=bcnOn?amDrawBeacons(bcnGroup,bL,w0,amLive==='beacons',(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null):(bcnGroup.clearLayers(),[]);
+    var nm=mL.filter(function(x){return amKeep(x.age,w0);}).length,nb=bL.filter(function(x){return amKeep(x.age,w0);}).length;
+    if(mk){mk.hidden=rnShow||(!nm&&amLive!=='mesh');mk.textContent=(amLive==='mesh'?'\u25CF ':'')+'MESH '+nm;mk.classList.toggle('on',meshOn);}
+    if(bk){bk.hidden=rnShow||(!nb&&amLive!=='beacons');bk.textContent=(amLive==='beacons'?'\u25CF ':'')+'BEACONS '+nb;bk.classList.toggle('on',bcnOn);}
     if(digiFit)digiFit.poke();
   }
   window.__amPush=function(json){try{var o=JSON.parse(json);if(!o||typeof o!=='object')return;
     var okp=function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));};
     amMesh=(Array.isArray(o.mesh)?o.mesh:[]).filter(okp).slice(0,1000).map(function(x){return {key:String(x.key||'').slice(0,48),name:String(x.name||'?').slice(0,40),
       net:x.net==='MeshCore'?'MeshCore':'Meshtastic',lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),age:Math.max(0,Number(x.age)||0),
-      approx:!!x.approx,what:String(x.what||'').slice(0,40),live:!!x.live};});
+      approx:!!x.approx,what:String(x.what||'').slice(0,40),live:!!x.live,
+      radios:Array.isArray(x.radios)?x.radios.slice(0,8).map(String):undefined,fa:x.fa==null||!isFinite(Number(x.fa))?null:Number(x.fa)};});
     amBcn=(Array.isArray(o.beacons)?o.beacons:[]).filter(okp).slice(0,18).map(function(x){return {key:String(x.key||'').slice(0,20),call:String(x.call||'').slice(0,12),
       where:String(x.where||'').slice(0,60),lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),age:Math.max(0,Number(x.age)||0),
       bands:Array.isArray(x.bands)?x.bands.slice(0,5).map(function(b){return String(b).slice(0,8);}):[],best:Math.max(0,Math.min(4,Math.round(Number(x.best)||0)))};});
@@ -2081,6 +2100,13 @@ if(KIND==='digi'||KIND==='cw'){
   if(bcnKey)bcnKey.addEventListener('click',function(){bcnOn=!bcnOn;amDraw();});
   if(fAge)fAge.addEventListener('change',function(){aprsDraw();amDraw();});
   if(window.__pendingAm){window.__amPush(window.__pendingAm);window.__pendingAm=null;}
+  /* ★★★ beta96 the scope and SHOW from React Native (DigiMapKeys): the page draws through them */
+  window.__amScope=function(json){try{var o=JSON.parse(json);if(!o||typeof o!=='object')return;
+    amSc={mine:String(o.mine||'').slice(0,16),others:o.others!==false,t0:Number(o.t0)||0};
+    if(o.show&&typeof o.show==='object'){rnShow=true;spotsOn=o.show.spots!==false;aprsOn=o.show.aprs!==false;meshOn=o.show.mesh!==false;bcnOn=o.show.beacons!==false;}
+    if(fRadio&&amSc.mine&&!amSc.others){fRadio.value='';fRadio.hidden=true;}
+    rebuild();aprsDraw();amDraw();}catch(e){console.error('amateur scope',e);}};
+  if(window.__pendingAmScope){window.__amScope(window.__pendingAmScope);window.__pendingAmScope=null;}
   /* ★★★ beta96 maps2 THE LIST's ROWS (TrackLiveList, React Native, over this page — amateurMap.ts amListRows): a row CENTRES its
    *  station and opens its card. Keys: 'spot:' + this page's key(s), 'aprs:' + the station's key, 'mesh:…' / 'bcn:…' (AM_MK).
    *  A layer switched off is switched back on (the person asked to see that station). */
@@ -2270,6 +2296,7 @@ if(KIND==='digi'||KIND==='cw'){
       freq:d.frequency, country:String(d.country||''),
       distKm:(function(){var v=parseFloat(d.distance_km);return isNaN(v)?(lat!=null?distKm(lat,lon):0):v;})(),
       t:(function(ts){var x=new Date(ts).getTime();return isNaN(x)?Date.now():x;})(cw?d.time:d.timestamp),
+      first:typeof d.first==='number'&&isFinite(d.first)?d.first:0,
       radios:Array.isArray(d.radios)?d.radios.slice(0,8).map(String).filter(function(x){return /^[0-9a-z]{1,16}$/.test(x);}):[]
     };
   }
@@ -2362,7 +2389,7 @@ const NDB_PREFS_KEY = 'lsv_ndb_map_prefs';
 function spotToData(s: SpotRow) {
   return {
     grid: s.grid, mode: s.mode, band: s.band, callsign: s.call,
-    snr: s.snr, frequency: s.freqHz, distance_km: s.distKm, timestamp: s.time,
+    snr: s.snr, frequency: s.freqHz, distance_km: s.distKm, timestamp: s.time, ...(s.first ? { first: s.first } : {}),
     country: s.country, ...(s.radios?.length ? { radios: s.radios } : {}),
   };
 }
@@ -2371,7 +2398,7 @@ export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
     shared, tune, dialLock,
-    storeWindows, onDigiWindow, aprsPoints, aprsFocus, amateur, digiOverlay, digiRadios, digiWindow, digiTotals }:
+    storeWindows, onDigiWindow, aprsPoints, aprsFocus, amateur, amScope, digiOverlay, digiRadios, digiWindow, digiTotals }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2738,17 +2765,54 @@ export default function MapOverlay(
   const [amTick, setAmTick] = useState(0);
   useEffect(() => { if (!visible || !amOn) return; const t = setInterval(() => setAmTick((n) => n + 1), 30_000); return () => clearInterval(t); }, [visible, amOn]);   // ★ the ages move on
   useEffect(() => { if (!visible) { setAmPick(''); setAmSel(null); } }, [visible]);
+  /* ★★★ beta96 THE AMATEUR MAP's SCOPE (mapScope.ts — the web window's): OTHER RADIOS ON THIS SERVER (a stored station / a
+   *  remembered mesh node another radio heard is hidden; this radio's live decodes are its own) and THIS SESSION (first heard
+   *  since the map opened; a new live layer is a re-entry). The page draws through the same rule (__amScope); the list,
+   *  its tabs and the SHOW counts follow from amData. Every entry is OBSERVED on each pass, so the session picked later knows
+   *  what came before. */
+  const amUp = visible && kind === 'digi';
+  const [amSess, setAmSess] = useState(false);
+  const [amT0, setAmT0] = useState(() => Math.floor(Date.now() / 1000));
+  const amFirst = useRef(new FirstSeen());
+  useEffect(() => { if (!amUp) { setAmSess(false); return; } setAmT0(Math.floor(Date.now() / 1000)); amFirst.current.clear(); }, [amUp, amateur?.live]);
+  const amSc = useMemo<MapScope>(() => ({ mine: amScope?.mine ?? '', others: !amScope?.offered || amScope.others, t0: amSess ? amT0 : 0 }),
+    [amScope?.mine, amScope?.offered, amScope?.others, amSess, amT0]);
+  const [amShow, setAmShow] = useState<Record<AmLayer, boolean>>({ spots: true, aprs: true, mesh: true, beacons: true });
+  useEffect(() => { if (!visible) setAmShow({ spots: true, aprs: true, mesh: true, beacons: true }); }, [visible]);
+  const amData = useMemo(() => {
+    const nowS = Math.floor(Date.now() / 1000), fs = amFirst.current;
+    const obs = <X,>(list: readonly X[], key: (x: X) => string, server: (x: X) => number | null) => list.map((x) => ({ x, f: fs.first(key(x), nowS, server(x)) }));
+    const sp = obs(spots ?? [], (x) => `spot:${x.call}`, (x) => (x.first ? x.first / 1000 : null));
+    const ap = obs((aprsPoints ?? []) as AmAprsIn[], (x) => `aprs:${x.key}`, () => null);
+    const me = obs(amateur?.mesh ?? [], (x) => x.key, (x) => (x.fa != null ? nowS - x.fa : null));
+    const bc = obs(amateur?.beacons ?? [], (x) => x.key, () => null);
+    return {
+      spots: scopeList(sp, amSc, (o) => o.x.radios, (o) => o.f).map((o) => o.x),
+      aprs: (amSc.t0 ? ap.filter((o) => scopeSessionOk(o.f, amSc)) : ap).map((o) => o.x),
+      mesh: scopeList(me, amSc, (o) => o.x.radios, (o) => o.f).map((o) => o.x),
+      beacons: (amSc.t0 ? bc.filter((o) => scopeSessionOk(o.f, amSc)) : bc).map((o) => o.x),
+    };
+  }, [spots, aprsPoints, amateur, amSc, amTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const amCounts = useMemo(() => (amateur ? amCountsOf(amData, amSc.t0 ? 'all' : digiWinShown, Date.now()) : null), [amateur, amData, amSc.t0, digiWinShown]);
+  // ★ the page draws through the same scope and SHOW choice
+  useEffect(() => {
+    if (!visible || kind !== 'digi') return;
+    const lit = JSON.stringify(JSON.stringify({ mine: amSc.mine, others: amSc.others, t0: amSc.t0, show: amShow }));
+    webRef.current?.injectJavaScript(`(window.__amScope?window.__amScope(${lit}):(window.__pendingAmScope=${lit}));true;`);
+  }, [visible, kind, amSc, amShow]);   // eslint-disable-line react-hooks/exhaustive-deps
   const amList = useMemo(() => {
     if (!amOn || !amateur) return null;
-    const now = Date.now(), win = digiWinShown;
-    const d = { spots: spots ?? [], aprs: (aprsPoints ?? []) as AmAprsIn[], mesh: amateur.mesh, beacons: amateur.beacons };   // ★ digiAprsPoints' rows (DigiAprsPoint)
+    const now = Date.now(), win = amSc.t0 ? 'all' : digiWinShown;
+    const d = { spots: amData.spots, aprs: amData.aprs, mesh: amData.mesh, beacons: amData.beacons };   // ★ digiAprsPoints' rows (DigiAprsPoint), through the scope
     const n = amCountsOf(d, win, now);
     const tabs = amTabs(n, amateur.live, amateur.opened ?? '');
     const tab = amTabNow(tabs, amPick, amateur.live, amateur.opened ?? '');
     return { tabs: tabs.map((t) => ({ id: t, label: `${amateur.live === t ? '● ' : ''}${AM_TAB_LABEL[t]}`, n: n[t] })), tab,
              rows: amListRows(tab, d, win, now, (m) => digiModeStyle(m).colour), empty: amEmptyWords(tab),
-             status: `Heard in ${DIGI_WINDOWS.find((w) => w.id === win)?.words ?? 'this window'} · background decoding and every listener` };
-  }, [amOn, amateur, spots, aprsPoints, digiWinShown, amPick, amTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+             status: [amScope?.offered && !amScope.others ? 'Only this radio\u2019s own decodes' : '',
+                      amSc.t0 ? `First heard since ${new Date(amSc.t0 * 1000).toISOString().slice(11, 16)} UTC (this session)` : `Heard in ${DIGI_WINDOWS.find((w) => w.id === win)?.words ?? 'this window'}`,
+                      'background decoding and every listener'].filter(Boolean).join(' · ') };
+  }, [amOn, amateur, amData, amSc, amScope?.offered, amScope?.others, digiWinShown, amPick, amTick]);   // eslint-disable-line react-hooks/exhaustive-deps
   const amFocus = (key: string) => {
     setAmSel(key);
     webRef.current?.injectJavaScript(`window.__amFocus&&window.__amFocus(${JSON.stringify(String(key).slice(0, 120))});true;`);
@@ -3019,7 +3083,19 @@ export default function MapOverlay(
         {/* ★★ beta92 THE DIGI MODES MAP's keys — the window and the panels, over the map's top-left (DigiMapKeys). */}
         {kind === 'digi' && !!pageUri && !packError && digiMapTop > 0 && (
           <DigiMapKeys top={digiMapTop} left={safeInsets?.left ?? 0} windows={!!storeWindows} win={digiWinShown}
-                       onWin={(w) => { setDigiWinShown(w); pushWin(w); onDigiWindow?.(w); }}
+                       onWin={(w) => { setAmSess(false); setDigiWinShown(w); pushWin(w); onDigiWindow?.(w); }}
+                       /* ★★★ beta96 THIS SESSION (the store asked for the window that covers it), SHOW with counts, OTHER RADIOS */
+                       session={storeWindows && amateur ? { on: amSess, words: SESSION_WORDS, onPress: () => {
+                         if (amSess) return;
+                         setAmSess(true);
+                         const w = sessionWindow(amT0, Math.floor(Date.now() / 1000));
+                         pushWin(w === 'all' ? 'all' : w); onDigiWindow?.(w);
+                       } } : undefined}
+                       show={amateur && amCounts ? (['spots', 'aprs', 'mesh', 'beacons'] as AmLayer[]).filter((id) => amCounts[id] > 0 || amateur.live === id)
+                         .sort((a, b) => Number(b === amateur.live) - Number(a === amateur.live))
+                         .map((id) => ({ id, label: AM_TAB_LABEL[id], n: amCounts[id], colour: AM_LAYER_COLOUR[id], on: amShow[id], live: amateur.live === id })) : undefined}
+                       onShow={(id, on) => setAmShow((cur) => ({ ...cur, [id as AmLayer]: on }))}
+                       scope={amScope?.offered ? { label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS, on: amScope.others, onPress: () => amScope.onOthers(!amScope.others) } : undefined}
                        shown={digiPanels} onPanel={setDigiPanel} onHeight={setDigiKeysH} ink={ink}
                        navCtx={amOn && amKeysNav ? amKeysNav : undefined} />
         )}

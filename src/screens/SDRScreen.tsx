@@ -271,7 +271,7 @@ import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
          askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, mapSharedLine, type DialState } from '../services/dialChat';
 import { airSeaTuneRows, airSeaTuneChip } from '../services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE chip
-import { otherRadiosOffered, sessionOffered, otherRadiosOf, radiosSeen, sessionStart, sessionWindow, withSession, FirstSeen, scopeRadioOk, OTHER_RADIOS_KEY_APP,
+import { radiosOf, otherRadiosOffered, sessionOffered, otherRadiosOf, radiosSeen, sessionStart, sessionWindow, withSession, FirstSeen, scopeRadioOk, OTHER_RADIOS_KEY_APP,
          OTHER_RADIOS_LABEL, OTHER_RADIOS_WORDS, OTHER_RADIOS_CHIP, SESSION_ID, SESSION_WORDS, type MapScope } from '../services/mapScope';   // ★★★ beta96 the maps' scope
 import { airSeaScope, airSeaLiveOk } from '../services/airSeaScope';
 import { pickChatLanguage } from '../services/chatLangNative';
@@ -3254,13 +3254,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   const avSharedS = asSrcS.shared, shipStoreS = asSrcS.ships, navReportS = asSrcS.nav, navWarnRepS = asSrcS.warn, navMetRepS = asSrcS.met, dscGalS = asSrcS.dscG;
   const adsbReportS = asSrcS.adsb, aisReportS = asSrcS.ais, avReportS = asSrcS.av, sdReportS = asSrcS.sd, vmReportS = asSrcS.vm, sdStoredS = asSrcS.sdStored, vmStoredS = asSrcS.vmStored;
   // ★ NDB (this radio's): THIS SESSION only — when this viewer first saw each beacon
-  const ndbReportS = useMemo(() => (asSc.t0 && ndbReport ? { ...ndbReport, beacons: ndbReport.beacons.filter((b) => airSeaLiveOk(`ndb:${b.hz}`, null, asSc, Math.floor(Date.now() / 1000), asFirst.current)) } : ndbReport),
+  const ndbReportS = useMemo(() => {
+    if (!ndbReport) return ndbReport;
+    const now = Math.floor(Date.now() / 1000);
+    const keep = ndbReport.beacons.filter((b) => airSeaLiveOk(`ndb:${b.hz}`, null, asSc, now, asFirst.current));   // ★ observes always
+    return asSc.t0 ? { ...ndbReport, beacons: keep } : ndbReport;
+  },
     [asSc, ndbReport]);
   const [navAvail, setNavAvail] = useState(false);
   const navFromGallery = useRef(false);
   useEffect(() => { AsyncStorage.getItem('lsv_nav_map_range').then((v) => setNavRange(navRangeOf(v))).catch(() => {}); }, []);
   /* ★★ V12 2026-11-01 THE TIME FILTER (the web's ismMapRange / ismGalRange): 24 h live, ALL in the gallery, remembered. */
   const [ismRange, setIsmRange] = useState('24h');
+  const [ismSess, setIsmSess] = useState(false);   // ★★★ beta96 THIS SESSION on the mesh map (this visit's own)
+  const [ismSessSt, setIsmSessSt] = useState<{ mode: string; t0: number } | null>(null);
   const [ismGalRange, setIsmGalRange] = useState('all');
   useEffect(() => {
     AsyncStorage.multiGet(['lsv_ism_map_range', 'lsv_ism_gal_range']).then((kv) => {
@@ -3288,13 +3295,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     try {
       const now = Math.floor(Date.now() / 1000), from = Math.floor((now - 24 * 3600) / 86400) * 86400;
       const lj = await satGalleryGet('/vibeserver/gallery.json?kind=ism&limit=1000');
-      let items: Array<{ s?: string; t: number; f: string }> = [];
+      let items: Array<{ s?: string; t: number; f: string; ri?: string }> = [];
       try { items = lj ? (JSON.parse(lj).items ?? []) : []; } catch { items = []; }
       const cards = items.filter((c) => ismIsNodeCard(c) && ismNodeCardBand(c.s) === band && c.t >= from).sort((a, b) => b.t - a.t).slice(0, 2);
       const per: IsmGalNode[][] = [];
       for (const c of cards) {   // ★ one at a time: a live server
         const body = await satGalleryGet(`/vibeserver/gallery/file/${encodeURIComponent(c.f)}`);
-        if (body) per.push(ismNodesParse(body, c.t, now).nodes);
+        const ri = radiosOf(c.ri);   // ★★★ beta96 the card's radios on its nodes (the OTHER RADIOS switch)
+        if (body) { const n = ismNodesParse(body, c.t, now).nodes; per.push(ri.length ? n.map((x) => ({ ...x, radios: ri })) : n); }
       }
       setIsmStored({ band, nodes: ismGalMerge(per, now).filter((n) => n.last >= now - 24 * 3600) });
     } catch { /* keep what we had */ } finally { ismStoredBusy.current = false; }
@@ -12482,6 +12490,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const ismTrk = useMemo(() => {
     // ★ a link to a node outside the chosen range shows 24 h, so the node asked for is there
     const range = ismFocus && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === ismFocus), ismRange).length ? '24h' : ismRange;
+    /* ★★★ beta96 THE SCOPE (mapScope.ts — the web's ismMapRender): OTHER RADIOS hides another radio's remembered nodes (this
+     *  radio's live ones are its own); THIS SESSION keeps only what was first heard since the map was opened for this band */
+    const nowC = Math.floor(Date.now() / 1000);
+    const othersOk = otherRadiosOffered({ mine: mapRadio.mine, radioCount: mapRadio.count, viewer: false, seen: radiosSeen([ismStored?.nodes]) });
+    const isc: MapScope = { mine: mapRadio.mine, others: !othersOk || mapOthers, t0: ismSess && ismSessSt ? ismSessSt.t0 : 0 };
     // ★ beta92 the remembered nodes this session has not heard itself (node id as the card keeps it, or the name) — live wins
     const liveIds = new Set<string>();
     for (const d of ismReport?.devices ?? []) { if (d.node) liveIds.add(`${d.kind}|n|${d.node.slice(0, 16)}`); if (d.name) liveIds.add(`${d.kind}|m|${d.name}`); }
@@ -12489,15 +12502,31 @@ export default function SDRScreen({ route, navigation }: Props) {
       ? ismStored.nodes.filter((n) => !(n.node && liveIds.has(`${n.kind}|n|${n.node.slice(0, 16)}`)) && !(n.name && liveIds.has(`${n.kind}|m|${n.name}`)))
       : [];
     const storedBy = new Map(stored.map((n) => [n.key, n]));
-    const r = ismReport ? { ...ismReport, devices: ismInRange([...ismReport.devices, ...stored], range) } : null;
+    const storedS = stored.filter((n) => scopeRadioOk(n.radios, isc) && (!isc.t0 || n.first >= isc.t0 - 2));
+    const liveS = isc.t0 ? (ismReport?.devices ?? []).filter((d) => nowC - d.age >= isc.t0 - 2) : (ismReport?.devices ?? []);
+    const r = ismReport ? { ...ismReport, devices: isc.t0 ? [...liveS, ...storedS] : ismInRange([...liveS, ...storedS], range) } : null;
+    const note = [othersOk && !isc.others ? 'Only this radio\u2019s own decodes' : '', isc.t0 ? `Only what was first heard since ${new Date(isc.t0 * 1000).toISOString().slice(11, 16)} UTC (this session)` : ''].filter(Boolean).join(' \u00b7 ');
     return {
       items: ismMapItems(r, trkRx).map((it) => { const n = storedBy.get(it.key); return n ? { ...it, _cd: ismGalCard(n, trkRx) } : it; }),
-      rows: ismMapRows(r, trkRx), status: ismMapStatus(r, trkRx),
+      rows: ismMapRows(r, trkRx), status: [note, ismMapStatus(r, trkRx)].filter(Boolean).join(' \u00b7 '),
       empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
-      ranges: ISM_LIVE_RANGES, range, rangeHint: ISM_RANGE_HINT_LIVE,
-      onRange: (id: string) => { setIsmRange(id); setIsmFocus(''); AsyncStorage.setItem('lsv_ism_map_range', id).catch(() => {}); },
+      ranges: withSession(ISM_LIVE_RANGES, true), range: isc.t0 ? SESSION_ID : range, rangeHint: `${ISM_RANGE_HINT_LIVE} THIS SESSION: ${SESSION_WORDS}.`,
+      onRange: (id: string) => {
+        if (id === SESSION_ID) { setIsmSess(true); return; }
+        setIsmSess(false); setIsmRange(id); setIsmFocus(''); AsyncStorage.setItem('lsv_ism_map_range', id).catch(() => {});
+      },
+      // ★★★ beta96 OTHER RADIOS ON THIS SERVER (2+ sources only)
+      toggles: othersOk ? [{ id: OTHER_RADIOS_CHIP, label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS }] : undefined,
+      toggled: othersOk ? { [OTHER_RADIOS_CHIP]: mapOthers } : undefined,
+      onToggle: (id: string, v: boolean) => { if (id === OTHER_RADIOS_CHIP) mapOthersSet(v); },
     };
-  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange, mapRadio, mapOthers, mapOthersSet, ismSess, ismSessSt]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta96 the mesh map's THIS SESSION: (re)opened, or a new band = re-entry; closed = the pick forgotten */
+  const ismMapUp = shownMap === 'ism' && !ismGal;
+  useEffect(() => {
+    if (!ismMapUp) { setIsmSess(false); setIsmSessSt(null); return; }
+    setIsmSessSt((p) => sessionStart(p, `ism:${ismReport?.band || ''}`, Math.floor(Date.now() / 1000), !p));
+  }, [ismMapUp, ismReport?.band]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ V12 the SONDES map: the sondes at their last position, a chosen one's track from the newest report (no request). */
   /** ★★★ beta96 THE AIR & SEA MAP is up (any of its openers: ADS-B, AIS, the shipping / NAVTEX / aviation MAPs, and since
    *  stage 8 SONDES and the VOR map) — its polls (aircraft.json, the ship store) run while it is */
@@ -18646,6 +18675,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         aprsPoints={digiAprs}
         aprsFocus={aprsFocus}
         amateur={amateur}
+        /* ★★★ beta96 the AMATEUR map's OTHER RADIOS ON THIS SERVER switch (2+ sources: the machine's radios, or a stored station /
+         *  remembered node another source heard) */
+        amScope={shownMap === 'digi' ? { mine: mapRadio.mine, others: mapOthers, onOthers: mapOthersSet,
+          offered: otherRadiosOffered({ mine: mapRadio.mine, radioCount: mapRadio.count, viewer: false, seen: radiosSeen([[...digiStore.values()], amMeshStored ?? undefined]) }) } : null}
         digiOverlay={digiOverlay}
         digiRadios={digiStorePolling ? digiRadios : null}
         digiWindow={digiWin}
