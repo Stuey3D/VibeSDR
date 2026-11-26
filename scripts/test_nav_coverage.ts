@@ -86,7 +86,11 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
                  'src/components/IdentModal.tsx', 'src/components/VibePinPrompt.tsx', 'src/components/Coachmark.tsx',
                  'src/components/AppAlert.tsx', 'src/components/DabPanel.tsx',
                  // ★ main's "Trust this server?" (GitHub #52), joined to the overlay rule in the 11.0.9 merge (audit §7).
-                 'src/components/TlsTrustPrompt.tsx']) {
+                 'src/components/TlsTrustPrompt.tsx',
+                 // ★★★ beta96 the server entry — made for TVs: every key a ServerKey (TV remote focus + the pad bus + a ring)
+                 'src/components/ServerKey.tsx', 'src/screens/ServerChoiceScreen.tsx', 'src/screens/SimpleServerScreen.tsx',
+                 'src/screens/SetupElsewhereScreen.tsx', 'src/components/ServerTopBar.tsx',
+                 'src/components/DeviceCredentials.tsx', 'src/components/DeviceReset.tsx']) {
   const list = report[f] ?? unregistered(path.join(root, f));
   ok(list.length === 0, `${f}: every touchable registered`, list.map((l) => '      ' + l).join('\n'));
 }

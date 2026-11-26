@@ -4,7 +4,7 @@
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CHOICE_KEY, MDNS_KEY, parseChoice, simpleStartConfig, type ServerChoice } from '../utils/serverChoice';
+import { CHOICE_KEY, MDNS_KEY, parseChoice, serverKeysToWipe, simpleStartConfig, type ServerChoice } from '../utils/serverChoice';
 
 const Local: any = (NativeModules as any).VibeLocalSDR;
 
@@ -68,13 +68,7 @@ export function adoptRemoteAdminPassword() {
   });
 }
 
-/** The line every status screen shows once an admin password exists (Stuart, 2026-11-26). */
-export function setupAddressLine(ip: string, port: number, mdnsHost: string): string {
-  const a = ip && port ? `http://${ip}:${port}/setup` : '';
-  const b = mdnsHost && port ? `${mdnsHost}.local:${port}/setup` : '';
-  return 'Change settings from another device: ' + [a, b].filter(Boolean).join(' or ')
-    + ' — sign in with your admin password.';
-}
+export { setupAddressLine } from '../utils/serverChoice';
 
 /* ★★★ beta96 CHANGE ADMIN PASSWORD / PIN ON THE DEVICE (DeviceCredentials) — no old password: the device is the proof.
  *  Each goes to all three places it lives: the screen's own copy (AsyncStorage), the server's one settings store (which
@@ -95,10 +89,6 @@ export async function savePinOnDevice(pin: string): Promise<void> {
  *  listing; this side then wipes the app's copy of the SERVER settings — every 'vs_' key, the server's location and the
  *  local name — and nothing of the app's own listening (favourites, the directory, the receiver's own settings).
  *  `wipeData` (the owner's tick, off by default) also deletes the gallery, the DX log and the learned bookmarks. */
-export const RESET_EXTRA_KEYS = ['lsv_server_location', 'vsdr_rtltcp_server_name', 'vsdr_rtltcp_server_persist'];
-export function serverKeysToWipe(all: readonly string[], wipeData: boolean): string[] {
-  return all.filter((k) => (k.startsWith('vs_') && (wipeData || k !== 'vs_learned_bookmarks')) || RESET_EXTRA_KEYS.includes(k));
-}
 export async function resetAllServerSettings(password: string, confirmWord: string, wipeData: boolean): Promise<void> {
   if (typeof Local?.resetAllServerSettings !== 'function') throw new Error('This build cannot reset the server.');
   await Local.resetAllServerSettings(password, confirmWord, wipeData);   // ★ rejects with the server's words

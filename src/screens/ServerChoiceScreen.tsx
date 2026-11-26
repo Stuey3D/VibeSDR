@@ -20,7 +20,7 @@ import { themeFor } from '../constants/theme';
 import { serverPalette } from '../constants/serverPalette';
 import type { PopupTokens } from '../constants/popupTokens';
 import ServerKey, { useKeyList } from '../components/ServerKey';
-import { CHOICE_WORDS, choicesFor, routeFor, type ServerChoice } from '../utils/serverChoice';
+import { CHOICE_WORDS, choicesFor, isFirstOpen, remoteSetupOffered, routeFor, type ServerChoice } from '../utils/serverChoice';
 import { getChoice, setChoice, storeFacts, setupCodeSupported, adoptRemoteAdminPassword } from '../services/serverChoiceStore';
 import { rtlTcpServerSupported, getServerStatus, stopRtlTcpServer } from '../services/rtlTcpServer';
 import { getConnectedRadio, getVibeServerStatus, stopVibeServer } from '../services/vibeServer';
@@ -69,13 +69,13 @@ export default function ServerChoiceScreen({ navigation, route, tokens }: Props)
         if (choice) { navigation.replace(routeFor(choice), paramsFor(choice, false)); return; }
       }
       // ★ FIRST OPEN = never chosen and no admin password: the two big keys. Otherwise the list.
-      setPhase(!choose && !choice && !facts?.hasAdminPassword ? 'first' : 'list');
+      setPhase(!choose && isFirstOpen(choice, !!facts?.hasAdminPassword) ? 'first' : 'list');
     })();
     return () => { gone = true; };
   }, []);
 
   const options = useMemo(() => choicesFor({ lite: isLite, rtlTcpSupported: rtlTcpServerSupported, icom }), [icom]);
-  const remoteOk = noPassword && setupCodeSupported();
+  const remoteOk = remoteSetupOffered(!noPassword, setupCodeSupported());
 
   const open = useCallback(async (c: ServerChoice) => {
     const go = async () => {

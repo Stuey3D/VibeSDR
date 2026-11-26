@@ -138,3 +138,45 @@ export function simpleView(cfg: Record<string, unknown>): Record<string, unknown
 
 /** Is this stored config a Simple server's? */
 export const isSimpleConfig = (cfg: Record<string, unknown> | null | undefined) => !!cfg && cfg.simple === true;
+
+// ── ★★★ beta96 the words and rules the screens share (pure, so test_server_choice.ts proves them) ────────────────────
+
+/** The device's own password rule (DeviceCredentials) — the same as the shim's setup-code step: 8–128, typed twice. */
+export function passwordProblem(a: string, b: string): string {
+  if (!a) return 'Type the new admin password.';
+  if (a !== b) return 'The two passwords are not the same.';
+  if (a.length < 8) return 'At least 8 characters.';
+  if (a.length > 128) return 'At most 128 characters.';
+  if (/[\u0000-\u001f\u007f]/.test(a)) return 'No control characters.';
+  return '';
+}
+
+/** "Change settings from another device: …" — the /setup address, by IP and by .local name. */
+export function setupAddressLine(ip: string, port: number, mdnsHost: string): string {
+  const a = ip && port ? `http://${ip}:${port}/setup` : '';
+  const b = mdnsHost && port ? `${mdnsHost}.local:${port}/setup` : '';
+  return 'Change settings from another device: ' + [a, b].filter(Boolean).join(' or ')
+    + ' \u2014 sign in with your admin password.';
+}
+
+/** The status line (Stuart, 2026-11-26): the address only while remote access is ON; otherwise how to turn it on. */
+export function remoteSettingsLine(o: { running: { ip: string; port: number } | null; mdnsHost: string;
+                                        hasAdminPassword: boolean; remoteOn: boolean }): string {
+  if (!o.running) return '';
+  if (o.remoteOn && o.hasAdminPassword) return setupAddressLine(o.running.ip, o.running.port, o.mdnsHost);
+  return 'Remote settings: off (turn on here to change settings from another device).';
+}
+
+/** RESET ALL SETTINGS: the app's storage keys that are the SERVER's — every 'vs_' key and three more — and none of the
+ *  app's own listening things. The learned bookmarks go only with the owner's "also delete stored data" tick. */
+export const RESET_EXTRA_KEYS = ['lsv_server_location', 'vsdr_rtltcp_server_name', 'vsdr_rtltcp_server_persist'];
+export function serverKeysToWipe(all: readonly string[], wipeData: boolean): string[] {
+  return all.filter((k) => (k.startsWith('vs_') && (wipeData || k !== 'vs_learned_bookmarks')) || RESET_EXTRA_KEYS.includes(k));
+}
+
+/** First open = never chosen a server type and no admin password: the SET UP HERE / REMOTE SETUP pair. */
+export function isFirstOpen(choice: ServerChoice | null, hasAdminPassword: boolean): boolean {
+  return !choice && !hasAdminPassword;
+}
+/** REMOTE SETUP is offered only while there is no admin password (first-time only — the server refuses it too). */
+export const remoteSetupOffered = (hasAdminPassword: boolean, supported: boolean) => !hasAdminPassword && supported;

@@ -16,15 +16,8 @@ import ServerKey from './ServerKey';
 export type CredInk = { text: string; textDim: string; key: string; keyAct: string; border: string; borderBright: string;
                         placeholder: string; bad: string; ok: string; fontFamily?: string };
 
-/** The password rule, one place (the shim's setup-code step and this screen agree: 8–128, typed twice). */
-export function passwordProblem(a: string, b: string): string {
-  if (!a) return 'Type the new admin password.';
-  if (a !== b) return 'The two passwords are not the same.';
-  if (a.length < 8) return 'At least 8 characters.';
-  if (a.length > 128) return 'At most 128 characters.';
-  if (/[\u0000-\u001f\u007f]/.test(a)) return 'No control characters.';
-  return '';
-}
+import { passwordProblem } from '../utils/serverChoice';
+export { passwordProblem };
 
 type Props = {
   ink: CredInk;

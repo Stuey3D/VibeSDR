@@ -35,7 +35,7 @@ import {
   getMdnsName, setMdnsName, setChoice, startSimpleServer, storeFacts, saveAdminPasswordOnDevice, setupAddressLine,
   adoptRemoteAdminPassword,
 } from '../services/serverChoiceStore';
-import { mdnsLabel } from '../utils/serverChoice';
+import { mdnsLabel, remoteSettingsLine } from '../utils/serverChoice';
 import { RATE_OPTIONS_AHF, RATE_OPTIONS_ASP, RATE_OPTIONS_HRF, RATE_OPTIONS_RSP, RATE_OPTIONS_RTL } from './ServerModeScreen';
 
 const Local: any = (NativeModules as any).VibeLocalSDR;
@@ -201,11 +201,9 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
             <Text style={{ color: C.textDim, fontFamily: F, fontSize: 14, marginTop: 8 }}>
               {listeners}/{maxUsers} listening{status?.radioProblem ? ' — ' + status.radioProblem : ''}
             </Text>
-            {facts?.hasAdminPassword && facts.remote && (
-              <Text style={{ color: C.textDim, fontFamily: F, fontSize: 13, marginTop: 8, lineHeight: 18 }} testID="simple-setup-line">
-                {setupAddressLine(running.ip, running.port, host)}
-              </Text>
-            )}
+            <Text style={{ color: C.textDim, fontFamily: F, fontSize: 13, marginTop: 8, lineHeight: 18 }} testID="simple-setup-line">
+              {remoteSettingsLine({ running, mdnsHost: host, hasAdminPassword: !!facts?.hasAdminPassword, remoteOn: !!facts?.remote })}
+            </Text>
           </View>
           {notSimple && (
             <Text style={[s.hint, { color: C.warn, fontFamily: F }]}>

@@ -11,7 +11,7 @@
 import React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import ServerKey, { useKeyList } from './ServerKey';
-import { setupAddressLine } from '../services/serverChoiceStore';
+import { remoteSettingsLine } from '../utils/serverChoice';
 
 type Props = {
   C: any; F?: string;
@@ -27,13 +27,7 @@ type Props = {
   remoteOn: boolean;
 };
 
-/** The status words, one rule for every server screen (Stuart, 2026-11-26 — shown only when remote access is on). */
-export function remoteSettingsLine(o: { running: { ip: string; port: number } | null; mdnsHost: string;
-                                        hasAdminPassword: boolean; remoteOn: boolean }): string {
-  if (!o.running) return '';
-  if (o.remoteOn && o.hasAdminPassword) return setupAddressLine(o.running.ip, o.running.port, o.mdnsHost);
-  return 'Remote settings: off (turn on here to change settings from another device).';
-}
+export { remoteSettingsLine };
 
 export default function ServerTopBar(p: Props) {
   const { C, F } = p;

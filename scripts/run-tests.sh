@@ -1491,6 +1491,8 @@ if node --no-warnings scripts/test_wf_combine.ts; then pass=$((pass+1)); else fa
 # ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
 #    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
 if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 "Use as a server": the entry, VibeServer Simple, remote first-time setup, device-only password / PIN / reset
+if node --no-warnings scripts/test_server_choice.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ "IS THIS ACTUALLY NEWS?" (renderChurn.ts): a repeated RDS label / bookmark list keeps the old
 #    object so the radio screen does not re-render for it, any drawn change still gets through, and
 #    the controls-bar clock re-renders on the minute, not every second (power audit, 2026-10-01).
