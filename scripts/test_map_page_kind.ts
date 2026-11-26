@@ -171,8 +171,8 @@ for (const [from, to] of [['airsea', 'ndb'], ['ndb', 'airsea']] as [K, K][]) {
   eq('ADS-B → AIS: adsb_off then the report', [S({}), S({ aisView: true })], [null, 'airsea']);
   eq('NDB under AIS: NDB', S({ ndbView: true, aisView: true }), 'ndb');
   eq('ISM map only while ISM is on', [S({ ismMap: true }), S({ ismMap: true, ismOn: true }), S({ ismGallery: true })], [null, 'ism', 'ism']);
-  eq('VOR map only while on', [S({ vmMap: true }), S({ vmMap: true, vmOn: true })], [null, 'vormap']);
-  eq('SONDES map only while on', [S({ sdMap: true }), S({ sdMap: true, sdOn: true })], [null, 'sondes']);
+  eq('VOR map only while on — ★ stage 8 the AIR & SEA map', [S({ vmMap: true }), S({ vmMap: true, vmOn: true })], [null, 'airsea']);
+  eq('SONDES map only while on — ★ stage 8 the AIR & SEA map', [S({ sdMap: true }), S({ sdMap: true, sdOn: true })], [null, 'airsea']);
   eq('AVIATION: datalink focus needs the mode; another focus does not', [S({ avMap: true }), S({ avMap: true, avOn: true }), S({ avMap: true, avFocusDatalink: false })], [null, 'airsea', 'airsea']);
   eq('a picked server map under the modes', [S({ picked: 'hfdl' }), S({ picked: 'hfdl', aisView: true })], ['hfdl', 'airsea']);
   eq('NAVTEX / shipping MAP: the AIR & SEA map; DSC keeps its own', [S({ navMap: true }), S({ dscMap: true })], ['airsea', 'dsc']);

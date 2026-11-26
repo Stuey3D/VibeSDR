@@ -10253,7 +10253,7 @@ let aisCap: { ok: boolean; why: string } | null = null;
 let aisOn = false;
 let aisReport: AisReport | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
-function trackViewUp(): boolean { return !!asView?.open || !!vmView?.open; }   // ★ V12 + the VOR map: nothing drawn behind it, as NDB
+function trackViewUp(): boolean { return !!asView?.open; }   // ★ V12 nothing drawn behind it, as NDB (beta96: the VOR map and SONDES are the AIR & SEA map's)
 function aisReadCap(j: any) {
   if (j?.ais === true) aisCap = { ok: true, why: '' };
   else if (j?.ais === false) {
@@ -10431,9 +10431,15 @@ function asViewOpts() {
     aircraft: true, mixed: true, imageBase: adsbImageBase() || null,
     liveIds: ['chatPanel'],   // ★ ADS-B mode's CHAT key is in this map's top bar: its panel stays reachable, over the map
     labelRank: (it: any) => it._rk ?? 0,
+    // ★ beta96 stage 8 a sonde's track is in its report (no request); the rest as the shipping map's
+    trail: (key: string, done: (pts: [number, number][]) => void) => {
+      if (key.startsWith('sd:')) { done(sondeTrail(sdReport, key.slice(3))); return; }
+      ship.trail(key, done);
+    },
     onRange: (id: string) => {
-      // ★ one segmented control, two meanings: the DATALINK's band while that mode is on, else the maritime time filter
+      // ★ one segmented control, three meanings: the DATALINK's band or the SONDES band while that mode is on, else the maritime time filter
       if (avOn) { if (spec && avReport?.band !== id) spec.avdata(true, id); return; }
+      if (sdOn) { if (spec && sdReport?.band !== id) spec.sondes(true, id); return; }
       navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true);
     },
     onToggle: (id: string, on: boolean) => {
@@ -10473,6 +10479,8 @@ function asExit() {
     if (adsbOn) { adsbSetMode(false); return; }
     if (aisOn) { aisSetMode(false); return; }
     if (avOn) { avSetMode(false); return; }
+    if (sdOn) { sdSetMode(false); return; }   // ★ beta96 stage 8
+    if (vmOn) { vmSetMode(false); return; }
   }
   asClose();
 }
@@ -10506,8 +10514,10 @@ function asRender() {
   const have: Partial<Record<LiveLayerId, number>> = {
     adsb: avh.adsb, acars: avh.acars, vdl2: avh.vdl2, hfdl: avh.hfdl, adsc: avh.adsc, hfdlst: avh.stations,
     ships: sh.ships, dsc: sh.dsc, navst: sh.stations, warnings: sh.warnings, weather: sh.weather, areas: sh.areas ?? 0,
+    // ★ beta96 stage 8: the VOR map and SONDES while they run (their reports are the mode's own; nothing is stored yet)
+    vor: vmOn && vmReport ? vmReport.heard : 0, sondes: sdOn && sdReport ? sdReport.sondes.length : 0,
   };
-  const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l));
+  const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l) || l === 'vor');
   const first: LiveLayerId[] = asBox === 'navtex' ? ['navst', 'warnings', 'weather'] : asBox === 'dsc' ? ['dsc'] : asBox === 'hfdl' ? ['hfdl', 'hfdlst'] : [];
   const present = livePresent('airsea', have, live, aviationAny || asBox === 'hfdl' ? ['airports'] : [], first);
   // ★ SEA AREAS is offered everywhere (Stuart 11-26), but with nothing maritime here it starts OFF — chart lines over an
@@ -10519,7 +10529,7 @@ function asRender() {
   const on = (id: LiveLayerId) => liveLayerOn(id, present, tog, live);
   v.setToggles(liveChips(present, live), Object.fromEntries(present.map((id) => [id, on(id)])));
   v.setProfile(liveProfile('airsea', present, on));
-  v.setCamera(live.layers.some((l) => SEA_ID_SET.has(l)) ? 'track' : 'aircraft');
+  v.setCamera(live.layers.some((l) => SEA_ID_SET.has(l) || l === 'vor' || l === 'sondes') ? 'track' : 'aircraft');
   // ── aviation (aviationMap.ts avCompose, unchanged: our toggles in its terms) ──
   const avFocus: AvFocus = mode === 'datalink' ? 'datalink' : mode === 'hfdl' ? 'hfdl' : 'adsb';
   const avc = avCompose(avOn ? avReport : null, avShared, avFocus, avLayersFrom(tog, present, live) as AvLayers, rx, 'web');
@@ -10542,7 +10552,11 @@ function asRender() {
   // ★ the live layer's names win the declutter
   const liveAv = live.layers.some((l) => AV_ID_SET.has(l));
   const avItems = (liveAv ? avc.items.map((it: any) => ({ ...it, _rk: (it._rk ?? 0) + 1e12 })) : avc.items).filter((it: any) => !isLiveAc(it?._adsb?.hex));
-  const items = [...adsbItems, ...avItems, ...liveShips, ...sc.items];
+  /* ★★ beta96 stage 8 the VOR map's stations, radials and fix, and the sondes — their keys prefixed (a VOR's key is its
+   *  frequency in Hz and a ship's its MMSI: both nine digits) */
+  const vorItems: any[] = vmOn && on('vor') ? vorMapItems(vmReport).map((it: any) => ({ ...it, key: `vor:${it.key}`, _rk: (Number(it._rk) || 0) + 1e12 })) : [];
+  const sondeIts: any[] = sdOn && on('sondes') ? sondeItems(sdReport).map((x) => ({ ...x, key: `sd:${x.key}`, _ic: sondeIcon(x), _lb: String(x.serial || ''), _cd: sondeCard(x), _rk: 1e12 })) : [];
+  const items = [...adsbItems, ...vorItems, ...sondeIts, ...avItems, ...liveShips, ...sc.items];
   const otherPlanes = liveHex.size ? avc.planes.filter((p) => !isLiveAc(p.icao)) : avc.planes;
   // ── the MESSAGES feed (every aircraft's last message as it changes; the owner's text where the server sent it) ──
   const bodies = new Map<string, string>();
@@ -10553,7 +10567,8 @@ function asRender() {
   const aircraftN = liveHex.size + otherPlanes.length;
   const shipsN = (on('ships') ? sh.ships : 0) + (on('dsc') ? sh.dsc : 0);
   const navN = (on('navst') ? sh.stations : 0) + (on('warnings') ? sh.warnings : 0) + (on('weather') ? sh.weather : 0);
-  const tabHave: Partial<Record<LiveTab, number>> = { aircraft: aircraftN, messages: asMsgs.length, ships: shipsN || (aisOn ? 1 : 0), navtex: navN };
+  const tabHave: Partial<Record<LiveTab, number>> = { aircraft: aircraftN, messages: asMsgs.length, ships: shipsN || (aisOn ? 1 : 0), navtex: navN,
+    navaids: vmOn ? Math.max(1, vmReport?.heard ?? 0) : 0, sondes: sdOn ? Math.max(1, sdReport?.sondes.length ?? 0) : 0 };
   const tabs = liveTabs('airsea', tabHave, live, asOpenedTab);
   const tab = liveTabPick(tabs, asPicked, live, asOpenedTab) ?? 'aircraft';
   v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
@@ -10564,6 +10579,7 @@ function asRender() {
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
   // ── the ranges: the DATALINK's bands while it is on, else the time filter where a maritime layer is drawn ──
   if (avOn) v.setRanges(avRanges(avBands), avReport?.band || '', 'The band', 'The band: ACARS (131 MHz) or VDL2 (136 MHz)');
+  else if (sdOn) v.setRanges(sondeRanges(sdBands), sdReport?.band || '', 'The band', 'The band searched: radiosondes use 400\u2013406 MHz');   // ★ stage 8
   else if (shipPresent.some((id) => id !== 'areas')) v.setRanges(NAV_RANGES, navRange, '', NAV_RANGE_HINT);
   else v.setRanges([], '');
   // ── the rows of the tab shown (capped — the 1 GB phones) ──
@@ -10591,12 +10607,18 @@ function asRender() {
     rows = (liveRows ? asSec('SHIPS — HEARD NOW') + liveRows : '') + (sc.rowsBy.ships || '') + (sc.rowsBy.dsc || '');
   } else if (tab === 'navtex') {
     rows = sc.by(['stations', 'weather', 'warnings']);
+  } else if (tab === 'navaids') {
+    // ★ stage 8 the VOR map's list (the FIX's words first), keyed as its map items
+    rows = vmOn ? vorMapRows(vmReport).replace(/data-key="/g, 'data-key="vor:') : '';
+  } else if (tab === 'sondes') {
+    rows = sdOn ? sondeRows(sdReport).replace(/data-key="/g, 'data-key="sd:') : '';
   }
   // ── the KEY: the aircraft's, the ships' and NAVTEX's for the layers present ──
   const avPresent = present.map((id) => avLayerOf(id)).filter((x): x is AvLayerId => !!x);
-  v.setLegend((avPresent.length ? avLegendHtml(avPresent, true) : '') + (shipPresent.length ? shipKeyHtml(shipPresent) : ''));
-  const status = [adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', aviationAny ? avc.status : '', sc.status].filter(Boolean).join(' · ');
-  v.update(items, rows, status, aircraftN + shipsN, rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
+  v.setLegend((present.includes('vor') ? VORMAP_LEGEND : '') + (avPresent.length ? avLegendHtml(avPresent, true) : '') + (shipPresent.length ? shipKeyHtml(shipPresent) : ''));
+  const status = [adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', vmOn ? vorMapStatus(vmReport) : '', sdOn ? sondeStatus(sdReport) : '',
+                  aviationAny ? avc.status : '', sc.status].filter(Boolean).join(' · ');
+  v.update(items, rows, status, aircraftN + shipsN + vorItems.length + sondeIts.length, rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
   v.note(sc.building);
   if (avOn && avReport) for (const b of Array.from(v.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === avReport.band));
   syncOnlyMode();
@@ -10613,7 +10635,6 @@ let sdCap: { ok: boolean; why: string } | null = null;
 let sdBands: SondeBand[] = [];
 let sdOn = false;
 let sdReport: SondeReport | null = null;
-let sdView: TrackView | null = null;
 function sdReadCap(j: any) {
   if (j?.sondes === true) sdCap = { ok: true, why: '' };
   else if (j?.sondes === false) {
@@ -10628,21 +10649,16 @@ function sdUiOn() {
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   closePanels();
-  if (!sdView) sdView = new TrackView({
-    title: 'RADIOSONDES', exitLabel: 'EXIT SONDES', listTitle: 'SONDES', onExit: () => sdSetMode(false),
-    icon: (it: any) => sondeIcon(it), label: (it: any) => String(it.serial || ''), card: (it: any) => sondeCard(it),
-    trail: (key: string, done: (pts: [number, number][]) => void) => done(sondeTrail(sdReport, key)),
-    ranges: sondeRanges(sdBands), range: sdReport?.band || '', rangeHint: 'The band searched: radiosondes use 400\u2013406 MHz', rangeLabel: 'The band',
-    onRange: (id: string) => { if (spec && sdReport?.band !== id) spec.sondes(true, id); },
-  });
-  sdView.show(myPos());
-  sdRender();
+  /* ★★★ beta96 stage 8: SONDES is a live state of the AIR & SEA map (WEATHER ALOFT): the sondes at their last position, a
+   *  chosen one's track from the report, the band control in the top bar, EXIT SONDES — and every other layer this server
+   *  holds (aircraft, ships, NAVTEX) beside them as stored */
+  asOpen({ by: 'mode', tab: 'sondes', sort: 'nearest' });
 }
 function sdUiOff() {
   sdOn = false;
   syncAudioQuiet();
   sdReport = null;
-  sdView?.hide();
+  asModeEnded();
   renderFreq();
 }
 function sdSetMode(on: boolean) {
@@ -10659,12 +10675,7 @@ function sdSetMode(on: boolean) {
     sdUiOff();
   }
 }
-function sdRender() {
-  if (!sdView) return;
-  const r = sdReport;
-  sdView.update(sondeItems(r), sondeRows(r), sondeStatus(r), r ? r.sondes.length : 0, myPos());
-  if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
-}
+function sdRender() { asRender(); }
 /* ★★★ THE VOR / ILS MAP (V12, docs/v12/VOR-MAP.md — Stuart, 2026-11-24: "treated the same as NDB") — the sondes' shape
  *  (vormap.ts): a TrackView, EXIT VOR MAP gives the receiver back. Every station heard at its published position, a VOR's
  *  radial towards the receiver, the FIX where radials cross; the status says which window the sweep is on. ★ Offered only
@@ -10672,7 +10683,6 @@ function sdRender() {
 let vmCap: { ok: boolean; why: string } | null = null;
 let vmOn = false;
 let vmReport: VorMapReport | null = null;
-let vmView: TrackView | null = null;
 function vmReadCap(j: any) {
   if (j?.vormap === true) vmCap = { ok: true, why: '' };
   else if (j?.vormap === false) {
@@ -10687,20 +10697,15 @@ function vmUiOn() {
   syncAudioQuiet();
   closePanels();
   if (!document.getElementById('vmRowCss')) { const st = document.createElement('style'); st.id = 'vmRowCss'; st.textContent = VORMAP_ROW_CSS; document.head.appendChild(st); }
-  if (!vmView) vmView = new TrackView({
-    title: 'VOR / ILS MAP', exitLabel: 'EXIT VOR MAP', listTitle: 'NAVAIDS', onExit: () => vmSetMode(false),
-    icon: (it: any) => it._ic, label: (it: any) => String(it._lb || ''), card: (it: any) => String(it._cd || ''),
-    shape: (it: any) => it._sh ?? null, labelRank: (it: any) => Number(it._rk) || 0, aria: (it: any) => String(it._aria || it._lb || ''),
-    legend: VORMAP_LEGEND, profile: 'aero', nautical: true, labelZoom: 6, focusZoom: 9,
-  });
-  vmView.show(myPos());
-  vmRender();
+  /* ★★★ beta96 stage 8: the VOR map is a live state of the AIR & SEA map: every station heard at its published position,
+   *  a VOR's radial towards the receiver, the FIX where radials cross (its words head the NAVAIDS list), the KEY, EXIT VOR MAP */
+  asOpen({ by: 'mode', tab: 'navaids', sort: 'nearest' });
 }
 function vmUiOff() {
   vmOn = false;
   syncAudioQuiet();
   vmReport = null;
-  vmView?.hide();
+  asModeEnded();
   renderFreq();
 }
 function vmSetMode(on: boolean) {
@@ -10717,11 +10722,7 @@ function vmSetMode(on: boolean) {
     vmUiOff();
   }
 }
-function vmRender() {
-  if (!vmView) return;
-  const r = vmReport;
-  vmView.update(vorMapItems(r), vorMapRows(r), vorMapStatus(r), r ? r.heard : 0, myPos());
-}
+function vmRender() { asRender(); }
 /** ★ A report (on) or the server's `vormap_off` (null). */
 function onVmReport(r: VorMapReport | null) {
   if (!r) { if (vmOn) { audio?.holdHealing(6000); vmUiOff(); } return; }
@@ -23875,7 +23876,7 @@ function onlyModeExits(): Array<[string, HTMLElement | null]> {
   const trk = (v: TrackView | null) => (v?.root.querySelector('.exit') as HTMLElement | null) ?? null;
   return [['adsb', adsbOn ? trk(asView) : null], ['ndb', document.getElementById('ndbExit')], ['ism', document.getElementById('ismExit')],
           // ★ beta96 AIS and the DATALINK share the AIR & SEA map's one EXIT key — whichever is live owns it
-          ['ais', aisOn ? trk(asView) : null], ['avdata', avOn ? trk(asView) : null], ['sondes', trk(sdView)], ['vormap', trk(vmView)]];
+          ['ais', aisOn ? trk(asView) : null], ['avdata', avOn ? trk(asView) : null], ['sondes', sdOn ? trk(asView) : null], ['vormap', vmOn ? trk(asView) : null]];
 }
 function syncOnlyMode() {
   const only = onlyModeNow();
@@ -24503,7 +24504,7 @@ function initKeyboard() {
        *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
       if (!anyOpen && adsbOn && asView?.open && asBy === 'mode') { adsbSetMode(false); return true; }
       if (!anyOpen && ndbOn && ndbViewUp) { ndbSetMode(false); return true; }
-      if (!anyOpen && vmOn && vmView?.root && !vmView.root.hidden) { vmSetMode(false); return true; }   // ★ V12 the VOR map, as NDB's
+      if (!anyOpen && (vmOn || sdOn) && asView?.open && asBy === 'mode') { if (vmOn) vmSetMode(false); else sdSetMode(false); return true; }   // ★ V12 the VOR map and SONDES, as NDB's
       return anyOpen;
     },
     guide: () => togglePadGuide(),

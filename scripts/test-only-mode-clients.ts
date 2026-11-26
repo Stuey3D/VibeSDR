@@ -58,7 +58,7 @@ ok(/if \(typeof msg\.onlyMode === 'string'\) this\.cb\.onOnlyMode\?\.\(msg\.only
 ok(/return onlyModeFrom\(hwOnlyMode, blockedModes, adminUnlocked, offered\);/.test(main), 'web: the rule from the server word, the blocked list, the admin and the offer');
 // ★ beta96 ADS-B, AIS and the DATALINK share the AIR & SEA map's one EXIT key — whichever is live owns it
 for (const [id, k] of [['adsb', 'adsbOn ? trk(asView) : null'], ['ndb', "document.getElementById('ndbExit')"], ['ism', "document.getElementById('ismExit')"],
-                       ['ais', 'aisOn ? trk(asView) : null'], ['avdata', 'avOn ? trk(asView) : null'], ['sondes', 'trk(sdView)'], ['vormap', 'trk(vmView)']])
+                       ['ais', 'aisOn ? trk(asView) : null'], ['avdata', 'avOn ? trk(asView) : null'], ['sondes', 'sdOn ? trk(asView) : null'], ['vormap', 'vmOn ? trk(asView) : null']])
   ok(main.includes(`['${id}', ${k}]`), `web: EXIT for ${id} is one the rule removes`);
 ok(/ex\.style\.display = here \? 'none' : '';/.test(main) && /note\.textContent = onlyModeNote\(m\);/.test(main), '★ web: EXIT not drawn, the note in its place');
 for (const [f, k] of [['adsbSetMode', 'adsb'], ['ismSetMode', 'ism'], ['ndbSetMode', 'ndb'], ['aisSetMode', 'ais'], ['avSetMode', 'avdata'], ['sdSetMode', 'sondes'], ['vmSetMode', 'vormap']])
@@ -81,7 +81,7 @@ for (const f of ['AdsbPanel', 'IsmPanel', 'AvdataPanel', 'SondesPanel']) {
 }
 for (const k of ['adsb', 'ism', 'sondes', 'avdata']) ok(scr.includes(`only={onlyModeHere === '${k}' ? onlyModeNote('${k}') : undefined}`), `app: the ${k} box is told`);
 // ★ beta96 the AIR & SEA map ('airsea') is told for the whole-radio mode it is the screen of (ADS-B and AIS)
-ok(/only=\{shownMap === 'airsea' \? \(adsbLiveHere && onlyModeHere === 'adsb' \? onlyModeNote\('adsb'\) : aisViewOpen && onlyModeHere === 'ais' \? onlyModeNote\('ais'\) : undefined\) : shownMap && onlyModeHere === shownMap \? onlyModeNote\(shownMap\) : undefined\}/.test(scr), 'app: the map is told (ADS-B and AIS: the AIR & SEA map, stage 6)');
+ok(/only=\{shownMap === 'airsea' \? \(adsbLiveHere && onlyModeHere === 'adsb' \? onlyModeNote\('adsb'\) : aisViewOpen && onlyModeHere === 'ais' \? onlyModeNote\('ais'\) : airSeaMode === 'sondes' && onlyModeHere === 'sondes' \? onlyModeNote\('sondes'\) : airSeaMode === 'vormap' && onlyModeHere === 'vormap' \? onlyModeNote\('vormap'\) : undefined\) : shownMap && onlyModeHere === shownMap \? onlyModeNote\(shownMap\) : undefined\}/.test(scr), 'app: the map is told (ADS-B and AIS: the AIR & SEA map, stage 6)');
 ok(/\$\{opts\?\.only\s*\? `<button id="back"[^`]*>CLOSE MAP<\/button>`/.test(mo), '★ app: the map\'s EXIT becomes CLOSE MAP');
 
 // ── the R36S ──

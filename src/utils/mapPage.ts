@@ -71,7 +71,7 @@ export function shownMapOf(s: ShownMapState): ShownMapKind | null {
     : s.navMap ? 'airsea'
     : s.ismGallery ? 'ism'
     : s.ismMap && s.ismOn ? 'ism'
-    : s.vmMap && s.vmOn ? 'vormap'
-    : s.sdMap && s.sdOn ? 'sondes'
+    : s.vmMap && s.vmOn ? 'airsea'   // ★★★ beta96 stage 8: the VOR map and SONDES are live states of the AIR & SEA map
+    : s.sdMap && s.sdOn ? 'airsea'
     : s.avMap && (s.avOn || !s.avFocusDatalink) ? 'airsea' : s.picked;
 }
