@@ -195,6 +195,9 @@ flags_for() {
     test-adsb-commb)       echo "-O2" ;;
     # ★ V12 beta94 the ADS-B RANGE OUTLINE (vibe_adsb_range.h): bins, the rolling window, the record, the file, reset, a move.
     test-adsb-range)       echo "-O2" ;;
+    # ★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): Beast round trip, settings, the local server and a push
+    #   feed against 127.0.0.1 test sockets only (never a real aggregator), the service's sink end to end.
+    test-adsb-feed)        echo "-O2 -pthread" ;;
     # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
     #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
     test-tdf)              echo "-O2" ;;

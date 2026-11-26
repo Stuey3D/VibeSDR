@@ -44,6 +44,16 @@ class Service {
 public:
     static constexpr double kMinRateHz = 2.4e6 - 1000;   ///< below this ADS-B is not offered — see test-adsb
 
+    /** ★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): every believed reply, AS CORRECTED, with its place
+     *  on the sample clock (125 ns units), its level (dBFS), the aircraft's address and the block's arrival time — on the
+     *  decoder's own thread, so the sink must only queue. Also CRC-clean DF18 TIS-B/ADS-R relays the map leaves out.
+     *  `onRun(true/false)` at start()/stop(). Set before start(); the benchmark's own Service has neither. */
+    using FrameSink = std::function<void(const uint8_t* msg, int len, uint64_t fine, float dbfs, uint32_t addr, double t)>;
+    void setFeed(FrameSink sink, std::function<void(bool)> onRun) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        sink_ = std::move(sink); onRun_ = std::move(onRun);
+    }
+
     ~Service() { stop(); }
 
     /** Start decoding a capture at `rateHz`. lat/lon NAN when the server has no position. */
@@ -69,6 +79,7 @@ public:
         health_ = Health{};
         run_ = true;
         worker_ = std::thread([this] { loop(); });
+        if (onRun_) onRun_(true);
     }
 
     void stop() {
@@ -79,6 +90,7 @@ public:
         }
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        if (onRun_) onRun_(false);   // ★ beta96 the flight-tracker feeds hear that ADS-B stopped
         rangeStore().flush((int64_t)std::time(nullptr));   // ★ the last minute's growth is not lost when ADS-B ends
         std::lock_guard<std::mutex> il(infoMtx_);
         work_.clear(); infoJson_.clear(); infoDelta_.clear();
@@ -225,7 +237,20 @@ private:
                 d->feed(b.data(), b.size(),
                         [&](const Frame& f) {
                             std::lock_guard<std::mutex> g(mtx_);
-                            if (tracker_.accept(f, t)) { ++winMsgs_; ++msgsTotal_; if (f.level > -3.0f) ++winStrong_; }
+                            if (tracker_.accept(f, t)) {
+                                ++winMsgs_; ++msgsTotal_; if (f.level > -3.0f) ++winStrong_;
+                                if (sink_) {
+                                    const uint8_t* m = tracker_.lastBytes();
+                                    const int df = m[0] >> 3;
+                                    // the aircraft: in the reply (DF11/17/18), else the parity's overlay (the Tracker said known)
+                                    const uint32_t addr = (df == 11 || df == 17 || df == 18)
+                                        ? (uint32_t(m[1]) << 16 | uint32_t(m[2]) << 8 | m[3]) : syndrome(m, tracker_.lastLen());
+                                    sink_(m, tracker_.lastLen(), f.sample, f.level, addr, t);
+                                }
+                            } else if (sink_ && f.len == 14 && (f.b[0] >> 3) == 18 && syndrome(f.b, f.len) == 0) {
+                                // ★ a CRC-clean TIS-B / ADS-R relay: not this aircraft's own, so not on our map — aggregators read it
+                                sink_(f.b, f.len, f.sample, f.level, uint32_t(f.b[1]) << 16 | uint32_t(f.b[2]) << 8 | f.b[3], t);
+                            }
                         },
                         [&](uint32_t a) { std::lock_guard<std::mutex> g(mtx_); return tracker_.known(a, t); });
                 lk.lock();
@@ -339,6 +364,8 @@ private:
     std::mutex mtx_;
     std::condition_variable cv_;
     std::thread worker_;
+    FrameSink sink_;                                        // ★ beta96 setFeed — read on the worker under mtx_
+    std::function<void(bool)> onRun_;
     std::atomic<bool> run_{false};
     double rate_ = 0;
     double rxLat_ = NAN, rxLon_ = NAN;                      // the server's own position, NAN when it has none
