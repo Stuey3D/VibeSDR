@@ -94,7 +94,7 @@ inside none >= 100 m.
 | Run | Passed | Failed |
 |---|---|---|
 | After (this branch) | 282 | 0 |
-| Before (the e4f2bb9aa pack, style and renderer; detail phase not run) | 122 | 66 — every river water sample, both phases, drew as land |
+| Before (the e4f2bb9aa pack, style and renderer; detail phase not run) | 122 | 66 — all 32 river water samples per phase drew as land, plus the riverareas-b wiring check, in both phases |
 
 ### Not done / open
 - The Natural Earth river LINES (`rivers-b`) still draw over-zoomed; close in they sit beside the true river area
