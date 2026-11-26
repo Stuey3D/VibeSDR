@@ -187,13 +187,30 @@ console.log('── CRASH: markers left by a run that died at 2.56 MS/s during A
   hw = await getJson(s.port, '/vibeserver/hardware');
   ok(hw?.rateGuard?.latched === true && hw.rateGuard.ceiling === 2400000, `the second latches at 2.4: ${JSON.stringify(hw?.rateGuard)}`);
   ok(/ADS-B still runs/.test(hw?.rateGuard?.say || ''), 'and says ADS-B still runs');
+  let vj = await getJson(s.port, '/vibeserver.json');
+  ok(vj?.adsb === true, `latched at 2.4, ADS-B is still OFFERED (adsb ${hw?.adsb}${hw?.adsbWhy ? ' — ' + hw.adsbWhy : ''})`);
   let cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
   ok(cfg.radios?.[0]?.dabRateBoost === true, `the owner's switch is untouched (${cfg.radios?.[0]?.dabRateBoost})`);
   const cleared = await getJson(s.port, '/vibeserver/rate-guard?clear=1', { method: 'POST' });
   ok(cleared && cleared.fault === '' && cleared.blocked === false, `Clear forgets it: ${JSON.stringify(cleared)}`);
   await s.stop();
 
-  // ★ a pre-beta95 record had persisted the switch OFF: given back
+  // ★★★ THE SONY'S CASE (Android Lite): its persist handler never stored dabRateBoost, so the app's own copy of the
+  //     config still says ON — only the old in-memory latch held it off. A pre-beta95 LATCHED record from an update kill,
+  //     config ON, one restart after the upgrade: the switch is on, nothing is held, ADS-B is offered, owner touches nothing.
+  fs.writeFileSync(path.join(dir, 'rate-guard-fake.json'),
+    `{"fault":"crashed","at":${Math.floor(Date.now() / 1000) - 600},"rate":2560000,"mode":"ADS-B","blocked":true,"say":"old"}`);
+  fs.writeFileSync(marker, 'entering 2560000 Hz for ADS-B at 1764100000\n');   // ★ a b94 marker (no build): the install's kill
+  s = await start(dir);
+  hw = await getJson(s.port, '/vibeserver/hardware');
+  vj = await getJson(s.port, '/vibeserver.json');
+  ok(vj?.dabBoost === true && hw?.rateGuard && !hw.rateGuard.latched && hw.rateGuard.noted === 1,
+     `Android shape: switch ON, the old latch is one noted stop: dabBoost ${vj?.dabBoost} ${JSON.stringify(hw?.rateGuard)}`);
+  ok(vj?.adsb === true, `Android shape: ADS-B is offered after one restart (adsb ${vj?.adsb}${vj?.adsbWhy ? ' — ' + vj.adsbWhy : ''})`);
+  ok(!fs.existsSync(marker) && /not counted as a crash/.test(s.log()), 'the b94 marker left by the install is not a crash');
+  await s.stop();
+
+  // ★ a pre-beta95 record had persisted the switch OFF (Linux): given back
   fs.writeFileSync(path.join(dir, 'rate-guard-fake.json'),
     '{"fault":"crashed","at":1764100000,"rate":2560000,"mode":"ADS-B","blocked":true,"say":"old"}');
   cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
