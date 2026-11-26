@@ -64,3 +64,39 @@ export function cornerClearRight(rects: { x: number; y: number; w: number; h: nu
   }
   return clear;
 }
+
+/**
+ * ★★★ beta96 THE LIST DECODERS IN HALF-OPEN BIG (iPhone Duo; Stuart 2026-11-26: "the duo needs the layout we just built with
+ * decoder list split across the crease"). In beta95 these stayed one box below the fold with BIG not offered; now each is
+ * two panels like DAB / spots / Advanced RDS. How each splits, and how it scrolls (Stuart: one list = ONE continuous list,
+ * both panels scroll together — utils/linkedListScroll; separate data = each panel on its own):
+ */
+export type ListDecoder = 'cw' | 'psk' | 'rtty' | 'jtty' | 'dsc' | 'ncdxf' | 'balloon' | 'aprs' | 'scanner';
+export interface ListDecoderSplit { scroll: 'linked' | 'independent'; upper: string; lower: string }
+export const LIST_DECODER_SPLIT: Record<ListDecoder, ListDecoderSplit> = {
+  // The signals being decoded now (and ONE SIGNAL's own text) are the live view; SPOTS is the log of calls heard.
+  cw:      { scroll: 'independent', upper: 'the signals being decoded (ONE SIGNAL: its text first)', lower: 'SPOTS' },
+  psk:     { scroll: 'independent', upper: 'the signals being decoded', lower: 'SPOTS' },
+  rtty:    { scroll: 'independent', upper: 'the RTTY skimmer\'s signals (or the one signal\'s text)', lower: 'SPOTS' },
+  jtty:    { scroll: 'independent', upper: 'the stations being decoded', lower: 'SPOTS' },
+  // ONE list (the tune offer and channel keys at its head, then the calls, newest first): it continues across the fold.
+  dsc:     { scroll: 'linked', upper: 'the keys and the calls, continuing', lower: 'the calls that follow' },
+  ncdxf:   { scroll: 'independent', upper: 'the beacon grid', lower: 'the heard log' },
+  balloon: { scroll: 'independent', upper: 'the payloads heard (position, height)', lower: 'the SSDV pictures and the report log' },
+  aprs:    { scroll: 'independent', upper: 'the stations heard', lower: 'MESSAGES, PACKETS and FRAMES' },
+  scanner: { scroll: 'independent', upper: 'status and the live keys (START · HOLD · SKIP · IGNORE · TAG)',
+             lower: 'the source (band / bookmarks / manual), FOUND, settings and saved scans' },
+};
+
+/** An independent split: list-zone rows below `upperRows` are drawn in the upper panel, the rest in the lower. */
+export function independentRowPanel(i: number, upperRows: number): 'upper' | 'lower' {
+  return i < upperRows ? 'upper' : 'lower';
+}
+
+/**
+ * Whether the BIG key is offered: wherever the half-open split is (every decoder now has a two-panel layout), else only
+ * where BIG gains 40 pt over SMALL (DecoderPanel's rule since 2026-10-03 — unchanged on every window without a hinge).
+ */
+export function bigOffered(splitOffered: boolean, bigH: number, smallFit: number): boolean {
+  return splitOffered || bigH >= smallFit + 40;
+}

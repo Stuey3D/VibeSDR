@@ -90,4 +90,28 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
   const list = report[f] ?? unregistered(path.join(root, f));
   ok(list.length === 0, `${f}: every touchable registered`, list.map((l) => '      ' + l).join('\n'));
 }
+
+// ★★ beta96 HALF-OPEN BIG (iPhone Duo): the list decoders draw into TWO panels either side of the fold. Both halves must
+//    stay on the pad: every row-bearing half is handed the box's list focus (so the pad's index walks on across the fold
+//    and the half that draws the row brings it into view), the scanner's split keeps its one nav list, and the box's own
+//    entry (screenNavRef 'decoderBox') stays in the upper panel, which is always there.
+{
+  const dp = readFileSync(path.join(root, 'src/components/DecoderPanel.tsx'), 'utf8');
+  const lowerAt = dp.indexOf('const lowerBody = !splitOn'), upperAt = dp.indexOf('const upperBody = !splitOn');
+  const upperSrc = dp.slice(upperAt, lowerAt), lowerSrc = dp.slice(lowerAt, dp.indexOf('\n  return (', lowerAt));
+  const FOCUS = "focusIdx={kbZone === 'list' ? listIdx : -1}";
+  for (const v of ['CwView', 'JttyView', 'DscView', 'AprsView']) {
+    const tag = (src: string) => { const i = src.indexOf(`<${v} `); return i < 0 ? '' : src.slice(i, src.indexOf('/>', i)); };
+    ok(tag(upperSrc).includes(FOCUS), `half-open: ${v}'s upper half takes the pad's list focus`);
+    if (v !== 'AprsView') ok(tag(lowerSrc).includes(FOCUS), `half-open: ${v}'s lower half takes the pad's list focus (rows continue across the fold)`);
+  }
+  ok(/<ScannerPanel [^>]*navRef=\{scanNav\}[^>]*split=\{scanSplit\}/.test(upperSrc) && lowerSrc.includes('<PanelSlotOutlet slot={scanSlot}'),
+     'half-open: the scanner keeps ONE nav list across both panels (one instance, the lower half through its slot)');
+  ok(/screenNavRef\('decoderBox'/.test(dp.slice(dp.indexOf('<DecoderShell bottom'))), 'half-open: the box\'s pad entry is in the upper panel (the shell\'s children)');
+  // The halves' own touchables carry the focus ring like the one box's.
+  for (const f of ['src/components/CwView.tsx', 'src/components/JttyView.tsx', 'src/components/DscView.tsx', 'src/components/AprsView.tsx']) {
+    const t = readFileSync(path.join(root, f), 'utf8');
+    ok(/focusIdx/.test(t) && /part|linked/.test(t), `${f}: drawn by half, the focus ring by the pad's index`);
+  }
+}
 process.exit(fails ? 1 : 0);

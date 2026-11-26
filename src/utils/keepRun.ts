@@ -129,3 +129,11 @@ export function keepSatWords(modes: string, keep: boolean, ismWords?: Record<str
   return `${n} is kept running on this radio: a satellite pass takes the radio — ${n} pauses for the pass, about `
     + '10–15 min, and resumes after. ORBCOMM sky-plot monitoring runs only beside a pass while it is kept running.';
 }
+
+/** ★★★ beta96 the modes-card switch a kept / landing map mode stands on ("avdata" for VDL2 / ACARS, "vormap", "ais", "ism",
+ *  "adsb") — what ALL OFF keeps on (b96-newmodes: a radio is never left with no modes, and never with its landing off). */
+export function keepModeSwitch(modes: string): string {
+  const ids = keepParse(modes);
+  if (!ids.length) return '';
+  return KEEP_MODES.find((m) => m.id === keepBase(ids[0]))?.block ?? '';
+}

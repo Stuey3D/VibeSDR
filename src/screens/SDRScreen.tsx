@@ -78,8 +78,12 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import AvdataPanel from '../components/AvdataPanel';   // ★ V12 the aircraft datalink box
 import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosondes box
-import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
-import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindOffered, satRemindWhy,
+import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';
+// ★★★ beta96 SCHEDULE A PASS (Stuart 11-26) — one set of rules with the web (src/services/satSchedule.ts)
+import { SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_REMIND_NOTE, SatSchedule, satPassKey, satSchedDegradedText,
+         satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine,
+         type SatSchedPrev, type SatSchedRun } from '../services/satSchedule';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
+import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindWhy,
          SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
@@ -178,7 +182,7 @@ import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChan
          dscItems, dscListRows, dscKey, DSC_MAP_EMPTY, type DscCall } from '../services/dsc';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — AIS, DSC and NAVTEX on one map, the rules the web shares (docs/v12/SHIPPING-MAP.md)
 import { seaCompose, seaAreasFor, seaPlaceMet } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
-import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+import { shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type StoredShips, type DscPin } from '../services/shippingMap';
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
@@ -283,6 +287,7 @@ import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
 import { IS_TV, IS_APPLE_TV } from '../utils/tv';
+import { shownMapOf } from '../utils/mapPage';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig } from '../utils/airband';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -2897,8 +2902,26 @@ export default function SDRScreen({ route, navigation }: Props) {
     (v == null ? AsyncStorage.removeItem(SAT_SHOW_KEY) : AsyncStorage.setItem(SAT_SHOW_KEY, v)).catch(() => {});
   }, []);
   const satSetToasts = useCallback((ts: SatRemindToast[]) => { satToastsRef.current = ts; setSatToasts(ts); }, []);
-  const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); }, [satSetToasts]);
-  const satRemBusy = satRemN > 0 || satToasts.length > 0;
+  // ★★★ beta96 the session ending also ends a schedule's run (nothing put back for the next user); the stored schedule stays
+  const satRemClear = useCallback(() => { satRemRef.current.clear(); satSetToasts([]); setSatRemN(0); satSchedRunRef.current = SAT_SCHED_IDLE; }, [satSetToasts]);
+  /* ★★★ beta96 SCHEDULE — kept per server in this app's storage (SAT_SCHED_KEY); runs only while the app is open and
+   *  connected (in-app banners, no OS notification module — Stuart's 1.6 decision). The tick is set further down, where
+   *  the pick, the tune and the mode switches are in scope. */
+  const satSchedRef = useRef(new SatSchedule());
+  const [satSchedV, setSatSchedV] = useState(0);
+  const satSchedRunRef = useRef<SatSchedRun>(SAT_SCHED_IDLE);
+  const satSchedFiredRef = useRef(new Set<string>());
+  const [satSchedNote, setSatSchedNote] = useState('');
+  const satSchedTickRef = useRef<(now: number, conn: boolean) => void>(() => {});
+  const satSchedSave = useCallback(() => {
+    setSatSchedV((v) => v + 1);
+    AsyncStorage.setItem(SAT_SCHED_KEY, satSchedRef.current.toJSON()).catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem(SAT_SCHED_KEY).then((v) => { satSchedRef.current = SatSchedule.fromJSON(v, Date.now() / 1000); setSatSchedV((x) => x + 1); }).catch(() => {});
+  }, []);
+  const satSchedHere = satSchedRef.current.all(satSrvKey).length > 0;
+  const satRemBusy = satRemN > 0 || satToasts.length > 0 || satSchedHere || !!satSchedRunRef.current.key;
   useEffect(() => {
     if (!satRemBusy) return;
     const t = setInterval(() => {
@@ -2907,6 +2930,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (conn && satRemRef.current.nextIn(now, lead) < 40 && now - satRemListAt.current > 30) {
         satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
       }
+      satSchedTickRef.current(now, conn);   // ★★★ beta96 the schedule's second FIRST (it may add banners to satToastsRef)
       let ts = satToastsRef.current;
       // ★★ beta94 (Stuart 11-25) SHOW filters the LIST only: a reminder set on a pass always fires, even one SHOW now hides
       for (const r of satRemRef.current.due(now, lead, conn)) {
@@ -3705,6 +3729,18 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (leave) c?.ais?.(false);
     aisUiOff();
   }, [aisUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★★ beta96 ONE WHOLE-RADIO MAP AT A TIME, WHOEVER CHANGED THE MODE (Mac Ha, 11-26: the AIS map's title over the
+   *  ADS-B aircraft list). A report that ARRIVES for a mode we were not in means the radio is in that mode now — another
+   *  listener moved the shared dial, or the server answered a mode_resume — so the other map modes' screens are put away
+   *  here, not left to their `_off` alone (the server sends it first today; a screen must not depend on it). The keys
+   *  (toggleAdsb / toggleAis) already did this for our own presses. ★ The UI half only: nothing is sent. */
+  const wholeMapYield = (k: 'adsb' | 'ais' | 'ndb' | 'sondes' | 'vormap') => {
+    if (k !== 'adsb' && adsbOnRef.current) adsbUiOff();
+    if (k !== 'ais' && aisOnRef.current) aisUiOff();
+    if (k !== 'ndb' && ndbOnRef.current) ndbUiOff();
+    if (k !== 'sondes' && sdOnRef.current) sdUiOff();
+    if (k !== 'vormap' && vmOnRef.current) vmUiOff();
+  };
   /** ★★ V12 Leave SONDES from its map (it opens into the map now) — the box's EXIT, the same steps. */
   const exitSondes = useCallback(() => {
     const c = client.current as unknown as { sondes?: (on: boolean) => void } | null;
@@ -4692,17 +4728,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
   /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
-  const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : ndbViewOpen && !IS_APPLE_TV ? 'ndb'   // ★ V12 NDB: its map, as ADS-B's
-    // ★ V12 AIS's ship map is the mode's screen; APRS's station map is the decoder box's MAP (neither on Apple TV)
-    : aisViewOpen && !IS_APPLE_TV ? 'ais' : aprsMapOpen && !IS_APPLE_TV ? 'aprs'
-    // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
-    : dscMapOpen && !IS_APPLE_TV ? 'dsc'
-    : navMapOpen && !IS_APPLE_TV ? 'navtex'
-    : ismGal && !IS_APPLE_TV ? 'ism'
-    : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism'
-    : vmMapOpen && !IS_APPLE_TV && vmOn ? 'vormap'   // ★ V12 the VOR / ILS map: the mode's own screen, as NDB's
-    : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes'   // ★ V12 the SONDES box's MAP (the mode carries on)
-    : avMapOpen && !IS_APPLE_TV && (avOn || avMapFocus !== 'datalink') ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on); beta90 VIEWS' AVIATION standalone
+  // ★★ beta96 the precedence lives in utils/mapPage.ts (shownMapOf) so the mode changes can be driven in a test
+  //   (scripts/test_map_page_kind.ts — Mac Ha's AIS ↔ ADS-B mismatch).
+  const shownMap: MapKind | null = shownMapOf({
+    appleTv: IS_APPLE_TV, adsbView: adsbViewOpen, ndbView: ndbViewOpen,   // ★ V12 NDB: its map, as ADS-B's
+    aisView: aisViewOpen, aprsMap: aprsMapOpen,   // ★ V12 AIS's ship map is the mode's screen; APRS's station map is the decoder box's MAP
+    dscMap: dscMapOpen, navMap: navMapOpen,   // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
+    ismGallery: !!ismGal, ismMap: ismMapOpen, ismOn,
+    vmMap: vmMapOpen, vmOn,   // ★ V12 the VOR / ILS map: the mode's own screen, as NDB's
+    sdMap: sdMapOpen, sdOn,   // ★ V12 the SONDES box's MAP (the mode carries on)
+    avMap: avMapOpen, avOn, avFocusDatalink: avMapFocus === 'datalink',   // ★ V12 the DATALINK box's MAP; beta90 VIEWS' AVIATION standalone
+    picked: mapKind,
+  });
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -6516,6 +6553,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         queueDecoderStatus(tuneHintText.current || decStateText.current);
       },
       onNavtexFec: (fec) => { if (navtexAsmRef.current?.setFec(fec)) setNavtexFecSeq((n) => n + 1); },
+      // ★★ beta96 a second's SNR slice — into the message arriving (its timeline and the strip beside its text)
+      onNavtexSlice: (sig, noise) => {
+        if (activeDecRef.current === 'navtex' && navtexAsmRef.current?.slice(sig, noise)) setNavtexFecSeq((n) => n + 1);
+      },
       // ★ The lock lost mid-message ends it [end lost] — a co-channel station took over, or it faded (utils/navtex).
       onNavtexState: (st) => {
         if (activeDecRef.current === 'navtex' && navtexAsmRef.current?.lockState(st, Date.now())) setNavtexFecSeq((n) => n + 1);
@@ -8314,7 +8355,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         if (!r) { adsbUiOff(); return; }
-        if (!adsbOnRef.current) { adsbOnRef.current = true; setAdsbViewOpen(true); setAdsbError(undefined); }
+        if (!adsbOnRef.current) { wholeMapYield('adsb'); adsbOnRef.current = true; setAdsbViewOpen(true); setAdsbError(undefined); }
         setAdsbOn(true);
         setAdsbReport(r);
       },
@@ -8350,6 +8391,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         }
         if (!r) { ndbUiOff(); return; }
         if (!ndbOnRef.current) {
+          wholeMapYield('ndb');   // ★★★ beta96 one whole-radio map at a time
           ndbOnRef.current = true; setNdbViewOpen(!IS_APPLE_TV);
           client.current?.ndbFind?.('', 300);
         }
@@ -8400,6 +8442,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         satListRef.current = l; setSatList(l);
         if (satRemRef.current.size) { satRemRef.current.refresh(satSrvKeyRef.current, l); setSatRemN(satRemRef.current.size); }   // ★ 1.6 a new element set moves the reminder
+        if (satSchedRef.current.all(satSrvKeyRef.current).length) { satSchedRef.current.refresh(satSrvKeyRef.current, l); satSchedSave(); }   // ★★★ beta96 … and a scheduled pass
       },
       /* ★ 1.7 the pick's pass path — its geo is the dotted orbit (an older server sends none: no line) */
       onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current && satBoxNoradRef.current === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null); },
@@ -8481,7 +8524,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         if (why) { vmUiOff(); setTimeout(() => { if (!destroyed.current) appAlert('VOR map unavailable', why); }, 450); return; }
         if (!r) { vmUiOff(); return; }
-        if (!vmOnRef.current) { vmOnRef.current = true; if (!IS_APPLE_TV) setVmMapOpen(true); }
+        if (!vmOnRef.current) { wholeMapYield('vormap'); vmOnRef.current = true; if (!IS_APPLE_TV) setVmMapOpen(true); }
         setVmOn(true);
         setVmReport(r);
       },
@@ -8490,7 +8533,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         if (why) { sdOnRef.current = false; setSdOn(false); setSdError(why); setSdBoxOpen(true); return; }
         if (!r) { sdUiOff(); return; }
-        if (!sdOnRef.current) { sdOnRef.current = true; if (IS_APPLE_TV) setSdBoxOpen(true); else setSdMapOpen(true); }   // ★★ V12 into the map
+        if (!sdOnRef.current) { wholeMapYield('sondes'); sdOnRef.current = true; if (IS_APPLE_TV) setSdBoxOpen(true); else setSdMapOpen(true); }   // ★★ V12 into the map
         setSdOn(true); setSdError(undefined);
         setSdReport(r);
       },
@@ -8502,7 +8545,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         if (!r) { aisUiOff(); return; }
-        if (!aisOnRef.current) { aisOnRef.current = true; if (!IS_APPLE_TV) setAisViewOpen(true); }
+        if (!aisOnRef.current) { wholeMapYield('ais'); aisOnRef.current = true; if (!IS_APPLE_TV) setAisViewOpen(true); }
         setAisOn(true);
         setAisReport(r);
       },
@@ -12563,20 +12606,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     const live = aisOn ? aisReport : null;
     const vessels = shipShips(live, shipStore);
     const pins = dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls), dscGal), now);
+    const nearAreas = seaAreasFor(rx, navMetRep).length;
     const present = shipLayersPresent({ ships: vessels.length, dsc: pins.length, stations: navReport?.stations.length ?? 0,
       warnings: navWarnRep ? navWarnRep.list.length + navWarnRep.pending : 0, weather: navMetRep?.areas.length ?? 0, aisMode: aisOn,
-      areas: seaAreasFor(rx, navMetRep).length }, focus);
-    const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
+      areas: nearAreas }, focus);
+    // ★★ beta96 SEA AREAS on every server: on by default near the coast, off inland, the listener's choice once made
+    const eff = shipLayersFor(shipLayers, nearAreas > 0);
+    const on = (id: ShipLayerId) => shipOn(id, present, eff);
     // ★ the SEA AREAS (services/seaAreas.ts — the web's shipCompose draws the same): outlines + names; the tint is WEATHER's
     const sea = on('areas') ? seaCompose(rx, navMetRep, on('weather'), 'app', shipView).items : [];   // ★ beta95 the areas in view
     const extra = liveView && live ? vessels.filter((v) => !live.vessels.some((x) => x.mmsi === v.mmsi)) : vessels;
     return {
-      present, on, now,
+      present, on, now, layers: eff,
       items: [...sea, ...(on('ships') ? shipItems(extra, rx) : []), ...(on('dsc') ? dscPinItems(pins, rx, now, 'app') : [])],
       rows: [...(on('ships') ? shipRows(extra, rx) : []), ...(on('dsc') ? dscPinRows(pins, rx, now) : [])],
       status: [on('ships') && !liveView ? shipStatus(vessels, shipStore, live) : '', on('dsc') ? dscStatus(pins) : ''].filter(Boolean).join(' · '),
       toggles: shipToggles(present),
-      onToggle: (id: string, v: boolean) => setShipLayers((cur) => { const nx = { ...cur, [id]: v }; AsyncStorage.setItem('lsv_ship_map_layers', JSON.stringify(nx)).catch(() => {}); return nx; }),
+      onToggle: (id: string, v: boolean) => setShipLayers((cur) => { const nx = shipToggle(shipLayersFor(cur, nearAreas > 0), id, v); AsyncStorage.setItem('lsv_ship_map_layers', JSON.stringify(nx)).catch(() => {}); return nx; }),
     };
   };
   const navTrk = useMemo(() => {
@@ -12608,7 +12654,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       trail: () => Promise.resolve([] as [number, number][]),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
+      toggles: sc.toggles, toggled: sc.layers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
       // ★ a card's gallery text, with the read auth (the gallery viewer's own fetch)
       cardText: async (f: string) => {
         try {
@@ -12635,7 +12681,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       status: [aisTrk.status, sc.status, navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : ''].filter(Boolean).join(' · '),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
+      toggles: sc.toggles, toggled: sc.layers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
       trail: (key: string) => (key.startsWith('s:') ? Promise.resolve(shipStore?.pts.get(Number(key.slice(2))) ?? []) : aisTrk.trail(key)),
       cardText: navTrk.cardText, translateTo: txTarget,
     };
@@ -15211,15 +15257,96 @@ export default function SDRScreen({ route, navigation }: Props) {
       satPendingRef.current = { norad: t.r.norad, tx: t.r.tx }; setSatPending({ norad: t.r.norad, tx: t.r.tx }); setSatWhy(''); drop();
     }
   };
+  /* ★★★ beta96 SCHEDULE OR REMIND — by whether tuning moves anyone else (satSchedule.ts satSession), from the server's words:
+   *  sat_list's pickPrivate, the dial message (only on a shared tuner) and its listeners, the owner's locked range; this
+   *  app's own radio = a loopback session (no localHost). */
+  const satSess = satSession({ pickPrivate: satList?.source?.pickPrivate, localHw: isLocal && !route.params.localHost,
+                               locked: hwLockedCentre > 0, sharedDial, listeners: dialState?.listeners });
+  void satSchedV;   // ★ re-render on a schedule change
+  /** ★★★ beta96 one second of the schedule (the interval above calls it): prune, degraded reminders, the runner step, act. */
+  satSchedTickRef.current = (now: number, conn: boolean) => {
+    const b = satSchedRef.current;
+    const n0 = b.size; b.prune(now); if (b.size !== n0) satSchedSave();
+    const entries = b.all(satSrvKey);
+    if (!conn || (!entries.length && !satSchedRunRef.current.key)) return;
+    if (entries.some((e) => e.aos - now < 40 && e.los > now) && now - satRemListAt.current > 30) {
+      satRemListAt.current = now; (client.current as unknown as { satList?: () => void } | null)?.satList?.();
+    }
+    const l = satListRef.current;
+    if (!l) return;   // ★ nothing decided without the server's word
+    const kind = satSession({ pickPrivate: l.source?.pickPrivate, localHw: isLocal && !route.params.localHost, locked: hwLockedCentre > 0,
+                              sharedDial, listeners: dialStateRef.current?.listeners ?? dialState?.listeners }).kind;
+    if (kind === 'remind') {
+      const due = satSchedRemindDue(entries, now, satRemLeadRef.current, satSchedFiredRef.current);
+      if (due.length) satSetToasts([...due.map((r) => ({ r, why: satRemindWhy(l, r), note: SAT_SCHED_REMIND_NOTE })), ...satToastsRef.current]);
+    }
+    const pk = satPickedRef.current;
+    const here: SatSchedPrev = { hz: status.frequency, mode: status.mode, sat: satOnRef.current, pick: pk ? { norad: pk.norad, tx: pk.tx } : null };
+    const st = satSchedStep(satSchedRunRef.current, entries, now, { pick: here.pick }, here, kind);
+    satSchedRunRef.current = st.run;
+    const a = st.act;
+    const c = client.current as unknown as { satPick?: (n: number, t: number, d: boolean) => boolean } | null;
+    if (a.act === 'tune') {
+      const name = a.e.label ? `${a.e.name} · ${a.e.label}` : a.e.name;
+      const why = satSchedWhy(l, a.e);
+      if (why) { setSatSchedNote(`Scheduled ${name}: ${why}`); return; }
+      satEnterRef.current();
+      if (!satOnRef.current) { setSatSchedNote(`Scheduled ${name}: SATELLITE could not be opened`); return; }
+      if (pk && pk.norad === a.e.norad && pk.tx === a.e.tx) { setSatSchedNote(''); return; }
+      if (askGate()) { setSatSchedNote(`Scheduled ${name}: held — this dial asks before tuning`); return; }
+      if (c?.satPick?.(a.e.norad, a.e.tx, satAutoDoppler)) { satPendingRef.current = { norad: a.e.norad, tx: a.e.tx }; setSatPending({ norad: a.e.norad, tx: a.e.tx }); setSatWhy(''); setSatSchedNote(''); }
+    } else if (a.act === 'back') {
+      const pv = a.prev;
+      if (pv.sat && pv.pick) {   // ★ they were on a satellite: pick it again
+        satEnterRef.current();
+        if (satOnRef.current && !askGate() && c?.satPick?.(pv.pick.norad, pv.pick.tx, satAutoDoppler)) { satPendingRef.current = pv.pick; setSatPending(pv.pick); }
+        return;
+      }
+      satModeOff();
+      if (pv.sat) satEnterRef.current();   // ★ in SATELLITE with nothing picked: back in, nothing picked
+      if (pv.hz > 0) onTuneHz(pv.hz, (pv.mode || undefined) as SDRMode | undefined);
+    } else if (a.act === 'end') {
+      setSatSchedNote(a.why === 'shared' ? 'Another listener joined this dial — the schedule stopped tuning; the radio stays where it is' : '');
+    }
+  };
+  /** ★★★ beta96 the row's SCHEDULE key: schedule that pass, or cancel it (cancelled mid-pass: it stays, nothing put back). */
+  const satSchedToggle = (norad: number, tx: number, aos: number) => {
+    markInteract();
+    const b = satSchedRef.current;
+    const ex = b.find(satSrvKey, norad, tx, aos);
+    if (ex) {
+      b.cancel(ex.key);
+      if (satSchedRunRef.current.key === ex.key) satSchedRunRef.current = { ...satSchedRunRef.current, took: true, prev: null };
+    } else {
+      const now = Date.now() / 1000;
+      const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx && r.next?.aos === aos);
+      if (!row || satPassKey(satList, row, satSess.kind) !== 'schedule') return;
+      if (!b.add(satSrvKey, row, now)) { setSatWhy(SAT_SCHED_FULL); return; }
+    }
+    setSatSchedNote('');
+    satSchedSave();
+  };
+  const satSchedEntries = satSchedRef.current.all(satSrvKey);
+  const satSchedPlanNow = satSchedPlan(satSchedEntries);
+  const satSchedLines = [
+    satSess.kind === 'schedule' && satSchedEntries.some((e) => (satSchedPlanNow.get(e.key)?.over.length ?? 0) > 0) ? SAT_SCHED_OVERLAP_RULE : '',
+    satSess.kind === 'remind' ? satSchedDegradedText(satSchedEntries.length) : '',
+    satSess.kind === 'schedule' ? satSchedNowText(satSchedRunRef.current, satSchedEntries, satSchedPlanNow, Date.now() / 1000) : '',
+    satSchedNote,
+  ].filter(Boolean);
   /** ★★ 1.6 the row's REMIND key: hold one for its next pass, or cancel it. */
   const satRemToggle = (norad: number, tx: number) => {
     markInteract();
     const held = satRemRef.current.find(satSrvKey, norad, tx);
+    // ★★★ beta96 a scheduled pass shown as a reminder (someone else on the dial): FORGET cancels it
+    const nx0 = satModeRows(satList, Date.now() / 1000).find((r) => r.sat.norad === norad && r.i === tx && !r.later)?.next;
+    const se = !held && nx0 ? satSchedRef.current.find(satSrvKey, norad, tx, nx0.aos) : undefined;
+    if (se) { satSchedRef.current.cancel(se.key); satSchedSave(); return; }
     if (held) satRemRef.current.cancel(held.key);
     else {
       const now = Date.now() / 1000;
       const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx);
-      if (!row || !satRemindOffered(satList, row)) return;
+      if (!row || satPassKey(satList, row, satSess.kind) !== 'remind') return;
       if (!satRemRef.current.add(satSrvKey, row, now)) setSatWhy('Twenty reminders are held already — cancel one first');
     }
     setSatRemN(satRemRef.current.size);
@@ -16753,6 +16880,17 @@ export default function SDRScreen({ route, navigation }: Props) {
           skyRadio={skyRadioFromBase(connectBase)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
+          passKind={satSess.kind}
+          sessionLine={satSessionLine(satSess, 'app')}
+          sched={{
+            find: (n, t, aos) => satSchedRef.current.find(satSrvKey, n, t, aos),
+            slot: (k) => satSchedPlanNow.get(k),
+            all: satSchedEntries,
+            lines: satSchedLines,
+            degraded: satSess.kind === 'remind',
+            onToggle: satSchedToggle,
+            onPrio: (k) => { markInteract(); if (satSchedRef.current.prioritise(k)) satSchedSave(); },
+          }}
           remindsAll={() => satRemRef.current.all().filter((r) => r.server === satSrvKey)}
           remindLead={satRemLead}
           onRemind={satRemToggle}
@@ -17476,7 +17614,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           /*    ★★ beta94 (tester Mac Ha, Stuart 11-25): on THIS APP's own engine (Local Hardware) with no position, the key is
            *    SELECTABLE and the box opens on the position prompt (satPlace.ts satOffer) — elsewhere the rule above. */
           ...(() => {
-            const so = satOffer({ cap: satCap, on: satOn, isVibe: !!(client.current as any)?.isVibe, ownEngine: satOwnHere });
+            // ★★★ beta95 hotfix: no SATELLITE while an only mode holds this radio (the server refuses the pick too)
+            const so = satOffer({ cap: onlyModeHere && !satOn ? null : satCap, on: satOn, isVibe: !!(client.current as any)?.isVibe, ownEngine: satOwnHere });
             return { satAvail: so.avail, satWhy: !satOn && !so.prompt && satCap && !satCap.ok ? satCap.why : undefined };
           })(),
           satOn,

@@ -416,3 +416,11 @@ export function decoderTokensFor(chassis: Chassis = 'default', controlsRgb = '61
   }
   return t;
 }
+
+/** ★★ beta96 (a tester's phone, 11-26: the waterfall's labels — "AO-73 Telemetry", "TRANSPONDER · every signal…" — read
+ *  THROUGH the satellite box's text). A box whose body is mostly text the listener must read lays this opaque colour
+ *  behind it: the faceplate's own solid colour when transparency is off, the metal window's, else the glass tint at the
+ *  web's decoder-box alpha (0.96 — --ov-panel96). The header and edges stay as the faceplate draws them. */
+export function decoderTextBacking(tk: Pick<DecoderTokens, 'solidBg' | 'window' | 'tintRgb'>): string {
+  return tk.solidBg ?? tk.window?.bg ?? `rgba(${tk.tintRgb},0.96)`;
+}

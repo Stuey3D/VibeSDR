@@ -17,9 +17,9 @@
  * ★ The decoder font throughout (DecoderShell) — the display font is for the main controls only.
  * ★ Pure logic lives in services/scanner.ts; this file only draws it.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
+import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens, type PanelSlot } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { formatReading } from '../constants/meters';
 import { usePadField } from './ControllerKeyboard';
@@ -58,6 +58,11 @@ export interface ScannerPanelProps {
   /** The decoder box's list focus (-1 = none) and the nav it walks. */
   focusIdx: number;
   navRef: React.MutableRefObject<ScannerNav>;
+  /** ★★ beta96 iPhone Duo half-open BIG (decoderShellLayout LIST_DECODER_SPLIT): the status and the live keys stay here
+   *  (the upper panel, `bodyStyle`), and the source, FOUND, settings and saved scans go to the lower panel through
+   *  `slot`, at `lowerStyle` — each panel its own scroll. One instance, so the two halves share their state; the pad's
+   *  list walks both in the same order as the one box. Absent = the one box, as always. */
+  split?: { slot: PanelSlot; lowerStyle: object };
 }
 
 const MODES: SDRMode[] = ['am', 'nfm', 'usb', 'lsb', 'cwu', 'wfm'];
@@ -181,7 +186,7 @@ export default function ScannerPanel(p: ScannerPanelProps) {
   const statusFreq = cur && running && c.state !== 'PAUSED' ? scanRowText(cur.frequency, curName) : '';
   const statusThr = `${c.needsFloor && cfg.thresholdMode === 'auto' && fam === 'dbfs' ? 'measuring the noise floor…' : thrText}${cfg.thresholdMode === 'auto' ? ' auto' : ''}`;
 
-  const body = (
+  const upperBody = (
     <>
       <View style={s.statusRow} accessible accessibilityLiveRegion="polite"
             accessibilityLabel={`${statusMain}${statusFreq ? `, ${statusFreq}` : ''}. Threshold ${statusThr}`}>
@@ -223,7 +228,10 @@ export default function ScannerPanel(p: ScannerPanelProps) {
         {c.source === 'list' && key('tag', 'TAG', p.onTagHere,
           { big: true, a11y: 'Tag this frequency', hint: 'Adds where you are tuned — frequency, mode and passband — to the list' })}
       </View>
-
+    </>
+  );
+  const lowerBody = (
+    <>
       {/* ── the source ── */}
       {c.source === 'band' && (
         <View style={s.section}>
@@ -416,10 +424,24 @@ export default function ScannerPanel(p: ScannerPanelProps) {
   // ★ The nav list is rebuilt on every render (the items above register themselves in draw order); the box reads it at key time.
   p.navRef.current = { len: items.length, press: (i: number) => items[i]?.press() };
 
+  /* ★ beta96 half-open: the lower half drawn by the lower panel's outlet — handed over after every render (it closes over
+   *  this render's state), and taken back when the split goes. */
+  const split = p.split;
+  useLayoutEffect(() => {
+    if (!split) return;
+    split.slot.set(
+      <ScrollView style={[s.body, split.lowerStyle]} contentContainerStyle={[s.bodyIn, s.lowerIn, scrollLane]}
+                  keyboardShouldPersistTaps="handled">
+        {lowerBody}
+      </ScrollView>);
+  });
+  useLayoutEffect(() => (split ? () => split.slot.set(null) : undefined), [split?.slot]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <ScrollView style={[s.body, p.bodyStyle]} contentContainerStyle={[s.bodyIn, scrollLane]}
                 keyboardShouldPersistTaps="handled">
-      {body}
+      {upperBody}
+      {!split && lowerBody}
     </ScrollView>
   );
 }
@@ -435,6 +457,7 @@ const F = DECODER_FONT;
 const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   body:      { flexGrow: 0 },
   bodyIn:    { paddingHorizontal: 10, paddingBottom: 10, gap: 6 },
+  lowerIn:   { paddingTop: 8 },   // ★ beta96 the lower panel has no header above it
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 26 },
   dot:       { width: 8, height: 8, borderRadius: 4, backgroundColor: T.dotIdle },
   dotOn:     { backgroundColor: T.dotOn },

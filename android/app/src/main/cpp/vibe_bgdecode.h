@@ -118,8 +118,15 @@ public:
             if (!held_.empty() && !held_.back().endLost && !held_.back().startLost && !held_.back().haveFec) {
                 held_.back().haveFec = true;
                 held_.back().fecClean = u32(1); held_.back().fecRepaired = u32(5); held_.back().fecLost = u32(9);
+                // ★ beta96: the longer form adds both-copies-agreed and copies-disagreed (display only)
+                if (n >= 21) { held_.back().haveSplit = true; held_.back().fecAgreed = u32(13); held_.back().fecDisagreed = u32(17); }
             }
             saveHeld(true);
+        }
+        else if (d[0] == 0x08 && n >= 5) {
+            // ★★ beta96: a second's SNR slice — i16 BE signal, i16 BE noise, dBFS × 10 — for the message arriving
+            auto i16 = [&](size_t o) { return (int16_t)(uint16_t)(d[o] << 8 | d[o + 1]); };
+            asm_.slice(i16(1) / 10.0, i16(3) / 10.0);
         }
     }
     void tick() override {
@@ -180,6 +187,7 @@ private:
             gallery::Meta mm = meta_;
             mm.utc = m.startedAt;
             mm.title = gallery::NavtexAsm::title(m);
+            mm.qualJson = gallery::navtexQualityJson(m);   // ★ beta96: the FEC split + SNR timeline, when measured
             mm.partial = m.startLost || m.endLost || (partialTail && i + 1 == held_.size());
             const std::string n = store_.add(mm, "txt", gallery::NavtexAsm::fileText(m, where()));
             if (!n.empty()) { ++saved_; lastName_ = n; }

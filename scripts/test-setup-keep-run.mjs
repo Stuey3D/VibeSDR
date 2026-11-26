@@ -32,7 +32,7 @@ class El {
 const els = {};
 const $ = (id) => (els[id] ||= new El(id));
 
-const fnNames = ['keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
+const fnNames = ['modeLandingId', 'keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
                  'mapLandRender', 'keepSetModes', 'keepMirror', 'keepMigrate', 'adsbLandOffer'];
 const body = constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
 const make = new Function('env', `
@@ -143,6 +143,20 @@ console.log('── an Airspy HF+ and an Icom');
   ok(/Airspy HF\+ \u2014 pauses VDL2 for the pass/.test(P.keepSatWords({ ...RADIO, mapKeep: true })), 'the satellites line names the HF+ pause');
   P.setHW(null); RADIO = { driver: 'icom' }; P.mapLandRender();
   ok($('mapLandWrap').classList.contains('hide'), 'an Icom: the card is not drawn');
+}
+
+console.log('── ALL OFF keeps the kept-running mode on (b96-newmodes modeLandingId)');
+{
+  RADIO = { landingMap: 'avmar', landingModes: 'vdl2', mapKeep: true, demodMode: 'wfm' };
+  ok(P.modeLandingId() === 'avdata', 'kept VDL2 → the aircraft datalink switch stays on');
+  RADIO = { landingMap: 'amateur', landingModes: 'ism:868', mapKeep: true, demodMode: 'wfm' };
+  ok(P.modeLandingId() === 'ism', 'kept ISM 868 → the ISM switch stays on');
+  RADIO = { landingMap: 'avmar', landingModes: 'vor', demodMode: 'wfm' };
+  ok(P.modeLandingId() === 'vormap', 'the VOR map landing → vormap');
+  RADIO = { landingAdsb: true, demodMode: 'wfm' };
+  ok(P.modeLandingId() === 'adsb', 'beta95 ADS-B as before');
+  RADIO = { demodMode: 'wfm' };
+  ok(P.modeLandingId() === 'wfm', 'no map: the demodulator landing');
 }
 
 console.log('── migration of a beta95 radio');

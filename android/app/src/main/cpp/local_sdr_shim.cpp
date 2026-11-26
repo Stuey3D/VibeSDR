@@ -2057,6 +2057,7 @@ static bool vsSondeReach(const vibers41::Band& b);   // …and runs fast enough 
 static bool vsSondeAnyBand();        // false = not offered at all (the HF+, an Icom, a radio short of 400 MHz)
 static bool vsSatReachFn(double lo, double hi);        // ★ V12 this radio receives [lo, hi] (and a locked window holds it)
 static bool vsSatAnyReach();                           // ★ false = no Doppler button at all (no dead controls)
+static bool vsSatModesAllowed();                       // ★★★ beta96 the owner's switches leave SATELLITE something to do
 static std::string vsSatWhyNot();                      // "" = a lock can be tried now
 static std::string vsSatReachWhy(double lo, double hi); // ★ V12 SATELLITE MODE: "" = reaches, else why (greyed in the list)
 static vibe::sat::SupplyInfo vsSatSupply(bool kickIfEmpty);   // ★ the orbit-data supply for sat_list (+ the on-open fetch)
@@ -7723,17 +7724,18 @@ static void communityNavtex(int64_t now, std::map<std::string, CommunitySec>& ou
     }
     // messages: every copy in the window (and those a warning or forecast names), folded to one per id
     {
-        struct Copy { std::string f; int64_t t; double hz; };
+        struct Copy { std::string f; int64_t t; double hz; NavMsg q; };
         std::vector<Copy> copies;
         g.forEachLive("navtex", [&](const std::string& l) {
             const int64_t t = (int64_t)vibe::gallery::lineNum(l, "t");
             const std::string f = vibe::gallery::lineStr(l, "f");
             if (f.empty() || (t < now - kNavMsgSinceSec && !pinned.count(f))) return;
-            if (copies.size() < 4000) copies.push_back({ f, t, vibe::gallery::lineNum(l, "hz") });
+            NavMsg q; navQualityFrom(q, l, vibe::gallery::lineNum);   // ★ beta96: its decode quality, when recorded
+            if (copies.size() < 4000) copies.push_back({ f, t, vibe::gallery::lineNum(l, "hz"), q });
         });
         std::vector<NavMsg> cs;
         for (const auto& c : copies) {
-            NavMsg m; m.file = c.f; m.first = m.last = c.t; m.khz = std::round(c.hz / 500.0) / 2.0; m.pinned = pinned.count(c.f) > 0;
+            NavMsg m = c.q; m.file = c.f; m.first = m.last = c.t; m.khz = std::round(c.hz / 500.0) / 2.0; m.pinned = pinned.count(c.f) > 0;
             m.text = vsnav::navReadText(c.f);
             if (m.text.size() > 16384) m.text.resize(16384);
             m.id = navMsgId(m.text); m.lost = navLost(m.text);
@@ -7760,7 +7762,8 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
         if (communityLayerOk("hfdl", off)) keep |= 1u << vibeavshare::kHfdl;
         if (!keep) return r;
         keep |= 1u << vibeavshare::kAdsc;
-        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - kAircraftAgeSec * 1000), nowMs);
+        // ★ beta96: heard within the LONGER hold (a datalink position, 30 min); aircraftRows applies each source's own
+        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - std::max(kAircraftAgeSec, kAircraftDatalinkAgeSec) * 1000), nowMs);
         for (auto& w : rows) w.srcMask &= keep;
         rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return !(w.srcMask & 0x0F); }), rows.end());
         const std::string c = aircraftCompact(rows, nowMs);
@@ -12090,6 +12093,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  `sat lock` and a tune do (the shared-dial contract: a joiner who may not tune does not steer). */
     void satControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         const std::string op = jsonStr(msg, "op");
+        /* ★★★ beta95-2 hotfix (Stuart 11-26, Almere's ADS-B-only radio): SATELLITE was a way OUT of the only mode — a pick
+         *  (or the old lock) tunes the radio off 1090 MHz although every other mode is switched off. A listener's pick /
+         *  doppler / lock on an only-mode radio is refused with the only mode's reason, before anything else is looked at;
+         *  "drop"/"unlock" still pass (leaving is always allowed). The signed-in admin may, as with every only-mode exit. */
+        if (sock && op != "drop" && op != "unlock" && !adminNow(sock)) {
+            const std::string only = onlyModeNow();
+            if (!only.empty()) {
+                LOGI("[sat] only mode %s: a listener's \"%s\" refused", only.c_str(), op.c_str());
+                satRefuse(sock, op == "doppler" ? "doppler" : "pick", onlyModeWhy(only));
+                return;
+            }
+        }
         if (op == "pick") { satPick(sock, msg); return; }
         if (op == "doppler") { satDopplerOp(sock, msg); return; }
         if (op == "drop") { satDrop(sock); return; }
@@ -12337,6 +12352,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         jsonNum(msg, "norad", nv); jsonNum(msg, "tx", tv);
         const bool doppler = msg.find("\"doppler\":false") == std::string::npos && msg.find("\"doppler\":0") == std::string::npos;
         vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
+        if (!vsSatModesAllowed()) { satRefuse(sock, "pick", "The server owner has switched SATELLITE off on this receiver"); return; }   // ★★★ beta96
         if (!(nv > 0) || tv < 0 || tv != std::floor(tv) || !satEngine().txAt((long long)nv, (int)tv, sd, tx)) {
             satRefuse(sock, "pick", "That satellite or downlink is not in this server's list");
             return;
@@ -17717,7 +17733,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              why, rate / 1e6, mode.c_str(), mode.c_str(),
              latched ? ("the second stop there in 24 h: boosts held at " + vibe::RateFault::rateText(g_rateGuard.fault().ceiling)
                         + " or below").c_str()
-                     : "noted (the first): that rate is allowed again");
+                     : !vibe::rateGuardCanStep(rate)
+                       ? "at or below the 2.4 MS/s floor: never held lower (a second within 24 h tells the owner)"
+                       : "noted (the first): that rate is allowed again");
         vsSayVts("The radio stopped responding at " + vibe::RateFault::rateText(rate) + " during " + mode
                  + " \xe2\x80\x94 " + mode + " has ended and the radio is back at its own rate.");
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
@@ -20939,14 +20957,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  still leave, and the server's own moves (sock null) still can. "" = no only mode. */
     std::string onlyModeNow() const {
         if (dabOnlyNow()) return "dab";
-        static const char* kDemods[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
-                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
-        for (const char* m : kDemods) if (!vsModeBlocked(m)) return {};
-        const char* left = nullptr;
-        for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" })
-            if (!vsModeBlocked(m)) { if (left) return {}; left = m; }
-        if (!left) return {};
-        const std::string k = left;
+        // ★ beta96 the list half is vibereach::onlyModeLeft (tested in test-new-modes.cpp with Paul's exact list)
+        const std::string k = vibereach::onlyModeLeft([](const char* m) { return vsModeBlocked(m); });
+        if (k.empty()) return {};
         if (k == "adsb")   return g_adsbMode.load(std::memory_order_relaxed) || vsAdsbWhyNot().empty()     ? k : std::string();
         if (k == "ism")    return g_ismMode.load(std::memory_order_relaxed)  || vsIsmWhyNot().empty()      ? k : std::string();
         if (k == "ndb")    return g_ndbMode.load(std::memory_order_relaxed)  || vsNdbWhyNot().empty()      ? k : std::string();
@@ -45657,6 +45670,10 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
      *  one rung down. The owner's switches are NEVER written — vsGuardAllows is the override. */
     if (b == vibe::RateGuard::Boot::Explained)
         LOGI("rate guard: the last run stopped at a boosted rate, but its marker was %s — not counted as a crash", why.c_str());
+    else if (b == vibe::RateGuard::Boot::Noted && f.floor)   // (c') at the 2.4 floor: told, never capped
+        LOGE("the last run of this server died while the radio was at %s — the second time in 24 hours, but %s is the "
+             "floor: nothing is held lower (the owner is told to look at the radio's USB power, cable or hub)",
+             where.c_str(), vibe::RateFault::rateText(f.floorRate).c_str());
     else if (b == vibe::RateGuard::Boot::Noted)
         LOGE("the last run of this server died while the radio was at %s — noted once; that rate is allowed again, and "
              "only a second stop there within 24 hours holds it lower", where.c_str());
@@ -45837,8 +45854,8 @@ void LocalSdrShim::setBandRegion(int region, bool known) {
 
 std::string LocalSdrShim::regionDefaultsJson() {
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
-    const std::string j = vibereach::regionJson(g_vsRegionKnown);
-    return j.empty() ? std::string("{}") : "{" + j.substr(1) + "}";
+    const std::string j = vibereach::regionJson(g_vsRegionKnown) + vibereach::modeGensJson();   // ★★★ beta96 + the generations
+    return "{" + j.substr(1) + "}";
 }
 
 void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv) {
@@ -46235,7 +46252,9 @@ static std::string vsSatReachWhy(double lo, double hi) {
         return b;
     }
     const double lc = g_vsLockedCentre.load();
-    if (lc > 0.0 && g_vsMaxUsers.load() > 1) {
+    /* ★★★ beta96 ANY locked centre, not only one with more than one listener (Paul's ADS-B radio, locked at 1090 MHz with one
+     *  listener, was offered SATELLITE): a locked hardware centre never moves (retune returns early), whatever the count. */
+    if (lc > 0.0) {
         const double half = LocalSdrShim::instance().captureSpanHz() * 0.45;   // ★ clear of the anti-alias roll-off
         if (lo < lc - half || hi > lc + half) {
             std::snprintf(b, sizeof b, "Outside the range the owner has locked this receiver to (%.3f\xe2\x80\x93%.3f MHz)",
@@ -46279,6 +46298,12 @@ static std::string vsSatWhyNot() {
 }
 /** ★★ beta94 SATELLITE MODE FOR THE DIRECTORY (Stuart 11-25) — "sat" in the published `modes`; the rule, and why, is in
  *  vibe_sat_offer.h (reach · a location · an NFM / USB / LSB demodulator left on · "sat" not blocked). */
+/** ★★★ beta96 (Paul's ADS-B-only radio, 11-26: SATELLITE drawn on a radio locked to 1090 MHz with every mode off): the
+ *  owner's switches leave SATELLITE something to do — "sat" not blocked, and one of NFM / USB / LSB on (every downlink
+ *  lands in one of them; a single-mode radio has them all off). hwinfo's `doppler` and a pick both ask it. */
+static bool vsSatModesAllowed() {
+    return vibe::sat::offeredInModes(true, true, [](const char* m) { return vsModeBlocked(m); });
+}
 static bool vsSatOffered() {
     return vibe::sat::offeredInModes(vsSatAnyReach(), satEngine().haveObserver(),
                                      [](const char* m) { return vsModeBlocked(m); });
@@ -46972,7 +46997,7 @@ static std::string vsTunableJson() {
      *  model-only), advertised only where this radio receives at least one listed downlink (no dead controls: an Icom, a
      *  radio below 28 MHz, a locked window holding no downlink — no button at all). Supported but not ready (no orbit
      *  data yet, no location, NO TIME): still advertised, with `dopplerWhy` — the clients grey the button with it. */
-    if (vsSatAnyReach()) {
+    if (vsSatAnyReach() && vsSatModesAllowed()) {   // ★★★ beta96 never on a radio whose owner left SATELLITE nothing to do
         j += ",\"doppler\":1";
         const std::string why = vsSatWhyNot();
         if (!why.empty()) j += ",\"dopplerWhy\":\"" + dabEscape(why) + "\"";
@@ -47472,10 +47497,18 @@ void LocalSdrShim::healthTick() {
     }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
-    /* ★★ beta95 THE PILL AUDIT: the host's battery % is the OWNER's (the admin page's BATTERY card, with its suspend floor),
-     *  not a struggle a listener feels. What a listener does feel — connections suspended at the floor — is said to them
-     *  through the VTS line as it approaches (batteryTick). Read above (bgFullCpuTick) before it is taken off the pill. */
-    h.batPresent = false; h.batCharging = false; h.batPct = -1; h.bat = vibehealth::OK;
+    /* ★★★ beta96 — THE BATTERY IS BACK ON THE PILL (Stuart 11-26: "why is the battery level off the pill surely that is
+     *  useful info for battery powered servers and the listeners should know that info so they can work out how long they
+     *  have left"). beta95 took it off; that was wrong. The % stays on the pill (and on the admin BATTERY card, and the
+     *  VTS warnings before a suspend stay), and once the drain has been measured the card says how long is left — to the
+     *  owner's suspend floor when one is set, since that is when listening stops (vibehealth::BatteryEta). */
+    {
+        static vibehealth::BatteryEta eta;
+        const int floorPct = g_vsBatteryPauseAt.load();
+        h.batMins = h.batPresent ? eta.feed(h.batPct, !h.batCharging, now / 1000.0, floorPct) : (eta.reset(), -1);
+        const std::string line = vibehealth::batteryEtaText(h.batMins, floorPct > 0);
+        if (!line.empty()) h.notes.push_back(line);
+    }
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);

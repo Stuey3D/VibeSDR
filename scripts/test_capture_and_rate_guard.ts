@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 import vm from 'node:vm';
 import { adsbCaptureWarning, parseAdsbMessage } from '../src/services/adsbTypes.ts';
-import { rateGuardLine } from '../src/services/rateGuard.ts';
+import { rateGuardIsBad, rateGuardLine } from '../src/services/rateGuard.ts';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -63,6 +63,14 @@ const states: [string, any][] = [
 for (const [what, st] of states) eq(`rate guard line, the two readers agree: ${what}`, pageCtx.f(st), rateGuardLine(st, fmt));
 eq('crashed line starts with the server\'s sentence', rateGuardLine(states[2][1], fmt).startsWith(say + ' ('), true);
 eq('no fault, no line', rateGuardLine({ fault: '' }), '');
+// ★ beta96 (c'): two stops AT 2.4 raise the floor note — a line, in red, but nothing is latched
+const floorSt = { fault: 'stalled', at: 1764100060, rate: 2400000, mode: 'ADS-B', latched: false, floor: true, floorRate: 2400000,
+  say: 'The SDR stopped twice in 24 hours at 2.4 MS/s during ADS-B — kept at that rate, because a lower one would lose modes.' } as any;
+eq('floor: the two readers agree', pageCtx.f(floorSt), rateGuardLine(floorSt, fmt));
+eq('floor: red', rateGuardIsBad(floorSt), true);
+eq('noted only: not red', rateGuardIsBad({ fault: 'stalled', noted: 1 }), false);
+eq('latched: red', rateGuardIsBad({ fault: 'stalled', latched: true }), true);
+eq('the page colours the floor red too', /st\.latched \|\| st\.floor/.test(page), true);
 
 console.log(`${passes}/${passes + fails} checks passed`);
 process.exit(fails ? 1 : 0);

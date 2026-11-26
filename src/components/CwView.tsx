@@ -73,12 +73,15 @@ export const Q_SHORT: Record<CwSignal['q'], string> = { high: 'HIGH', medium: 'M
  *  even at the top, a new row above does not move you (scroll up to see it). The order (frequency) and the confidence
  *  colours are untouched. A keyboard / pad row is still brought into view. */
 export function useSpotsPin(scrollRef: React.RefObject<ScrollView | null> | undefined, onScrollY: ((y: number) => void) | undefined,
-                            focusIdx: number) {
+                            focusIdx: number, owns?: (i: number) => boolean) {
   const own = useRef<ScrollView | null>(null);
   const sv = scrollRef ?? own;
   const rowY = useRef<number[]>([]);
   useEffect(() => {
     if (focusIdx < 0) return;
+    // ★ beta96 half-open BIG: each panel brings into view only the rows it draws (a stale y from a row that has since
+    //   moved to the other panel would scroll this one for nothing).
+    if (owns && !owns(focusIdx)) return;
     const y = rowY.current[focusIdx];
     if (y == null) return;
     try { sv.current?.scrollTo({ y: Math.max(0, y - 40), animated: false }); } catch { /* detached */ }
@@ -117,17 +120,22 @@ export interface CwViewProps {
   rttyHistory?: Readonly<Record<number, string>>;
   cardId?: number | null;
   onCard?: (id: number | null) => void;
+  /** ★★ beta96 iPhone Duo half-open BIG (decoderShellLayout LIST_DECODER_SPLIT): 'upper' = the live view (ONE SIGNAL's
+   *  text, the signals, the RTTY card), 'lower' = SPOTS — each panel its own scroll. Absent = the whole list, as always. */
+  part?: 'upper' | 'lower';
 }
 
 export default function CwView({ skim, psk = false, list, spots, text, bodySize, focusIdx, onTune, scrollRef, onScrollY,
-                                 plain = false, rttyHistory, cardId = null, onCard }: CwViewProps) {
+                                 plain = false, rttyHistory, cardId = null, onCard, part }: CwViewProps) {
   const rtty = !!rttyHistory;
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const sigs = useMemo(() => sortCwSignals(list?.signals ?? []), [list]);
   const shownSpots = spots.slice(0, CW_SPOTS_SHOWN);
   const now = Date.now();
-  const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
+  const showSigs = part !== 'lower', showSpots = part !== 'upper';
+  const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx,
+    part ? (i: number) => (i < sigs.length) === (part === 'upper') : undefined);
 
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
   // ★ EXPLAIN: CW's and the RTTY skimmer's text (PSK is typed, not abbreviated) — one dictionary, utils/cwVocab
@@ -145,13 +153,13 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
       contentContainerStyle={[cs.content, scrollLane]}
       showsVerticalScrollIndicator
     >
-      {!skim && !!text && (
+      {showSigs && !skim && !!text && (
         <Text style={[cs.primary, { color: tk.value }]} selectable>{read(text)}</Text>
       )}
-      {!sigs.length && (
+      {showSigs && !sigs.length && (
         <Text style={[cs.idle, { color: tk.muted }]}>{rtty ? 'listening across the segment \u2014 each RTTY signal appears here as soon as it is heard' : kbIdleText(psk, skim)}</Text>
       )}
-      {sigs.map((sg: CwSignal, i: number) => {
+      {showSigs && sigs.map((sg: CwSignal, i: number) => {
         const primary = !!list && !list.skimmer && sg.id === list.primary;
         const qc = CW_Q_COLOURS[sg.q];
         return (
@@ -180,13 +188,15 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
           </TouchableOpacity>
         );
       })}
-      <View style={[cs.head, { borderBottomColor: tk.divider }]}>
+      {showSpots && (
+      <View style={[cs.head, { borderBottomColor: tk.divider }, part === 'lower' && cs.headFirst]}>
         <Text style={[cs.headTxt, { color: tk.label }]}>SPOTS</Text>
       </View>
-      {!shownSpots.length && (
+      )}
+      {showSpots && !shownSpots.length && (
         <Text style={[cs.idle, { color: tk.muted }]}>a callsign heard calling (CQ, DE, TEST) twice is spotted here</Text>
       )}
-      {shownSpots.map((s, j) => {
+      {showSpots && shownSpots.map((s, j) => {
         const i = sigs.length + j;
         return (
           <TouchableOpacity key={`p${s.callsign}`} activeOpacity={0.6}
@@ -204,7 +214,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
           </TouchableOpacity>
         );
       })}
-      {rtty && (
+      {rtty && showSigs && (
         <Modal visible={!!card} transparent animationType="fade" onRequestClose={() => onCard?.(null)} supportedOrientations={['portrait', 'landscape']}>
           <View style={cs.cardBack}>
             <View style={[cs.card, { backgroundColor: tk.selectedBg, borderColor: tk.divider }]}>
@@ -260,6 +270,7 @@ const makeCs = (T: DecoderTokens) => StyleSheet.create({
   country: { flex: 1, textAlign: 'right' },
   tx:      { fontFamily: DECODER_FONT, fontSize: 12, letterSpacing: 0.6, lineHeight: 17, marginTop: 2 },
   head:    { paddingTop: 10, paddingBottom: 4, paddingHorizontal: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  headFirst: { paddingTop: 2 },   // ★ beta96 the lower panel's first line (no rows above it to clear)
   headTxt: { fontFamily: DECODER_FONT, fontSize: 10, fontWeight: '700', letterSpacing: 1.4 },
   // ★ V12 the RTTY card
   cardBack: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', padding: 16 },

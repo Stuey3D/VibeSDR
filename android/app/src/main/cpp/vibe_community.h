@@ -15,7 +15,7 @@
 //
 // ── WHAT IS IN IT: THE EXISTING FORMATS, NOT A NEW ONE ───────────────────────────────────────────────────────────────
 //   "aircraft" — /vibeserver/aircraft.json's object (vibe_aircraft_share.h toJson): positioned rows only, heard in the
-//                last kAircraftAgeSec, newest first, at most kAircraftMax. Its "stations" (HFDL ground stations) kept.
+//                last kAircraftAgeSec (ADS-B) / kAircraftDatalinkAgeSec (datalink, beta96), newest first, at most kAircraftMax. Its "stations" (HFDL ground stations) kept.
 //   "ships"    — /vibeserver/gallery/ais-ships.json's object (vibe_ais_store.h toJson): heard in kShipsSinceSec, no tracks.
 //   "dsc"      — /vibeserver/gallery.json?kind=dsc's object (the gallery index lines; "plat"/"plon" pin a position).
 //   "navtex"   — /vibeserver/gallery/navtex-stations.json's object (vibe_navtex_map.h toJson) with rx = null: no receiver
@@ -63,7 +63,11 @@ namespace vibecommunity {
 static constexpr int64_t kCacheSec = 30;                 ///< one build per 30 s per process, whoever asks
 static constexpr size_t  kMaxBytes = 640 * 1024;          ///< the whole answer, at most
 static constexpr size_t  kAircraftMax = 600;
-static constexpr int64_t kAircraftAgeSec = 300;          ///< ★ live: a position older than 5 min is not "now" (Stuart 11-25)
+static constexpr int64_t kAircraftAgeSec = 300;          ///< ★ live: an ADS-B position older than 5 min is not "now" (Stuart 11-25)
+/** ★★ beta96 (Stuart 11-26: "hold them for 30 is fine faded to show older"): a position that came by DATALINK (ACARS, VDL2,
+ *  HFDL, ADS-C — posSrc not ADS-B) is reported minutes apart, often once an oceanic waypoint, so 5 min dropped nearly all
+ *  of them. They are kept 30 min; the row's position age (aircraftCompact field 3) lets the map fade them by age. */
+static constexpr int64_t kAircraftDatalinkAgeSec = 1800;
 static constexpr size_t  kShipsMax = 300;
 static constexpr int64_t kShipsSinceSec = 6 * 3600;      ///< the shipping map's own SHIP_KEEP_SEC
 static constexpr size_t  kDscMax = 150;
@@ -130,11 +134,16 @@ inline std::string offJson(const std::string& why) {
     return "{\"v\":1,\"on\":false,\"why\":\"" + jsonEsc(why) + "\"}";
 }
 
-/** ★ The aircraft to share: positioned, position no older than kAircraftAgeSec, newest first, at most kAircraftMax. */
+/** ★ A position from a datalink (not ADS-B)? An unknown source counts as ADS-B — the shorter hold. */
+inline bool aircraftPosDatalink(const vibeavshare::Row& w) { return w.posSrc > vibeavshare::kAdsb && w.posSrc < vibeavshare::kNSrc; }
+/** ★ The aircraft to share: positioned, position no older than kAircraftAgeSec (ADS-B) or kAircraftDatalinkAgeSec (a
+ *  datalink position), newest first, at most kAircraftMax. */
 inline std::vector<vibeavshare::Row> aircraftRows(std::vector<vibeavshare::Row> rows, int64_t nowMs,
-                                                   size_t maxRows = kAircraftMax, int64_t ageSec = kAircraftAgeSec) {
+                                                   size_t maxRows = kAircraftMax, int64_t ageSec = kAircraftAgeSec,
+                                                   int64_t datalinkAgeSec = kAircraftDatalinkAgeSec) {
     rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const vibeavshare::Row& w) {
-        return !(w.flags & 1) || !std::isfinite(w.lat) || !std::isfinite(w.lon) || nowMs - w.posMs > ageSec * 1000;
+        const int64_t keep = aircraftPosDatalink(w) ? datalinkAgeSec : ageSec;
+        return !(w.flags & 1) || !std::isfinite(w.lat) || !std::isfinite(w.lon) || nowMs - w.posMs > keep * 1000;
     }), rows.end());
     std::sort(rows.begin(), rows.end(), [](const vibeavshare::Row& a, const vibeavshare::Row& b) { return a.posMs > b.posMs; });
     if (rows.size() > maxRows) rows.resize(maxRows);
@@ -529,7 +538,37 @@ struct NavMsg {
     std::string id, file, title, text, st, sc, iso;
     int64_t first = 0, last = 0, issued = 0;
     int lost = 0; uint32_t n = 0; double khz = 0; bool pinned = false;
+    /** ★★ beta96 (Stuart 11-26): the copy's DECODE QUALITY from its gallery record — so the community map can pick the best
+     *  of several receivers' copies ("I hear it with a large red part in the middle, NickB hears it all green → use
+     *  NickB's"). hasQ: clean / FEC / lost % (whole); hasSnr: mean SNR, the lowest slice (dB, whole) and the % of its
+     *  characters decoded under 5 dB. Older records have neither — nothing is sent for them. Never the slices (size). */
+    bool hasQ = false, hasSnr = false;
+    int qClean = 0, qFec = 0, qLost = 0, snr = 0, snrMin = 0, redPct = 0;
 };
+/** ★ beta96: the quality fields of a gallery index line, when it has them. */
+inline void navQualityFrom(NavMsg& m, const std::string& line, double (*num)(const std::string&, const char*)) {
+    if (line.find("\"nqc\":") != std::string::npos) {
+        const double c = num(line, "nqc"), f = num(line, "nqf"), l = num(line, "nql"), n = c + f + l;
+        if (n > 0) { m.hasQ = true; m.qClean = (int)std::lround(100 * c / n); m.qFec = (int)std::lround(100 * f / n); m.qLost = (int)std::lround(100 * l / n); }
+    }
+    if (line.find("\"snr\":") != std::string::npos && line.find("\"red\":") != std::string::npos) {
+        m.hasSnr = true; m.snr = (int)std::lround(num(line, "snr")); m.snrMin = (int)std::lround(num(line, "smin"));
+        m.redPct = (int)std::lround(num(line, "red"));
+    }
+}
+/** ★ beta96: is copy `a` better than `b`? With both measured: the fewest characters under 5 dB, then the most clean, then
+ *  the highest lowest slice, then the highest mean SNR — the community map's order. Otherwise, as before: the fewest
+ *  lost characters ('_' / '*'). Ties: the newer. */
+inline bool navBetter(const NavMsg& a, const NavMsg& b) {
+    if (a.hasSnr && b.hasSnr && a.hasQ && b.hasQ) {
+        if (a.redPct != b.redPct) return a.redPct < b.redPct;
+        if (a.qClean != b.qClean) return a.qClean > b.qClean;
+        if (a.snrMin != b.snrMin) return a.snrMin > b.snrMin;
+        if (a.snr != b.snr) return a.snr > b.snr;
+        return a.last > b.last;
+    }
+    return a.lost < b.lost || (a.lost == b.lost && a.last > b.last);
+}
 /** "GA98" from "ZCZC GA98", or "". */
 inline std::string navMsgId(const std::string& text) {
     const size_t z = text.find("ZCZC");
@@ -554,7 +593,7 @@ inline std::vector<NavMsg> navFold(const std::vector<NavMsg>& copies) {
         ++m.n;
         m.first = std::min(m.first, c.first); m.pinned = m.pinned || c.pinned;
         const int64_t last = std::max(m.last, c.last);
-        if (c.lost < m.lost || (c.lost == m.lost && c.last > m.last)) {   // ★ the cleanest copy, then the newest
+        if (navBetter(c, m)) {   // ★ the cleanest copy, then the newest (beta96: by its measured quality when both have it)
             const uint32_t n = m.n; const int64_t first = m.first; const bool pin = m.pinned;
             m = c; m.n = n; m.first = first; m.pinned = pin;
         }
@@ -583,7 +622,9 @@ inline std::string navTitle(const std::string& text) {
     return std::string();
 }
 /** ★ Compact NAVTEX messages — [id, kHz, first, last, times heard, lost characters, station, conf, iso, file, title] —
- *  newest first, pinned ones (named by a shared warning or forecast) first in line, at most `maxRows` / `maxBytes`. */
+ *  newest first, pinned ones (named by a shared warning or forecast) first in line, at most `maxRows` / `maxBytes`.
+ *  ★★ beta96: + [clean %, FEC %, lost %] when the copy has the FEC split, then + [SNR dB, lowest slice dB, % weak] when it
+ *  has the SNR too — 14 or 17 members; an older record's row stays 11 (nothing invented). */
 inline std::string navMsgRows(std::vector<NavMsg> v, size_t maxRows = kNavMsgMax, size_t maxBytes = kNavMsgBytes) {
     std::stable_sort(v.begin(), v.end(), [](const NavMsg& a, const NavMsg& b) { return a.pinned != b.pinned ? a.pinned : a.last > b.last; });
     std::string o;
@@ -592,8 +633,13 @@ inline std::string navMsgRows(std::vector<NavMsg> v, size_t maxRows = kNavMsgMax
     for (const auto& m : v) {
         if (n >= maxRows) break;
         std::snprintf(b, sizeof b, ",%g,%lld,%lld,%u,%d,\"", m.khz, (long long)m.first, (long long)m.last, m.n, m.lost);
+        std::string q;
+        if (m.hasQ) {
+            char qb[96]; std::snprintf(qb, sizeof qb, ",%d,%d,%d", m.qClean, m.qFec, m.qLost); q = qb;
+            if (m.hasSnr) { std::snprintf(qb, sizeof qb, ",%d,%d,%d", m.snr, m.snrMin, m.redPct); q += qb; }
+        }
         const std::string one = "[\"" + jsonEsc(m.id) + "\"" + b + jsonEsc(m.st) + "\",\"" + jsonEsc(m.sc) + "\",\"" + jsonEsc(m.iso) + "\",\""
-                              + jsonEsc(m.file) + "\",\"" + jsonEsc(navTitle(m.text)) + "\"]";
+                              + jsonEsc(m.file) + "\",\"" + jsonEsc(navTitle(m.text)) + "\"" + q + "]";
         if (o.size() + one.size() + 2 > maxBytes) break;
         if (n) o += ',';
         o += one; ++n;

@@ -47,7 +47,7 @@ import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSu
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
 import { NAV_HAZARD_COLOURS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../../../src/services/navtexIcons';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
-import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+import { SHIPPING_TITLE, shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
@@ -65,7 +65,7 @@ import { type VorMapReport } from '../../../src/services/vorMap';
 import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetParams, packetTune, packetHint, packetIdle,
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
-import { SatPanel } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
+import { SatPanel, satSchedStored } from './satellites';   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -135,6 +135,9 @@ import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxS
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
+import { bodyTextBase, fileBodyStart, fileTextBase, navtexQualityDetail, navtexQualityLine, navtexSnrLine, snrColour, snrOfItem, snrRanges, splitOfItem,
+         type NavtexQualityFields } from '../../../src/utils/navtexQuality';
+import { paintSnrStrip, qualityBar, snrHBar, watchSnrStrip } from './navtexSnrDom';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../../../src/services/squelchNeighbours';
 import { SqlAutoTrack } from '../../../src/utils/sqlAutoTrack';
@@ -9443,7 +9446,20 @@ function syncAudioQuiet() {
   audio.setQuiet(q);
   updateMediaSession();
 }
+/** ★★★ beta96 ONE WHOLE-RADIO MAP AT A TIME, WHOEVER CHANGED THE MODE (Mac Ha, 11-26, on the app: the AIS map's title
+ *  over the ADS-B aircraft list — the app's MapOverlay kept the old page; src/utils/mapPage.ts). Here every mode has its
+ *  own view, but a mode entered — by our key, or by a report arriving because another listener moved the shared dial —
+ *  must still put the other map modes' views away itself rather than leave it to their `_off` (the server sends it first
+ *  today; a screen must not depend on it). The app's wholeMapYield, the same five modes. ★ The UI half only: nothing sent. */
+function wholeMapYield(k: 'adsb' | 'ais' | 'ndb' | 'sondes' | 'vormap') {
+  if (k !== 'adsb' && adsbOn) adsbUiOff();
+  if (k !== 'ais' && aisOn) aisUiOff();
+  if (k !== 'ndb' && ndbOn) ndbUiOff();
+  if (k !== 'sondes' && sdOn) sdUiOff();
+  if (k !== 'vormap' && vmOn) vmUiOff();
+}
 function adsbUiOn() {
+  wholeMapYield('adsb');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   adsbOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   avAdsbProbe(true);   // ★ V12 2026-11-16 the AVIATION MAP key, when another source has aircraft here
@@ -9830,6 +9846,7 @@ function ndbReadCap(j: any) {
 /** ★ The UI half of entering NDB — ADS-B's (adsbUiOn): a running decoder stopped, the box closed, the controls held,
  *  the audio let go (nothing to hear), the map view up over the (throttled) waterfall. */
 function ndbUiOn() {
+  wholeMapYield('ndb');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   ndbOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10111,6 +10128,10 @@ function shipHave(now: number): ShipHave {
     areas: seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m).length,
   };
 }
+/** ★★ beta96 the layers as drawn: SEA AREAS on every server, on by default only near the coast (shipLayersFor). */
+function shipLayersNow(): ShipLayers {
+  return shipLayersFor(shipLayers, seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m).length > 0);
+}
 /** ★ The KEY for the layers this map has: ships and DSC glyphs, the NAVTEX hazards, the weather arrows. */
 function shipKeyHtml(present: ShipLayerId[]): string {
   let h = shipLegendHtml(present);
@@ -10129,7 +10150,8 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
   const rx = myPos() ?? r?.rx ?? null;
   const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
   const present = shipLayersPresent(shipHave(now), focus);
-  const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
+  const eff = shipLayersNow();
+  const on = (id: ShipLayerId) => shipOn(id, present, eff);
   const items: any[] = [], out: string[] = [], status: string[] = [];
   const many = present.length > 1;
   const sec = (t: string) => (many ? `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>` : '');
@@ -10190,7 +10212,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
   return { items, rows: out.join(''), status: status.filter(Boolean).join(' · '), present, rx, building };
 }
 function shipSetChrome(v: TrackView, present: ShipLayerId[]) {
-  v.setToggles(shipToggles(present), shipLayers);
+  v.setToggles(shipToggles(present), shipLayersNow());
   v.setLegend(shipKeyHtml(present));
 }
 function navDraw() {
@@ -10214,7 +10236,7 @@ function shipViewOpts() {
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
     onRange: (id: string) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } navView?.setRange?.(id); aisView?.setRange?.(id); void navPoll(true); },
     onToggle: (id: string, on: boolean) => {
-      shipLayers = { ...shipLayers, [id]: on };
+      shipLayers = shipToggle(shipLayersNow(), id, on);   // ★ beta96 from the layers as drawn (SEA AREAS' coast default)
       try { localStorage.setItem(SHIP_LAYERS_KEY, JSON.stringify(shipLayers)); } catch { /* private */ }
       navDraw();
     },
@@ -10358,6 +10380,7 @@ function aisReadCap(j: any) {
   } else aisCap = null;
 }
 function aisUiOn() {
+  wholeMapYield('ais');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   aisOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10407,9 +10430,10 @@ function aisRender() {
   shipSetChrome(aisView, c.present);
   const live = r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>';
   const many = c.present.length > 1;
-  const rows = (many && shipOn('ships', c.present, shipLayers) ? '<div class="sec" role="heading" aria-level="3">SHIPS — HEARD NOW</div>' : '')
-    + (shipOn('ships', c.present, shipLayers) ? live : '') + c.rows;
-  aisView.update(shipOn('ships', c.present, shipLayers) ? [...items, ...c.items] : c.items, rows,
+  const eff = shipLayersNow();
+  const rows = (many && shipOn('ships', c.present, eff) ? '<div class="sec" role="heading" aria-level="3">SHIPS — HEARD NOW</div>' : '')
+    + (shipOn('ships', c.present, eff) ? live : '') + c.rows;
+  aisView.update(shipOn('ships', c.present, eff) ? [...items, ...c.items] : c.items, rows,
                  [aisStatus(r), c.status].filter(Boolean).join(' · '), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
 }
 /** ★ A report (on) or the server's `ais_off` (null). */
@@ -10602,6 +10626,7 @@ function sdReadCap(j: any) {
   sdBands = parseSondeBands(j?.sondesBands);
 }
 function sdUiOn() {
+  wholeMapYield('sondes');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   sdOn = true;
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10659,6 +10684,7 @@ function vmReadCap(j: any) {
   } else vmCap = null;
 }
 function vmUiOn() {
+  wholeMapYield('vormap');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   vmOn = true;
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
@@ -10719,7 +10745,10 @@ let satCap: { ok: boolean; why: string } | null = null;
 let satPanel: SatPanel | null = null;
 /** ★ SATELLITE has the receiver — safe to call from code above this declaration, even during start-up (the VTS). */
 function satActiveSafe(): boolean { try { return !!satPanel?.active; } catch { return false; } }
-function satReadCap(j: any) { satCap = satCapFrom(j); satPanel?.setCap(satCap); }
+function satReadCap(j: any) {
+  satCap = satCapFrom(j); satPanel?.setCap(satCap);
+  if (satCap && !satPanel && satSchedStored(location.host)) satPanelGet();   // ★★★ beta96 a stored schedule runs with the mode off
+}
 function satPanelGet(): SatPanel | null {
   if (!satCap) return satPanel;
   if (!satPanel) {
@@ -10763,6 +10792,11 @@ function satPanelGet(): SatPanel | null {
       },
       skyGet: galleryText,
       skyRadio: () => skyRadioFromBase(BASE_PATH),
+      /* ★★★ beta96 SCHEDULE (satSchedule.ts): the server's words on who else the dial moves — the dial message (only on a
+       *  shared tuner), the listener count (users), the owner's locked range — and where this listener is, and going back. */
+      session: () => ({ sharedDial: dialModeNow !== 'exclusive', listeners: listenerCount > 0 ? listenerCount : undefined, locked: hwLockedCentre > 0 }),
+      here: () => ({ hz: Math.round(spec?.frequency ?? 0), mode: String(spec?.mode ?? '') }),
+      back: (hz, mode) => { if (spec && hz > 0) { spec.tune(clampTune(hz), (mode || spec.mode) as SDRMode, { recenter: true, retarget: true }); updateViewOverlays(); } },
     });
     satPanel.setCap(satCap);
   }
@@ -14895,6 +14929,7 @@ function renderNavtex() {
     const body = navtexBody(shown);
     const pre = $('nvText');
     if (pre.textContent !== body) pre.textContent = body;
+    nvQualityPaint(shown, body);
   }
   if (!nvViewPrev && atBottom) view.scrollTop = view.scrollHeight;
   // ★ The status says where it is in the broadcast — WEFAX's "standing by" between charts.
@@ -14907,6 +14942,24 @@ function renderNavtex() {
   const saveBtn = $<HTMLButtonElement>('decSave');
   saveBtn.style.display = shown ? '' : 'none';
   saveBtn.title = 'Save this message as a text file';
+}
+/* ★★ beta96 (Stuart 11-26) — DISPLAY ONLY: the message's decode quality (the server's FEC split, after its NNNN) and its
+ *  SNR — the horizontal timeline growing while it arrives, and the strip down the left of the text colouring each line by
+ *  the SNR it was decoded at (worst slice per rendered line; follows re-wrapping). Each part only when measured. */
+let nvPaintedFor: unknown = null;
+function nvQualityPaint(m: NonNullable<typeof navtexAsm.live>, body: string) {
+  const split = m.split, q = m.snr;
+  const ql = navtexQualityLine(split), sl = navtexSnrLine(q);
+  $('nvQual').hidden = !ql && !sl;
+  qualityBar($('nvQBar'), split);
+  $('nvQText').textContent = ql ? `${ql} · ${navtexQualityDetail(split)}` : '';
+  snrHBar($('nvSnrBar'), q);
+  $('nvSnrText').textContent = sl ?? '';
+  $('nvSnrText').style.color = q ? snrColour(q.avg) : '';
+  const paint = () => paintSnrStrip($('nvWrap'), $('nvStrip'), $('nvText'), q ? snrRanges(q, bodyTextBase(body), body.length) : null);
+  nvPaintedFor = m;
+  paint();
+  watchSnrStrip($('nvWrap'), () => { const s = nvViewPrev ? navtexAsm.prev : navtexAsm.live; if (s && s === nvPaintedFor) nvQualityPaint(s, navtexBody(s)); });
 }
 function toggleNavtexPrev() {
   if (!navtexAsm.prev && !nvViewPrev) return;
@@ -15137,6 +15190,8 @@ function initDecoders(host: string, auth: AuthState) {
     },
     // ★ NAVTEX: the server's own FEC count for the message its NNNN just closed — into the title (2026-10-05).
     onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
+    // ★★ beta96 NAVTEX: a second's SNR slice — into the message arriving (its timeline and the strip beside its text)
+    onNavtexSlice: (sig, noise) => { if (activeDec === 'navtex' && navtexAsm.slice(sig, noise)) queueNavtexRender(); },
     // ★ FELD HELL's 0x02 (a fresh decoder): the next line starts a new page; the one on screen stays until it does.
     onImageStart: (w, h) => {
       if (activeDec === 'hell') { hellPager.reset(); return; }
@@ -16224,7 +16279,7 @@ setWholeRadioKeys(() => {
   // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md): a whole-radio mode — every satellite, its passes, a pick tunes and
   //     decodes, AUTO DOPPLER. Only where the server offers `doppler` (the radio reaches a listed downlink); the menu's rule
   //     — not drawn while it cannot run, unless on (so it can be left).
-  add('sat', 'SATELLITE', satCap, !!satPanel?.active, toggleSatMode, 'Satellites — pick one from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets');
+  add('sat', 'SATELLITE', onlyModeNow() && !satPanel?.active ? null : satCap, !!satPanel?.active, toggleSatMode, 'Satellites — pick one from the timetable: the radio tunes to it, follows its Doppler and decodes its pictures or packets');
   return keys;
 });
 
@@ -19653,7 +19708,8 @@ function initRecorder() {
 // Storm Austen came in), and listeners' own decoders. The server keeps it (vibe_gallery.h) and serves it read-only;
 // this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
 // ★ Text from the air is shown with textContent, never as HTML.
-interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
+interface GalleryItem extends NavtexQualityFields {   // ★ beta96 NAVTEX decode quality + SNR timeline (navtexQuality.ts)
+                        f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
                         title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string;
                         /** ★ V12 DSC: 3 distress · 2 urgency · 1 safety; and the position the item is about, for MAP. */
                         lv?: number; plat?: number; plon?: number;
@@ -19729,7 +19785,7 @@ function galChartsEl(): HTMLElement {
   let el = document.getElementById('galCharts');
   if (!el) {
     el = document.createElement('div'); el.id = 'galCharts'; el.hidden = true;
-    $('galText').parentElement!.insertBefore(el, $('galText'));
+    $('galWrap').parentElement!.insertBefore(el, $('galWrap'));
     tlmEnsureCss();
   }
   return el;
@@ -19759,7 +19815,7 @@ function galSkyEl(): HTMLElement {
   let el = document.getElementById('galSky');
   if (!el) {
     el = document.createElement('div'); el.id = 'galSky'; el.hidden = true;
-    $('galText').parentElement!.insertBefore(el, $('galText'));
+    $('galWrap').parentElement!.insertBefore(el, $('galWrap'));
     const st = document.createElement('style');
     st.textContent = `#galSky svg{display:block;width:100%;max-width:420px;height:auto;margin:6px auto;color:var(--btn-text,#ddd)}`
       + `#galSky .galSkyLeg{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 12px;font-size:12px;color:var(--text-dim)}`
@@ -19947,6 +20003,12 @@ async function renderGallery(page = galPage) {
       src.textContent = [galWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, heardByText(it.ri, galRadios) || it.r, formatSize(it.bytes)]
         .filter((x) => !!x).join(' · ');
       n.appendChild(src);
+      // ★★ beta96 a NAVTEX message's SNR timeline, thin, under its line (an older record: none)
+      if (it.k === 'navtex') {
+        const q = snrOfItem(it);
+        if (q) { const b = document.createElement('span'); b.className = 'snrBar galSnr'; snrHBar(b, q); n.appendChild(b);
+                 src.textContent += ` · ${navtexSnrLine(q)}`; }
+      }
       row.appendChild(f); row.appendChild(n);
       // ★ A position the item is about (a DSC distress call): MAP, on this server's own map.
       if (typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
@@ -20142,6 +20204,7 @@ async function openGalleryItem(it: GalleryItem) {
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
   galOutlineSetup(it, url);
+  galQualSetup(null, null);
   if (/\.(png|jpg)$/i.test(it.f)) {   // ★ V12 balloons: SSDV pictures are JPEGs
     galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24
     $('galText').hidden = true; img.hidden = false; img.src = url;
@@ -20149,6 +20212,7 @@ async function openGalleryItem(it: GalleryItem) {
     return;
   }
   img.hidden = true; img.removeAttribute('src'); $('galText').hidden = false;
+  galQualSetup(it, null);
   galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
   galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24
   $('galText').textContent = 'Loading…';
@@ -20156,11 +20220,35 @@ async function openGalleryItem(it: GalleryItem) {
     const r = await fetch(url, { cache: 'no-store' });
     const body = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
     $('galText').textContent = body;
+    if (r.ok) galQualSetup(it, body);   // ★ beta96 NAVTEX: the quality bar and the SNR strip beside the text
     if (r.ok && it.k === 'fctlm' && /\.csv$/i.test(it.f) && galShowTlm(it, body)) return;   // ★★ beta91 charts, not a CSV wall
     if (r.ok) void galTranslateSetup(it, body);
   } catch { $('galText').textContent = 'Could not reach the server.'; }
 }
 
+/* ★★ beta96 a NAVTEX gallery message: the decode-quality bar and SNR timeline above it (the file's own head says the
+ *  figures in words), and the strip down the left of the text — mapped from the record's slices (tl / tc) onto the file
+ *  (the message text starts after its ZCZC line). An older record, or anything not NAVTEX: nothing. */
+function galQualSetup(it: GalleryItem | null, body: string | null) {
+  const wrap = $('galWrap'), strip = $('galStrip'), pre = $('galText');
+  const q = it && it.k === 'navtex' ? snrOfItem(it) : null, split = it && it.k === 'navtex' ? splitOfItem(it) : null;
+  $('galQual').hidden = !q && !split;
+  qualityBar($('galQBar'), split);
+  snrHBar($('galSnrBar'), q);
+  const base = body ? fileTextBase(body) : -1, from = body ? fileBodyStart(body) : -1;
+  const ranges = q && body && base >= 0 && from >= 0 ? snrRanges(q, base, body.length, from) : null;
+  // ★ only over the file as received — TRANSLATE replaces the text, and the strip goes until ORIGINAL brings it back
+  const paint = () => { if (pre.textContent === body) paintSnrStrip(wrap, strip, pre, ranges); else paintSnrStrip(wrap, strip, pre, null); };
+  galQualPaint = paint;
+  paint();
+  watchSnrStrip(wrap, () => galQualPaint(), pre);
+  if (!galQualMo && typeof MutationObserver !== 'undefined') {
+    galQualMo = new MutationObserver(() => requestAnimationFrame(() => galQualPaint()));
+    galQualMo.observe(pre, { childList: true, characterData: true, subtree: true });
+  }
+}
+let galQualPaint: () => void = () => {};
+let galQualMo: MutationObserver | null = null;
 /* ★★ V12 METEOR LRPT's MAP OUTLINE in the gallery viewer (docs/v12/LRPT-MAP-OVERLAY.md). The picture stays the saved
  *  plain PNG; the outline (its own small item, named by the picture's "geo") is an SVG over it, shown when the viewer's
  *  MAP OUTLINE switch is ON (remembered in this browser; OFF until switched — OUTLINE_DEFAULT_ON). DOWNLOAD follows the

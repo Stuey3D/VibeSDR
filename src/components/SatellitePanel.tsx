@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path, Text as SvgText } from 'react-native-svg';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
+import { decoderTextBacking } from '../constants/decoderTokens';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch
 import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
@@ -39,7 +40,9 @@ import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
-import { GLOBE_ARROW_PX, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeLandInk, globeArrowPath, globeLabels, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindOffered, satRemindText, satTelemetryAbsentText, satTelemetryHead,
+import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_PRIO_WHAT, satPassKey, satSchedKeyText, satSchedPrioText, satSchedRowText,
+         type SatSchedEntry, type SatSchedSlot, type SatSessionKind } from '../services/satSchedule';
+import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeGlyph, globeLayers, globeLandInk, globeArrowPath, globeLabels, satReadoutLayout, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, satRemindText, satTelemetryAbsentText, satTelemetryHead,
          satTelemetryLine, satTelemetryHex, satTxDetail, satTxModeLabel, SAT_REMIND_LEADS, type GeoPt, type SatReminder, type SatTelemetry,
          globeScene, satAltKm, satBoxSize, satPassQuality, satPassText, satCorrectedHz, satCountdownText, satCreditText, satUplinkText, satHzText, satModeRows, satStateWord,
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
@@ -102,6 +105,19 @@ export interface SatellitePanelProps {
   remindLead?: number;
   onRemind?: (norad: number, tx: number) => void;
   onRemindLead?: (min: number) => void;
+  /** ★★★ beta96 SCHEDULE / REMIND (services/satSchedule.ts): the session's kind (absent = none: no key), its line, and the
+   *  schedule — find a pass's entry, the plan's slot for it, the lines under the list, the key presses. */
+  passKind?: SatSessionKind;
+  sessionLine?: string;
+  sched?: {
+    find: (norad: number, tx: number, aos: number) => SatSchedEntry | undefined;
+    slot: (key: string) => SatSchedSlot | undefined;
+    all: SatSchedEntry[];
+    lines: string[];
+    degraded: boolean;
+    onToggle: (norad: number, tx: number, aos: number) => void;
+    onPrio: (key: string) => void;
+  };
   /** ★ 1.9 the MAP key (a packet downlink, once a station with a position is heard) → the DIGI MODES map's APRS layer */
   mapOffered?: boolean;
   onMap?: () => void;
@@ -194,9 +210,12 @@ function HalfGlobeView({ rx, sat, ink, beam, ground, small = false, orbit, tcaId
   const [wPx, setWPx] = useState(small ? GLOBE_SMALL_W : GLOBE_MAX_W);
   const sc = GLOBE_W / Math.max(60, wPx);
   const font = 10 * sc;
-  const L = globeLabels(g, rxName, sat?.name, font);
-  const arrowD = g.arrows.length ? globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc) : '';
+  // ★★ beta96 (Stuart 11-26) SMALL: orbit, footprint, receiver dot and the satellite glyph only — no words (globeLayers)
+  const ly = globeLayers(small);
+  const L = ly.labels ? globeLabels(g, rxName, sat?.name, font) : { rx: null, sat: null };
+  const arrowD = ly.arrows && g.arrows.length ? globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc) : '';
   const birdInk = globeLandInk(ground);
+  const glyph = ly.glyph && g.bird && g.sat ? globeGlyph(g.sat, g.bird.u, sc) : null;
   const dome = `M${(g.cx - g.r).toFixed(1)} ${g.cy.toFixed(1)}A${g.r.toFixed(1)} ${g.r.toFixed(1)} 0 0 1 ${(g.cx + g.r).toFixed(1)} ${g.cy.toFixed(1)}Z`;
   return (
     <View style={small ? { width: GLOBE_SMALL_W, aspectRatio: GLOBE_W / GLOBE_H } : { width: '100%', maxWidth: GLOBE_MAX_W, aspectRatio: GLOBE_W / GLOBE_H, alignSelf: 'center' }}
@@ -207,18 +226,23 @@ function HalfGlobeView({ rx, sat, ink, beam, ground, small = false, orbit, tcaId
       {!!g.grid && <Path d={g.grid} fill="none" stroke={ink} strokeOpacity={0.12} strokeWidth={1} />}
       {!!g.coast && <Path d={g.coast} fill="none" stroke={globeLandInk(ground)} strokeOpacity={0.7} strokeWidth={1} />}
       {!!g.foot && <Path d={g.foot} fill={beam} fillOpacity={0.28} />}
-      {!!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
+      {ly.beam && !!g.beam && <Path d={g.beam} fill={beam} fillOpacity={0.35} />}
       {!!g.orbit && <Path d={g.orbit} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round"
                           strokeDasharray={`${(1.5 * sc).toFixed(1)} ${(4 * sc).toFixed(1)}`} />}
-      {!!g.tcaTick && <Path d={g.tcaTick} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round" />}
+      {ly.tick && !!g.tcaTick && <Path d={g.tcaTick} fill="none" stroke={beam} strokeOpacity={0.85} strokeWidth={1.5 * sc} strokeLinecap="round" />}
       {/* ★ beta91 which way it travels: open chevrons along increasing time, haloed in the ground so they read over the land */}
-      {g.arrows.length > 0 && <>
+      {!!arrowD && <>
         <Path d={arrowD} fill="none" stroke={ground} strokeOpacity={0.8} strokeWidth={3.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
         <Path d={arrowD} fill="none" stroke={beam} strokeWidth={1.6 * sc} strokeLinecap="round" strokeLinejoin="round" />
       </>}
       {!!g.rx && <Circle cx={g.rx.x} cy={g.rx.y} r={GLOBE_RX_DOT.r * sc} fill={GLOBE_RX_DOT.fill} stroke={GLOBE_RX_DOT.ring} strokeWidth={GLOBE_RX_DOT.ringW * sc} />}
       {/* ★ beta91 the bird is neutral like the land, so it stands off the beam (Stuart 11-22) */}
-      {!!g.bird && <>
+      {/* ★★ beta96 SMALL: the glyph — a square body, a line either side, on the BIG bird's heading; whole pixels */}
+      {!!glyph && <>
+        <Path d={glyph.panels} fill="none" stroke={birdInk} strokeWidth={GLOBE_GLYPH.line * sc} strokeLinecap="butt" />
+        <Path d={glyph.body} fill={birdInk} />
+      </>}
+      {ly.bird && !!g.bird && <>
         <Path d={g.bird.panels} fill={birdInk} fillOpacity={0.45} stroke={birdInk} strokeWidth={1.2 * sc} strokeLinejoin="round" />
         <Path d={g.bird.cells} fill="none" stroke={birdInk} strokeOpacity={0.9} strokeWidth={0.8 * sc} />
         <Path d={g.bird.boom} fill="none" stroke={birdInk} strokeWidth={1.6 * sc} strokeLinecap="round" />
@@ -251,7 +275,7 @@ const HalfGlobe = React.memo(HalfGlobeView, (a, b) =>
 /* ★★★ SATELLITE-BEST 1.6 — THE REMIND BANNER (Stuart 11-21: in-app banner only, no OS notification module). Each fired
  *  reminder its own banner, newest on top, three at most ("+2 more"); LISTEN enters SATELLITE and picks through the
  *  ordinary pick (ask-before-tuning); a pass that can no longer be picked says why and offers no LISTEN. */
-export interface SatRemindToast { r: SatReminder; why: string }
+export interface SatRemindToast { r: SatReminder; why: string; /** ★★★ beta96 a scheduled pass firing as a reminder says so */ note?: string }
 export function SatRemindBanner({ toasts, nowSec, picked, pickedName, top, onListen, onDismiss }: {
   toasts: SatRemindToast[]; nowSec: number; picked: { norad: number; tx: number } | null; pickedName?: string; top: number;
   onListen: (key: string) => void; onDismiss: (key: string) => void;
@@ -267,6 +291,7 @@ export function SatRemindBanner({ toasts, nowSec, picked, pickedName, top, onLis
           <View key={t.r.key} style={s.remToast} accessibilityRole="alert" accessibilityLiveRegion="polite">
             <Text style={s.txt}>{line}</Text>
             {!!(t.why || ends) && <Text style={s.remWhy}>{t.why || ends}</Text>}
+            {!!t.note && <Text style={s.remWhy}>{t.note}</Text>}
             <View style={s.remKeys}>
               {!t.why && <DecoderKey label="LISTEN" active onPress={() => onListen(t.r.key)} accessibilityLabel={`Listen: ${line}`} />}
               <DecoderKey label="DISMISS" onPress={() => onDismiss(t.r.key)} accessibilityLabel="Dismiss this reminder" />
@@ -297,6 +322,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const [bigPick, setBigPick] = useState(false);
   const [listOpen, setListOpen] = useState(true);   // ★ beta92 declared before bodyH: SMALL grows while the list is open
   const [minimised, setMinimised] = useState(false);
+  /** ★★ beta96 the readout's width — the small globe goes beside the words only where they keep their column (satReadoutLayout) */
+  const [roW, setRoW] = useState(0);
   const handBig = useRef(false);
   const sized = useRef(false);
   const big = bigPick && bigUseful;
@@ -448,10 +475,13 @@ export default function SatellitePanel(p: SatellitePanelProps) {
       {!minimised && !placeNeed && <DecoderBody>
         {/* ★ beta91 (Stuart 11-22, a screenshot: BIG with the list folded and nothing decoded yet, half the box empty) the box
              holds its full BIG height only while a picture is on show; otherwise it fits what is in it, up to that height */}
-        <ScrollView style={big && showPic ? { height: bodyH } : { maxHeight: bodyH }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
+        {/* ★★ beta96 the body is OPAQUE behind its text (decoderTextBacking): the waterfall's labels no longer read through it */}
+        <ScrollView style={[big && showPic ? { height: bodyH } : { maxHeight: bodyH }, { backgroundColor: decoderTextBacking(tk), borderRadius: 6 }]}
+                    contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
           {!!sel && !!sat && !!tx && (
             <View style={s.box}>
-              <View style={[big ? s.ro : s.roSmall, mine?.state === 'COAST' && s.coast]}
+              <View style={[satReadoutLayout(roW, big, GLOBE_SMALL_W) === 'beside' ? s.roSmall : s.ro, mine?.state === 'COAST' && s.coast]}
+                    onLayout={(e) => { const w = Math.round(e.nativeEvent.layout.width); if (w > 0 && Math.abs(w - roW) > 2) setRoW(w); }}
                     accessibilityLabel={`${sat.name} ${tx.label}, ${satHzText(satCorrectedHz(tx, mine))}, ${countdown}`}>
                 <View style={s.txtCol}>
                   <Text style={s.txt} numberOfLines={1}>{`${sat.name} · ${tx.label}${satTxModeLabel(tx) ? ' · ' + satTxModeLabel(tx) : ''}`}</Text>
@@ -478,7 +508,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   ))}
                 </View>
                 {!!p.rxPos && (
-                  <View style={!big ? undefined : { alignSelf: 'stretch' }}>
+                  <View style={!big ? (satReadoutLayout(roW, big, GLOBE_SMALL_W) === 'beside' ? s.globeSide : s.globeUnder) : { alignSelf: 'stretch' }}>
                     <HalfGlobe rx={p.rxPos} sat={sat} ink={tk.value} beam={tk.accent} ground={ground} small={!big}
                                orbit={confirmed ? p.orbit : null} tcaIdx={p.tcaIdx} rxName={p.rxName} />
                     {/* ★ BIG: the one-line key (the dotted half only when there is an orbit to see) */}
@@ -697,9 +727,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
             : rows.slice(0, 160).map((r) => {
                 const on = !r.later && !!sel && sel.norad === r.sat.norad && sel.tx === r.i;   // ★ 2026-11-24 a later pass: no highlight
                 const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
-                // ★★ 1.6 REMIND — only where a pick disturbs nobody (pickPrivate), hearable, a pass to come; hidden otherwise
-                const offer = !r.later && !!p.onRemind && !greyed && satRemindOffered(p.list, r);
-                const held = offer && !!p.remindHeld?.(r.sat.norad, r.i);
+                // ★★★ beta96 REMIND on a shared dial, SCHEDULE where nobody else is moved (satPassKey); hidden otherwise
+                const pk = greyed ? null : satPassKey(p.list, r, p.passKind ?? 'none');
+                const se = r.next && p.sched ? p.sched.find(r.sat.norad, r.i, r.next.aos) : undefined;
+                const slot = se ? p.sched!.slot(se.key) : undefined;
+                const offer = pk === 'remind' && !!p.onRemind;
+                const held = offer && (!!p.remindHeld?.(r.sat.norad, r.i) || !!se);   // ★ a degraded schedule reads as a reminder
                 return (
                   <View key={`${r.sat.norad}.${r.i}.${r.pass?.aos ?? 0}`} style={s.rw}>
                   <Pressable
@@ -715,7 +748,20 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                       {/* ★★ the pass's rating (satPassQuality — its highest elevation), shaded like n2yo's legend (Stuart 11-21) */}
                       {!r.grey && !!r.pass && <Text>{' · '}<Text style={[s.q, s[`q_${satPassQuality(r.pass.maxEl)}`]]}>{` ${satPassText(r.pass)} `}</Text></Text>}
                     </Text>
+                    {/* ★★★ beta96 a scheduled pass: when it tunes, and what an overlap did to it */}
+                    {!!se && <Text style={[s.detail, slot?.state === 'skipped' ? undefined : s.up]}>
+                      {p.sched!.degraded ? 'SCHEDULED · reminds you (another listener is on this dial)' : satSchedRowText(se, slot, p.sched!.all)}</Text>}
                   </Pressable>
+                  {pk === 'schedule' && !!p.sched && !!r.next && (
+                    <View style={[s.remKey, s.schedKeys]}>
+                      <DecoderKey label={satSchedKeyText(!!se)} active={!!se} onPress={() => p.sched!.onToggle(r.sat.norad, r.i, r.next!.aos)}
+                                  accessibilityLabel={se ? `${name}: ${SAT_SCHED_CANCEL_WHAT}` : `Schedule ${name}: tune at AOS, back after LOS — while the app is open and connected`} />
+                      {!!se && !!slot?.over.length && (
+                        <DecoderKey label={satSchedPrioText(!!se.prio)} active={!!se.prio} onPress={() => p.sched!.onPrio(se.key)}
+                                    accessibilityLabel={`${name}: ${SAT_SCHED_PRIO_WHAT}`} />
+                      )}
+                    </View>
+                  )}
                   {offer && (
                     <View style={s.remKey}>
                       <DecoderKey label={satRemindKeyText(held)} active={held} onPress={() => p.onRemind!(r.sat.norad, r.i)}
@@ -725,7 +771,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   </View>
                 );
               }))}
-          {listOpen && !!p.onRemind && !greyed && rows.some((r) => satRemindOffered(p.list, r)) && (
+          {/* ★★★ beta96 why it is SCHEDULE / REMIND here, the overlap rule, the degraded note and the schedule's state */}
+          {listOpen && !greyed && !!p.sessionLine && rows.some((r) => satPassKey(p.list, r, p.passKind ?? 'none')) && (
+            <Text style={[s.detailNp, s.schedLine]}>{p.sessionLine}</Text>
+          )}
+          {listOpen && (p.sched?.lines ?? []).map((ln, i) => <Text key={`sl${i}`} style={[s.detail, s.schedLine]}>{ln}</Text>)}
+          {listOpen && !!p.onRemind && !greyed && rows.some((r) => satPassKey(p.list, r, p.passKind ?? 'none') === 'remind') && (
             <View style={s.leadRow}>
               <Text style={s.detailNp}>REMIND</Text>
               {SAT_REMIND_LEADS.map((v) => (
@@ -778,7 +829,9 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   lnOn:    { borderColor: T.accent, backgroundColor: T.rowActive },
   lnTxt:   { paddingHorizontal: 8 },
   lnTxtOn: { color: T.value },
-  vbKey:   { alignSelf: 'flex-start', paddingLeft: 8, paddingTop: 2 },
+  vbKey:   { alignSelf: 'flex-start', paddingLeft: 8, paddingTop: 2, maxWidth: '100%', flexShrink: 1 },   // ★★ beta96 never wider than the words' column
+  globeSide: { flexShrink: 0 },                         // ★★ beta96 beside the words: its own width, never over them
+  globeUnder:{ alignSelf: 'center' },                   // ★★ beta96 too narrow for both: under the words
   mono:    { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.value },
   sumRow:  { paddingHorizontal: 10, paddingVertical: 8, minHeight: 36, justifyContent: 'center' },
   // ★★ beta94 SHOW — the drop-down above the rows
@@ -794,6 +847,8 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   sum:     { fontFamily: F, fontSize: 12, letterSpacing: 1, color: T.value },
   rw:      { flexDirection: 'row', alignItems: 'center' },
   remKey:  { paddingRight: 6 },
+  schedKeys: { gap: 4 },                                  // ★★★ beta96 SCHEDULE over PRIORITISE
+  schedLine: { paddingHorizontal: 10, paddingTop: 4 },
   leadRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6 },
   detailNp:{ fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted },
   // ★★ 2026-11-24 ORBCOMM

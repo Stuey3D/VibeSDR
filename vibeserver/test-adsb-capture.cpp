@@ -61,8 +61,9 @@ static void testGuard() {
     // rule (c): one rung down, never below the ADS-B floor from above it
     CHECK(vibe::rateGuardRungBelow(2.56e6) == 2.4e6, "c: 2.56 → 2.4");
     CHECK(vibe::rateGuardRungBelow(3.0e6) == 2.88e6, "c: 3.0 → 2.88");
-    CHECK(vibe::rateGuardRungBelow(2.4e6) == 2.048e6, "c: 2.4 → 2.048 (DAB still boosts)");
-    CHECK(vibe::rateGuardRungBelow(2.048e6) == 0, "c: 2.048 → no boost at all");
+    CHECK(vibe::rateGuardRungBelow(2.4e6) == 0 && !vibe::rateGuardCanStep(2.4e6), "c': 2.4 is the floor — no step below it");
+    CHECK(vibe::rateGuardRungBelow(2.048e6) == 0 && !vibe::rateGuardCanStep(2.048e6), "c': 2.048 (DAB) never steps either");
+    CHECK(vibe::rateGuardRungBelow(2.5e6) == 2.4e6 && vibe::rateGuardCanStep(2.56e6), "c: anything above the floor lands on it at worst");
     CHECK(vibe::rateGuardRungBelow(8.0e6) == 6.0e6, "c: 8 → 6");
 
     char dir[] = "/tmp/vibe-rateguard-XXXXXX";
@@ -139,12 +140,38 @@ static void testGuard() {
         CHECK(!g.recordStall(2.048e6, "DAB", T + DAY + 20), "b: another rate counts on its own");
         CHECK(g.fault(T + 3 * DAY).noted == 0 && !g.fault(T + 3 * DAY).any(), "b: notes age out after 24 h");
     }
-    {   // (c) a death AT 2.4 caps at 2.048: ADS-B cannot boost, DAB can
+    {   // ★★★ (c') Stuart 11-26: "2.4msps is the safe rate" — two stops AT 2.4 are told to the owner, NEVER capped
         wipe();
         vibe::RateGuard g; g.setBase(base, "B1");
-        g.recordStall(2.4e6, "ADS-B", T); g.recordStall(2.4e6, "ADS-B", T + 60);
-        CHECK(!g.allows(2.4e6, T + 61) && g.allows(2.048e6, T + 61), "c: held at 2.048 after two stops at 2.4");
-        CHECK(g.fault(T + 61).say().find("ADS-B still runs") == std::string::npos, "c: no ADS-B promise below its floor");
+        CHECK(!g.recordStall(2.4e6, "ADS-B", T), "c': a first stop at 2.4 only notes");
+        CHECK(g.fault(T + 1).say().find("never held lower") != std::string::npos, "c': the note says 2.4 is never held lower: %s", g.fault(T + 1).say().c_str());
+        CHECK(!g.recordStall(2.4e6, "ADS-B", T + 60), "c': a second stop at 2.4 within 24 h does NOT latch");
+        const auto f = g.fault(T + 61);
+        CHECK(!f.latched && f.floor && f.floorRate == 2.4e6 && f.floorMode == "ADS-B", "c': the floor note is raised: %s", f.json().c_str());
+        CHECK(g.allows(2.4e6, T + 61) && g.allows(2.56e6, T + 61) && g.allows(2.048e6, T + 61), "c': every rate still allowed");
+        CHECK(f.say().find("kept at that rate") != std::string::npos && f.say().find("USB power supply") != std::string::npos,
+              "c': the owner is told it is the radio: %s", f.say().c_str());
+        CHECK(f.json().find("\"floor\":true") != std::string::npos && f.json().find("\"floorRate\":2400000") != std::string::npos, "c': floor in the json");
+        vibe::RateGuard g2; g2.setBase(base, "B1");
+        CHECK(g2.fault(T + 120).floor && !g2.latched(T + 120), "c': the note survives a restart");
+        CHECK(!g2.fault(T + 60 + DAY + 1).floor && !g2.fault(T + 60 + DAY + 1).any(), "c': and is forgotten 24 h after the last stop");
+    }
+    {   // (c') DAB at 2.048 twice: noted for the owner, never capped (it would lose DAB AND ADS-B)
+        wipe();
+        vibe::RateGuard g; g.setBase(base, "B1");
+        g.recordStall(2.048e6, "DAB", T); g.recordStall(2.048e6, "DAB", T + 30);
+        CHECK(!g.latched(T + 31) && g.allows(2.048e6, T + 31) && g.fault(T + 31).floor, "c': DAB at 2.048 twice: told, not capped");
+    }
+    {   // (c') latched at 2.4 (from 2.56), then it stops twice AT 2.4: the latch stays at 2.4, never 2.048
+        wipe();
+        vibe::RateGuard g; g.setBase(base, "B1");
+        g.recordStall(2.56e6, "ADS-B", T); CHECK(g.recordStall(2.56e6, "ADS-B", T + 10), "latched from 2.56");
+        g.recordStall(2.4e6, "ADS-B", T + 20); g.recordStall(2.4e6, "ADS-B", T + 30);
+        const auto f = g.fault(T + 31);
+        CHECK(f.latched && f.ceiling == 2.4e6 && g.allows(2.4e6, T + 31) && !g.allows(2.56e6, T + 31), "c': still held at 2.4, not below: %s", f.json().c_str());
+        CHECK(f.floor && f.say().find("twice in 24 hours") != std::string::npos && f.say().find("USB power supply") != std::string::npos,
+              "c': the latch line carries the floor note: %s", f.say().c_str());
+        CHECK(f.rate == 2.56e6, "c': the latch's own stop (2.56) is still the one it names");
     }
     {   // ★ a PRE-beta95 record (it latched on one stop and switched the owner's setting off) becomes one noted stop
         wipe();

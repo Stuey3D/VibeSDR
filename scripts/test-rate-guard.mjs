@@ -4,7 +4,8 @@
 // "change the sample rate when a mode needs it" switch ON:
 //   1. STALL ×2 (in-process): the fake stops sending at 2.4 MS/s (--stall-at). ADS-B boosts to 2.4, the samples stop —
 //      the watchdog leaves ADS-B, the radio back at 1.024, IQ flows again; the FIRST is only noted (beta95) and the
-//      same rate is tried on the next ADS-B; the SECOND latches the boosts at 2.048 (one rung down). The owner's
+//      same rate is tried on the next ADS-B; the SECOND does NOT latch (beta96, Stuart 11-26: "2.4msps is the safe
+//      rate") — 2.4 is the floor: the owner is told (floor) and ADS-B still boosts to 2.4. The owner's
 //      dabRateBoost in the config is NEVER written. Clear forgets it.
 //   2. CRASH (whole process): markers planted beside the config. Another build's = an update, not counted; this build's
 //      once = noted; twice = latched at 2.4 (the ADS-B floor); a pre-beta95 record that had persisted the switch off
@@ -118,7 +119,7 @@ console.log('── STALL ×2: the radio stops delivering at the rate ADS-B boos
     await sleep(1500);
     ok(fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), `stall ${n}: the marker is down while ADS-B has the radio at 2.4 MS/s`);
     let hw = null;
-    for (let i = 0; i < 40; i++) { await sleep(500); hw = await getJson(s.port, '/vibeserver/hardware'); if (hw?.rateGuard?.fault && (n === 1 || hw.rateGuard.latched)) break; }
+    for (let i = 0; i < 40; i++) { await sleep(500); hw = await getJson(s.port, '/vibeserver/hardware'); if (hw?.rateGuard?.fault && (n === 1 || hw.rateGuard.floor)) break; }
     await sleep(2500);
     return hw;
   };
@@ -134,18 +135,21 @@ console.log('── STALL ×2: the radio stops delivering at the rate ADS-B boos
   let cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
   ok(cfg.radios?.[0]?.dabRateBoost === true, `the OWNER's rate switch is untouched (${cfg.radios?.[0]?.dabRateBoost})`);
   ok(hw?.radios?.[0]?.dabBoost !== false && hw?.dabBoost !== false, 'hwinfo still reports the switch on');
-  // the same rate is tried again; it stalls again → latched at 2.048 (the rung below 2.4)
+  // the same rate is tried again; it stalls again → 2.4 is the FLOOR: not latched, the owner is told (beta96)
   hw = await stallOnce(2);
-  ok(hw?.rateGuard?.latched === true && hw.rateGuard.ceiling === 2048000, `stall 2 within 24 h LATCHES one rung down: ${JSON.stringify(hw?.rateGuard)}`);
-  ok(/twice in 24 hours/.test(hw?.rateGuard?.say || ''), 'the line says twice in 24 hours');
+  ok(hw?.rateGuard?.latched === false && hw.rateGuard.floor === true && hw.rateGuard.floorRate === 2400000,
+     `stall 2 at 2.4 within 24 h: NOT capped, the floor note raised: ${JSON.stringify(hw?.rateGuard)}`);
+  ok(/twice in 24 hours at 2\.4 MS\/s.*kept at that rate/.test(hw?.rateGuard?.say || ''), 'the line says twice in 24 hours, kept at 2.4');
   const log = s.log();
   if (process.env.SHOW_LOG) console.log(log.split('\n').filter((l) => /ADS-B|rate|IQ|watchdog|stall|tcp|silent/i.test(l)).slice(-40).join('\n'));
   ok(/\[rate\] .* at 2\.400 MS\/s during ADS-B/.test(log), 'the log says what happened');
   cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-  ok(cfg.radios?.[0]?.dabRateBoost === true, `latched, and the owner's switch is STILL untouched (${cfg.radios?.[0]?.dabRateBoost})`);
+  ok(cfg.radios?.[0]?.dabRateBoost === true, `at the floor, and the owner's switch is STILL untouched (${cfg.radios?.[0]?.dabRateBoost})`);
   spec.send({ type: 'adsb', on: 1 });
   await sleep(1500);
-  ok(!fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'ADS-B asked again: no boost to 2.4 while it is held at 2.048');
+  ok(fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'ADS-B asked again: it still boosts to 2.4 (never held below the floor)');
+  spec.send({ type: 'adsb', on: 0 });
+  await sleep(1500);
   const cleared = await getJson(s.port, '/vibeserver/rate-guard?clear=1', { method: 'POST' });
   ok(cleared && cleared.fault === '' && cleared.latched === false, `Clear forgets it: ${JSON.stringify(cleared)}`);
   audio.close(); spec.close();

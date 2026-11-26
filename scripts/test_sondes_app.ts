@@ -60,7 +60,7 @@ const scr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url
 const map = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
 ok(/if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\);\s*sdOnRef\.current = true; setSdOn\(true\);\s*c\.sondes\(true\);/.test(scr),
    'SONDES opens into its map (the box only on the Apple TV, which has no maps)');
-ok(/if \(!sdOnRef\.current\) \{ sdOnRef\.current = true; if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\); \}/.test(scr),
+ok(/if \(!sdOnRef\.current\) \{ (?:wholeMapYield\('sondes'\); )?sdOnRef\.current = true; if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\); \}/.test(scr),
    '…and so does joining a receiver somebody else put on SONDES');
 ok(/shownMap === 'sondes' \? exitSondes\(\)/.test(scr) && /kind === 'sondes' \? '<button id="back"[^']*>EXIT SONDES<\/button>'/.test(map),
    "the map's key reads EXIT SONDES and leaves the mode");

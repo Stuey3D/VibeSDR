@@ -352,6 +352,28 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(r && r.length === 4 * 5 + 1, 'no needles: the ring joins only heard (and lent) bearings — no dive to the receiver');
 }
 
+// ── ★★ beta96 the outline is LABELLED "ADS-B RANGE" (Stuart 11-26: never to be taken for the distance rings) ──
+{
+  ok(M.RANGE_LABEL === 'ADS-B RANGE', 'the label reads ADS-B RANGE');
+  const km = new Array(360).fill(0);
+  km[10] = 100; km[100] = 140; km[200] = 320; km[300] = 90;
+  const ring = M.rangeRing(52.29, -0.85, km);
+  const p = M.rangeLabelPoint(52.29, -0.85, ring);
+  ok(p && Math.abs(M.distNm(52.29, -0.85, p[1], p[0]) - 320 * 1000 / 1852) < 0.5 && Math.abs(M.bearingDeg(52.29, -0.85, p[1], p[0]) - 200.5) < 0.5,
+     'the Leaflet label sits on the furthest vertex (320 km at 200.5°)');
+  ok(M.rangeLabelPoint(52.29, -0.85, null) === null && M.rangeLabelPoint(NaN, 0, ring) === null, 'no outline or no centre: no label');
+  // the GPU map: a symbol layer along the outline, in the map's own lettering, repeated so it shows at every zoom
+  ok(/id: 'vsadsb-range-lbl', type: 'symbol', source: 'vsadsb-range', filter: \['==', \['get', 'k'\], 'l'\]/.test(src), 'GPU: the label layer reads the outline\'s label feature');
+  ok(/'symbol-placement': 'line', 'symbol-spacing': \d+/.test(src) && /'text-font': \['JetBrains Mono Regular'\], 'text-size': 11/.test(src), 'GPU: along the line, repeated, the map lettering');
+  ok(/'text-keep-upright': true/.test(src), 'GPU: kept upright (readable on every side of the outline)');
+  ok(/properties: \{ k: 'l', t: RANGE_LABEL \}/.test(src), 'GPU: the drawn outline carries the label feature');
+  ok(src.includes("'vsadsb-range-lbl', 'vsadsb-range-line'"), 'GPU: the label layer is removed with the others on destroy');
+  // the KEY and the RANGE button say the same words
+  ok(/'<div class="vsadsb-rg" hidden><div class="t">' \+ RANGE_LABEL/.test(src), 'KEY: headed ADS-B RANGE');
+  ok(src.includes("mk('RANGE', 'ADS-B RANGE outline: the furthest aircraft heard on each bearing (not the distance rings)')"), 'RANGE button: the tooltip names ADS-B RANGE');
+  ok(src.includes("'ADS-B RANGE outline on' : 'ADS-B RANGE outline off'"), 'RANGE button: the live tooltip agrees');
+}
+
 // ── the generated copies (scripts/gen-adsblayer-source.mjs) ──
 {
   const copies = [['directory/public/mapgl/vendor/adsblayer.js', (t) => t],

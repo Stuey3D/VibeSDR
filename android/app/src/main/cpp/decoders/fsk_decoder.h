@@ -134,8 +134,24 @@ public:
     /** ★ Per-character FEC outcome, for a later per-message report: clean (RX copy good), repaired (from the DX copy
      *  or the soft tiers), failed ('_'). `total` counts since start; `message` since the last ZCZC, and `lastMessage`
      *  is the finished one, frozen at its NNNN. */
-    struct Counts { unsigned long clean = 0, repaired = 0, failed = 0; };
+    /** ★★ beta96 (Stuart 11-26, DISPLAY ONLY — nothing here changes what is printed or the lock): the same characters
+     *  split the way SITOR-B's time diversity sees them —
+     *    agreed    both copies valid and the same word (a subset of `clean`);
+     *    disagreed both copies valid but DIFFERENT words — the decoder printed one of them (so these sit in clean or
+     *              repaired, never in failed): honest evidence that one copy was hit;
+     *  so CLEAN = agreed, FEC = clean + repaired − agreed (one copy, the other invalid / missing / overruled, or the soft
+     *  tiers), LOST = failed. `on`/`off`/`bits`: the signal measured at each bit centre (see snrOf). */
+    struct Counts { unsigned long clean = 0, repaired = 0, failed = 0, agreed = 0, disagreed = 0;
+                    double on = 0, off = 0; unsigned long bits = 0; };
     Counts total, message, lastMessage;
+    /** ★★ beta96: the signal and the noise of `c`, dBFS (int16 full-scale sine = 0 dBFS), the noise IN THE BIT BANDWIDTH
+     *  (the baud rate, 100 Hz — as the SITOR-A status reports its SNR), so SNR = sig − noise. False with nothing measured
+     *  (no bits yet, or the biquad front end, which has no exact noise bandwidth). */
+    bool snrOf(const Counts& c, double& sigDbfs, double& noiseDbfs) const;
+    /** ★★ beta96: one SNR SLICE every second (baud bits) of the decoder running — locked or not, so a fade reads as a
+     *  fade — signal and noise dBFS as snrOf. The host streams them; the message assemblers keep the ones that fall
+     *  inside a message (the SNR timeline). */
+    std::function<void(double sigDbfs, double noiseDbfs)> onSlice;
     /** ★ Fired once per NNNN, AFTER its last 'N' has gone to onChar, with lastMessage (2026-10-05) — the host sends it
      *  to the message box behind the text, so the title can say "2 repaired · 1 lost" from the FEC, not from '_'s. */
     std::function<void(const Counts&)> onMessageEnd;
@@ -153,6 +169,7 @@ private:
     int  findAlpha(int& pol) const;
     void processRx(int pos);
     void retune();
+    void measureBit(double bit);   // ★ beta96: the SNR at this bit's centre (display only)
 
     NavtexOptions o_;
     double fs_, cf_, shift_, baud_;
@@ -186,6 +203,13 @@ private:
     int cursor_ = 0, errorCount_ = 0;
     bool alphaPhase_ = false;
     Ccir476 coder_;
+    // ── ★ beta96 SNR (display only): |mark|², |space|² of the last front samples, so a bit's CENTRE can be read when its
+    //    prompt integral ends; the raised cosine's noise bandwidth Σh²·rate (two-sided); this second's slice sums ──
+    static const int kRing = 256;
+    double ringM_[kRing] = {0}, ringS_[kRing] = {0}; int ringPos_ = 0;
+    double enbw_ = 0;
+    Counts slice_; long sliceClock_ = 0;
+    bool prevMark_[2] = {false, false}; double prevM_ = 0, prevS_ = 0; int prevBits_ = 0;   // the bit before, at its centre
     std::string tail_;                                 // the last four characters printed, for ZCZC / NNNN
 };
 

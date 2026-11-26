@@ -174,6 +174,10 @@ struct Meta {
      *  "lrptgeo", JSON — the clients draw it over this picture when their MAP OUTLINE toggle is on) as "geo", or why the
      *  pass has none as "gw" (a caption line). Both empty = not attempted (an older build's picture: plain). */
     std::string geo, geoWhy;
+    /** ★★ beta96 NAVTEX decode quality + SNR (Stuart 11-26): JSON members ALREADY FORMED (",\"nqc\":…") appended to the
+     *  index line as they are — navtexQualityJson(). Empty = an older build's message, or no measure: the clients show
+     *  nothing for what is not there. */
+    std::string qualJson;
 };
 /** What a download name may hold (Meta::dlName). Anything else is dropped. */
 inline std::string downloadSafe(const std::string& s) {
@@ -927,6 +931,7 @@ private:
             + pinText(m) + (m.level >= 0 ? ",\"lv\":" + std::to_string(m.level) : std::string())
             + (m.geo.empty() ? std::string() : ",\"geo\":\"" + jsonEsc(m.geo) + "\"")
             + (m.geoWhy.empty() ? std::string() : ",\"gw\":\"" + jsonEsc(printable(m.geoWhy, 160)) + "\"")
+            + m.qualJson
             + [&ri] { const std::string r = vibe::logradio::joinIds(vibe::logradio::splitIds(ri)); return r.empty() ? std::string() : ",\"ri\":\"" + r + "\""; }()
             + (re ? ",\"re\":" + std::to_string(re) : std::string()) + "}\n";
         return l;
@@ -1259,7 +1264,62 @@ struct NavtexMsg {
     std::string station;
     /** ★ 2026-11-01: why that station — plain English, this message's evidence (navtex::Resolution::why), in the file. */
     std::vector<std::string> why;
+    /** ★★ beta96 (Stuart 11-26) — DISPLAY ONLY. The FEC split from op 0x07's longer form: both copies agreed, and both valid
+     *  but different (counted in fecClean + fecRepaired already). */
+    bool haveSplit = false; unsigned long fecAgreed = 0, fecDisagreed = 0;
+    /** ★★ beta96 SNR TIMELINE: one slice per `sliceSec` seconds while the message arrived (≤ kMaxSlices, pairs merged
+     *  when longer) — `tl` the slice's SNR (dB, whole), `tc` the CHARACTER INDEX in `text` where the slice ENDED (the
+     *  slice covers tc[i-1]..tc[i]; text after the last one is the last one's). Empty = no measure (an older server). */
+    std::vector<int> tl, tc; int sliceSec = 1;
+    bool haveSnr = false; double snr = 0, sigDbfs = 0, noiseDbfs = 0;   ///< over the message (mean powers)
+    int minSnr = 0, redPct = 0;   ///< the lowest slice; the share of characters decoded under 5 dB
 };
+
+/** ★★ beta96: the SNR colour scale — < 5 dB red (that text may be junk), 5–10 amber, > 10 green. */
+static constexpr double kSnrRed = 5, kSnrGreen = 10;
+static constexpr size_t kMaxSlices = 120;
+
+/** ★★ beta96: the index-line members for a NAVTEX message's quality (Meta::qualJson) — what is there, nothing else.
+ *  "nqc"/"nqf"/"nql" characters clean (both copies agreed) / FEC / lost, "nqd" copies disagreed; "snr" mean SNR (dB, bit
+ *  bandwidth), "sdb"/"ndb" signal / noise dBFS, "smin" the lowest slice, "red" % of characters under 5 dB, "ts" slice
+ *  seconds, "tl" slice SNRs, "tc" their character ends. */
+inline std::string navtexQualityJson(const NavtexMsg& m) {
+    std::string o; char b[96];
+    if (m.haveFec && m.haveSplit) {
+        const unsigned long fec = m.fecClean + m.fecRepaired - std::min(m.fecAgreed, m.fecClean + m.fecRepaired);
+        std::snprintf(b, sizeof b, ",\"nqc\":%lu,\"nqf\":%lu,\"nql\":%lu,\"nqd\":%lu", m.fecAgreed, fec, m.fecLost, m.fecDisagreed);
+        o += b;
+    }
+    if (m.haveSnr && !m.tl.empty()) {
+        std::snprintf(b, sizeof b, ",\"snr\":%.1f,\"sdb\":%.1f,\"ndb\":%.1f,\"smin\":%d,\"red\":%d,\"ts\":%d",
+                      m.snr, m.sigDbfs, m.noiseDbfs, m.minSnr, m.redPct, m.sliceSec);
+        o += b;
+        o += ",\"tl\":["; for (size_t i = 0; i < m.tl.size(); i++) o += (i ? "," : "") + std::to_string(m.tl[i]); o += "]";
+        o += ",\"tc\":["; for (size_t i = 0; i < m.tc.size(); i++) o += (i ? "," : "") + std::to_string(m.tc[i]); o += "]";
+    }
+    return o;
+}
+/** "Decode quality: 98.6 % clean · 1.2 % FEC · 0.2 % lost (512 characters; copies disagreed 0.4 %)" — "" without the split. */
+inline std::string navtexQualityLine(const NavtexMsg& m) {
+    if (!m.haveFec || !m.haveSplit) return "";
+    const unsigned long n = m.fecClean + m.fecRepaired + m.fecLost;
+    if (!n) return "";
+    const unsigned long fec = m.fecClean + m.fecRepaired - std::min(m.fecAgreed, m.fecClean + m.fecRepaired);
+    char b[200];
+    std::snprintf(b, sizeof b, "Decode quality: %.1f %% clean \xc2\xb7 %.1f %% FEC \xc2\xb7 %.1f %% lost (%lu characters%s",
+                  100.0 * m.fecAgreed / n, 100.0 * fec / n, 100.0 * m.fecLost / n, n, m.fecDisagreed ? "; copies disagreed " : ")");
+    std::string o = b;
+    if (m.fecDisagreed) { std::snprintf(b, sizeof b, "%.1f %%)", 100.0 * m.fecDisagreed / n); o += b; }
+    return o;
+}
+/** "SNR 14 dB avg · lowest 3 dB · 22 % weak (signal -34 dBFS, noise -48 dBFS in 100 Hz)" — "" without a measure. */
+inline std::string navtexSnrLine(const NavtexMsg& m) {
+    if (!m.haveSnr || m.tl.empty()) return "";
+    char b[200];
+    std::snprintf(b, sizeof b, "SNR %.0f dB avg \xc2\xb7 lowest %d dB \xc2\xb7 %d %% weak (signal %.0f dBFS, noise %.0f dBFS in 100 Hz)",
+                  m.snr, m.minSnr, m.redPct, m.sigDbfs, m.noiseDbfs);
+    return b;
+}
 
 class NavtexAsm {
 public:
@@ -1278,7 +1338,7 @@ public:
         scan(now);
         if (seg_.size() > kSegMax) {      // ★ the bound: whatever this is, it is not a message any more
             if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-            seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now; cut_ = Cut();
+            seg_.clear(); sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now; cut_ = Cut();
         }
     }
     /** 75 s of nothing: an unfinished message ends "[end lost]". A lock lost and not regained within kLockBlipMs: the
@@ -1287,7 +1347,7 @@ public:
         if (!lastTextAt_ || now - lastTextAt_ < kEndLostMs) return;
         if (cut_.on && !cut_.relocked) { closeAtCut(now); return; }   // ★ silent for good while unlocked: ends at the loss
         if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-        seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; cut_ = Cut();
+        seg_.clear(); sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; cut_ = Cut();
     }
     /** The decoder's lock (op 0x03, state 3 = reading). A loss is not an end until it outlasts a blip (see navtex.ts). */
     void lockState(int st, int64_t now) {
@@ -1296,7 +1356,7 @@ public:
         if (was && !locked_) {
             lockLosses_++;
             if (inMsg_ || alnum(seg_) >= kOrphanMin) { if (!cut_.on || cut_.relocked) cut_ = Cut{ true, seg_.size(), now, false }; return; }
-            seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
+            seg_.clear(); sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
             return;
         }
         // ★★★ A FADE IS NOT AN END (Lenovo, beta3: 517.5 kHz lost lock 5–15 s at a time): carry on in the same message, the
@@ -1308,6 +1368,9 @@ public:
                 const size_t at = std::min(cut_.at, seg_.size());
                 char m[64]; std::snprintf(m, sizeof m, "\n[\xe2\x80\xa6 signal lost %lld s \xe2\x80\xa6]\n", (long long)std::max<int64_t>(1, (lost + 500) / 1000));
                 seg_ = seg_.substr(0, at) + m;
+                // ★ beta96: the slices of the fade (and the hunting garbage) cover the gap marker — that line reads red
+                for (auto& x : sl_) if (x.at > at) x.at = seg_.size();
+                if (pend_.at > at) pend_.at = seg_.size();
                 gaps_++; gapMs_ += lost;
                 scanFrom_ = std::min(scanFrom_, at);
             }
@@ -1317,10 +1380,26 @@ public:
     /** The decoder stopped: what was arriving is saved as far as it got (end lost). */
     void flush() {
         if (inMsg_ || alnum(seg_) >= kOrphanMin) finish(build(seg_, true));
-        seg_.clear(); inMsg_ = false; scanFrom_ = 0; cut_ = Cut();
+        seg_.clear(); sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; inMsg_ = false; scanFrom_ = 0; cut_ = Cut();
     }
     /** A retune: the text from here is another transmission — drop what was arriving (as the client's clearLive). */
-    void clearLive() { seg_.clear(); inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); gaps_ = 0; gapMs_ = 0; }
+    void clearLive() { seg_.clear(); sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; inMsg_ = false; scanFrom_ = 0; lastTextAt_ = 0; locked_ = false; cut_ = Cut(); gaps_ = 0; gapMs_ = 0; }
+    /** ★★ beta96: one SNR SLICE from the decoder (op 0x08, a second's signal and noise, dBFS). Kept while a message — or
+     *  text that may become one — is arriving, at the character count so far: the timeline is tied to the text. */
+    void slice(double sigDbfs, double noiseDbfs) {
+        if (!inMsg_ && seg_.empty()) return;          // between messages: nothing to tie it to
+        // ★ every slice the same length: after a merge, `sliceSec_` decoder seconds make one
+        pend_.sig += std::pow(10.0, sigDbfs / 10); pend_.noise += std::pow(10.0, noiseDbfs / 10); pend_.at = seg_.size();
+        if (++pendN_ < sliceSec_) return;
+        sl_.push_back({ pend_.sig / pendN_, pend_.noise / pendN_, pend_.at });
+        pend_ = Sl{ 0, 0, 0 }; pendN_ = 0;
+        if (sl_.size() > kMaxSlices) {                // ★ bounded: pairs merged, each slice twice as long
+            std::vector<Sl> m;
+            for (size_t i = 0; i + 1 < sl_.size(); i += 2) m.push_back({ (sl_[i].sig + sl_[i + 1].sig) / 2, (sl_[i].noise + sl_[i + 1].noise) / 2, sl_[i + 1].at });
+            if (sl_.size() % 2) { const Sl& l = sl_.back(); pend_ = Sl{ l.sig * sliceSec_, l.noise * sliceSec_, l.at }; pendN_ = sliceSec_; }
+            sl_.swap(m); sliceSec_ *= 2;              // ★ an odd last slice is half of the next one, not a short one
+        }
+    }
     /** Lock losses seen (blips included) — for the log. */
     unsigned long lockLosses() const { return lockLosses_; }
 
@@ -1356,6 +1435,10 @@ public:
     static std::string fileText(const NavtexMsg& m, const std::string& where) {
         std::string head = "NAVTEX \xc2\xb7 " + title(m) + "\nReceived " + utcStamp(m.startedAt, "%Y-%m-%d %H:%M UTC");
         if (!m.haveFec && m.chars > 0) head += " \xc2\xb7 " + std::to_string((int)std::lround(100.0 * m.lost / m.chars)) + "% of characters lost";
+        // ★ beta96: the FEC split and the SNR, each only when measured
+        { const std::string q = navtexQualityLine(m), r = navtexSnrLine(m);
+          if (!q.empty()) head += "\n" + q;
+          if (!r.empty()) head += "\n" + r; }
         if (!where.empty()) head += "\n" + where;
         if (!m.why.empty()) { head += "\nWhy: "; for (size_t i = 0; i < m.why.size(); i++) head += (i ? "; " : "") + m.why[i]; }
         std::string body = m.startLost ? "[start lost]" : "ZCZC " + (m.id.empty() ? std::string("????") : m.id);
@@ -1420,9 +1503,46 @@ private:
         size_t b = o.size(); while (b > a && std::isspace((unsigned char)o[b - 1])) b--;
         return o.substr(a, b - a);
     }
-    NavtexMsg build(const std::string& body, bool endLost) {
+    /** ★★ beta96: the slices of `body` (those that ended within its first `upto` raw characters — all of them when
+     *  upto = npos), mapped onto the CLEANED text, and the message's SNR figures from them. */
+    void quality(NavtexMsg& m, const std::string& body, size_t upto) const {
+        std::vector<Sl> sv = sl_;
+        if (pendN_) sv.push_back({ pend_.sig / pendN_, pend_.noise / pendN_, pend_.at });   // a part-made last slice counts
+        size_t n = 0; while (n < sv.size() && (upto == std::string::npos || sv[n].at <= upto)) n++;
+        if (!n) return;
+        // raw offset → cleaned offset: cleanText's own walk (CR runs + optional LF → one '\n'), then its leading trim
+        std::vector<size_t> map(body.size() + 1, 0);
+        size_t o = 0;
+        for (size_t i = 0; i < body.size(); i++) {
+            map[i] = o;
+            if (body[i] == '\r') { size_t j = i; while (j + 1 < body.size() && body[j + 1] == '\r') map[++j] = o; if (j + 1 < body.size() && body[j + 1] == '\n') map[++j] = o; i = j; o++; }
+            else o++;
+        }
+        map[body.size()] = o;
+        size_t lead = 0;   // the leading blank lines cleanText trims, in cleaned characters
+        { std::string c; for (size_t i = 0; i < body.size(); i++) { if (body[i] == '\r') { while (i + 1 < body.size() && body[i + 1] == '\r') i++; if (i + 1 < body.size() && body[i + 1] == '\n') i++; c += '\n'; } else c += body[i]; }
+          for (;;) { size_t k = lead; while (k < c.size() && (c[k] == ' ' || c[k] == '\t')) k++; if (k < c.size() && c[k] == '\n') lead = k + 1; else break; } }
+        double ss = 0, nn = 0, lo = 1e9; size_t red = 0, all = 0, prev = 0;
+        for (size_t i = 0; i < n; i++) {
+            const double db = 10 * std::log10(std::max(1e-30, sv[i].sig) / std::max(1e-30, sv[i].noise));
+            size_t e = map[std::min(sv[i].at, body.size())];
+            e = e > lead ? e - lead : 0; e = std::min(e, m.text.size());
+            if (i + 1 == n) e = m.text.size();        // what came after the last slice is the last slice's
+            for (size_t k = prev; k < e; k++) if (!std::isspace((unsigned char)m.text[k])) { all++; if (db < kSnrRed) red++; }
+            prev = std::max(prev, e);
+            m.tl.push_back((int)std::lround(std::max(-99.0, std::min(99.0, db))));
+            m.tc.push_back((int)e);
+            ss += sv[i].sig; nn += sv[i].noise; lo = std::min(lo, db);
+        }
+        m.haveSnr = true; m.sliceSec = sliceSec_;
+        m.sigDbfs = 10 * std::log10(std::max(1e-30, ss / n)); m.noiseDbfs = 10 * std::log10(std::max(1e-30, nn / n));
+        m.snr = m.sigDbfs - m.noiseDbfs; m.minSnr = (int)std::lround(std::max(-99.0, lo));
+        m.redPct = all ? (int)std::lround(100.0 * red / all) : 0;
+    }
+    NavtexMsg build(const std::string& body, bool endLost, size_t upto = std::string::npos) {
         NavtexMsg m;
         m.text = cleanText(body);
+        quality(m, body, upto);
         for (char c : m.text) { if (c == '_') { m.lost++; m.chars++; } else if (std::isalnum((unsigned char)c)) m.chars++; }
         m.endLost = endLost;
         m.gaps = gaps_; m.gapMs = gapMs_;
@@ -1433,8 +1553,10 @@ private:
     void closeAtCut(int64_t now) {
         const std::string body = seg_.substr(0, std::min(cut_.at, seg_.size()));
         cut_ = Cut();
+        for (auto& x : sl_) x.at = std::min(x.at, body.size());   // ★ the lost stretch's slices end the message
+        pend_.at = std::min(pend_.at, body.size());
         if (inMsg_ || alnum(body) >= kOrphanMin) finish(build(body, true));
-        seg_.clear(); inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
+        seg_.clear(); sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; inMsg_ = false; scanFrom_ = 0; segStartedAt_ = now;
     }
     void finish(const NavtexMsg& m) { gaps_ = 0; gapMs_ = 0; if (onMessage) onMessage(m); }
     void scan(int64_t now) {
@@ -1452,13 +1574,20 @@ private:
             const size_t upto = (cut_.on && kind == 1) ? std::min(cut_.at, at) : at;
             cut_ = Cut();
             const std::string before = seg_.substr(0, upto);
+            // ★ beta96: the slices that ended inside `before` are its (an NNNN's slice up to its last N); the rest move on
+            const size_t sUpto = kind == 2 ? end : upto;
             if (kind == 2) {
-                if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, false));
+                if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, false, sUpto));
                 inMsg_ = false;
             } else {
-                if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, true));
+                if (inMsg_ || alnum(before) >= kOrphanMin) finish(build(before, true, sUpto));
                 inMsg_ = true; hdrId_ = id; hdrAt_ = now; gaps_ = 0; gapMs_ = 0;
             }
+            { size_t k = 0; while (k < sl_.size() && sl_[k].at <= sUpto) k++;
+              sl_.erase(sl_.begin(), sl_.begin() + (long)k);
+              for (auto& x : sl_) x.at = x.at > end ? x.at - end : 0;
+              pend_.at = pend_.at > end ? pend_.at - end : 0;
+              if (kind == 2 || sl_.empty()) { sl_.clear(); sliceSec_ = 1; pend_ = Sl{ 0, 0, 0 }; pendN_ = 0; } }   // after NNNN: between messages
             seg_.erase(0, end);
             segStartedAt_ = now; scanFrom_ = 0;
         }
@@ -1471,6 +1600,9 @@ private:
     struct Cut { bool on = false; size_t at = 0; int64_t atMs = 0; bool relocked = false; } cut_;
     unsigned long lockLosses_ = 0;
     int gaps_ = 0; int64_t gapMs_ = 0;
+    struct Sl { double sig, noise; size_t at; };     // ★ beta96: linear powers; `at` = seg_ length when it ENDED
+    std::vector<Sl> sl_; int sliceSec_ = 1;
+    Sl pend_{ 0, 0, 0 }; int pendN_ = 0;           // the decoder seconds of the slice being made (after a merge)
 };
 
 } // namespace gallery
