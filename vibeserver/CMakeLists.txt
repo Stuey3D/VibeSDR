@@ -1295,6 +1295,11 @@ add_executable(test-decoder-reach "${CMAKE_CURRENT_SOURCE_DIR}/test-decoder-reac
 target_include_directories(test-decoder-reach PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-decoder-reach)
 add_test(NAME decoder-reach COMMAND test-decoder-reach)
+# ★★★ beta96 a mode an update adds stays off on a restricted / single-mode radio (docs/v12/NEW-MODES-OFF.md)
+add_executable(test-new-modes "${CMAKE_CURRENT_SOURCE_DIR}/test-new-modes.cpp")
+target_include_directories(test-new-modes PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-new-modes)
+add_test(NAME new-modes COMMAND test-new-modes WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # ★★ V12 (2026-11-05) what each radio can do — its modes, decoders and the settings that mean anything on it
 #    (vibe_radio_caps.h), per driver, from its config: the Setup page's per-radio tabs and the shim's `modes` offer.
 add_executable(test-radio-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-caps.cpp")
