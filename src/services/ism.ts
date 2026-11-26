@@ -8,8 +8,8 @@
 //     no ID, no code. Nothing here could show one; nothing here tries.
 // ★ PURE: no React Native — node runs it.
 
-import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml,
-         type MeshKnown, type MeshRoute } from '../utils/meshRoute';
+import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml, meshSortRows,
+         type MeshKnown, type MeshRoute, type MeshSort } from '../utils/meshRoute';
 
 export interface IsmDevice {
   key: string; kind: string; make: string; model: string; name: string; line: string;
@@ -585,11 +585,11 @@ export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number 
   });
 }
 type MapRow = { key: string; colour: string; flag: string; name: string; second: string; sp: string; trend: -1 | 0 | 1; range: string; brg: string; noPos: boolean; age: string; em: boolean };
-/** The live list (TrackRow's shape): nearest first when the receiver's position is known, else newest first. */
-export function ismMapRows(r: IsmReport | null, rx: { lat: number; lon: number } | null, miles = false): MapRow[] {
+/** The live list (TrackRow's shape): NEAREST or LATEST first (the list's sort key, meshSortRows); with no receiver position, newest first. */
+export function ismMapRows(r: IsmReport | null, rx: { lat: number; lon: number } | null, miles = false, sort: MeshSort = 'nearest'): MapRow[] {
   if (!r) return [];
   const rows = r.devices.filter((d) => ismPlotted(d, rx)).map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
-  if (rx) rows.sort((a, b) => a.k!.km - b.k!.km);
+  meshSortRows(rows, sort, rx);   // ★★ beta96 NEAREST | LATEST (meshRoute.ts)
   return rows.map(({ d, k }) => ({
     key: d.key, colour: MAP_COLOURS[d.kind] || '#ffb833', flag: '', name: ismMapLabel(d),
     second: [`${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, d.hw, d.hops !== undefined ? (d.hops === 0 ? 'first-hand' : `${d.hops} hop${d.hops === 1 ? '' : 's'}${d.direct === 1 ? ' (also first-hand)' : ''}`) : '',
@@ -692,9 +692,9 @@ export function ismGalItems(nodes: IsmGalNode[], rx: { lat: number; lon: number 
     return { key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx, miles, rt), _h: d.count, _rk: ismMapRank(d), _rt: rt };
   });
 }
-export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false): MapRow[] {
+export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false, sort: MeshSort = 'nearest'): MapRow[] {
   const rows = nodes.filter((d) => ismPlotted(d, rx)).map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
-  if (rx) rows.sort((a, b) => a.k!.km - b.k!.km);
+  meshSortRows(rows, sort, rx);   // ★★ beta96 NEAREST | LATEST (meshRoute.ts)
   return rows.map(({ d, k }) => ({
     key: d.key, colour: MAP_COLOURS[d.kind] || '#ffb833', flag: '', name: ismMapLabel(d),
     second: [ORIGIN_TAG[d.origin] || '', `${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, `${d.count}×`, `${hhmm(d.first)}–${hhmm(d.last)}`].filter(Boolean).join(' · '),

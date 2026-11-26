@@ -85,6 +85,27 @@ export function meshFarText(f: { direct: MeshFar | null; mesh: MeshFar | null },
   return o;
 }
 
+/* ★★ beta96 THE NODES LIST's ORDER (Stuart 11-26: "meshcore list needs to filter by nearest first and latest first") —
+ *  NEAREST | LATEST, the AIR & SEA list's sort key (tracks.ts setSort / TrackLiveList sort). One rule for the web and the
+ *  app, the live map and the gallery's: NEAREST = by distance, ties the most recently heard; LATEST = the most recently
+ *  heard (`seen`, s ago), ties the nearest. With no receiver position there is no distance: LATEST, and the key is not
+ *  offered (meshSortOffered → null — never a NEAREST that does nothing). Default NEAREST (the order before the key). */
+export type MeshSort = 'nearest' | 'latest';
+export const MESH_SORT_KEY = 'vibesdr.meshListSort';      // web localStorage
+export const MESH_SORT_STORE = 'lsv_mesh_list_sort';      // app AsyncStorage
+export function meshSortParse(v: unknown): MeshSort { return v === 'latest' ? 'latest' : 'nearest'; }
+/** The key's state for the list header: the viewer's pick while a position is known, else null (no key). */
+export function meshSortOffered(sort: MeshSort, rx: { lat: number; lon: number } | null | undefined): MeshSort | null {
+  return rx ? sort : null;
+}
+/** Sorts rows in place (`k` = range from the receiver, null when unknown; `d.seen` = s since heard) and returns them. */
+export function meshSortRows<T extends { d: { seen: number }; k: { km: number } | null }>(rows: T[], sort: MeshSort, rx: unknown): T[] {
+  const byKm = (a: T, b: T) => (a.k?.km ?? Infinity) - (b.k?.km ?? Infinity) || 0;
+  const bySeen = (a: T, b: T) => (a.d.seen - b.d.seen) || 0;
+  if (rx && sort === 'nearest') return rows.sort((a, b) => byKm(a, b) || bySeen(a, b));
+  return rows.sort((a, b) => bySeen(a, b) || byKm(a, b));
+}
+
 /** A relays field from the wire or a card ("5a 9f 1c") → hex groups, or undefined. Bounded: 64 hops of 1-3 bytes. */
 export function meshRelays(v: unknown): string[] | undefined {
   if (typeof v !== 'string' || v.length > 64 * 7) return undefined;

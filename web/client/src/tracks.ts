@@ -956,14 +956,16 @@ export class TrackView {
   }
   get tab(): string { return (this.root.querySelector('.hd .tab[aria-selected="true"]') as HTMLElement | null)?.dataset.tab || ''; }
   private srtSig = '';
-  /** ★★ beta96 the AIRCRAFT list's sort chip, NEAREST | LATEST — null = none (another tab). */
-  setSort(sort: string | null, onSort: (s: string) => void) {
+  /** ★★ beta96 the list's sort chip, NEAREST | LATEST — null = none (another tab, or no receiver position). `what` names
+   *  the rows for a screen reader ("aircraft"; the mesh maps' "nodes" — Stuart 11-26). */
+  setSort(sort: string | null, onSort: (s: string) => void, what = 'aircraft') {
     const host = this.root.querySelector('.hd .srt') as HTMLElement;
     host.hidden = !sort;
-    const sig = sort || '';
+    const sig = sort ? `${sort}|${what}` : '';
     if (sig === this.srtSig) return;
     this.srtSig = sig;
-    host.innerHTML = sort ? [['nearest', 'NEAREST'], ['latest', 'LATEST']].map(([id, l]) => `<button type="button" data-srt="${id}" aria-pressed="${id === sort}">${l}</button>`).join('') : '';
+    host.setAttribute('aria-label', `Sort the ${what}`);
+    host.innerHTML = sort ? [['nearest', 'NEAREST', 'nearest first'], ['latest', 'LATEST', 'most recently heard first']].map(([id, l, w]) => `<button type="button" data-srt="${id}" aria-pressed="${id === sort}" title="Sort the ${esc(what)} ${w}">${l}</button>`).join('') : '';
     for (const b of Array.from(host.querySelectorAll('[data-srt]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onSort(b.dataset.srt || ''); };
   }
   /** ★★ beta96 the MESSAGES filter line ("Messages from RYR12K · ALL") — '' = none. */
