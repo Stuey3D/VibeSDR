@@ -245,6 +245,56 @@
     pts.push(pts[0].slice());
     return pts;
   }
+  /* ★★ V12 beta95 THE OUTLINE GROWS LIVE (Stuart, 2026-11-25: "virtual radar does it straight away"). The map extends the
+   *  outline itself from every position it already receives — the server's rule (vibe_adsb_range.h + vibe_adsb.h setPos):
+   *  a position counts only from an aircraft's SECOND consistent one in a row (the step flown at ≤ 1 200 kt, at least 1 s
+   *  assumed), at most RANGE_MAX_KM out, the furthest per 1° bearing. Merged (max per bearing) with the server's stored
+   *  outline, which is fetched on open and re-synced slowly. Zero extra requests. */
+  const RANGE_BINS = 360, RANGE_MAX_KM = 650, RANGE_MAX_KT = 1200;
+  /** Is fix ({lat, lon, t ms}) a believable step on from prev? The server's posOk rule. */
+  function rangeConsistent(prev, fix) {
+    if (!prev || !fix) return false;
+    const dt = Math.max(1, (fix.t - prev.t) / 1000);
+    return distNm(prev.lat, prev.lon, fix.lat, fix.lon) / dt * 3600 <= RANGE_MAX_KT;
+  }
+  /** Offer one believed position to km (RANGE_BINS distances, km) around (cLat, cLon). True = a bearing grew. */
+  function rangeOffer(km, cLat, cLon, lat, lon) {
+    if (!Array.isArray(km) || ![cLat, cLon, lat, lon].every(isFinite)) return false;
+    const d = distNm(cLat, cLon, lat, lon) * NM_M / 1000;
+    if (!(d > 0.05) || d > RANGE_MAX_KM) return false;
+    const bin = Math.min(km.length - 1, Math.max(0, Math.floor(bearingDeg(cLat, cLon, lat, lon) * km.length / 360)));
+    const q = Math.round(d * 10) / 10;
+    if (q <= (Number(km[bin]) || 0)) return false;
+    km[bin] = q;
+    return true;
+  }
+  /** Max per bearing of two outlines (either may be missing or short). */
+  function rangeMerge(a, b) {
+    const n = Math.max(Array.isArray(a) ? a.length : 0, Array.isArray(b) ? b.length : 0);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = Math.max(Number(a && a[i]) || 0, Number(b && b[i]) || 0);
+    return out;
+  }
+  /* ★★ NO NEEDLES (Stuart, 11-25: "once it filled in, the outline is a STAR"): empty bearings are skipped (rangeRing), and
+   *  this LIGHT ±2° smoothing lets a bearing lend its neighbours 90 % / 75 % of its range, so one far aircraft is a bump,
+   *  not a needle. A bearing's own heard range is never lowered; a smooth stretch of outline is unchanged (a neighbour
+   *  is raised only where it sits more than 10 % below the bearing beside it). */
+  const RANGE_SMOOTH = [0.9, 0.75];
+  function rangeSmooth(km) {
+    if (!Array.isArray(km)) return km;
+    const n = km.length, out = km.map((v) => Number(v) || 0);
+    for (let i = 0; i < n; i++) {
+      const v = Number(km[i]) || 0;
+      if (!(v > 0)) continue;
+      for (let d = 1; d <= RANGE_SMOOTH.length; d++) {
+        const w = v * RANGE_SMOOTH[d - 1];
+        const a = (i + d) % n, b = (i - d + n) % n;
+        if (out[a] < w) out[a] = w;
+        if (out[b] < w) out[b] = w;
+      }
+    }
+    return out;
+  }
   /** Put rings (or none: null) on the GPU map's ring sources. */
   function setRingData(gl, idp, rings) {
     const s1 = gl.getSource(idp + 'rings'), s2 = gl.getSource(idp + 'ringlbl');
@@ -561,7 +611,7 @@
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
-                  wrapLon, distNm, bearingDeg, destination, rangeRing, cardinal, deadReckon, iconFor, altText, altShort,
+                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
@@ -958,7 +1008,7 @@
       bFit.classList.toggle('on', !!prefs.fit || !rx);
       bRings.classList.toggle('on', !!prefs.rings && !!rx);
       bLabels.classList.toggle('on', prefs.labels !== false);
-      bRange.hidden = !rangeData;
+      bRange.hidden = !rangeData && !liveHas();
       bRange.classList.toggle('on', !!prefs.range);
       bRange.title = rangeTitle();
       // ★ A control that cannot do anything is shown disabled with the reason, never left inert (AGENTS.md).
@@ -990,37 +1040,76 @@
      *  map"): a 3 px magenta edge — clear of the aircraft's green/amber/grey/red/blue tones and the amber rings, on both
      *  themes — over a faint fill so the aircraft beneath stay readable. The all-time outline is a thin dotted line of
      *  the same colour, behind it, off unless asked for (the key's tick box). */
-    const RANGE_POLL_MS = 5 * 60 * 1000;
+    // ★ beta95 the outline grows LIVE (rangeOffer, from update()), so the server's copy is only a slow re-sync now
+    const RANGE_POLL_MS = 15 * 60 * 1000;
     let rangeData = null, rangeAt = 0, rangeBusy = false, rangeTimer = 0, llRange = null;
+    /* ★★ beta95 THE LIVE OUTLINE: what this map has seen since it opened, binned around the receiver (the server's centre
+     *  where the page has none). It is drawn around the server's own centre once that has answered — the two are within
+     *  5 km (vibe_adsb_range.h kMovedKm), a hair at outline scale. Collected whether or not RANGE is on, so turning it on
+     *  shows it at once. liveFar = its furthest catch. */
+    let liveKm = new Array(RANGE_BINS).fill(0), liveN = 0, liveFar = null, liveC = null, rangeDrawTimer = 0;
+    function serverCentre() { return rangeData && rangeData.lat != null && rangeData.lon != null ? { lat: rangeData.lat, lon: rangeData.lon } : null; }
+    function liveCentre() { return rx || serverCentre(); }
+    function drawCentre() { return serverCentre() || rx; }
+    /** One aircraft's new fix: counted only on its second consistent position in a row (the server's posOk). */
+    function liveRangeFix(s, fix, sparse) {
+      const prev = s.rg;
+      s.rg = { lat: fix.lat, lon: fix.lon, t: fix.t };
+      if (sparse || !rangeConsistent(prev, s.rg)) return false;
+      const c = liveCentre();
+      if (!c) return false;
+      // ★ the receiver moved (a different site, the server's 5 km rule): the live bins start again around it
+      if (!liveC || distNm(liveC.lat, liveC.lon, c.lat, c.lon) * NM_M > 5000) { liveKm = new Array(RANGE_BINS).fill(0); liveN = 0; liveFar = null; }
+      liveC = c;
+      if (!rangeOffer(liveKm, c.lat, c.lon, fix.lat, fix.lon)) return false;
+      liveN++;
+      const brg = bearingDeg(c.lat, c.lon, fix.lat, fix.lon), km = distNm(c.lat, c.lon, fix.lat, fix.lon) * NM_M / 1000;
+      if (!liveFar || km > liveFar.km) liveFar = { km, brg, at: Math.floor(Date.now() / 1000) };
+      return true;
+    }
+    function liveHas() { return liveKm.some((v) => v > 0); }
+    function farOf(a, b) { return a && b ? (b.km > a.km ? b : a) : a || b || null; }
+    /** Redraw soon (at most every 1.5 s) — the outline grows from 1 Hz reports. */
+    function rangeSoon() {
+      if (rangeDrawTimer || destroyed) return;
+      rangeDrawTimer = setTimeout(() => { rangeDrawTimer = 0; if (destroyed) return; paintCtl(); paintRangeKey(); drawRange(); }, 1500);
+    }
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     function dayText(utc) { const d = new Date(utc * 1000); return d.getUTCDate() + ' ' + MONTHS[d.getUTCMonth()]; }
-    function catchText(c) { return c && c.km > 0 ? Math.round(c.km) + ' km at ' + Math.round(c.brg) + '\u00b0, ' + dayText(c.at) : ''; }
+    // ★★ beta95 NM (Stuart 11-25: NM everywhere on the aviation and shipping maps) — the server still sends km
+    function catchText(c) { return c && c.km > 0 ? Math.round(c.km * 1000 / NM_M) + ' NM at ' + Math.round(c.brg) + '\u00b0, ' + dayText(c.at) : ''; }
     function windowText(w) { return w === 0 ? 'all time' : w === 1 ? 'the last day' : 'the last ' + w + ' days'; }
+    function rangeWindowText() { return rangeData ? windowText(rangeData.window) : 'since this map opened'; }
     function rangeTitle() {
-      if (!rangeData) return '';
-      const f = catchText(rangeData.far);
-      return (prefs.range ? 'Range outline on' : 'Range outline off') + ' \u2014 the furthest aircraft heard on each bearing over '
-        + windowText(rangeData.window) + (f ? ' \u00b7 furthest ' + f : ' \u00b7 nothing heard yet');
+      if (!rangeData && !liveHas()) return '';
+      const f = catchText(farOf(rangeData && rangeData.far, liveFar));
+      return (prefs.range ? 'Range outline on' : 'Range outline off') + ' \u2014 the furthest aircraft heard on each bearing '
+        + (rangeData ? 'over ' : '') + rangeWindowText() + (f ? ' \u00b7 furthest ' + f : ' \u00b7 nothing heard yet');
     }
     function paintRangeKey() {
       const box = leg.querySelector('.vsadsb-rg');
       if (!box) return;
-      box.hidden = !rangeData;
-      if (!rangeData) return;
-      const f = catchText(rangeData.far), r = catchText(rangeData.record);
-      box.querySelector('.vsadsb-rg-w').textContent = 'Furthest per bearing, ' + windowText(rangeData.window);
+      box.hidden = !rangeData && !liveHas();
+      if (box.hidden) return;
+      const f = catchText(farOf(rangeData && rangeData.far, liveFar)), r = catchText(farOf(rangeData && rangeData.record, liveFar));
+      box.querySelector('.vsadsb-rg-w').textContent = 'Furthest per bearing, ' + rangeWindowText();
       box.querySelector('.vsadsb-rg-far').textContent = f ? 'Furthest: ' + f : 'Nothing heard yet in this window';
       box.querySelector('.vsadsb-rg-rec').textContent = r ? 'Furthest ever: ' + r : '';
       box.querySelector('.vsadsb-rg-all').checked = !!prefs.rangeAll;
+      box.querySelector('.vsadsb-rg-all').parentNode.hidden = !rangeData || rangeData.window === 0;   // ★ no all-time line to show
     }
     leg.addEventListener('change', (e) => {
       if (!e.target || !e.target.classList || !e.target.classList.contains('vsadsb-rg-all')) return;
       setPref('rangeAll', !!e.target.checked); drawRange();
     });
+    /** The outline drawn: the server's (if any) merged with the live one, smoothed (rangeSmooth), and its all-time line. */
     function rangeGeo() {
-      if (!rangeData || rangeData.lat == null || rangeData.lon == null) return { w: null, a: null };
-      return { w: prefs.range ? rangeRing(rangeData.lat, rangeData.lon, rangeData.km) : null,
-               a: prefs.range && prefs.rangeAll && rangeData.window !== 0 ? rangeRing(rangeData.lat, rangeData.lon, rangeData.allKm) : null };
+      const c = drawCentre();
+      if (!c || (!rangeData && !liveHas())) return { w: null, a: null };
+      const live = liveC && distNm(liveC.lat, liveC.lon, c.lat, c.lon) * NM_M <= 5000 ? liveKm : null;
+      return { w: prefs.range ? rangeRing(c.lat, c.lon, rangeSmooth(rangeMerge(rangeData && rangeData.km, live))) : null,
+               a: prefs.range && prefs.rangeAll && rangeData && rangeData.window !== 0
+                 ? rangeRing(c.lat, c.lon, rangeSmooth(rangeMerge(rangeData.allKm, live))) : null };
     }
     function drawRange() {
       if (destroyed) return;
@@ -1609,7 +1698,7 @@
       const t = now();
       if (!firstUpdateAt) firstUpdateAt = t;
       const seen = new Set();
-      let anyPos = false;
+      let anyPos = false, rangeGrew = false;
       for (const raw of Array.isArray(list) ? list : []) {
         if (!raw || typeof raw !== 'object') continue;
         const hex = cleanHex(raw.hex);
@@ -1637,6 +1726,7 @@
           else fix.track = s.fix.track;
         }
         if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
+        if (liveRangeFix(s, fix, !!raw.sparse)) rangeGrew = true;     // ★ beta95 the outline grows live
         if (!s.tr) s.tr = [];
         if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
         if (!s.disp) {
@@ -1659,6 +1749,7 @@
         else s.corr = { dLat: shown.lat - pred.lat, dLon: wrapLon(shown.lon, pred.lon) - pred.lon, t0: t, ms: sparse ? SPARSE_GLIDE_MS : GLIDE_MS };
       }
       if (anyPos) firstPosBatchSeen = true;
+      if (rangeGrew) rangeSoon();
       for (const s of ac.values()) if (!seen.has(s.hex) && !s.goneAt) s.goneAt = t;
       if (selected && popup && ac.has(selected)) {
         const h = cardHtml(ac.get(selected));
@@ -1887,17 +1978,20 @@
         return true;
       },
       prefs() { return Object.assign({}, prefs); },
-      /** ★ beta94 what the range outline draws (a test's view): null until the server has answered. */
+      /** ★ beta94 what the range outline draws (a test's view): null until the server has answered or (beta95) the map
+       *  has grown one live. live = the bearings grown from this map's own positions; liveFar its furthest. */
       rangeShown() {
-        if (!rangeData) return null;
+        if (!rangeData && !liveHas()) return null;
         const g = rangeGeo();
-        return { window: rangeData.window, points: g.w ? g.w.length - 1 : 0, allPoints: g.a ? g.a.length - 1 : 0,
-                 far: rangeData.far, record: rangeData.record, title: rangeTitle() };
+        return { window: rangeData ? rangeData.window : null, points: g.w ? g.w.length - 1 : 0, allPoints: g.a ? g.a.length - 1 : 0,
+                 far: rangeData ? rangeData.far : null, record: rangeData ? rangeData.record : null, title: rangeTitle(),
+                 live: liveKm.filter((v) => v > 0).length, liveFar, ring: g.w };
       },
       destroy() {
         destroyed = true;
         if (rafId) cancelAnimationFrame(rafId);
         if (rangeTimer) clearInterval(rangeTimer);
+        if (rangeDrawTimer) clearTimeout(rangeDrawTimer);
         doc.removeEventListener('visibilitychange', onVis);
         closePopup();
         try { ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }

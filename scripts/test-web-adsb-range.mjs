@@ -62,7 +62,7 @@ const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-adsbrange-'));
 const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg}`, '--no-first-run', '--no-default-browser-check',
   '--enable-unsafe-swiftshader', `--user-data-dir=${path.join(ud, 'edge')}`, '--window-size=1100,800', 'about:blank'], { stdio: 'ignore' });
 const done = (code) => { try { edge.kill(); } catch {} srv.close(); setTimeout(() => { try { fs.rmSync(ud, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {} process.exit(code); }, 500); };
-const watchdog = setTimeout(() => { console.log('   FAIL timed out'); done(1); }, 150000);
+const watchdog = setTimeout(() => { console.log('   FAIL timed out'); done(1); }, 300000);
 
 try {
   let page = null;
@@ -77,15 +77,40 @@ try {
   // ★ a few maps in one headless Edge (SwiftShader): a later one can take well over 15 s to load — waited for, up to 40 s
   const open = async (theme, prefs, base = '/adsb/') => {
     const n = ++navs;   // ★ wait for THIS page: the last one's window.ready answers until the navigation lands
+    // ★ beta95: headless Edge was marking the page HIDDEN after a couple of maps (MapLibre then never fires "load" —
+    //   no frames): brought to the front, focus emulated, before each one
+    await send('Page.bringToFront'); await send('Emulation.setFocusEmulationEnabled', { enabled: true });
     await send('Page.navigate', { url: `${origin}/page?n=${n}&theme=${theme}&prefs=${encodeURIComponent(JSON.stringify(prefs))}&base=${encodeURIComponent(base)}` });
     for (let i = 0; i < 160; i++) { await sleep(250); if ((await ev(`location.search.startsWith('?n=${n}&') && window.ready === 1`)) === true) break; }
+    if ((await ev('window.ready === 1')) !== true) console.log('   (map not ready)', await ev(`JSON.stringify({ vis: document.visibilityState, focus: document.hasFocus(), style: window.map && map.isStyleLoaded(), err: String(window.err), gl: !!(window.map && map.painter) })`));
     await sleep(1200);
   };
   const shown = async () => JSON.parse(await ev('JSON.stringify(layer.rangeShown())'));
   const feats = async () => JSON.parse(await ev(`JSON.stringify(map.querySourceFeatures('vsadsb-range').map(f => f.properties.k + ':' + f.geometry.type))`));
   const btn = `[...document.querySelectorAll('.vsadsb-ctl button')].find(b => b.textContent === 'RANGE')`;
-  const heard = km.filter((v) => v > 0).length;
+  // ★ beta95 rangeSmooth: a heard bearing lends its ±2° neighbours (no needles), so the unheard gap's two edges are drawn too
+  const lends = (a) => a.filter((v, i) => v > 0 || [1, 2].some((d) => a[(i + d) % 360] > 0 || a[(i - d + 360) % 360] > 0)).length;
+  const heard = lends(km), heardAll = lends(allKm);
 
+  // an older server: no /adsb/range → no button, nothing drawn
+  const before = hits;
+  await open('dark', {}, '/old/');
+  const old = await ev(`JSON.stringify({ ready: window.ready === 1, hidden: ${btn}.hidden, shown: layer.rangeShown() })`);
+  ok(old === '{"ready":true,"hidden":true,"shown":null}', `a server without the outline: no RANGE button, nothing drawn (${old})`);
+  ok(hits === before, '…(it asked the old server, not this one)');
+  // ★★ beta95 THE LIVE OUTLINE: the same server-less map grows its own from the positions it is sent — the second
+  //    consistent position counts (the first proves nothing), a jump that is not flight does not
+  const step = (lat, lon, seenPos) => `layer.update([{hex:"77aa11",lat:${lat},lon:${lon},gs:420,track:90,alt_baro:35000,flight:"EZY77",seen:0,seen_pos:${seenPos}}])`;
+  await ev(step(51.6, 1.200, 0)); await sleep(1800);
+  let live = await ev('JSON.stringify(layer.rangeShown())');
+  ok(live === 'null', `live: a first-seen aircraft's first position proves nothing… (${live})`);
+  await ev(step(51.6, 1.205, 0)); await sleep(1800);
+  live = JSON.parse(await ev('JSON.stringify(layer.rangeShown())'));
+  ok(live && live.live === 1 && live.window === null, `live: …the next grows the outline at once, with no server outline (${live && live.live} bearing)`);
+  ok((await ev(`${btn}.hidden`)) === false, 'live: the RANGE button appears with it');
+  ok(live && / NM at \d+°/.test(live.title) && /since this map opened/.test(live.title), `live: its title, in NM, since the map opened ("${live && live.title}")`);
+  await ev(step(40.0, -20.0, 0)); await sleep(1800);
+  ok(JSON.parse(await ev('JSON.stringify(layer.rangeShown())')).live === 1, 'live: a jump that is not flight (1 000 NM in a second) grows nothing');
   for (const theme of ['dark', 'light']) {
     await open(theme, {});
     let s = await shown();
@@ -97,15 +122,15 @@ try {
     const paint = JSON.parse(await ev(`JSON.stringify({ w: map.getPaintProperty('vsadsb-range-line','line-width'), c: map.getPaintProperty('vsadsb-range-line','line-color'), f: map.getPaintProperty('vsadsb-range-fill','fill-opacity') })`));
     ok(paint.w >= 2.5 && paint.f < 0.15, `${theme}: a bold edge (${paint.w} px, ${paint.c}) over a faint fill (${paint.f})`);
     ok((await ev(`${btn}.hidden === false && ${btn}.classList.contains('on')`)) === true, `${theme}: the RANGE toggle is there and on`);
-    ok(/furthest \d+ km at \d+°, 8 Nov/.test(s.title), `${theme}: its title says the furthest catch ("${s.title}")`);
+    ok(/furthest \d+ NM at \d+°, 8 Nov/.test(s.title), `${theme}: its title says the furthest catch ("${s.title}")`);
     await ev('layer.toggleLegend(true)'); await sleep(300);
     const key = await ev(`document.querySelector('.vsadsb-leg .vsadsb-rg').innerText`);
-    ok(/Furthest: \d+ km at \d+°, 8 Nov/.test(key) && /Furthest ever: 512 km at 160°, 3 Nov/.test(key) && /last 30 days/.test(key), `${theme}: the key — window, furthest, furthest ever`);
+    ok(/Furthest: \d+ NM at \d+°, 8 Nov/.test(key) && /Furthest ever: 276 NM at 160°, 3 Nov/.test(key) && /last 30 days/.test(key), `${theme}: the key — window, furthest, furthest ever`);
     if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); const p = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(SHOTS, `range-${theme}.png`), Buffer.from(p.result.data, 'base64')); }
     // the all-time line
     await ev(`(() => { const c = document.querySelector('.vsadsb-leg .vsadsb-rg-all'); c.click(); return 1; })()`); await sleep(400);
     s = await shown();
-    ok(s.allPoints === heard && (await feats()).includes('a:LineString'), `${theme}: ticking "All-time outline" draws the dotted line`);
+    ok(s.allPoints === heardAll && (await feats()).includes('a:LineString'), `${theme}: ticking "All-time outline" draws the dotted line`);
     ok((await ev('JSON.stringify(saved[saved.length-1])')).includes('"rangeAll":true'), `${theme}: …and the host is told (remembered)`);
     if (SHOTS) { const p = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(SHOTS, `range-${theme}-alltime.png`), Buffer.from(p.result.data, 'base64')); }
     // the toggle off, remembered
@@ -120,13 +145,15 @@ try {
     await ev(`${btn}.click()`); await sleep(400);
     ok((await shown()).points === heard, `${theme}: …and RANGE turns it back on`);
   }
-  // an older server: no /adsb/range → no button, nothing drawn
-  const before = hits;
-  await open('dark', {}, '/old/');
-  const old = await ev(`JSON.stringify({ ready: window.ready === 1, hidden: ${btn}.hidden, shown: layer.rangeShown() })`);
-  ok(old === '{"ready":true,"hidden":true,"shown":null}', `a server without the outline: no RANGE button, nothing drawn (${old})`);
-  ok(hits === before, '…(it asked the old server, not this one)');
-  ok(hits === 4, `the outline is fetched once per map opened, not per report (${hits} for 4 maps on this server)`);
+  // and merged with the server's: a far live catch beyond the fixture on bearing ~95° widens it
+  await open('dark', {});
+  const pre = await shown();
+  const far = (d) => `(() => { const M = VibeAdsbLayer.maths, p = M.destination(52.29, -0.85, 95.5, ${d}); return 'layer.update([{hex:"abc123",lat:' + p.lat + ',lon:' + p.lon + ',gs:450,track:95,alt_baro:38000,seen:0}])'; })()`;
+  await ev(await ev(far(330))); await ev('new Promise(r => setTimeout(r, 1100))'); await ev(await ev(far(330.2)));
+  await sleep(1900);
+  const post = await shown();
+  ok(post.live === 1 && post.points >= pre.points && post.ring.some((p) => Math.abs(p[0] - (-0.85)) > 7), `live + server: the far live catch is merged into the server's outline (${post.live} live bearing, ${post.points} points)`);
+  ok(hits === 5, `the outline is fetched once per map opened, not per report (${hits} for 5 maps on this server)`);
   ws.close();
 } catch (e) { fail++; console.log('   FAIL', e && e.stack || e); }
 clearTimeout(watchdog);
