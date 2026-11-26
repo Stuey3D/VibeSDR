@@ -777,6 +777,9 @@ public:
      *  POST /vibeserver/setup-code/password, which calls this handler ("" = stored and in force, else the reason). */
     using SetupPasswordFn = std::function<std::string(const std::string&)>;
     static void setSetupPasswordHandler(SetupPasswordFn fn);
+    /** Finish (an admin, from the page): `remote` = the owner ticked "allow changing settings from other devices later". */
+    using SetupFinishFn = std::function<std::string(bool)>;
+    static void setSetupFinishHandler(SetupFinishFn fn);
     static std::string setupCodeIssue();
     static void setupCodeCancel();
     static std::string setupCodeState();

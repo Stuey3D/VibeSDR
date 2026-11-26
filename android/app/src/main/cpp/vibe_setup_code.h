@@ -91,6 +91,7 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         endSessionLocked();
         if (adminPasswordSet) { code_.clear(); end_ = End::PasswordExists; return ""; }
+        passwordSet_ = false; finished_ = false; peer_.clear();
         std::string c;
         // ★ Rejection sampling: 31 does not divide 2^64, so the top of the range is thrown away — no symbol is likelier.
         const uint64_t lim = UINT64_MAX - (UINT64_MAX % 31);
@@ -109,6 +110,7 @@ public:
         if (!code_.empty()) end_ = End::Cancelled;
         code_.clear();
         endSessionLocked();
+        passwordSet_ = false; finished_ = false;
     }
 
     /** A laptop typed `typed`. `lan` = the caller checked the peer is on the local network (and not via the tunnel). */
@@ -145,7 +147,11 @@ public:
     /** The password was set (or the owner left): the session is over. */
     void endSession() { std::lock_guard<std::mutex> lk(mtx_); endSessionLocked(); }
     void setSessionPeer(const std::string& p) { std::lock_guard<std::mutex> lk(mtx_); if (!session_.empty()) peer_ = p.substr(0, 64); }
-    void markPasswordSet() { std::lock_guard<std::mutex> lk(mtx_); passwordSet_ = true; endSessionLocked(); }
+    /** The first password is set: the code's session is over (its one power is spent). The REMOTE SETUP WINDOW goes on —
+     *  the laptop carries on as an ordinary admin with that password — until finish() or cancel(). */
+    void markPasswordSet() { std::lock_guard<std::mutex> lk(mtx_); passwordSet_ = true; session_.clear(); }
+    /** ★ The page pressed Finish (an admin, with the new password): the window closes; the TV returns to its status. */
+    void finish() { std::lock_guard<std::mutex> lk(mtx_); finished_ = true; code_.clear(); endSessionLocked(); }
 
     /** For the screen showing the code (JSON). Never contains the session token. */
     std::string stateJson(int64_t nowMs) {
@@ -159,10 +165,15 @@ public:
         j += ",\"peer\":\"" + jsonSafe(peer_) + "\"";
         j += ",\"ended\":\"" + std::string(endWord(end_)) + "\"";
         j += ",\"passwordSet\":"; j += passwordSet_ ? "true" : "false";
+        // ★ "Setup in progress on <peer>": from the code being used until Finish or the owner leaves the screen.
+        j += ",\"inProgress\":"; j += (!session_.empty() || (passwordSet_ && !finished_ && !peer_.empty())) ? "true" : "false";
+        j += ",\"finished\":"; j += finished_ ? "true" : "false";
         j += "}";
         return j;
     }
 
+    /** The first password was set through a code and the window has not been finished or left. */
+    bool windowOpen() { std::lock_guard<std::mutex> lk(mtx_); return passwordSet_ && !finished_; }
     bool codeLive(int64_t nowMs) { std::lock_guard<std::mutex> lk(mtx_); expireLocked(nowMs); return !code_.empty(); }
     bool sessionLive(int64_t nowMs) { std::lock_guard<std::mutex> lk(mtx_); expireLocked(nowMs); return !session_.empty(); }
 
@@ -189,7 +200,7 @@ private:
     int64_t expires_ = 0, sessionSeen_ = 0;
     int wrong_ = 0;
     End end_ = End::None;
-    bool issued_ = false, passwordSet_ = false;
+    bool issued_ = false, passwordSet_ = false, finished_ = false;
 };
 
 }  // namespace setupcode

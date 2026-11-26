@@ -517,6 +517,7 @@ Java_com_vibesdr_app_VibeRemoteSetup_nativeEnable(JNIEnv* env, jclass cls, jbool
 // password" reaches Kotlin through the handler registered here (VibeRemoteSetup.setupPasswordSet — stores it, puts it in
 // force, and switches remote access to /setup ON, which is the point of it).
 static jmethodID g_rsPw = nullptr;
+static jmethodID g_rsFin = nullptr;
 static jclass    g_rsPwCls = nullptr;
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeRemoteSetup_nativeSetupInit(JNIEnv* env, jclass cls) {
@@ -524,7 +525,26 @@ Java_com_vibesdr_app_VibeRemoteSetup_nativeSetupInit(JNIEnv* env, jclass cls) {
         g_rsPwCls = (jclass)env->NewGlobalRef(cls);
         g_rsPw = env->GetStaticMethodID(cls, "setupPasswordSet", "(Ljava/lang/String;)Ljava/lang/String;");
         if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_rsPw = nullptr; }
+        g_rsFin = env->GetStaticMethodID(cls, "setupFinish", "(Z)Ljava/lang/String;");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_rsFin = nullptr; }
     }
+    if (g_rsFin) vibe::LocalSdrShim::setSetupFinishHandler([](bool remote) -> std::string {
+        if (!g_vm || !g_rsPwCls || !g_rsFin) return "";
+        JNIEnv* e = nullptr; bool attached = false;
+        if (g_vm->GetEnv((void**)&e, JNI_VERSION_1_6) != JNI_OK) {
+            if (g_vm->AttachCurrentThread(&e, nullptr) != JNI_OK) return "";
+            attached = true;
+        }
+        std::string out;
+        if (auto r = (jstring)e->CallStaticObjectMethod(g_rsPwCls, g_rsFin, remote ? JNI_TRUE : JNI_FALSE)) {
+            if (const char* c = e->GetStringUTFChars(r, nullptr)) { out = c; e->ReleaseStringUTFChars(r, c); }
+            e->DeleteLocalRef(r);
+        }
+        if (e->ExceptionCheck()) { e->ExceptionClear(); out.clear(); }
+        if (attached) g_vm->DetachCurrentThread();
+        for (auto& ch : out) if (ch == '"' || ch == '\\') ch = '\'';
+        return out;
+    });
     if (!g_rsPw) return;
     vibe::LocalSdrShim::setSetupPasswordHandler([](const std::string& pw) -> std::string {
         if (!g_vm || !g_rsPwCls || !g_rsPw) return "the phone is not ready";

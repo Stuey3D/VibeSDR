@@ -7,6 +7,7 @@
 //      set; and never in the state JSON the screen reads.
 //   6. Symbols are uniform enough (no symbol hugely favoured over 31 × 4000 draws) — the rejection sampling works.
 #include "vibe_setup_code.h"
+#include "vibe_android_setup.h"   // ★ the lock-out guard (remote access is the device's switch)
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -80,10 +81,16 @@ int main() {
         s.markPasswordSet();
         ok(!s.sessionOk(r.session, T0 + 3), "setting the password ends the session");
         ok(s.stateJson(T0 + 3).find("\"passwordSet\":true") != std::string::npos, "and the screen is told");
+        ok(s.windowOpen() && s.stateJson(T0 + 3).find("\"inProgress\":true") != std::string::npos,
+           "after the password the WINDOW stays open: the laptop carries on as an admin, the TV still says in progress");
+        s.finish();
+        ok(!s.windowOpen() && s.stateJson(T0 + 4).find("\"finished\":true") != std::string::npos
+           && s.stateJson(T0 + 4).find("\"inProgress\":false") != std::string::npos, "Finish closes it: the TV goes back to its status");
         SetupCodes s2;
         auto r2 = s2.redeem(s2.issue(false, T0, &rnd), true, false, T0 + 1, &rnd);
         s2.cancel();
         ok(!s2.sessionOk(r2.session, T0 + 2), "backing out ends a session in progress");
+        ok(!s2.windowOpen(), "and no window is left open behind it");
     }
     {   // 2d. wrong tries + 3. LAN only
         SetupCodes s;
@@ -116,6 +123,15 @@ int main() {
         uint64_t (*mix)() = []() -> uint64_t { return (seq % 3 == 2) ? (seq++, g_rng()) : badRnd(); };
         std::string c = s.issue(false, T0, mix); got = (int)c.size();
         ok(got == 8, "values at the top of the range are thrown away, not folded in");
+    }
+    {   // 7. THE LOCK-OUT GUARD: a remote save may never change "Remote access to server settings".
+        for (const char* body : {R"({"remoteAccess":false})", R"({"remote":false,"radios":[]})", R"({"remoteSetup":true})"}) {
+            std::string patch, err; bool restart = false;
+            const bool okSave = vibe::androidsetup::settingsPatch(body, patch, restart, err);
+            ok(!okSave && err.find("on the device itself") != std::string::npos, "a remote save touching remote access is refused, with the reason");
+        }
+        std::string patch, err; bool restart = false;
+        ok(vibe::androidsetup::settingsPatch(R"({"radios":[]})", patch, restart, err), "an ordinary save still goes through");
     }
     std::printf(fails ? "test-setup-code: %d passed, %d FAILED\n" : "test-setup-code: all %d passed\n", passes, fails);
     return fails ? 1 : 0;

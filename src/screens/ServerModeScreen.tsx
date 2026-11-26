@@ -275,7 +275,7 @@ type PinMode = 'random' | 'custom' | 'off';
 //    which were only ever here. Android offered three while the Pi offered eight, so a TV with an RTL-SDR V4
 //    could not pick 2.048 — DAB's native rate — while the Pi's NooElec could (Stuart, 2026-09-19). It looked
 //    like a per-dongle limit; it was two copies of one list. Edit both together.
-const RATE_OPTIONS_RTL = [
+export const RATE_OPTIONS_RTL = [
   { label: 'Client-controlled',     value: 0 },
   { label: 'Full · 2.4 MHz',        value: 2_400_000 },
   { label: '2.16 MHz',              value: 2_160_000 },
@@ -297,7 +297,7 @@ const RATE_OPTIONS_RTL = [
 // decides which menu to draw. 10 MS/s is offered but flagged — it is far more than the phone's
 // DSP can carry, and the server-side comment says the ceiling is what the DSP can plausibly
 // process, not what the radio can emit.
-const RATE_OPTIONS_HRF = [
+export const RATE_OPTIONS_HRF = [
   { label: 'Client-controlled', value: 0 },
   { label: '2 MS/s (lightest)', value: 2_000_000 },
   { label: '2.4 MS/s',          value: 2_400_000 },
@@ -308,7 +308,7 @@ const RATE_OPTIONS_HRF = [
 // ★★★ SDRplay RSP (2026-10-22, the OpenRSP driver inside the app, Android 8.0+). Mirrors supportedRates() in the shim
 // (2 – 8 MS/s) and `sdrplay` in vibe_setup_page.h's DRIVER_HW — edit together. Above 6.048 MS/s the converter gives up
 // bits (12-bit to 8.064), and a phone's DSP pays for every one of them, so the light end is marked.
-const RATE_OPTIONS_RSP = [
+export const RATE_OPTIONS_RSP = [
   { label: 'Client-controlled',          value: 0 },
   { label: '2 MS/s (lightest)',          value: 2_000_000 },
   { label: '2.048 MS/s',                 value: 2_048_000 },
@@ -320,7 +320,7 @@ const RATE_OPTIONS_RSP = [
 ];
 // Airspy HF+ Discovery / Dual Port. ★ The radio's own list still wins once it is running —
 // this is which menu to draw, not a claim about the hardware.
-const RATE_OPTIONS_AHF = [
+export const RATE_OPTIONS_AHF = [
   { label: 'Client-controlled', value: 0 },
   { label: 'Full · 912 kHz',  value: 912_000 },
   { label: '768 kHz',         value: 768_000 },
@@ -331,7 +331,7 @@ const RATE_OPTIONS_AHF = [
 // device), and getConnectedRadio() cannot tell the two apart from VID/PID — so both boards' rates
 // are listed and the shim snaps a pinned one to the radio's nearest (AirspySource::nearestRate).
 // ★ Same list as `airspy` in vibe_setup_page.h's DRIVER_HW — edit both together.
-const RATE_OPTIONS_ASP = [
+export const RATE_OPTIONS_ASP = [
   { label: 'Client-controlled',        value: 0 },
   { label: '10 MS/s (R2, heavy)',      value: 10_000_000 },
   { label: '6 MS/s (Mini)',            value: 6_000_000 },

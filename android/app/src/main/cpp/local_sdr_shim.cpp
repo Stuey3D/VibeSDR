@@ -6923,6 +6923,7 @@ VsAuth g_vsAuthState;
 static vibe::setupcode::SetupCodes g_vsSetupCodes;
 static std::mutex g_vsSetupPwMtx;
 static std::function<std::string(const std::string&)> g_vsSetupPwFn;
+static std::function<std::string(bool)> g_vsSetupFinishFn;
 static int64_t vsSteadyMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -29848,6 +29849,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (got != body.size()) { reply(400, "Bad Request", "{\"ok\":false,\"why\":\"bad_body\"}"); return; }
             const std::string form = "POST /?" + body + " HTTP/1.1";
             const bool isPw = reqLine.rfind("POST /vibeserver/setup-code/password", 0) == 0;
+            /* ★★ FINISH — an ADMIN now (the password just set, the ordinary nonce + HMAC proof in the URL). Ends the remote
+             *  setup window; `remote=1` only if the owner ticked "allow changing settings from other devices later" — the
+             *  permanent switch is the owner's explicit choice, never a side effect of first-time setup (Stuart, 2026-11-26). */
+            if (reqLine.rfind("POST /vibeserver/setup-code/finish", 0) == 0) {
+                if (!lan) { reply(403, "Forbidden", "{\"ok\":false,\"why\":\"not_local\"}"); return; }
+                std::string secret;
+                { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+                const VsAdminProof pr = vsAdminProof(secret, reqLine);
+                if (!pr.ok || g_vsAuthState.blocked(ip)) {
+                    if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
+                    reply(401, "Unauthorized", "{\"ok\":false,\"why\":\"admin\"}"); return;
+                }
+                g_vsAuthState.recordOk(ip);
+                if (!g_vsSetupCodes.windowOpen()) { reply(409, "Conflict", "{\"ok\":false,\"why\":\"no_window\"}"); return; }
+                std::function<std::string(bool)> fn;
+                { std::lock_guard<std::mutex> lk(g_vsSetupPwMtx); fn = g_vsSetupFinishFn; }
+                const std::string why = fn ? fn(queryParam(form, "remote") == "1") : std::string();
+                g_vsSetupCodes.finish();
+                LOGI("remote first-time setup finished by %s (remote access %s)", ip.c_str(),
+                     queryParam(form, "remote") == "1" ? "switched on by the owner" : "left off");
+                reply(200, "OK", why.empty() ? "{\"ok\":true}" : "{\"ok\":true,\"note\":\"" + why + "\"}");
+                return;
+            }
             if (!isPw) {
                 const auto r = g_vsSetupCodes.redeem(urlDecode(queryParam(form, "code")), lan, vsAdminPasswordSet(),
                                                      vsSteadyMs(), &vsRandom64);
@@ -48127,6 +48151,9 @@ void LocalSdrShim::setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set)
     g_vsSdrChangeSet  = std::move(set);
 }
 
+void LocalSdrShim::setSetupFinishHandler(SetupFinishFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsSetupPwMtx); g_vsSetupFinishFn = std::move(fn);
+}
 void LocalSdrShim::setSetupPasswordHandler(SetupPasswordFn fn) {
     std::lock_guard<std::mutex> lk(g_vsSetupPwMtx); g_vsSetupPwFn = std::move(fn);
 }

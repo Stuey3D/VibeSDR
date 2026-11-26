@@ -657,6 +657,12 @@ inline std::string pageConfig(const std::string& raw) {
 inline bool settingsPatch(const std::string& body, const std::string& current, std::string& patchOut, bool& restart, std::string& err) {
     J b;
     if (!parse(body, b) || b.t != J::Obj) { err = "the settings were not valid JSON"; return false; }
+    /* ★★★ beta96 THE LOCK-OUT GUARD (Stuart, 2026-11-26): "Remote access to server settings" is the device's switch. From
+     *  here, turning it off would lock the owner out of the very page doing it — so a save that tries to change it is
+     *  REFUSED with the reason, whatever value it carries. The page shows it read-only; only the device's own screen
+     *  turns it on or off. */
+    for (const char* k : {"remoteAccess", "remoteSetup", "remote"})
+        if (b.get(k)) { err = "Remote access to server settings can only be changed on the device itself."; return false; }
     J cur; if (!parse(current, cur) || cur.t != J::Obj) cur = J::obj();
     J noSettings = J::obj();
     const J* curS = cur.get("settings"); if (!curS || curS->t != J::Obj) curS = &noSettings;
