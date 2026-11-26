@@ -18,6 +18,7 @@
  *     decoder in one step, under the shared-dial contract (spectrum.ts asks before tuning). AUTO DOPPLER sends
  *     {"op":"doppler"}; leaving the mode (EXIT, the key again, another whole-radio mode) sends {"op":"drop"}.
  *  ★ No flashing: COAST dims the readout, nothing blinks. */
+import { plainEnglish } from '../../../src/utils/cwVocab';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
 import {
@@ -313,6 +314,14 @@ function qualityHtml(p: SatPass | undefined): string {
   if (!p) return '';
   const q = satPassQuality(p.maxEl);
   return ` · <span class="sat-q q-${q.toLowerCase()}" title="How well this pass should come in: the higher it climbs, the closer and clearer it is">${esc(satPassText(p))}</span>`;
+}
+
+/** ★★ beta96 the CW box's EXPLAIN setting (main.ts CW_PLAIN_KEY 'vibe.cwPlain'), read and written here for the transponder rows;
+ *  main.ts is told (vibe:cwplain) so its own key and text follow at once. */
+function xpdrCwPlain(): boolean { try { return localStorage.getItem('vibe.cwPlain') === '1'; } catch { return false; } }
+function xpdrCwPlainSet(on: boolean) {
+  try { localStorage.setItem('vibe.cwPlain', on ? '1' : '0'); } catch { /* not stored: this page only */ }
+  try { window.dispatchEvent(new CustomEvent('vibe:cwplain', { detail: on })); } catch { /* fine */ }
 }
 
 export class SatPanel {
@@ -752,6 +761,7 @@ export class SatPanel {
     if (act === 'tlmall') { this.tlmAll = !this.tlmAll; this.paintPick(); return; }
     if (act === 'orbsky') { this.orbSky = !this.orbSky; this.paintPick(); return; }
     if (act === 'skymode') { this.skyMode = skyModeOf(b.dataset.v); this.paintPick(); return; }
+    if (act === 'xexplain') { xpdrCwPlainSet(!xpdrCwPlain()); this.xpKey = ''; this.render(); return; }   // ★★ beta96
     if (act === 'xlisten') { const r = this.xp?.rows.find((x) => x.id === b.dataset.xid); if (r && this.deps.xpdrListen) this.deps.xpdrListen(r); return; }
     if (act === 'orbmax') { this.orbMaxK = Math.max(0, Math.min(6, Number(b.dataset.v) || 0)); this.deps.orbMax?.(this.orbMaxK); this.paintPick(); return; }
     if (act === 'show') { this.setShow(satShowGroup((b.dataset.g || 'all') as SatShowGroup | 'all', this.showF)); return; }
@@ -1089,6 +1099,11 @@ export class SatPanel {
     const fw = xpdrFollowText(st?.follow ?? null);
     if (fw) h += `<div class="sat-note">${esc(fw)}</div>`;
     const rows = xpdrRowsSorted(st?.rows ?? []);
+    /* ★★ beta96 (Stuart 11-26: "we need the raw/explain here for the cw"): EXPLAIN ↔ RAW over the CW rows — the CW box's key,
+     *  the SAME stored setting (main.ts 'vibe.cwPlain') and dictionary (src/utils/cwVocab); the legend names what a press does */
+    const plain = xpdrCwPlain();
+    if (rows.some((r) => r.kind === 'cw' && r.text))
+      h += `<div class="sat-tk"><button data-act="xexplain" aria-pressed="${plain}" title="${plain ? 'Show the CW as sent' : 'Explain the CW in plain English (press again for the CW as sent)'}">${plain ? 'RAW' : 'EXPLAIN'}</button></div>`;
     if (!rows.length) h += `<div class="sat-dim">no signals found yet</div>`;
     for (const r of rows.slice(0, 16)) {
       const following = st?.follow?.id === r.id;
@@ -1097,7 +1112,7 @@ export class SatPanel {
         + (xpdrListenable(r) && this.deps.xpdrListen   // ★★★ beta94 voices and the telemetry
           ? ` <button data-act="xlisten" data-xid="${esc(r.id)}" class="${following ? 'on' : ''}" aria-pressed="${following}" title="${esc(xpdrListenLabel(r))}">${following ? 'LISTENING' : 'LISTEN'}</button>`
           : '')
-        + (r.kind === 'cw' && r.text ? `<div class="sat-xt">${esc(r.text)}</div>` : '')
+        + (r.kind === 'cw' && r.text ? `<div class="sat-xt">${esc(plain ? plainEnglish(r.text) : r.text)}</div>` : '')
         + `</div>`;
     }
     if (h !== this.xpKey) { this.xpKey = h; this.sXp.innerHTML = h; }

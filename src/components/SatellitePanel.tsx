@@ -20,6 +20,8 @@
  *    ★ No flashing: COAST dims the readout.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { plainEnglish } from '../utils/cwVocab';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SAT_PLACE_TITLE, SAT_PLACE_TEXT, SAT_PLACE_PRIVATE, SAT_PLACE_ENTRY_HINT } from '../services/satPlace';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -328,6 +330,11 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   const bigH = winH > 950 ? Math.min(availH, winH * 0.62) : availH;
   const bigUseful = bigH >= smallFit + 40;
   const [bigPick, setBigPick] = useState(false);
+  /* ★★ beta96 (Stuart 11-26: "we need the raw/explain here for the cw"): the transponder finder's CW rows read through
+   *  EXPLAIN ↔ RAW — the CW box's key, the SAME stored setting (DecoderPanel's 'vibe_cw_plain') and dictionary (cwVocab). */
+  const [cwPlain, setCwPlain] = useState(false);
+  useEffect(() => { AsyncStorage.getItem('vibe_cw_plain').then((v: string | null) => setCwPlain(v === '1')).catch(() => {}); }, []);
+  const toggleCwPlain = () => { const next = !cwPlain; setCwPlain(next); AsyncStorage.setItem('vibe_cw_plain', next ? '1' : '0').catch(() => {}); };
   const [listOpen, setListOpen] = useState(true);   // ★ beta92 declared before bodyH: SMALL grows while the list is open
   const [minimised, setMinimised] = useState(false);
   /** ★★ beta96 the readout's width — the small globe goes beside the words only where they keep their column (satReadoutLayout) */
@@ -607,6 +614,13 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 <View style={s.pk}>
                   <Text style={[s.detailNp, s.caveat]}>{xpdrHint(p.xpdr)}</Text>
                   {!!xpdrFollowText(p.xpdr?.follow ?? null) && <Text style={[s.detailNp, s.orbName]}>{xpdrFollowText(p.xpdr?.follow ?? null)}</Text>}
+                  {(p.xpdr?.rows ?? []).some((r) => r.kind === 'cw' && !!r.text) && (
+                    <View style={s.keys}>
+                      {/* ★ EXPLAIN ↔ RAW: the legend names what a press does, as in the CW box */}
+                      <DecoderKey label={cwPlain ? 'RAW' : 'EXPLAIN'} onPress={toggleCwPlain}
+                                  accessibilityLabel={cwPlain ? 'Show the CW as sent' : 'Explain the CW in plain English (press again for the CW as sent)'} />
+                    </View>
+                  )}
                   {xpdrRowsSorted(p.xpdr?.rows ?? []).slice(0, 16).map((r) => {
                     const following = p.xpdr?.follow?.id === r.id;
                     return (
@@ -622,7 +636,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                             </View>
                           )}
                         </View>
-                        {r.kind === 'cw' && !!r.text && <Text style={[s.mono, s.hex]} numberOfLines={1}>{r.text}</Text>}
+                        {r.kind === 'cw' && !!r.text && <Text style={[s.mono, s.hex]} numberOfLines={cwPlain ? 3 : 1}>{cwPlain ? plainEnglish(r.text) : r.text}</Text>}
                       </View>
                     );
                   })}

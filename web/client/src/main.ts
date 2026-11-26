@@ -15033,6 +15033,8 @@ const cwSpotsSeen: CwSpot[] = [];
 const CW_PLAIN_KEY = 'vibe.cwPlain';
 let cwPlainOn = (() => { try { return localStorage.getItem(CW_PLAIN_KEY) === '1'; } catch { return false; } })();
 let cwPlainQueued = false;
+/* ★★ beta96 the satellite panel's transponder rows switch the same setting (satellites.ts xpdrCwPlainSet): follow it */
+window.addEventListener('vibe:cwplain', (e) => { cwPlainOn = !!(e as CustomEvent).detail; try { syncCwPlain(); } catch { /* the box not built yet */ } });
 /** A row's text as the PLAIN key says to show it. */
 function cwRead(t: string): string { return cwPlainOn && explainHere() ? plainEnglish(t) : t; }
 /** ★★ V12 (2026-11-14) EXPLAIN is CW's AND RTTY's — RTTY uses the same codes (Stuart: "the same CW translator needs to
