@@ -109,5 +109,6 @@ int main(int argc, char** argv) {
     std::printf("\n%d of %d starts came up in ADS-B at 2.56 MS/s with aircraft\n", good, starts);
     std::printf("%d/%d checks passed\n", checks - fails, checks);
     std::string rm = "rm -rf '" + dir + "'"; (void)!std::system(rm.c_str());
+    std::fflush(stdout);
     std::_Exit(fails ? 1 : 0);   // ★ statics with threads (decoder pools) are not torn down at exit — as main.cpp ends
 }

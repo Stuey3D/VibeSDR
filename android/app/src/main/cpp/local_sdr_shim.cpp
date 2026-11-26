@@ -1051,6 +1051,32 @@ static void dabModeEnd() {
     g_dab.closeAllStations();   // ★★ V12 own station: out of DAB nobody has one (their threads join on the own-station loop)
 }
 
+/** ★★★ b96 A STOPPED RECEIVER IS IN NO MODE (Stuart 11-26, the Sony: "I change a setting and restart VibeServer, the
+ *  2.56 MS/s mode complains and says 94 % dropped"). The whole-radio mode flags and their services are PROCESS statics,
+ *  and the stop (stopLocked) ended only some services and none of the flags. On Linux every restart is a new process, so
+ *  it never showed; on Android (Setup → save → restartFromSettings) and the Mac app the stop and the next start are the
+ *  SAME process — so a restart taken while kept-running ADS-B had the radio at 2.56 MS/s left g_adsbMode true and the
+ *  old ADS-B service running, demod and capture meter built for 2.56. The new receiver opened at the owner's 2.4 on the
+ *  landing frequency; adsbKeepTick saw "already in ADS-B" and never entered, so nothing re-tuned to 1090 or applied the
+ *  2.56 boost, while the DSP loop fed the stale service 2.4 MS/s: capture 2.4/2.56 = 94 %, no aircraft. A trip through
+ *  FM ran the real leave and entry, which is why that cured it — and why a restart from another mode worked (the
+ *  intermittency). ★ The cure: the stop ends every whole-radio mode, so the next start is a clean one and kept-running
+ *  ADS-B comes in through the same entry a listener's button uses — open at the base rate, then the boost. Nothing is
+ *  "restored" here: the receiver those saved states belong to is being destroyed, and the next start sets its own. */
+static void endWholeRadioModesForStop() {
+    const bool adsb = g_adsbMode.exchange(false);
+    g_adsb.stop();   // ★ idempotent; its worker was the one left running across the restart
+    const bool ism = g_ismMode.exchange(false), ndb = g_ndbMode.exchange(false), ais = g_aisMode.exchange(false),
+               av = g_avMode.exchange(false), sd = g_sdMode.exchange(false), vor = g_vorMode.exchange(false);
+    g_avBoostFrom.store(0.0);
+    const bool dab = g_dabMode.load();
+    if (dab) dabModeEnd();
+    if (adsb || ism || ndb || ais || av || sd || vor || dab)
+        LOGI("stop: the receiver was in %s%s%s%s%s%s%s%s — ended with it, so the next start enters afresh",
+             adsb ? "ADS-B " : "", ism ? "ISM " : "", ndb ? "NDB " : "", ais ? "AIS " : "", av ? "datalink " : "",
+             sd ? "sondes " : "", vor ? "VOR map " : "", dab ? "DAB " : "");
+}
+
 /** ★★★ WHAT THE LISTENER IS ACTUALLY ON, WHEN IT IS A MULTIPLEX. The admin page read `mode` — the
  *  DEMODULATOR — and in DAB that is still whatever it was before the mode was entered, so a
  *  receiver decoding 11A appeared in the listener table as "216.928 MHz WFM" (Stuart, 2026-09-08:
@@ -48937,6 +48963,7 @@ void LocalSdrShim::stopLocked() {
     g_av.stop();    // ★ …and the aircraft datalink's thread
     g_sd.stop();    // ★ …and the sondes'
     impl->decoders_.shutdownAll();
+    endWholeRadioModesForStop();
     /* ★★★ beta92 THE STATION STORE'S LAST ROWS ARE WRITTEN BY THE STOP (docs/v12/SHUTDOWN-HANG.md): its final flush used to
      *  be its static destructor at exit — and the standalone server now ends without running those (main.cpp
      *  endProcessAfterStop: a library's finaliser held the Lenovo's exit for 8 s). Every decoder is down by here, so
