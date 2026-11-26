@@ -713,6 +713,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     { double v = 0; const bool hm = getNum(j, "maxFps", v);  if (hm) r.maxFps = v;
       const bool hr = getNum(j, "fftRate", v); if (hr) r.fftRate = v;
       legacyFps(hm, hr, r.maxFps, r.fftRate); }   // ★ the 10-fps default is for NEW radios only
+    B("fpsFollow", r.fpsFollow);   // ★★★ beta96 b96-setupux — absent = false (the radio's own rate, as before)
     I("uncompressed", r.uncompressed);
     B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
@@ -808,6 +809,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("blockedModes", r.blockedModes);
     B("rtlAgc", r.rtlAgc); B("tunerBwAuto", r.tunerBwAuto);
     N("users", r.users); N("maxBw", r.maxBw); N("maxFps", r.maxFps); N("fftRate", r.fftRate);
+    B("fpsFollow", r.fpsFollow);   // ★★★ beta96 b96-setupux
     N("uncompressed", r.uncompressed);
     B("releaseWhenIdle", r.releaseWhenIdle);
     N("idleGrace", r.idleGrace);
@@ -984,6 +986,7 @@ std::string toJson(const ServerConfig& c) {
     S("landingMessage", c.landingMessage);
     S("landingLinkUrl", c.landingLinkUrl); S("landingLinkLabel", c.landingLinkLabel);
     N("port", c.port); B("web", c.web);
+    N("fpsDefault", c.fpsDefault);   // ★★★ beta96 b96-setupux the machine's frame rate
     // ★★★ Top-level keys a newer version wrote, kept as written (see RadioConfig::unknownKeys) — after every key this
     //     version owns, before `radios`.
     for (const auto& kv : c.unknownKeys) o += "  \"" + kv.first + "\": " + kv.second + ",\n";
@@ -1089,6 +1092,8 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     c.landingLinkUrl = safeLinkUrl(c.landingLinkUrl);
     I("uncompressed", c.uncompressed);
     I("port", c.port); B("web", c.web);
+    // ★★★ beta96 b96-setupux the machine's frame rate — a sane rate or the default (a hand-edited 0 / 500 never runs)
+    { double f = 0; if (getNum(j, "fpsDefault", f)) c.fpsDefault = (f >= 1 && f <= 60) ? f : 10; }
 
     // ★★★ THE TOP-LEVEL KEYS THIS VERSION NEVER ASKED FOR, KEPT (11.0.10-4 — going back from a V12 beta must not cost
     //     the owner the settings V12 wrote). Only a document with a radios array: an old single-radio file is
@@ -1411,6 +1416,9 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     // ★ Only when the owner actually set one: 0 means "same as freq", which is already true.
     if (r.mode != Mode::LockedRange && r.landingFreq > 0) c.freq = r.landingFreq;
     c.users = r.users; c.maxBw = r.maxBw; c.maxFps = r.maxFps; c.fftRate = r.fftRate;
+    // ★★★ beta96 b96-setupux "Use the server's frame rate": the radio runs at the machine's rate — both numbers, as the
+    //     page has written them since 2026-09-24 (the rate AND its ceiling), so a listener's ask is held to it too.
+    if (r.fpsFollow) c.maxFps = c.fftRate = effectiveFps(s, r);
     // ★ The MACHINE's choice wins — one uplink, one answer. A file that only carries the old
     //   per-radio value still works and is migrated up on the next save.
     c.uncompressed = s.uncompressed ? s.uncompressed : r.uncompressed;

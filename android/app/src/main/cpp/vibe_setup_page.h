@@ -214,6 +214,26 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .wifiDone{border:1px solid var(--amber);border-radius:10px;padding:14px;margin-top:12px}
   .wifiDone ol{margin:8px 0 0 1.2em;padding:0}.wifiDone li{margin:6px 0}
   .wifiDone code{color:var(--amber);font-size:15px;word-break:break-all}
+/* ★★★ beta96 b96-setupux COLLAPSIBLE SECTIONS (secEnsure in the script). The header is a button in front of the card's own
+   contents; closed, everything after it is hidden — nothing is moved, so every id and show/hide keeps working. */
+.secHead{display:flex;align-items:flex-start;gap:10px;width:100%;background:none;border:0;border-radius:8px;padding:2px 0;
+  margin:0;color:var(--ink);text-align:left;cursor:pointer;font:inherit;min-height:32px}
+.secHead:focus-visible{outline:2px solid var(--amber);outline-offset:6px}
+.secHead .secChev{color:var(--amber);flex:none;width:1.1em;font-size:16px;line-height:1.35}
+.secHead .secTxt{flex:1;min-width:0}
+.secHead .secTitle{display:block;font-size:15px;font-weight:700;color:var(--amber);text-transform:uppercase;letter-spacing:.09em}
+.secHead .secSum{display:block;color:var(--dim);font-size:13px;font-weight:400;margin-top:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.secHead .secSum:empty{display:none}
+.card.sec:not(.secOpen) > :not(.secHead){display:none!important}
+.card.sec:not(.secOpen){padding-top:14px;padding-bottom:14px}
+.card.sec.secOpen > .secHead{margin-bottom:10px}
+.card.sec h2.secOrig{display:none}
+.card.sec.secMust{border-color:var(--bad)}
+.card.sec.secMust > .secHead .secTitle,.card.sec.secMust > .secHead .secChev{color:var(--bad)}
+.card.sec.secMust > .secHead .secSum{color:#ff9b9b;white-space:normal}
+#secAllRow{display:flex;gap:8px;justify-content:flex-end;margin:0 0 10px}
+#secAllRow button{padding:6px 12px;font-size:12.5px;letter-spacing:.06em}
 /* ★ The finish panel points at the step still missing: a short glow, then back to normal. */
 @keyframes needsYou { 0%,100% { box-shadow: 0 0 0 0 rgba(245,185,66,0); } 30%,70% { box-shadow: 0 0 0 4px rgba(245,185,66,.75); } }
 .needsYou { animation: needsYou 1.4s ease-in-out 2; }
@@ -384,6 +404,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div id="radioTabs" style="display:flex;gap:6px;flex-wrap:wrap"></div>
       <div id="hwScope" class="hide sub" style="margin-top:8px;font-size:12px;opacity:.8"></div>
     </div>
+    <!-- ★★★ beta96 b96-setupux OPEN ALL / CLOSE ALL — every section of the tab in front of you (the rest keep theirs). -->
+    <div id="secAllRow"><button type="button" class="ghost" id="secOpenAll">OPEN ALL</button>
+      <button type="button" class="ghost" id="secCloseAll">CLOSE ALL</button></div>
     <!-- ★★★ THE MACHINE, NOT A RADIO. These were interleaved with the per-radio cards, so an owner
          working through three tabs met the same server-wide questions on each one and could not
          tell which answers belonged to what. One tab, asked once (Stuart, 2026-08-08: "A Server tab
@@ -1046,6 +1069,23 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           follow this setting.</div></label>
       </div>
 
+      <!-- ★★★ beta96 b96-setupux THE MACHINE'S FRAME RATE (Stuart 11-26) — ServerConfig::fpsDefault. Every radio whose rate
+           menu says "Use the server's frame rate" runs at it; a radio with its own value keeps it. Not on a phone's page. -->
+      <div class="card" id="fpsDefaultCard">
+        <h2>Frame rate</h2>
+        <p class="why">How many waterfall lines a second each radio sends, unless a radio sets its own beside its sample rate.</p>
+        <label><span class="lbl">Frame rate for every radio</span>
+          <select id="fpsDefault">
+            <option value="20">Smoother &middot; 20 fps</option>
+            <option value="10">Default &middot; 10 fps</option>
+            <option value="5">Half &middot; 5 fps</option>
+          </select>
+          <div class="hint" id="fpsDefaultUse"></div>
+          <div class="hint">10 fps is the default. 20 is smoother but sends about twice the data and costs more processor
+            time &mdash; fine for a 2 MS/s dongle; a very wide radio (a 56 MS/s B210) is happier at 5. Listeners can still
+            choose a slower waterfall. Takes effect when the server restarts.</div></label>
+      </div>
+
       <!-- ★★★ ONE DOWNLOAD FOR THE WHOLE MACHINE. The schedule is a single file every radio
            process reads, so it belongs to the server and not to whichever radio tab happened to be
            open — where it used to sit, inside a per-radio Range card, implying one copy per radio
@@ -1218,8 +1258,12 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       </div>
     </div><!-- /lockedOnly -->
       <!-- ★ EVERY MODE, not locked only (2026-09-18): the zoom FFT engages in single-user and shared-VFO
-           modes too, and hiding the switch here left those radios blocky at depth. -->
-        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+           modes too, and hiding the switch here left those radios blocky at depth.
+           ★★ beta96 b96-setupux: its own card (Spectrum detail) — it sat loose between two cards, which with the cards
+              folded read as a stray line; a section header now says what it is set to. -->
+      <div class="card" id="zoomCard">
+        <h2>Spectrum detail</h2>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:6px">
           <input type="checkbox" id="zoomSpectrum" checked
                  style="width:16px;height:16px;accent-color:var(--amber)">
           <span>Keep the spectrum sharp when zoomed in</span></label>
@@ -1231,6 +1275,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              already being computed for everyone. Shown by setMode(). -->
         <div class="hint" id="zoomSpectrumSlow">On a slower machine there may be a slight delay when zooming in
           at the higher zoom levels, while the detail is recalculated.</div>
+      </div>
 
       <!-- ★★★ HOW MANY PEOPLE — AND IT BELONGS TO BOTH MODES. This card lived inside the
            locked-only block, so on an UNLOCKED radio the box was hidden and the count was stuck
@@ -1527,10 +1572,14 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              Full 20 / Half 10 / Quarter 5, which stopped meaning anything once 10 was the default. The VALUES
              are unchanged (5 / 10 / 20), so every saved config reads exactly as before. -->
         <select id="maxFps">
+          <!-- ★★★ beta96 b96-setupux (Stuart 11-26): the machine's rate (server tab → Frame rate) unless this radio needs its own
+               — 20 fps for a 2 MS/s RTL, 5–10 for a 56 MS/s B210. Not on a phone's page (one radio: its rate IS the server's). -->
+          <option value="server" id="maxFpsServer">Use the server&rsquo;s frame rate</option>
           <option value="20">Smoother &middot; 20 fps</option>
           <option value="10">Default &middot; 10 fps</option>
           <option value="5">Half &middot; 5 fps</option>
         </select>
+        <div class="hint" id="maxFpsEff"></div>
         <div class="hint">For this radio: the rate it runs at, and the fastest a listener may ask for &mdash;
           they can still choose a slower waterfall. 10 fps is the default. 20 is smoother, but sends about
           twice the data and costs more processor time; 5 halves it again &mdash; worth it for a wide, fast
@@ -5633,11 +5682,16 @@ if ($("singlePick")) $("singlePick").addEventListener("change", () => { const r 
 for (const id of ["newModesPolOn", "newModesPolOff"])
   if ($(id)) $(id).addEventListener("change", (e) => { if (e.target.checked) newModesPolicySet(e.target.value); });
 /** ★ Save refused when a drawn radio would have no modes at all (both save buttons ask). */
+/** ★★★ beta96 b96-setupux "never a radio with no modes", on its own — modesStop refuses the save on it, the Modes and
+ *  decoders header goes red on it. */
+function modesWhy(r) {
+  if (!r || (r.singleMode && r.singleMode !== "general")) return "";   // ★★★ beta96 single mode decides, the ticks are underneath
+  return modeNoneLeft(r.blockedModes) ? "Every mode is off, so nobody could listen: tick at least one" : "";
+}
 function modesStop() {
   const list = radioList();
   for (let i = 0; i < list.length; i++) {
-    if (!modeDrawn().has(modeRadioKey(list[i], i)) || !modeNoneLeft(list[i].blockedModes)) continue;
-    if (list[i].singleMode && list[i].singleMode !== "general") continue;   // ★★★ beta96 single mode decides, the ticks are underneath
+    if (!modeDrawn().has(modeRadioKey(list[i], i)) || !modesWhy(list[i])) continue;
     $("saveErr").textContent = "Not saved — " + (list[i].label || "a radio") + " has every mode switched off, so nobody could listen. "
       + "Tick at least one under “Modes and decoders”.";
     return true;
@@ -6717,9 +6771,46 @@ async function rateGuardClear() {
     modeRateShow(radio());
   } catch (e) { $("rateGuardText").textContent = "Could not reach the radio: " + e.message; }
 }
+/** ★★★ beta96 b96-setupux the machine's frame rate (server tab), as the page shows it — the saved fpsDefault or 10. */
+function fpsServerNow() {
+  const el = $("fpsDefault"); const v = el ? parseFloat(el.value) : NaN;
+  if (v > 0) return v;
+  const c = cfg && Number(cfg.fpsDefault); return c >= 1 && c <= 60 ? c : 10;
+}
+/** ★★★ beta96 the server tab's Frame rate card: the saved value (a hand-set one shown as such), and which radios use it. */
+function fpsDefaultShow() {
+  const sel = $("fpsDefault"); if (!sel || !cfg) return;
+  for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20") o.remove();
+  const c = Number(cfg.fpsDefault); const f = c >= 1 && c <= 60 ? c : 10;
+  if (f !== 5 && f !== 10 && f !== 20) { const o = document.createElement("option"); o.value = String(f); o.textContent = `${f} fps (set by hand)`; sel.appendChild(o); }
+  sel.value = String(f);
+  fpsDefaultUse();
+}
+function fpsDefaultUse() {
+  const el = $("fpsDefaultUse"); if (!el) return;
+  const list = radioList(); const fol = list.filter(r => fpsFollows(r)).map(r => r.label || r.driver || "a radio");
+  const own = list.filter(r => !fpsFollows(r)).map(r => (r.label || r.driver || "a radio") + " " + (Math.min(...[Number(r.fftRate) || 10, Number(r.maxFps) || 1e9])) + " fps");
+  el.textContent = !list.length ? "" : (fol.length ? "Used by: " + fol.join(", ") + "." : "No radio uses it yet — each has its own rate.")
+    + (own.length ? " Own rate: " + own.join(", ") + "." : "");
+}
+/** ★★★ beta96 a radio follows the server's rate: the saved word, or — for a radio never set up — the page's choice for it
+ *  (a new radio follows the machine; an existing one keeps its own rate, exactly as before the update). */
+const FPS_CHOSEN = new WeakSet();
+function fpsFollows(r) {
+  if (ANDROID) return false;   // ★ a phone serves one radio: its rate IS the server's
+  if (r.fpsFollow === true) return true;
+  if (!r.configured && !FPS_CHOSEN.has(r)) { r.fpsFollow = true; return true; }
+  return false;
+}
+function fpsEffWords(r) {
+  const el = $("maxFpsEff"); if (!el) return;
+  el.textContent = fpsFollows(r) ? "This radio runs at the server\u2019s " + fpsServerNow() + " fps (SERVER tab \u2192 Frame rate)." : "";
+  const so = $("maxFpsServer"); if (so) { so.textContent = "Use the server\u2019s frame rate (" + fpsServerNow() + " fps)"; so.hidden = !!ANDROID; so.disabled = !!ANDROID; }
+}
 function fpsShow(r) {
   const sel = $("maxFps");
-  for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20") o.remove();
+  for (const o of [...sel.options]) if (o.value !== "5" && o.value !== "10" && o.value !== "20" && o.value !== "server") o.remove();
+  if (fpsFollows(r)) { sel.value = "server"; fpsEffWords(r); return; }
   const rates = [Number(r.fftRate) || 0, Number(r.maxFps) || 0].filter(v => v > 0);
   const f = rates.length ? Math.min(...rates) : 0;
   if (f > 0 && f !== 5 && f !== 10 && f !== 20) {
@@ -6728,6 +6819,7 @@ function fpsShow(r) {
     sel.appendChild(o);
     sel.value = String(f);
   } else sel.value = f > 0 ? String(f) : "10";   // ★ nothing saved = the server default, Default · 10
+  fpsEffWords(r);
 }
 
 let govHw = null, govAll = null;
@@ -8316,6 +8408,7 @@ function fill() {
     govOffer();
   }
   $("uncompressed").value = String(cfg.uncompressed || 0);
+  fpsDefaultShow();   // ★★★ beta96 b96-setupux the machine's frame rate
   $("trustedProxies").value = cfg.trustedProxies || "";
   // ★ Absent = "1" (the rule enforced), matching the config's own default — an older server that
   //   never heard of this must not appear to have it switched off.
@@ -8630,7 +8723,12 @@ function fill() {
   $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {
-    const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; });
+    FPS_CHOSEN.add(radio());   // ★★★ beta96 the owner chose — a new radio no longer defaults to following
+    if ($("maxFps").value === "server") { radio().fpsFollow = true; fpsEffWords(radio()); return; }   // its own numbers kept underneath
+    radio().fpsFollow = false;
+    const v = parseFloat($("maxFps").value) || 10; radio().maxFps = v; radio().fftRate = v; fpsEffWords(radio()); });
+  // ★★★ beta96 the machine's rate: the open radio's words follow it live, and the server tab says who uses it
+  if ($("fpsDefault")) $("fpsDefault").addEventListener("change", () => { fpsDefaultUse(); if (curRadio >= 0) fpsEffWords(radio()); });
   $("dabScanLabels").addEventListener("change", () => { radio().dabScanLabels = parseInt($("dabScanLabels").value, 10); });
   $("dabOwnStation").addEventListener("change", () => { radio().dabOwnStation = parseInt($("dabOwnStation").value, 10); dabOwnRender(); });
   $("users").addEventListener("input", dabOwnRender);
@@ -10314,7 +10412,8 @@ function stashServer() {
   cfg.landingLinkUrl = $("landingLinkUrl").value.trim();
   cfg.landingLinkLabel = $("landingLinkLabel").value.trim();
   cfg.port = parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0;
-  // ★ The waterfall rate is per radio now (radio().maxFps / fftRate, set by its own control).
+  // ★ The waterfall rate is per radio (radio().maxFps / fftRate, set by its own control) — beta96: or the machine's.
+  if ($("fpsDefault")) cfg.fpsDefault = fpsServerNow();
 }
 
 /** The machine: stated once, the same on every tab. */
@@ -10369,6 +10468,7 @@ function collect() {
     // ★ 0 means "no preference", which is what an empty box means. Sending NaN would be written
     //   out as a port and the server would fail to bind with nothing to point at.
     port: parseInt($("srvPort").value, 10) > 0 ? parseInt($("srvPort").value, 10) : 0,
+    ...(ANDROID ? {} : { fpsDefault: fpsServerNow() }),   // ★★★ beta96 b96-setupux the machine's frame rate
     radios: Array.isArray(cfg.radios) ? cfg.radios : [],
     ...(ANDROID ? androidSrvCollect() : {})   // ★★ beta88: the phone's web client / Opus / Simple-Advanced
   };
@@ -12018,21 +12118,35 @@ function wsprnetCallValue() {
 function wsprnetCallOk(s) {
   return /^[A-Z0-9\/]{3,15}$/.test(s) && /[A-Z]/.test(s) && /[0-9]/.test(s) && !/^\/|\/$|\/\//.test(s);
 }
+/** ★★★ beta96 b96-setupux the flight-tracker refusal on its own (see pskrWhy). */
+function afWhy() {
+  const card = $("adsbFeedCard");
+  if (!card || card.classList.contains("hide")) return "";
+  try { const r = afCollect(); return r.error ? r.error : ""; } catch (e) { return ""; }
+}
 function afStops() {
   const card = $("adsbFeedCard");
-  if (!card || card.classList.contains("hide")) return false;
+  if (!afWhy()) return false;
   const r = afCollect();
-  if (!r.error) return false;
   $("saveErr").textContent = "Not saved \u2014 Share ADS-B with flight trackers: " + r.error + ".";
   card.scrollIntoView({behavior: "smooth", block: "center"});
   return true;
 }
-function pskrStops() {
-  if (!$("pskrOn") || !$("pskrOn").checked) return false;
+/** ★★★ beta96 b96-setupux PSK Reporter's refusal, on its own ("" = fine, else which box): the Save buttons stop on it and the
+ *  section header goes red on it — one rule. */
+function pskrWhy() {
+  if (!$("pskrOn") || !$("pskrOn").checked) return {};
   const c = pskrCallValue();
   if (/^[A-Za-z0-9\/-]{3,20}$/.test(c) && /[A-Za-z]/.test(c)) {
-    // \u2605 WSPRnet on: a callsign to send under \u2014 its own box, else the PSK Reporter name when that is one
-    if (!$("wsprnetOn").checked || wsprnetCallOk(wsprnetCallValue() || c.toUpperCase())) return false;
+    if (!$("wsprnetOn").checked || wsprnetCallOk(wsprnetCallValue() || c.toUpperCase())) return {};
+    return { box: "wsprnetCall", short: "WSPRnet needs a callsign" };
+  }
+  return { box: "pskrCall", short: "PSK Reporter needs a receiver name (your callsign)" };
+}
+function pskrStops() {
+  const w = pskrWhy();
+  if (!w.box) return false;
+  if (w.box === "wsprnetCall") {
     $("saveErr").textContent = "Not saved \u2014 WSPRnet needs a callsign: enter one under \u201cAlso send WSPR spots to WSPRnet\u201d, or switch that off.";
     $("wsprnetCall").scrollIntoView({behavior: "smooth", block: "center"}); $("wsprnetCall").focus();
     return true;
@@ -12085,10 +12199,11 @@ if ($("pskrOn")) {
   if ($("wsprnetOn")) $("wsprnetOn").addEventListener("change", pskrSync);
 }
 
+/** ★★★ beta96 b96-setupux the refusal's rule, on its own — the Save button stops on it and the section header goes red on it. */
+function dirWhy() { return $("dirList") && $("dirList").checked && dirReachProblem() ? "The VibeSDR.net address: " + dirReachProblem() : ""; }
 function dirReachStops() {
-  if (!$("dirList").checked) return false;
+  if (!dirWhy()) return false;
   const bad = dirReachProblem();
-  if (!bad) return false;
   $("saveErr").textContent = "Not saved \u2014 the VibeSDR.net address: " + bad;
   renderDirReach();
   const el = $("dirPublicUrl");
@@ -12288,5 +12403,237 @@ function pocketNewHome() {
   const ip = w.wiredIp || w.ip || "";
   return chosen || (ip ? "http://" + ip + suffix + "/" : "");
 }
+
+/* ══ ★★★ beta96 b96-setupux COLLAPSIBLE SECTIONS + THE RED "!" (Stuart 11-26) ═══════════════════════════════════════════
+ *  "Made for the Sony TV: scrolling the long screen with a remote took ages." Every card on the SERVER tab and every radio
+ *  tab gets a header — its title and ONE line saying what it is set to now ("Background decoding · AIS", "Operating mode ·
+ *  Locked 88–108 MHz") — and starts closed. A remote / keyboard / pad steps HEADER TO HEADER (↑ ↓, or W S); Enter / OK
+ *  opens one and moves into it; Escape (or Backspace outside a text box) goes back to its header. Open or closed is
+ *  remembered per device (localStorage, try/catch: a private window simply starts closed). OPEN ALL / CLOSE ALL at the top.
+ *  ★★ NOTHING IS MOVED. The header is a button put in front of the card's own contents, which are hidden by CSS while it
+ *     is closed — every id, every show/hide the page already does, keeps working. A card that redraws itself (innerHTML)
+ *     simply gets its header back on the next pass (secEnsure).
+ *  ★★★ THE RED "!" — a section holding something the owner MUST set before things work shows its header red with "!" and
+ *      the reason, opens by itself, and clears the moment it is valid. The reasons are the SAVE PATH'S OWN REFUSALS
+ *      (pskrWhy / afWhy / dirWhy / modesWhy / beastAddrWhy — the very functions the Save buttons stop on) and the SERVER'S
+ *      facts (a radio not set up is not served; SDR_ALARM: the server says it is gone; no location: the satellite engine's
+ *      "this server has no location set"), never a list kept in this page. */
+const SEC_KEY = "vibeSetupSections";
+let SEC_STATE = {};
+try { SEC_STATE = JSON.parse(localStorage.getItem(SEC_KEY) || "{}") || {}; } catch (e) { SEC_STATE = {}; }
+function secSave() { try { localStorage.setItem(SEC_KEY, JSON.stringify(SEC_STATE)); } catch (e) { /* this visit only */ } }
+function secSlug(t) { return String(t).toLowerCase().replace(/['’]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); }
+/** The cards that get a header: every card of the two panes with a title, never a card inside a card. */
+function secCards() {
+  return [...document.querySelectorAll("#serverPane .card, #radioPane .card")]
+    .filter(c => !(c.parentElement && c.parentElement.closest(".card")) && c.querySelector("h2"));
+}
+function secShown(card) { return !!card && card.offsetParent !== null && !card.closest(".hide,[hidden],.androidOff"); }
+/** The card's header — found among its children, wherever a move put it (layoutLockedRadio inserts rows at the top). */
+function secHeadOf(card) { return [...card.children].find(c => c.classList.contains("secHead")) || null; }
+function secEnsure() {
+  for (const card of secCards()) {
+    const had = secHeadOf(card);
+    if (had) { if (card.firstElementChild !== had) card.insertBefore(had, card.firstChild); continue; }
+    const h = card.querySelector("h2");
+    const title = h.textContent.replace(/\s+/g, " ").trim();
+    card.dataset.sec = (card.closest("#radioPane") ? "radio:" : "server:") + secSlug(title);
+    h.classList.add("secOrig");
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "secHead"; b.setAttribute("aria-expanded", "false");
+    b.innerHTML = '<span class="secChev" aria-hidden="true">▸</span><span class="secTxt"><span class="secTitle"></span>'
+      + '<span class="secSum"></span></span>';
+    b.querySelector(".secTitle").textContent = title;
+    // ★ e.detail is 0 for a click made by Enter / Space / a remote's OK — then the focus goes INTO the section it opened
+    b.addEventListener("click", (e) => secToggle(card, undefined, e.detail === 0));
+    b.addEventListener("keydown", secHeadKey);
+    card.classList.add("sec");
+    card.insertBefore(b, card.firstChild);
+    card.__secOpen = null;
+  }
+}
+/** Where the open radio's "!" was dismissed (closed while red): that radio + that reason only. */
+function secCtx() { return String(curRadio) + "|" + (curRadio >= 0 ? (radio().serial || "") : ""); }
+function secWantOpen(card) {
+  if (document.body.classList.contains("wifiFirst") && card.id === "wifiCard") return true;   // ★ the only card on the hotspot
+  if (SEC_STATE[card.dataset.sec] === 1) return true;
+  if (card.__stayOpen === secCtx()) return true;   // ★ its "!" just cleared under the owner's hands: never snap shut on them
+  return !!card.__must && card.__mustDismissed !== secCtx() + "|" + card.__must;
+}
+function secPaint(card, open) {
+  if (card.__secOpen === open) return;
+  card.__secOpen = open;
+  card.classList.toggle("secOpen", open);
+  const b = secHeadOf(card);
+  if (b) { b.setAttribute("aria-expanded", open ? "true" : "false"); b.querySelector(".secChev").textContent = open ? "▾" : "▸"; }
+}
+function secToggle(card, open, intoIt) {
+  const now = card.classList.contains("secOpen");
+  const want = open === undefined ? !now : !!open;
+  SEC_STATE[card.dataset.sec] = want ? 1 : 0;
+  card.__stayOpen = null;
+  if (!want && card.__must) card.__mustDismissed = secCtx() + "|" + card.__must;
+  secSave();
+  secPaint(card, want);
+  if (want && intoIt) secFocusInside(card);
+}
+function secHeads() { return secCards().filter(secShown).map(secHeadOf).filter(Boolean); }
+/** ↑ ↓ (W S) on a header: the next / previous header — a remote steps over every section, open or not. */
+function secFocusInside(card) {
+  const first = [...card.querySelectorAll("input,select,textarea,button,a[href],[tabindex]")]
+    .find(e => !e.classList.contains("secHead") && !e.disabled && e.tabIndex >= 0 && e.offsetParent !== null);
+  if (first) { first.focus(); return true; }
+  return false;
+}
+function secHeadKey(e) {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  const k = e.key, dn = k === "ArrowDown" || k === "s" || k === "S", up = k === "ArrowUp" || k === "w" || k === "W";
+  if (!dn && !up) return;
+  const hs = secHeads(), i = hs.indexOf(e.currentTarget);
+  if (i < 0) return;
+  // ★ Down from an OPEN section's header goes into it (as Enter did); only a closed one steps on to the next header
+  if (dn && e.currentTarget.parentElement.classList.contains("secOpen")) { if (secFocusInside(e.currentTarget.parentElement)) { e.preventDefault(); return; } }
+  const to = hs[i + (dn ? 1 : -1)];
+  if (!to) return;
+  e.preventDefault();
+  to.focus();
+  try { to.scrollIntoView({ block: "nearest" }); } catch (x) { /* old browser */ }
+}
+/** BACK inside a section: Escape always, Backspace when it is not deleting text — to the section's own header. */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" && e.key !== "Backspace") return;
+  const t = e.target, card = t && t.closest ? t.closest(".card.sec") : null;
+  if (!card || t.classList.contains("secHead")) return;
+  const typing = /^(INPUT|TEXTAREA)$/.test(t.tagName) && !/^(checkbox|radio|button|submit|range)$/i.test(t.type || "");
+  if (e.key === "Backspace" && (typing || t.isContentEditable || t.tagName === "SELECT")) return;
+  if (document.querySelector(".modalWrap:not([hidden])")) return;   // ★ a dialog's own Escape first
+  e.preventDefault();
+  secHeadOf(card).focus();
+});
+function secAll(open) {
+  for (const card of secCards()) {
+    if (!secShown(card)) continue;
+    SEC_STATE[card.dataset.sec] = open ? 1 : 0;
+    if (!open && card.__must) card.__mustDismissed = secCtx() + "|" + card.__must;
+    card.__stayOpen = null;
+    secPaint(card, open);
+  }
+  secSave();
+}
+
+/* ── what each section says when closed ── */
+const secV = (id) => { const e = $(id); return e ? String(e.value || "").trim() : ""; };
+const secC = (id) => { const e = $(id); return !!(e && e.checked); };
+const secT = (id) => { const e = $(id); if (!e) return ""; const o = e.options && e.options[e.selectedIndex]; return o ? o.textContent.replace(/\s+/g, " ").trim() : ""; };
+const secTx = (id) => { const e = $(id); return e ? e.textContent.replace(/\s+/g, " ").trim() : ""; };
+const secShort = (s, n) => { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > (n || 60) ? s.slice(0, (n || 60) - 1) + "…" : s; };
+const secOnOff = (on, yes, no) => on ? yes : (no || "Off");
+function secMHz(hz) { const v = hz / 1e6; return (v >= 100 ? v.toFixed(1) : v >= 10 ? v.toFixed(2) : v.toFixed(3)).replace(/\.?0+$/, ""); }
+function secRange() {
+  const c = parseFloat(secV("lockFreq")) * 1e3, w = parseFloat(secV("rate"));
+  if (!(c > 0) || !(w > 0)) return "";
+  return secMHz(c - w / 2) + "–" + secMHz(c + w / 2) + " MHz";
+}
+const SEC_SUM = {
+  "server:radio-order": () => radioList().map(r => r.label || r.driver).join(" · "),
+  "server:what-this-box-can-carry": () => secTx("benchWhen") || (BENCH ? "Measured" : "Not measured yet"),
+  "server:processor": () => secT("cpuGovernor"),
+  "server:wi-fi": () => !WIFI ? "" : WIFI.wired ? "Wired network" : WIFI.mode === "client" && WIFI.ssid ? "On " + WIFI.ssid : WIFI.mode === "setup-ap" ? "Setup hotspot" : "",
+  "server:on-your-network": () => secC("mdns") ? "Advertised as " + (secV("name") || "VibeServer") + ".local" : "Not advertised",
+  "server:where-this-receiver-is": () => [secV("place"), secV("country"), secV("locator")].filter(Boolean).join(" · ") || (secC("locFollow") ? "Follows the phone" : (secV("lat") ? secV("lat") + ", " + secV("lon") : "")),
+  "server:network-port": () => "Port " + (secV("srvPort") || "8073"),
+  "server:behind-a-reverse-proxy": () => secV("trustedProxies") ? "Trusting " + secShort(secV("trustedProxies"), 40) : "No proxy",
+  "server:advertise-on-vibesdr-net": () => secC("dirList") ? "Listed" + (secV("dirName") ? " as " + secV("dirName") : "") : "Not listed",
+  "server:ssh": () => WIFI && WIFI.ssh ? secOnOff(WIFI.ssh.on, "On") : "",
+  "server:vibesdr-community-map": () => secOnOff(secC("communityMap"), "Sharing to the community map", "Not sharing"),
+  "server:psk-reporter": () => secC("pskrOn") ? "On · " + (pskrCallValue() || "?") + (secC("wsprnetOn") ? " · WSPRnet" : "") : "Off",
+  "server:sharing-ads-b-with-flight-trackers": () => secShort(secTx("feedersList"), 70) || "None",
+  "server:audio": () => secT("uncompressed"),
+  "server:frame-rate": () => secT("fpsDefault"),
+  "server:shortwave-schedule": () => secShort(secTx("eibiState"), 70),
+  "server:this-phones-server": () => [secOnOff(secC("androidWebServer"), "Web client on", "Web client off"), secC("androidCompress") ? "Opus" : "Uncompressed"].join(" · "),
+  "server:start-with-windows": () => secOnOff(secC("winAutoOn"), "On"),
+  "server:message-on-the-landing-screen": () => secShort(secV("landingMessage"), 50) || "None",
+  "radio:sdr-display-name": () => secV("radioName") || (radio().label || radio().driver || ""),
+  "radio:operating-mode": () => { const r = radio(); const s = r.singleMode && r.singleMode !== "general" ? r.singleMode : "";
+    if (s) return "Single use · " + singleWords(s); return r.mode === "locked" ? "Locked" + (secRange() ? " " + secRange() : "") : "Unlocked"; },
+  "radio:range": () => secRange(),
+  "radio:spectrum-detail": () => secC("zoomSpectrum") ? "Sharp when zoomed in" : "Magnified (cheaper)",
+  "radio:listeners": () => { const n = parseInt(secV("users"), 10) || 1; return n + (n === 1 ? " listener" : " listeners") + (secC("askFirst") ? " · ask before tuning" : ""); },
+  "radio:antenna": () => secShort(secV("antenna"), 60) || "Not described",
+  "radio:ads-b-beast-feed": () => secV("beastAddr"),
+  "radio:icom-transceiver": () => secTx("icomModel"),
+  "radio:radio": () => [radio().driver, radio().serial].filter(Boolean).join(" · "),
+  "radio:this-radios-hardware": () => [secT("rate"), secC("rateLock") ? "locked" : "", secV("maxFps") === "server" ? "server’s " + fpsServerNow() + " fps" : secT("maxFps")].filter(Boolean).join(" · "),
+  "radio:where-listeners-may-tune": () => { const r = radio(); const a = (r.allowRanges || "").split(",").filter(Boolean).length, b = (r.blockRanges || "").split(",").filter(Boolean).length;
+    return !a && !b ? "Anywhere the radio reaches" : [a ? a + " allowed" : "", b ? b + " blocked" : ""].filter(Boolean).join(" · "); },
+  "radio:gain-limits": () => { const n = (radio().gainLimits || "").split(",").filter(Boolean).length; return n ? n + (n === 1 ? " band limit" : " band limits") : "No limits"; },
+  "radio:modes-and-decoders": () => { const r = radio(); if (r.singleMode && r.singleMode !== "general") return "Only " + singleWords(r.singleMode);
+    const off = [...modeBlockSet()].filter(id => !/[+-]/.test(id)).length; return off ? off + " switched off" : "Everything on"; },
+  "radio:raw-iq": () => secOnOff(secC("rawIqOn"), "On" + (secV("rawIqStreams") ? " · " + secV("rawIqStreams") + " streams" : "")),
+  "radio:where-new-listeners-land": () => secC("landKindMap") ? "Map · " + secT("mapLandWhich") : secC("landKindDab") ? "DAB · " + secT("dabLandStation")
+    : (secV("landingFreq") ? secV("landingFreq") + " kHz " + secT("demodMode") : "Where the last listener left it"),
+  "radio:background-decoding": () => { const r = radio(); const ids = keepParse(r.bgMode || ""); if (ids.length) return ids.map(keepTokName).join(" + ");
+    return secC("bgOn") ? "Manual profiles" : "Off"; },
+  "radio:pin-for-this-radio": () => radio().pin || secV("radioPin") ? "PIN set" : "No PIN",
+  "radio:share-ads-b-with-flight-trackers": () => [secC("afServe") ? "Beast out :" + (secV("afPort") || "30005") : "", secC("afPush") ? "Feeding trackers" : ""].filter(Boolean).join(" · ") || "Off",
+  "radio:broadcast-fm-defaults": () => secT("fmDeemph"),
+  "radio:time-limit": () => { const m = parseInt(secV("sessionLimit"), 10) || 0; return m ? m + " min · " + secT("sessionLimitMode") : "No limit"; },
+};
+
+/* ── what each section MUST have — the save path's refusals and the server's facts (see the header above) ── */
+function secLocationWhy() {
+  if (ANDROID) return "";   // ★ a phone's location is the phone's own (the device card)
+  const has = (secV("lat") && secV("lon")) || /^[A-Ra-r]{2}[0-9]{2}/.test(secV("locator")) || secC("locFollow");
+  return has ? "" : "Location not set: satellites and maps need it";
+}
+const SEC_MUST = {
+  "server:where-this-receiver-is": secLocationWhy,
+  "server:advertise-on-vibesdr-net": () => dirWhy(),
+  "server:psk-reporter": () => pskrWhy().short || "",
+  "radio:sdr-display-name": () => curRadio >= 0 && radio().enabled !== false && !radio().configured ? "Not set up yet: save this radio to put it on air" : "",
+  "radio:radio": () => SDR_ALARM.has(radio().serial) ? "Not detected: see the notice above" : "",
+  "radio:ads-b-beast-feed": () => radio().driver === "beast" && beastAddrWhy(secV("beastAddr")) ? "Beast feed address missing or wrong: " + beastAddrWhy(secV("beastAddr")) : "",
+  "radio:modes-and-decoders": () => modesWhy(radio()),
+  "radio:share-ads-b-with-flight-trackers": () => afWhy(),
+};
+
+let secPending = 0;
+function secSchedule() {
+  if (secPending) return;
+  const run = () => { secPending = 0; secRefresh(); };
+  secPending = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : setTimeout(run, 16);
+}
+function secRefresh() {
+  secEnsure();
+  for (const card of secCards()) {
+    const key = card.dataset.sec, b = secHeadOf(card);
+    if (!b) continue;
+    let must = "", sum = "";
+    try { must = SEC_MUST[key] ? (SEC_MUST[key]() || "") : ""; } catch (e) { must = ""; }
+    try { sum = SEC_SUM[key] ? (SEC_SUM[key]() || "") : ""; } catch (e) { sum = ""; }
+    if (card.__must !== must || card.__mustCtx !== secCtx()) {
+      // ★ fixed under the owner's hands (same tab), never a tab switch to a radio without the problem
+      if (card.__must && !must && card.__mustCtx === secCtx() && card.classList.contains("secOpen")) card.__stayOpen = secCtx();
+      card.__must = must; card.__mustCtx = secCtx();
+    }
+    const red = !!must;
+    if (card.classList.contains("secMust") !== red) card.classList.toggle("secMust", red);
+    const text = red ? "! " + must : sum;
+    const el = b.querySelector(".secSum");
+    if (el.textContent !== text) el.textContent = text;
+    secPaint(card, secWantOpen(card));
+  }
+}
+(function secInit() {
+  const bar = $("secAllRow");
+  if (bar) { $("secOpenAll").onclick = () => secAll(true); $("secCloseAll").onclick = () => secAll(false); }
+  for (const ev of ["input", "change", "click"]) document.addEventListener(ev, (e) => { if (!(e.target && e.target.closest && e.target.closest(".secHead"))) secSchedule(); }, true);
+  try {
+    new MutationObserver((list) => { if (list.some(m => !(m.target.closest && m.target.closest(".secHead")))) secSchedule(); })
+      .observe(document.getElementById("setup") || document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "hidden"] });
+  } catch (e) { /* no observer: the events above still refresh it */ }
+  secRefresh();
+})();
 </script>
 )HTML";

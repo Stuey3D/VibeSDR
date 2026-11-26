@@ -2745,6 +2745,12 @@ int main(int argc, char** argv) {
     // ★ ...and this radio's own, which opens THIS radio only. Either is accepted; see vsAuthOk.
     LocalSdrShim::setVibeServerRadioAuth(o.radioPin);
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
+    {   // ★★★ beta96 b96-setupux the frame rate's source for hwinfo — this radio's entry decides follow / own
+        bool follow = false;
+        for (const auto& r : g_serverConfig.radios) if (!r.serial.empty() && r.serial == g_myRadioSerial) follow = r.fpsFollow;
+        const double eff = (o.maxFps > 0 && o.maxFps < o.fftRate) ? o.maxFps : o.fftRate;
+        LocalSdrShim::setVibeServerFpsSource(eff, follow, g_serverConfig.fpsDefault);
+    }
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerRateLock(o.rateLock);
     vsApplyRateGate(o.lockFreq > 0 && o.users > 1);   // ★ V12 the USRP's wide rates, from the saved benchmark — before it opens
@@ -3260,7 +3266,10 @@ int main(int argc, char** argv) {
                 r.bgMode = c.bgMode;   // ★★★ b96-bgsplit
                 r.singleMode = c.singleMode;
                 r.fm = c.fm;   // ★ Broadcast FM defaults
-                r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
+                r.users = c.users; r.maxBw = c.maxBw;
+                // ★★★ beta96 b96-setupux a radio following the server's frame rate keeps ITS OWN numbers underneath —
+                //     c holds the machine's rate (effectiveFor), and copying it down would lose the radio's choice.
+                if (!r.fpsFollow) { r.maxFps = c.maxFps; r.fftRate = c.fftRate; }
                 r.uncompressed = c.uncompressed;
                 r.releaseWhenIdle = c.releaseWhenIdle;
                 r.idleGrace = c.idleGrace;
@@ -4555,8 +4564,9 @@ int main(int argc, char** argv) {
             r.bgMode = disk.bgMode;   // ★★★ b96-bgsplit
             r.singleMode = disk.singleMode;
             r.fm = disk.fm;   // ★ Broadcast FM defaults
-            r.users = disk.users; r.maxBw = disk.maxBw; r.maxFps = disk.maxFps;
-            r.fftRate = disk.fftRate; r.uncompressed = disk.uncompressed;
+            r.users = disk.users; r.maxBw = disk.maxBw;
+            if (!r.fpsFollow) { r.maxFps = disk.maxFps; r.fftRate = disk.fftRate; }   // ★★★ beta96 see the twin above
+            r.uncompressed = disk.uncompressed;
             r.releaseWhenIdle = disk.releaseWhenIdle;
             r.idleGrace = disk.idleGrace;
             r.rfNotch = disk.rfNotch; r.dabNotch = disk.dabNotch; r.zoomSpectrum = disk.zoomSpectrum;

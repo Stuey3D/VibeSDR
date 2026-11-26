@@ -1,6 +1,8 @@
 package com.vibesdr.app
 
 import android.content.Context
+import android.system.Os
+import android.util.Base64
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,6 +31,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  *     reporting progress back through nativeProgress. The C++ side owns the .part name, the size
  *     and magic checks and the rename — this is transport only, like VibeHttp.
  *
+ * ★★★ beta96: THE THREE BIG PACKS ARE NOT UNPACKED ANY MORE (basic 18 MB + relief + runways ≈ 30.5 MB). They are
+ *     stored uncompressed in the APK (mapgl-assets.gradle noCompress), so each is one run of bytes inside it:
+ *     `apkSlices` finds them (AssetManager.openFd → the APK file, the entry's offset and length, the PMTiles magic
+ *     checked there), the server is told through nativeSetBundleSlice (vibe_mapgl.h serves /mapgl/<pack> from that
+ *     run — same URL, Range/206, ?r=), and the app's own map reads them through `readPackRange`. Fonts, scripts,
+ *     icons and the style are still unpacked (small). A pack that turns out compressed (openFd refuses) is
+ *     unpacked as before, logged. The marker records WHICH packs are in the APK, so an install unpacked by
+ *     beta95/96 (marker = version alone) is cleared and redone once, without them — no orphaned 30 MB.
+ *
  * ★ `filesDir/mapgl/` is the writable data dir — the same place the main app's React Native
  *   High Detail download already writes `vibemap-detail.pmtiles`, so one download serves both the
  *   app's own map and the server's listeners.
@@ -45,7 +56,7 @@ object VibeMapGL {
     @Volatile private var nativeReady = false
 
     /**
-     * Wire the map into the server. Idempotent and cheap after the first call; the ~22 MB copy runs
+     * Wire the map into the server. Idempotent and cheap after the first call; the copy (~3 MB since beta96) runs
      * on its own low-priority thread, never on the caller's (a bridge thread or a service start).
      */
     fun start(ctx: Context) {
@@ -81,6 +92,7 @@ object VibeMapGL {
         Thread({
             try {
                 val dir = bundleDir(app)
+                registerSlices(app, dir)
                 bundleReady = dir.absolutePath
                 nativeSetBundleDir(dir.absolutePath)
             } catch (t: Throwable) {
@@ -105,13 +117,82 @@ object VibeMapGL {
      *  "URI is not absolute"), so every Android phone silently fell back to the Leaflet map: five full-screen
      *  canvases, ~250 MB of GPU memory and ~20 fps on the Moto G35's HFDL map. The APK already carries the
      *  identical files here for the server, so the app uses them: one copy on disk, not two.
-     *  Blocking (first run copies ~26 MB) — call off the UI thread. Returns the bundle directory.
+     *  Blocking (first run copies ~3 MB: fonts, scripts, icons — the packs stay in the APK since beta96) — call off
+     *  the UI thread. Returns the bundle directory.
      */
     fun bundleDir(ctx: Context): File = synchronized(unpackLock) { unpack(ctx.applicationContext) }
 
-    private fun unpack(ctx: Context): File {
-        val am = ctx.assets
-        val lines = am.open(MANIFEST).bufferedReader(Charsets.UTF_8).use { it.readLines() }
+    /** The three packs served straight out of the APK, never unpacked (see the class comment). */
+    private val APK_PACKS = listOf("vibemap-basic.pmtiles", "vibemap-relief.pmtiles", "vibemap-runways.pmtiles")
+
+    @Volatile private var slices: Map<String, VibeApkPack.Slice>? = null
+
+    /**
+     * ★★ Which packs this process reads OUT OF THE APK, worked out once per process (the APK cannot change under a
+     *  running process; an update restarts it). VibeApkPack.locate does the checks (stored not compressed, the
+     *  manifest's length, inside the file, the PMTiles magic); the file behind the descriptor comes from
+     *  /proc/self/fd (so a split APK is found too), sourceDir if that fails. Every process (the app's and the
+     *  server's) computes the same answer from the same APK, so they agree on what the marker says. The server is
+     *  told by `start` (registerSlices), never from here: the app's map must not load the server library.
+     */
+    fun apkSlices(ctx: Context): Map<String, VibeApkPack.Slice> {
+        slices?.let { return it }
+        synchronized(this) {
+            slices?.let { return it }
+            val app = ctx.applicationContext
+            val bytes = try { manifest(app).second.associate { it.dest to it.bytes } } catch (t: Throwable) { emptyMap() }
+            val out = VibeApkPack.locate(ASSET_DIR, APK_PACKS, bytes, { asset ->
+                app.assets.openFd(asset).use { fd ->
+                    val path = try { Os.readlink("/proc/self/fd/${fd.parcelFileDescriptor.fd}") }
+                               catch (t: Throwable) { app.applicationInfo.sourceDir }
+                    VibeApkPack.Slice(path, fd.startOffset, fd.length)
+                }
+            }) { Log.w(TAG, it) }
+            Log.i(TAG, "GPU map packs read from the APK: ${out.keys.joinToString().ifEmpty { "none" }}")
+            slices = out
+            return out
+        }
+    }
+
+    /**
+     * Tell the server where each APK pack is (vibe_mapgl.h setBundleSlice — it checks bounds and magic again). Its
+     * native state lives as long as the process, so once per process, before the bundle dir is set. ★ A refusal
+     * should be impossible (Kotlin made the same checks); if it happens anyway that one pack is copied into the
+     * bundle dir, as before beta96, so the listeners' map is never short of it.
+     */
+    private fun registerSlices(ctx: Context, root: File) {
+        for ((name, sl) in apkSlices(ctx)) {
+            val why = try { nativeSetBundleSlice(name, sl.path, sl.offset, sl.length) } catch (t: Throwable) { t.toString() }
+            if (why.isEmpty()) continue
+            Log.e(TAG, "$name: the server refused the APK slice ($why) — copying it out as before")
+            try {
+                val out = File(root, name); val tmp = File(root, "$name.tmp")
+                ctx.assets.open("$ASSET_DIR/$name").use { i -> FileOutputStream(tmp).use { o -> i.copyTo(o, 64 * 1024); o.fd.sync() } }
+                if (!tmp.renameTo(out)) throw IllegalStateException("rename failed")
+            } catch (t: Throwable) { Log.e(TAG, "$name: fallback copy FAILED — /mapgl/$name will 404: ${t.message}") }
+        }
+    }
+
+    private val reader = VibeApkPack.Reader()
+
+    /**
+     * ★★★ THE APP'S OWN MAP READS A PACK BY RANGE (mapglPack.ts readPackRange → VibePowerModule.mapglPackRange): exactly
+     *  `length` bytes from `offset` of bundled pack `name` (fewer at its end), base64 — straight from the APK when the
+     *  pack is a slice, else from the unpacked copy. Only the three packs; reads capped at 4 MB; null on any failure
+     *  (the page leaves that tile out). Synchronous on the JS thread, like the iOS FileHandle read it replaces: a
+     *  pread of a few KB from the page cache.
+     */
+    fun readPackRange(ctx: Context, name: String, offset: Long, length: Int): String? {
+        if (name !in APK_PACKS || offset < 0 || length <= 0 || length > 4 * 1024 * 1024) return null
+        val app = ctx.applicationContext
+        val sl = apkSlices(app)[name]
+        val buf = if (sl != null) reader.read(sl, offset, length)
+                  else VibeApkPack.readFile(File(File(app.filesDir, "mapgl-bundled"), name), offset, length)
+        return buf?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+    }
+
+    private fun manifest(ctx: Context): Pair<String, List<Entry>> {
+        val lines = ctx.assets.open(MANIFEST).bufferedReader(Charsets.UTF_8).use { it.readLines() }
         val version = lines.firstOrNull()?.takeIf { it.startsWith("#version ") }?.removePrefix("#version ")?.trim()
             ?: throw IllegalStateException("manifest has no #version line")
         val entries = lines.drop(1).filter { it.isNotBlank() }.map {
@@ -119,6 +200,17 @@ object VibeMapGL {
             require(p.size == 3) { "bad manifest line: $it" }
             Entry(p[0], p[1], p[2].toLong())
         }
+        return version to entries
+    }
+
+    private fun unpack(ctx: Context): File {
+        val am = ctx.assets
+        val (manifestVersion, allEntries) = manifest(ctx)
+        // ★★ The packs read from the APK are not copied — and the marker says which they are, so a bundle unpacked
+        //    WITH them (beta95/96: marker = the version alone) no longer matches and is cleared and redone once.
+        val inApk = apkSlices(ctx).keys
+        val entries = allEntries.filter { it.dest !in inApk }
+        val version = if (inApk.isEmpty()) manifestVersion else "$manifestVersion apk:${inApk.sorted().joinToString(",")}"
         val root = File(ctx.filesDir, "mapgl-bundled")
         val marker = File(root, MARKER)
         if (marker.isFile && marker.readText().trim() == version) {
@@ -307,6 +399,8 @@ object VibeMapGL {
     /** Caches this class for the downloader, sets the data dir, installs the downloader. */
     @JvmStatic private external fun nativeInit(dataDir: String)
     @JvmStatic private external fun nativeSetBundleDir(dir: String)
+    /** beta96: serve bundle file `rel` from `length` bytes at `offset` of `path` (the APK). "" = accepted, else why not. */
+    @JvmStatic private external fun nativeSetBundleSlice(rel: String, path: String, offset: Long, length: Long): String
     @JvmStatic private external fun nativeProgress(handle: Long, written: Long, total: Long)
     /** V12 ADS-B aircraft data: its data dir, the owner's image folders, the transport (fetchIf); starts the weekly job. */
     @JvmStatic private external fun nativeInitAdsb(dataDir: String, imagesDir: String, userAgent: String)

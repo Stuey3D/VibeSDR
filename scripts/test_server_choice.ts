@@ -117,8 +117,11 @@ const fullSrc = rd('src/screens/ServerModeScreen.tsx');
 const runView = fullSrc.slice(fullSrc.indexOf('// ── Running view'), fullSrc.indexOf('// ── Config view'));
 const cfgView = fullSrc.slice(fullSrc.indexOf('// ── Config view'));
 ok(runView.indexOf('<ServerTopBar') > 0 && runView.indexOf('<ServerTopBar') < runView.indexOf('styles.h1'), 'Full running: STOP is the first thing');
-ok(cfgView.indexOf('<ServerTopBar') > 0 && cfgView.indexOf('<ServerTopBar') < cfgView.indexOf('styles.h1'), 'Full setup: START is the first thing');
-ok((fullSrc.match(/\{scCredentials\}/g) || []).length === 2 && /<DeviceReset /.test(fullSrc), 'Full: password / PIN change and RESET at the bottom of both views');
+ok(/const serverChoiceTop: React\.ReactNode = \(\s*<ServerTopBar/.test(fullSrc) && cfgView.indexOf('{serverChoiceTop}') > 0
+   && cfgView.indexOf('{serverChoiceTop}') < cfgView.indexOf('secRender('), 'Full setup: START (the serverChoiceTop hook) comes before every section');
+ok(/devicePassword: \{ key: 'devicePassword'[^}]*body: scDeviceCreds/.test(fullSrc), 'Full setup: the device-only password / PIN fills its section slot');
+ok((fullSrc.match(/\{scCredentials\}/g) || []).length === 1 && runView.includes('{scCredentials}'), 'Full running: password / PIN and RESET at the bottom');
+ok(cfgView.lastIndexOf('{scReset}') > cfgView.lastIndexOf('secRender('), 'Full setup: RESET at the very bottom, after every section');
 ok(/mdnsName: mdnsName\.trim\(\)/.test(fullSrc), 'Full sends the address on this network (Simple → Full keeps it)');
 const simple = rd('src/screens/SimpleServerScreen.tsx');
 ok(/multiSet\(\[\[NAME_KEY, n\], \['vs_rate'/.test(simple) && /setMdnsName\(mdns\.trim\(\)\)/.test(simple) && /setChoice\('simple'\)/.test(simple),

@@ -759,6 +759,8 @@ if node scripts/test-setup-adsb-landing.mjs; then pass=$((pass+1)); else fail=$(
 # ★★★ beta96 the landing map + keep-running modes on the Setup page (the gate on the C++ cases, the card drawn) and the app's rule
 if node scripts/test-setup-keep-run.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_keep_run.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 b96-setupux the app's server screen in sections, in Stuart's order (src/utils/setupSections.ts)
+if node --no-warnings scripts/test_setup_sections.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 BACKGROUND DECODING's editor (2026-10-22): the page's real code — Nick's profile round-trips, decoders follow the
 #    demodulator, "add another profile" only under a timed one, delete, the dial hint.
 if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1132,6 +1134,11 @@ else notrun=$((notrun+1)); fi
 #     in headless MUTED Edge — the ADS-B tab shows its own ticks, NEW marks, All on / All off, the save's seen@.
 if [ -n "${VIBESERVER_BIN:-}" ]; then
   node scripts/test-setup-paul-tabs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else notrun=$((notrun+1)); fi
+# ★★★ beta96 b96-setupux the Setup page's COLLAPSIBLE SECTIONS + the red "!" + the server's frame rate, in headless MUTED Edge.
+if [ -n "${VIBESERVER_BIN:-}" ]; then
+  node scripts/test-setup-sections.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 else notrun=$((notrun+1)); fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).

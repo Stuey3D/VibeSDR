@@ -118,4 +118,21 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
     ok(/focusIdx/.test(t) && /part|linked/.test(t), `${f}: drawn by half, the focus ring by the pad's index`);
   }
 }
+// ★★★ beta96 b96-setupux THE SERVER SCREEN ON A TV REMOTE (Stuart 11-26: "scrolling the long screen with a remote took ages").
+//    Every section's header is ONE D-pad stop with its own focus ring; a closed section mounts nothing, so with the sections
+//    closed the remote steps header to header; OK opens one and down walks into it. OPEN ALL / CLOSE ALL are stops too.
+{
+  const f = 'src/components/SetupSection.tsx';
+  const list = unregistered(path.join(root, f));
+  ok(list.length === 0, `${f}: every touchable registered (the header, OPEN ALL, CLOSE ALL)`, list.map((l) => '      ' + l).join('\n'));
+  const t = readFileSync(path.join(root, f), 'utf8');
+  ok((t.match(/focusable=\{Platform\.OS === 'android'\}/g) || []).length >= 2, `${f}: the header and the all-buttons are focusable on Android (the TV)`);
+  ok(/\{open && <View style=\{s\.body\}>\{children\}<\/View>\}/.test(t), `${f}: a closed section mounts nothing — the D-pad steps header to header`);
+  ok(/onFocus=\{\(\) => setFocused\(true\)\}/.test(t) && /focused && \{ backgroundColor: C\.keySelBg \}/.test(t), `${f}: the header draws its focus ring`);
+  const sm = readFileSync(path.join(root, 'src/screens/ServerModeScreen.tsx'), 'utf8');
+  const order = sm.indexOf('<SectionAllRow') < sm.indexOf('{secRender(serverSecs, SERVER_ORDER)}')
+             && sm.indexOf('{secRender(serverSecs, SERVER_ORDER)}') < sm.indexOf('{secRender(radioSecs, RADIO_ORDER)}');
+  ok(order, 'ServerModeScreen: D-pad order — OPEN ALL / CLOSE ALL, then the server headers, then the radio headers');
+  ok(/<SetupSection key=\{s\.key\} sectionKey=\{s\.key\}/.test(sm), 'ServerModeScreen: every section is drawn through SetupSection (one header each)');
+}
 process.exit(fails ? 1 : 0);
