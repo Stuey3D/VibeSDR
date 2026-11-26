@@ -149,6 +149,9 @@ export type VibeServerConfig = {
   mapKeep?: boolean;
   /** ★★★ beta96 the single-mode radio ('' / 'general' = General; else the token — vibe_keep_store.h singleOk). */
   singleMode?: string;
+  /** ★★★ beta96 b96-bgsplit the BACKGROUND choice ('' = manual background decoding; else a whole-radio mode token, e.g.
+   *  "ais", "aisdsc", "adsb", "vdl2", "ism:868") — separate from the landing (vsMapFromConfigJson reads it off the config). */
+  bgMode?: string;
   /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h). Sent to the engine as its config's
    *  flat fm* keys; absent = the engine's defaults (de-emphasis by region, NR off, the rest on, RETURN). */
   fmDefaults?: FmDefaults;
@@ -405,6 +408,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     landingModes: cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur' ? (cfg.landingModes ?? '') : '',
     mapKeep: (cfg.landingMap === 'avmar' || cfg.landingMap === 'amateur') && !!cfg.landingModes && cfg.mapKeep === true,
     singleMode: cfg.singleMode ?? '',   // ★★★ beta96 on every start, a definite value
+    bgMode: cfg.bgMode ?? '',           // ★★★ beta96 b96-bgsplit on every start, a definite value (else the choice was dropped here)
     ...fmDefaultsKeys(cfg.fmDefaults ?? FM_DEFAULTS),   // ★ on EVERY start, at definite values, like its neighbours
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,
