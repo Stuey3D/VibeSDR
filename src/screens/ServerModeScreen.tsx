@@ -5201,7 +5201,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   // ★★ V12 and only what THIS radio can run (vibe_radio_caps.h — the Setup page's answer, radioCapsNow)
                   const full = modeTree();
                   const tree = full.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).filter((m) => modeCapShown(full, m));
-                  const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
+                  /* ★★★ beta96 the list with its "seen@" fixed first (NM.freeze — the same enforced list): every edit below starts
+                   *  from it, so a "+id" tick can never move which switches count as new (a "+vormap" would read as a 93 list) */
+                  const ownCsv = NM.freeze(blockedModes, modeGens);
+                  const own = NM.ownSet(ownCsv);
                   // ★★ V12 off here only by its REGION DEFAULT — the owner has said nothing either way
                   // ★ the list as the server ENFORCES it: the owner's, plus the region and new-mode defaults, minus their words
                   const off = NM.enforcedOff(own, regionDefaults, modeGens);
@@ -5407,7 +5410,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   const landingId = landingAdsb ? 'adsb' : landingDabCh >= 0 ? 'dab' : (landingMode === 'cw' ? 'cwu' : landingMode);
                   const allSet = (on: boolean) => {
                     // ★ ON: what this radio draws; OFF: every switch (hidden ones too, so one whole-radio mode left IS single-mode)
-                    const v0 = NM.allSet(blockedModes, on, plainIds(!on), landingId, regionDefaults, modeGens);
+                    const v0 = NM.allSet(ownCsv, on, plainIds(!on), landingId, regionDefaults, modeGens);
                     if (v0 == null) { setModeAllNote('Not changed \u2014 a radio needs one mode left on. Set where new listeners start, then All off keeps that one.'); return; }
                     setModeUndo(blockedModes);
                     keepCsv(NM.stamp(v0, modeGens, regionDefaults));
@@ -5433,7 +5436,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                                  : addedOff.length ? 'Those marked NEW below are off until you tap them.' : 'They are on.')}
                           </Text>
                           <View style={{ flexDirection: 'row' }}>
-                            {btn('nmKeep', 'Keep as shown', () => keepCsv(NM.stamp(blockedModes, modeGens, regionDefaults)))}
+                            {btn('nmKeep', 'Keep as shown', () => keepCsv(NM.stamp(ownCsv, modeGens, regionDefaults)))}
                           </View>
                         </View>
                       )}
@@ -5454,8 +5457,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         <View style={{ marginTop: 10, gap: 6 }}>
                           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>When an update adds new modes</Text>
                           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                            {btn('nmOn', 'Switch them on', () => keepCsv(NM.setPolicy(blockedModes, 'on')), polOn, nmState.single)}
-                            {btn('nmOff', 'Leave them off until I tap them', () => keepCsv(NM.setPolicy(blockedModes, 'off')), !polOn, nmState.single)}
+                            {btn('nmOn', 'Switch them on', () => keepCsv(NM.setPolicy(ownCsv, 'on')), polOn, nmState.single)}
+                            {btn('nmOff', 'Leave them off until I tap them', () => keepCsv(NM.setPolicy(ownCsv, 'off')), !polOn, nmState.single)}
                           </View>
                           <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
                             {nmState.single

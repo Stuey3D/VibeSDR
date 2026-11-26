@@ -99,6 +99,18 @@ for (const [csv, what] of cases) {
   ok(NM.enforcedOff(NM.ownSet(leaveOff), {}, later).has('newmode'), '"leave them off": a mode added in 97 is off');
 }
 
+{   // ★ a tick of ONE new switch must not turn the others on: "+vormap" alone would read as a list from 93
+  const frozen = NM.freeze(PAUL, MG);
+  const ticked = NM.ownSet(frozen); ticked.add('+vormap');
+  const saved = NM.stamp([...ticked].join(','), MG, {});
+  const off = appOff(saved);
+  ok(!off.has('vormap') && off.has('dvsig') && off.has('sat') && off.has('orbcomm'), 'Paul ticks VOR MAP (frozen first): VOR MAP on, DV signalling / SATELLITE / ORBCOMM still off');
+  const r = { blockedModes: PAUL }; ctx.newModesFreeze(r);
+  const t2 = new Set(r.blockedModes.split(',')); t2.add('+vormap'); r.blockedModes = [...t2].join(',');
+  ctx.newModesStamp(r);
+  ok([...pageOff(r.blockedModes)].sort().join(',') === [...off].sort().join(','), 'the page: the same');
+}
+
 // ── ALL ON / ALL OFF and "never no modes" ──
 {
   const ids = Object.keys(GENS);
@@ -130,7 +142,7 @@ for (const [csv, what] of cases) {
   ok(/\{ id: "sat", label: "SATELLITE mode/.test(page), 'SATELLITE is a switch on the Setup page');
   const sm = read('src/screens/ServerModeScreen.tsx');
   ok(/\{ id: 'sat', label: 'SATELLITE mode/.test(sm), '…and on the app’s server screen');
-  ok(/NM\.allSet\(/.test(sm) && /'Undo'/.test(sm) && /NM\.setPolicy\(blockedModes, 'off'\)/.test(sm), 'the app: All on / All off with Undo, the policy row');
+  ok(/NM\.allSet\(/.test(sm) && /'Undo'/.test(sm) && /NM\.setPolicy\(ownCsv, 'off'\)/.test(sm) && /const ownCsv = NM\.freeze\(blockedModes, modeGens\);/.test(sm), 'the app: All on / All off with Undo, the policy row');
   ok(/setModeGens\(NM\.parseModeGens\(j\)\)/.test(sm), 'the app reads the engine’s table');
 }
 
