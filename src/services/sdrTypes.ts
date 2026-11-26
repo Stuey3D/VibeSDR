@@ -500,6 +500,9 @@ export interface ServerOccupancy {
   /** ★ V12 the VOR / ILS map (docs/v12/VOR-MAP.md): absent where the radio cannot tune 108–118 MHz; `wins` windows a sweep at
    *  the running rate, `dwell` seconds each. */
   vormap?: { ok: boolean; why: string; wins: number; dwell: number; lo?: number; hi?: number };   // ★ beta96 lo/hi: the band swept (vormapLo/Hi)
+  /** ★★★ beta96 the maps' OTHER RADIOS ON THIS SERVER switch (mapScope.ts): this radio's id ('' = none — no switch) and how
+   *  many radios the machine has. */
+  radioId?: string; radioCount?: number;
   /** ★★ V12 satellites: `doppler` (a version) — absent where the radio reaches no listed downlink (no entry at all). */
   sat?: { ok: boolean; why: string; need?: 'location' };   // ★★ beta94 need: the engine has no position (satPlace.ts)
   /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
@@ -627,6 +630,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
             dwell: typeof j.vormapDwell === 'number' && j.vormapDwell > 0 && j.vormapDwell < 600 ? j.vormapDwell : 30,
             ...(typeof j.vormapLo === 'number' && typeof j.vormapHi === 'number' && j.vormapLo > 0 && j.vormapHi > j.vormapLo ? { lo: j.vormapLo, hi: j.vormapHi } : {}) }
         : undefined,
+      radioId:   typeof j.radioId === 'string' && /^[0-9a-z]{1,16}$/.test(j.radioId) ? j.radioId : '',
+      radioCount: typeof j.radioCount === 'number' && Number.isFinite(j.radioCount) ? Math.max(0, Math.min(64, Math.floor(j.radioCount))) : 0,
       mfsk:      j.mfsk === true,
       mfskModes: parseTextModes(j.mfskModes),
       hell:      j.hell === true,

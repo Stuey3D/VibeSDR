@@ -58,7 +58,7 @@ import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as 
 // ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules
 import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProfile, liveTabs, liveTabPick, avLayersFrom, avLayerOf, shipLayerOf,
          aircraftOrder, msgFeedUpdate, msgFilter, MAP_TITLE, TAB_LABEL, SHIP_ID, LIVE_ROW_CAP,
-         type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../../../src/services/liveMaps';
+         LIVE_CHIP_COLOUR, type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../../../src/services/liveMaps';
 import { avMerge, avNowRule, avHave, avName, type AvLayerId } from '../../../src/services/aviationMap';
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
@@ -10706,11 +10706,7 @@ function asModeEnded() {
  *  TUNE = what MOVES THE SHARED RADIO (the whole-radio modes this map is a live state of, and the live mode's bands), under
  *  the ask / lock rules (the group is data-dial: TrackView.setDialLock greys it with the reason), the live one pressed; only
  *  with a radio behind the map. SHOW = this viewer's own filter (the layer chips with their counts), never sent anywhere. */
-const AS_CHIP_COLOUR: Partial<Record<LiveLayerId, string>> = {
-  adsb: '#ffd34d', vdl2: '#7ee787', acars: '#79c0ff', hfdl: '#ffa657', adsc: '#d2a8ff', hfdlst: '#ffa657', airports: '#9fb0c2',
-  ships: '#4fc3f7', dsc: '#ff6b6b', navst: '#f0c674', warnings: '#ff8a65', weather: '#81c784', areas: '#e0a040',
-  vor: '#c792ea', ndb: '#ffb000', sondes: '#80deea',
-};
+const AS_CHIP_COLOUR = LIVE_CHIP_COLOUR;   // ★★★ beta96 one table for the web and the app (liveMaps.ts)
 /* ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): ONE "AIR & SEA LIVE" key in the mode menu's TUNES THE RADIO ITSELF in place
  *  of ADS-B · AIS · MARITIME · DATALINK · NDB · VOR MAP · SONDES — it takes the radio into the last air / sea mode used here
  *  (else ADS-B where reachable, else the first reachable) and the map's TUNE keys switch between them. VIEWS' AIR & SEA is
