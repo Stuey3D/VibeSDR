@@ -8,7 +8,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
-import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -126,54 +125,29 @@ object VibeMapGL {
     /** The three packs served straight out of the APK, never unpacked (see the class comment). */
     private val APK_PACKS = listOf("vibemap-basic.pmtiles", "vibemap-relief.pmtiles", "vibemap-runways.pmtiles")
 
-    /** A pack's bytes inside the APK: `length` bytes from `offset` of `path`. */
-    class ApkSlice(val path: String, val offset: Long, val length: Long)
-
-    @Volatile private var slices: Map<String, ApkSlice>? = null
+    @Volatile private var slices: Map<String, VibeApkPack.Slice>? = null
 
     /**
      * ★★ Which packs this process reads OUT OF THE APK, worked out once per process (the APK cannot change under a
-     *  running process; an update restarts it). For each: openFd (throws for a COMPRESSED entry — then it is
-     *  unpacked, logged), the file behind the descriptor (/proc/self/fd, so a split APK is found too; sourceDir if
-     *  that fails), the length against the manifest's, and the PMTiles magic at the offset. Every process (the app's
-     *  and the server's) computes the same answer from the same APK, so they agree on what the marker says. The
-     *  server is told by `start` (registerSlices), never from here: the app's map must not load the server library.
+     *  running process; an update restarts it). VibeApkPack.locate does the checks (stored not compressed, the
+     *  manifest's length, inside the file, the PMTiles magic); the file behind the descriptor comes from
+     *  /proc/self/fd (so a split APK is found too), sourceDir if that fails. Every process (the app's and the
+     *  server's) computes the same answer from the same APK, so they agree on what the marker says. The server is
+     *  told by `start` (registerSlices), never from here: the app's map must not load the server library.
      */
-    fun apkSlices(ctx: Context): Map<String, ApkSlice> {
+    fun apkSlices(ctx: Context): Map<String, VibeApkPack.Slice> {
         slices?.let { return it }
         synchronized(this) {
             slices?.let { return it }
             val app = ctx.applicationContext
-            val out = LinkedHashMap<String, ApkSlice>()
             val bytes = try { manifest(app).second.associate { it.dest to it.bytes } } catch (t: Throwable) { emptyMap() }
-            for (name in APK_PACKS) {
-                try {
-                    val afd = try { app.assets.openFd("$ASSET_DIR/$name") } catch (e: java.io.FileNotFoundException) {
-                        Log.w(TAG, "$name is COMPRESSED in the APK (or missing) — unpacking it instead: ${e.message}")
-                        continue
-                    }
-                    val slice = afd.use { fd ->
-                        val path = try { Os.readlink("/proc/self/fd/${fd.parcelFileDescriptor.fd}") }
-                                   catch (t: Throwable) { app.applicationInfo.sourceDir }
-                        ApkSlice(path, fd.startOffset, fd.length)
-                    }
-                    val want = bytes[name]
-                    if (want != null && want != slice.length) {
-                        Log.w(TAG, "$name: APK entry is ${slice.length} B, manifest says $want — unpacking it instead"); continue
-                    }
-                    val magic = ByteArray(7)
-                    RandomAccessFile(slice.path, "r").use { f ->
-                        if (slice.offset + slice.length > f.length()) throw IllegalStateException("entry runs past ${slice.path}")
-                        f.seek(slice.offset); f.readFully(magic)
-                    }
-                    if (String(magic, Charsets.US_ASCII) != "PMTiles") {
-                        Log.w(TAG, "$name: no PMTiles magic at ${slice.path}@${slice.offset} — unpacking it instead"); continue
-                    }
-                    out[name] = slice
-                } catch (t: Throwable) {
-                    Log.w(TAG, "$name: cannot read it from the APK (${t.message}) — unpacking it instead")
+            val out = VibeApkPack.locate(ASSET_DIR, APK_PACKS, bytes, { asset ->
+                app.assets.openFd(asset).use { fd ->
+                    val path = try { Os.readlink("/proc/self/fd/${fd.parcelFileDescriptor.fd}") }
+                               catch (t: Throwable) { app.applicationInfo.sourceDir }
+                    VibeApkPack.Slice(path, fd.startOffset, fd.length)
                 }
-            }
+            }) { Log.w(TAG, it) }
             Log.i(TAG, "GPU map packs read from the APK: ${out.keys.joinToString().ifEmpty { "none" }}")
             slices = out
             return out
@@ -199,8 +173,7 @@ object VibeMapGL {
         }
     }
 
-    /** The open APK(s) for the app's ranged reads, one per path (normally one: base.apk). */
-    private val apkFiles = HashMap<String, RandomAccessFile>()
+    private val reader = VibeApkPack.Reader()
 
     /**
      * ★★★ THE APP'S OWN MAP READS A PACK BY RANGE (mapglPack.ts readPackRange → VibePowerModule.mapglPackRange): exactly
@@ -213,30 +186,9 @@ object VibeMapGL {
         if (name !in APK_PACKS || offset < 0 || length <= 0 || length > 4 * 1024 * 1024) return null
         val app = ctx.applicationContext
         val sl = apkSlices(app)[name]
-        return try {
-            val buf: ByteArray
-            if (sl != null) {
-                if (offset >= sl.length) return null
-                val n = minOf(length.toLong(), sl.length - offset).toInt()
-                buf = ByteArray(n)
-                synchronized(apkFiles) {
-                    val f = apkFiles.getOrPut(sl.path) { RandomAccessFile(sl.path, "r") }
-                    f.seek(sl.offset + offset); f.readFully(buf)
-                }
-            } else {
-                val file = File(File(app.filesDir, "mapgl-bundled"), name)
-                RandomAccessFile(file, "r").use { f ->
-                    if (offset >= f.length()) return null
-                    buf = ByteArray(minOf(length.toLong(), f.length() - offset).toInt())
-                    f.seek(offset); f.readFully(buf)
-                }
-            }
-            Base64.encodeToString(buf, Base64.NO_WRAP)
-        } catch (t: Throwable) {
-            Log.w(TAG, "readPackRange $name @$offset+$length: ${t.message}")
-            synchronized(apkFiles) { apkFiles.values.forEach { try { it.close() } catch (_: Throwable) {} }; apkFiles.clear() }
-            null
-        }
+        val buf = if (sl != null) reader.read(sl, offset, length)
+                  else VibeApkPack.readFile(File(File(app.filesDir, "mapgl-bundled"), name), offset, length)
+        return buf?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
     }
 
     private fun manifest(ctx: Context): Pair<String, List<Entry>> {
