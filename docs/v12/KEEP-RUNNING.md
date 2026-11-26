@@ -21,7 +21,7 @@ memory `map_landing_toggles.md` specifies.
 | Setup page card | `vibe_setup_page.h` `mapLandWrap` | built, tested against stand-in elements |
 | Android: bridge + engine | `vibe_android_setup.h`; the engine reads the keys off the config JSON (`vsMapFromConfigJson`) — **no new JNI** | built (the shim compiled on the Mac), test-android-setup passes; **gradle not run** |
 | App's server screen | `ServerModeScreen.tsx` + `src/utils/keepRun.ts` | built; esbuild syntax OK; **not type-checked** (tsc on the screen needs > 1 GB) |
-| Single mode (General / Single) | `vsEnforcedBlocked`, `vsApplyLanding`, `singleSatRefuses`; page `radioUseWrap`; app RADIO USE | built; unit + page + e2e tested (VDL2 single, General restores ticks); SATELLITES server half only |
+| Single mode (General / Single) | `vsEnforcedBlocked`, `vsApplyLanding`, `singleSatRefuses`; page `radioUseWrap`; app RADIO USE | built; unit + page + e2e tested (VDL2 single, General restores ticks); SATELLITES finished on b96-satsingle (watch view + transponder hybrid — docs/v12/SAT-SINGLE.md) |
 | Copy | About beta96 note (+ the old ADS-B note pointed at the new control) | done; tours do not mention keep-running (checked) |
 | `vibe_web_page.h` | rebuilt on this branch (build-web via the lock) after the last merge of b96-integrate | regenerate again if integration changes web/ |
 
@@ -75,20 +75,14 @@ such as ADS-B / AIS / VDL2. Only the selected decoder is available."*
 - Listeners WATCH: `singleSatRefuses` refuses every frame that would move what the room hears (tune, mode, gain, whole modes,
   SATELLITE picks — the ask-before-tuning list) for anybody but the signed-in admin, sends the room's state back and a notice
   (`{"type":"notice","single":"sat",…}`); a pick gets the usual `sat` OFF with the reason.
-- ✗ **NOT BUILT: the clients' watch-only SATELLITE view** (land straight in SATELLITE, the pass now / next with a countdown, the
-  live decode, the timetable + the last pass's gallery between passes). The server publishes `singleMode:"sat"` for it; the
-  web/app view change belongs with b96-satsched / b96-onemap's owners. **Not e2e-tested** (needs orbit data and a pass).
-- ✗ **NOT BUILT: Stuart's HYBRID for linear transponder passes** — during a transponder pass the radio becomes a locked range over
-  the passband (+ Doppler) with a VFO per listener and per-listener AUTO DOPPLER, back to watch-only at LOS. Design for the next
-  agent: `perClientDsp()` is DERIVED (`g_vsLockedCentre > 0 && g_vsMaxUsers > 1`), so the pass's session would set
-  `g_vsLockedCentre` / `g_vsLockedRate` to the passband's centre / a rate holding it at AOS (saving the owner's, as
-  `satWorkBeginLocked` saves the dial) and restore them at LOS; each listener's ClientDsp then needs its VFO placed at the
-  passband centre (a joiner too), its own Doppler lock (`satEngine().start(key=session …)`, the per-listener SATELLITE pick
-  path that exists for locked ranges), tune clamped to the passband (the locked-window clamp does this), and `singleSatRefuses`
-  must let per-VFO tunes through while refusing the rest. The risk is the live switch of every connected client between the
-  shared pipeline and per-client DSP mid-session (their sockets, audio chains, the spectrum crop) — it needs the coordinator's
-  live test on a real transponder pass. Not attempted on this branch: it is a restart-class change to the DSP topology that
-  I could not test here.
+- ✓ **BUILT on b96-satsingle (docs/v12/SAT-SINGLE.md): the clients' watch-only SATELLITE view** (web + app: lands in
+  SATELLITE, the pass now / next with its countdown, the live decode in the ordinary pick box, the radio's timetable, the last
+  pass and GALLERY; no EXIT for listeners) — server: `sat_single`, the pass as the room's pick.
+- ✓ **BUILT on b96-satsingle: Stuart's HYBRID for linear transponder passes** — at AOS the radio becomes a locked range over
+  the passband ± Doppler (g_vsLockedCentre / g_vsLockedRate saved and restored at LOS), listeners are told (`sat_hybrid`) and
+  their sockets recycled so the ordinary accept path builds each a channel at the passband centre with their own per-listener
+  pick + AUTO DOPPLER; outside the window is refused. e2e-tested with a fake radio and a fake pass clock
+  (`scripts/test-server-sat-single.mjs`, 33/33). "Per-listener DSP always on" was weighed and refused — see SAT-SINGLE.md.
 
 ## What the owner sees
 
@@ -170,7 +164,7 @@ Stuart 11-25: VDL2 136.7–136.975, ORBCOMM 137.2–137.8 and Meteor 137.1 / 137
 | `scripts/test-setup-keep-run.mjs` | 65/65 | the page's real functions on the C++ cases; the card for an RTL at 2.4, an RSP at 8, an HF+, an Icom |
 | `scripts/test_keep_run.ts` | 32/32 | the app's rule, same cases |
 | `scripts/test_admin_bg.ts` | 63/63 | the admin keep-run line, the shared / rider satellite rows |
-| `check-android-settings-parity` | 206/1 | the 1 = b96-newmodes' `newModesPolOn/Off` unclassified — already failing on b96-integrate, not this branch's |
+| `check-android-settings-parity` | 214/0 | b96-newmodes' `newModesPolOn/Off` classified as ported on b96-satsingle |
 | `check-setup-page`, `test-setup-adsb-landing`, `test-new-modes` 577/577, `test-server-ism-bg-return` 30/30 | clean | |
 | `scripts/test-keep-restart.sh` (`vibeserver/test-keep-restart.cpp`) | 7/7 | IN-PROCESS restarts (Android / the Mac app, after b96-adsbstart's endWholeRadioModesForStop, + `g_av.stop()`): kept VDL2 ×5, kept ISM 868 ×2 — every start re-tunes to the kept band |
 | CPU (Mac M5, fake rtl_tcp 2.4 MS/s, 20 s, nobody connected) | plain 3.0 %, kept VDL2 4.5 %, kept ISM 868 7.7 % of one core | the server process only |
