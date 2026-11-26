@@ -162,15 +162,17 @@ Stuart 11-25: VDL2 136.7–136.975, ORBCOMM 137.2–137.8 and Meteor 137.1 / 137
 
 | Test | Result | What |
 |---|---|---|
-| `vibeserver/test-keep-run.cpp` | 95/95 | table, CSV, entries; migration; the gate at 2.048 / 2.4 / 2.56 / 8 MS/s; multi-radio (the Pi 500 shape); the shared fit (Meteor 137.9 / 137.1 at 2.4 and 2.56, NOAA, 2.048, an HF+); the scheduler's hold; cost words |
+| `vibeserver/test-keep-run.cpp` | 105/105 | table, CSV, entries; migration; the gate at 2.048 / 2.4 / 2.56 / 8 MS/s; multi-radio (the Pi 500 shape); the shared fit (Meteor 137.9 / 137.1 at 2.4 and 2.56, NOAA, 2.048, an HF+); the scheduler's hold; cost words |
 | `vibeserver/test-sat-pass-sched.cpp` | 43/43 | unchanged behaviour with no hold |
-| `vibeserver/test-config-radios.cpp` | 278 checks, 0 fail | the three fields over every hop; beta95 migration; old writer vs new |
+| `vibeserver/test-config-radios.cpp` | 284 checks, 0 fail | the three fields over every hop; beta95 migration; old writer vs new |
 | `vibeserver/test-android-setup.cpp` | all passed | the bridge's identity round trip with the new keys; the mirror; a beta95 phone config on the page |
-| `scripts/test-server-keep-run.mjs` | 32/32 | **e2e on the Mac binary**: kept VDL2 at start, listener joins, EXIT to the plain landing, back after leaving, a band step then the hand-back, landing-only, negative, the shared centre, ACARS + VDL2 refused at 2.4 with the reason, AIS kept, a beta95 ADS-B config |
-| `scripts/test-setup-keep-run.mjs` | 48/48 | the page's real functions on the C++ cases; the card for an RTL at 2.4, an RSP at 8, an HF+, an Icom |
-| `scripts/test_keep_run.ts` | 28/28 | the app's rule, same cases |
+| `scripts/test-server-keep-run.mjs` | 39/39 | **e2e on the Mac binary**: kept VDL2 at start, listener joins, EXIT to the plain landing, back after leaving, a band step then the hand-back, landing-only, negative, the shared centre, ACARS + VDL2 refused at 2.4 with the reason, AIS kept, a beta95 ADS-B config |
+| `scripts/test-setup-keep-run.mjs` | 65/65 | the page's real functions on the C++ cases; the card for an RTL at 2.4, an RSP at 8, an HF+, an Icom |
+| `scripts/test_keep_run.ts` | 32/32 | the app's rule, same cases |
 | `scripts/test_admin_bg.ts` | 63/63 | the admin keep-run line, the shared / rider satellite rows |
-| `check-android-settings-parity`, `check-setup-page`, `test-setup-adsb-landing` | clean | |
+| `check-android-settings-parity` | 206/1 | the 1 = b96-newmodes' `newModesPolOn/Off` unclassified — already failing on b96-integrate, not this branch's |
+| `check-setup-page`, `test-setup-adsb-landing`, `test-new-modes` 577/577, `test-server-ism-bg-return` 30/30 | clean | |
+| CPU (Mac M5, fake rtl_tcp 2.4 MS/s, 20 s, nobody connected) | plain 3.0 %, kept VDL2 4.5 %, kept ISM 868 7.7 % of one core | the server process only |
 
 Not tested here: a real pass (orbit data), the ORBCOMM rider running, the narrow IF on air, Android gradle, the app's types.
 
