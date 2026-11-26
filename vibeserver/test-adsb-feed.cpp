@@ -456,7 +456,7 @@ static void testInput() {
         const int port = freePort();
         BeastInput in; InputTiming t; t.backoffMin = 0.2; t.backoffMax = 0.4; in.setTiming(t);
         in.start("127.0.0.1", port, [](const std::vector<Decoded>&) {});
-        CHECK(waitFor([&] { return in.statusJson().find("\"state\":\"waiting\"") != std::string::npos; }, 3), "nothing listening → waiting");
+        CHECK(waitFor([&] { return in.statusJson().find("\"state\":\"reconnecting\"") != std::string::npos; }, 3), "nothing listening → reconnecting");
         const std::string st = in.statusJson();
         CHECK(field(st, "error") == "nothing is listening on 127.0.0.1:" + std::to_string(port) + " \xe2\x80\x94 is dump1090's Beast output on?",
               "the error says what to check: %s", field(st, "error").c_str());
@@ -488,7 +488,7 @@ static void testInput() {
         // the feeder restarts (a Pi rebooting): the input comes back on its own
         const int port = fd.port;
         fd.stop();
-        CHECK(waitFor([&] { return in.statusJson().find("\"state\":\"waiting\"") != std::string::npos; }, 3), "the far end gone → waiting: %s",
+        CHECK(waitFor([&] { return in.statusJson().find("\"state\":\"reconnecting\"") != std::string::npos; }, 3), "the far end gone (mid-stream close) → reconnecting: %s",
               field(in.statusJson(), "error").c_str());
         Feeder again(500, false, port);
         CHECK(again.port == port, "(the feeder is back on the same port)");
@@ -578,6 +578,58 @@ static void testBudget() {
     int stv = 0; waitpid(kid, &stv, 0);
 }
 
+
+static void testOutage() {
+    std::printf("10. a long outage on a fake clock (Stuart's PiAware drops for hours)\n");
+    Outage o; InputTiming tm; std::string log;
+    std::vector<std::string> logs;
+    double t = 1000, d = o.fail(t, "nothing is listening on 192.168.86.12:30005", tm, 0.5, log);
+    logs.push_back(log);
+    CHECK(log.find("lost:") == 0 && std::fabs(d - 2.0) < 1e-9, "the loss is logged once; first retry after 2 s (%s)", log.c_str());
+    double maxDelay = 0, minDelay = 1e9; int tries = 1;
+    std::mt19937 r(3); std::uniform_real_distribution<double> j(0, 1);
+    while (t < 1000 + 5 * 3600 + 7 * 60) {   // five hours and seven minutes down
+        t += d;
+        d = o.fail(t, "no answer", tm, j(r), log); ++tries;
+        if (!log.empty()) logs.push_back(log);
+        if (tries > 8) { maxDelay = std::max(maxDelay, d); minDelay = std::min(minDelay, d); }
+    }
+    CHECK(maxDelay <= 72.0 + 1e-9 && minDelay >= 48.0 - 1e-9, "capped at 60 s ±20 %% jitter (%.1f–%.1f s), retried forever (%d tries)", minDelay, maxDelay, tries);
+    CHECK(logs.size() >= 30 && logs.size() <= 33, "no log flood: %zu lines in 5 h (one at the loss, one per 10 min)", logs.size());
+    CHECK(logs.back().find("still reconnecting, down 5 h") == 0, "the reminder says how long: %s", logs.back().c_str());
+    o.up(t, log);
+    CHECK(log.find("back after 5 h 7 min") == 0, "recovery logged once, with the outage: %s", log.c_str());
+    CHECK(!o.down() && o.backoff == 0, "a reconnect resets the backoff");
+    d = o.fail(t + 10, "closed", tm, 0.5, log);
+    CHECK(std::fabs(d - 2.0) < 1e-9 && log.find("lost:") == 0, "the next loss starts again at 2 s");
+    CHECK(spanWords(8040) == "2 h 14 min" && spanWords(90) == "1 min" && spanWords(200000) == "2 d 7 h", "the words for a span");
+}
+
+static void testStallState() {
+    std::printf("11. a stalled feed is shown as stalled, then reconnected; logs not flooded\n");
+    int port = 0; const int lfd = listenLocal(port);
+    std::vector<std::string> logs; std::mutex lm;
+    BeastInput in; InputTiming t; t.silentAfter = 2.5; t.backoffMin = 0.2; in.setTiming(t);
+    in.setLog([&](const std::string& l) { std::lock_guard<std::mutex> g(lm); logs.push_back(l); });
+    in.start("127.0.0.1", port, [](const std::vector<Decoded>&) {});
+    const int c = acceptWithin(lfd, 3);
+    const auto id = hexBytes(kId); std::vector<uint8_t> o; appendFrame(o, id.data(), 14, 1, 1);
+    (void)::send(c, o.data(), o.size(), 0);
+    sleepMs(300);
+    CHECK(field(in.statusJson(), "state") == "connected" && in.downSinceUtc() == 0, "data flowing: connected, not down");
+    // (kQuietSec is 20 s in the server; this test does not wait that long — the stall → reconnect at silentAfter is the rule)
+    CHECK(waitFor([&] { return field(in.statusJson(), "state") == "reconnecting"; }, 5), "silent past the stall limit → reconnecting: %s",
+          field(in.statusJson(), "error").c_str());
+    CHECK(in.downSinceUtc() > 0 && std::atoll(field(in.statusJson(), "downSince").c_str()) > 0, "down-since is set (the listeners' banner)");
+    const int c2 = acceptWithin(lfd, 3);
+    (void)::send(c2, o.data(), o.size(), 0);
+    CHECK(waitFor([&] { return in.downSinceUtc() == 0; }, 3), "data again: the outage is over (the banner clears)");
+    { std::lock_guard<std::mutex> g(lm);
+      CHECK(logs.size() == 2 && logs[0].find("lost:") != std::string::npos && logs[1].find("back after") != std::string::npos,
+            "two log lines for the whole outage (%zu): %s | %s", logs.size(), logs.empty() ? "" : logs[0].c_str(), logs.size() > 1 ? logs[1].c_str() : ""); }
+    in.stop(); ::close(c); ::close(c2); ::close(lfd);
+}
+
 int main() {
     testEncoding();
     testConfig();
@@ -588,6 +640,8 @@ int main() {
     testInput();
     testLoopGuard();
     testBudget();
+    testOutage();
+    testStallState();
     std::printf("test-adsb-feed: %d/%d passed\n", checks - fails, checks);
     return fails ? 1 : 0;
 }

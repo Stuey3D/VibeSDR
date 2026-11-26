@@ -156,6 +156,21 @@ console.log('\nA. a server whose only radio is an ADS-B Beast feed');
     }, 6000);
     const s3 = await (await fetch(`http://127.0.0.1:${port}/r/beast-1/vibeserver/admin/adsbfeed?${await adminQ(`http://127.0.0.1:${port}`, ADMIN)}`)).json();
     ok(s3.input && /is dump1090's Beast output on\?|closed the connection/.test(s3.input.error || ''), `gone: said in the owner's words (${s3.input && s3.input.error})`);
+    ok(s3.input && s3.input.state === 'reconnecting' && s3.input.downSince > 0 && s3.input.attempts >= 1,
+       `the tab's status: reconnecting, down since, attempts (${s3.input && s3.input.state}, ${s3.input && s3.input.attempts})`);
+    // ★ the listeners' banner while it is down, and it clears itself when the receiver is back
+    const W = ws(port, `/ws/user-spectrum?user_session_id=${crypto.randomUUID()}&mode=binary8&bins=256&proto=1`);
+    await until(() => parsed(W, 'adsb').some((m) => /Connection to the receiver lost/.test(m.feedWarn || '')), 6000);
+    const lost = parsed(W, 'adsb').reverse().find((m) => m.feedWarn) || {};
+    ok(/Connection to the receiver lost — reconnecting… \(lost \d+ s ago\)/.test(lost.feedWarn || ''), `listeners see the banner: ${lost.feedWarn}`);
+    const back = feeder(fport);
+    await until(() => { const a = parsed(W, 'adsb'); const l = a[a.length - 1] || {}; return !l.feedWarn && (l.aircraft || []).length > 0; }, 12000);
+    const last = parsed(W, 'adsb').pop() || {};
+    ok(!last.feedWarn && (last.aircraft || []).length > 0, 'the receiver back: the banner clears itself and aircraft return');
+    ok(/\[ADS-B\] Beast feed 127\.0\.0\.1:\d+: lost:/.test(L()) && /\[ADS-B\] Beast feed 127\.0\.0\.1:\d+: back after/.test(L()),
+       'logged once at the loss and once on recovery');
+    ok((L().match(/Beast feed 127\.0\.0\.1:\d+: (lost|still reconnecting)/g) || []).length === 1, 'no log flood while down');
+    W.close(); back.kill();
   } finally { srv.kill('SIGTERM'); fsrv.kill(); }
 }
 

@@ -17728,6 +17728,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!w.empty()) put("feedWarn", w);
             r += '}';
         }
+        /* ★★ V12 beta96 A BEAST FEED RADIO THAT HAS LOST ITS RECEIVER (Stuart 11-26: his PiAware drops for hours): the
+         *  listeners' red banner over the map, through the feed warning both clients already draw (feedWarn) — "Connection
+         *  to the receiver lost — reconnecting… (lost 2 h 14 min ago)". It clears itself when data flows again. The aircraft
+         *  age out as they always do (60 s). Not the health pill: the server is not struggling (feedback_health_pill_genuine_only). */
+        if (g_beastOn.load(std::memory_order_relaxed) && !r.empty() && r.back() == '}') {
+            const long down = g_beastIn().downSinceUtc();
+            std::string w;
+            if (down > 0) w = "Connection to the receiver lost \xe2\x80\x94 reconnecting\xe2\x80\xa6 (lost "
+                            + vibe::beast::spanWords(double(std::time(nullptr) - down)) + " ago)";
+            else if (g_beastIn().stalled()) w = "Nothing from the receiver for " + vibe::beast::spanWords(g_beastIn().secsSinceData())
+                                              + " \xe2\x80\x94 its feed has stalled; reconnecting if it stays quiet";
+            if (!w.empty()) {
+                r.pop_back();
+                r += ",\"feedWarn\":\"" + vibe::beast::jsonEsc(w) + "\",\"feedLost\":"
+                   + std::to_string(down > 0 ? long(std::time(nullptr) - down) : long(g_beastIn().secsSinceData())) + "}";
+            }
+        }
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
         for (auto& sk : socks) { if (!info.empty()) sendText(sk, info); sendText(sk, r); }
@@ -17774,6 +17791,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         });
         vibeavshare::sharer().adsbLive([] { return g_adsb.running(); });
         vibe::beast::Hub::shared().setInputHost(g_beastHost);   // ★ the loop guard
+        g_beastIn().setLog([](const std::string& l) { LOGI("[ADS-B] %s", l.c_str()); });   // ★ once at loss, ≤ 1 per 10 min, once back
         g_beastIn().start(g_beastHost, g_beastPort, [](const std::vector<vibe::beast::Decoded>& ds) {
             std::vector<vibeadsb::Frame> fs; fs.reserve(ds.size());
             for (const auto& d : ds) {

@@ -171,6 +171,35 @@ How it is built:
   - "… closed the connection (restarting?)"
   - "cannot find piaware.local (…)"
 
+### When the receiver goes away
+
+Stuart, 11-26: his PiAware sometimes drops for hours.
+
+- **Detected both ways.**
+  - TCP closed or refused, or no answer at connect.
+  - A **stall**: connected, but no bytes for `kStallSec` = **90 s**, after which it reconnects. It is not 30 s because on
+    an empty night sky dump1090 may send only its heartbeat, about once a minute. A live feed at ~1,500 msg/s is never
+    quiet for even a second.
+  - It is *shown* as "stalled" after `kQuietSec` = 20 s without a byte.
+- **Reconnects forever.**
+  - 2 s doubling to a 60 s cap, ±20 % jitter, for hours or days.
+  - A reconnect that delivers data resets the backoff. A peer that accepts and then closes does not reset it.
+  - The rules are the pure `vibe::beast::Outage`, which is tested over a 5-hour outage on a fake clock.
+- **Logs, with no flood.** One line at the loss ("Beast feed …: lost: … — reconnecting"). At most one every 10 minutes
+  while down ("still reconnecting, down 2 h 14 min (N attempts; …)"). One at recovery ("back after 5 h 7 min").
+- **Listeners see a red banner over the map, from the server.** Through the existing `feedWarn`, which both clients
+  already draw:
+  - when lost: "Connection to the receiver lost — reconnecting… (lost 2 h 14 min ago)", plus `feedLost` seconds;
+  - when stalled: "Nothing from the receiver for … — its feed has stalled".
+
+  The banner clears itself when data flows. Aircraft age out as always (60 s), so no frozen planes are shown as live.
+  It is not on the health pill, because the server is not struggling (feedback_health_pill_genuine_only).
+- **The tab and the admin page** show: state (connected / stalled / reconnecting), `downSince`, `attempts` and the last
+  error, in the line.
+- **Not done:** the directory and community map showing the feed as "receiver offline". Today a down feed shares
+  nothing, and the community map's own "nothing on the map right now" covers it. A `receiver offline` flag in the
+  community share is the next step.
+
 ### Cost
 
 `test-adsb-feed` part 9 measures this. A synthetic dump1090 in a child process sends **1,516 msg/s**. This process runs

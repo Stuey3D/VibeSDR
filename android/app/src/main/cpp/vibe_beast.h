@@ -802,9 +802,56 @@ inline std::string hostPortText(const std::string& h, int p) {
     return (h.find(':') != std::string::npos ? "[" + h + "]" : h) + ":" + std::to_string(p);
 }
 
+/** ★★ STALL: connected, but no bytes for this long → treated as lost and reconnected (a half-open TCP after the far end
+ *  lost power, or a dump1090 that hung). NOT 30 s: on an empty night sky dump1090 may send nothing but its heartbeat, which
+ *  dump1090-fa writes about once a minute on a quiet Beast output — so 90 s, a heartbeat and a half. A live feed at
+ *  ~1,500 msg/s is never quiet for even a second. */
+constexpr double kStallSec = 90;
+/** …and "stalled" is SHOWN (the status, the listeners' banner) after this long without a byte, before the reconnect. */
+constexpr double kQuietSec = 20;
+/** While down: one log line at the loss, then at most one every this many seconds, then one at recovery (no flood). */
+constexpr double kDownLogEverySec = 600;
+
 struct InputTiming {
-    double backoffMin = 2, backoffMax = 60, stableAfter = 60, connectTimeout = 8;
-    double silentAfter = 120;    ///< connected but nothing for this long → reconnect (a half-open link after a reboot)
+    double backoffMin = 2, backoffMax = 60, connectTimeout = 8;
+    double silentAfter = kStallSec;
+};
+
+inline std::string spanWords(double sec) {
+    const long s = std::max(0L, std::lround(sec));
+    char b[48];
+    if (s >= 86400) std::snprintf(b, sizeof b, "%ld d %ld h", s / 86400, (s % 86400) / 3600);
+    else if (s >= 3600) std::snprintf(b, sizeof b, "%ld h %ld min", s / 3600, (s % 3600) / 60);
+    else if (s >= 60) std::snprintf(b, sizeof b, "%ld min", s / 60);
+    else std::snprintf(b, sizeof b, "%ld s", s);
+    return b;
+}
+
+/** ★★ THE OUTAGE RULES, pure (a test drives them with a fake clock over hours): backoff 2 s doubling to a 60 s cap with
+ *  ±20 % jitter, retried FOREVER; a reconnect that delivers data resets it; the log is one line at the loss, at most one
+ *  every 10 minutes while down, one at recovery with how long it was down. `t` = seconds on any monotonic clock. */
+struct Outage {
+    double backoff = 0, downSince = -1, lastLog = -1;
+    uint64_t attempts = 0;
+    /** A connect failed or a link was lost. Returns the delay before the next try; `log` gets a line or stays empty. */
+    double fail(double t, const std::string& why, const InputTiming& tm, double jitter01, std::string& log) {
+        log.clear();
+        ++attempts;
+        if (downSince < 0) { downSince = t; lastLog = t; log = "lost: " + why + " \xe2\x80\x94 reconnecting"; }
+        else if (t - lastLog >= kDownLogEverySec) {
+            lastLog = t;
+            log = "still reconnecting, down " + spanWords(t - downSince) + " (" + std::to_string(attempts) + " attempts; " + why + ")";
+        }
+        backoff = backoff <= 0 ? tm.backoffMin : std::min(tm.backoffMax, backoff * 2);
+        return backoff * (0.8 + 0.4 * jitter01);
+    }
+    /** Data arrived on a new connection: the outage is over. */
+    void up(double t, std::string& log) {
+        log.clear();
+        if (downSince >= 0) log = "back after " + spanWords(t - downSince) + " (" + std::to_string(attempts) + " attempts)";
+        backoff = 0; downSince = -1; attempts = 0;
+    }
+    bool down() const { return downSince >= 0; }
 };
 
 class BeastInput {
@@ -812,6 +859,12 @@ public:
     using Sink = std::function<void(const std::vector<Decoded>&)>;
     ~BeastInput() { stop(); }
     void setTiming(const InputTiming& t) { std::lock_guard<std::mutex> lk(mtx_); t_ = t; }
+    /** Where the outage lines go (the shim: LOGI). */
+    void setLog(std::function<void(const std::string&)> f) { std::lock_guard<std::mutex> lk(mtx_); log_ = std::move(f); }
+    /** 0 = up (or never down); else the wall-clock second the feed was lost — the listeners' banner. */
+    long downSinceUtc() const { std::lock_guard<std::mutex> lk(mtx_); return out_.down() ? downSinceUtc_ : 0; }
+    /** Connected but nothing for kQuietSec: shown as "stalled" before the reconnect at kStallSec. */
+    bool stalled() const { std::lock_guard<std::mutex> lk(mtx_); return st_ == "connected" && mono() - lastData_ > kQuietSec; }
     /** Start reading host:port; frames go to `sink` (on this class's thread). */
     void start(const std::string& host, int port, Sink sink) {
         stop();
@@ -837,13 +890,19 @@ public:
                       (unsigned long long)connects_, st_ == "waiting" ? std::max(0L, std::lround(nextTry_ - now)) : 0L);
         std::string line;
         const std::string where = hostPortText(host_, port_);
-        if (st_ == "connected") { char x[96]; std::snprintf(x, sizeof x, "connected, %.0f messages a second", perSec_); line = "Beast feed from " + where + ": " + x; }
-        else if (st_ == "waiting") line = err_ + " \xe2\x80\x94 trying again in " + std::to_string(std::max(0L, std::lround(nextTry_ - now))) + " s";
+        const bool stall = st_ == "connected" && now - lastData_ > kQuietSec;
+        if (stall) line = "Beast feed from " + where + ": connected but nothing received for " + spanWords(now - lastData_) + " (stalled)";
+        else if (st_ == "connected") { char x[96]; std::snprintf(x, sizeof x, "connected, %.0f messages a second", perSec_); line = "Beast feed from " + where + ": " + x; }
+        else if (st_ == "waiting") line = err_ + " \xe2\x80\x94 trying again in " + std::to_string(std::max(0L, std::lround(nextTry_ - now))) + " s"
+                                        + (out_.down() ? " (down " + spanWords(std::time(nullptr) - downSinceUtc_) + ", " + std::to_string(out_.attempts) + " attempts)" : "");
         else line = "connecting to " + where;
-        return "{\"host\":\"" + jsonEsc(host_) + "\",\"port\":" + std::to_string(port_) + ",\"state\":\"" + st_ + "\",\"since\":"
+        const std::string shown = stall ? "stalled" : st_ == "waiting" ? "reconnecting" : st_;
+        return "{\"host\":\"" + jsonEsc(host_) + "\",\"port\":" + std::to_string(port_) + ",\"state\":\"" + shown + "\",\"downSince\":"
+             + std::to_string(out_.down() ? downSinceUtc_ : 0L) + ",\"attempts\":" + std::to_string(out_.attempts) + ",\"since\":"
              + std::to_string(sinceUtc_) + b + ",\"error\":\"" + jsonEsc(err_) + "\",\"line\":\"" + jsonEsc(line) + "\"}";
     }
     bool connected() const { std::lock_guard<std::mutex> lk(mtx_); return st_ == "connected"; }
+    double secsSinceData() const { std::lock_guard<std::mutex> lk(mtx_); return mono() - lastData_; }
 
 private:
     static double mono() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
@@ -857,13 +916,23 @@ private:
             return "no answer from " + where + " \xe2\x80\x94 is that machine on and on this network?";
         return where + ": " + std::strerror(e);
     }
-    void fail(const std::string& err, double now, const InputTiming& t, double upSince) {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (upSince > 0 && now - upSince >= t.stableAfter) backoff_ = 0;
-        backoff_ = backoff_ <= 0 ? t.backoffMin : std::min(t.backoffMax, backoff_ * 2);
-        std::uniform_real_distribution<double> jit(0.8, 1.2);
-        nextTry_ = now + backoff_ * jit(rng_);
-        st_ = "waiting"; err_ = err; perSec_ = 0;
+    void fail(const std::string& err, double now, const InputTiming& t, double /*upSince*/) {
+        std::string line;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            std::uniform_real_distribution<double> j01(0.0, 1.0);
+            const bool wasUp = !out_.down();
+            nextTry_ = now + out_.fail(now, err, t, j01(rng_), line);
+            if (wasUp) downSinceUtc_ = (long)std::time(nullptr);
+            st_ = "waiting"; err_ = err; perSec_ = 0;
+        }
+        logLine(line);
+    }
+    void logLine(const std::string& l) {
+        if (l.empty()) return;
+        std::function<void(const std::string&)> f; std::string where;
+        { std::lock_guard<std::mutex> lk(mtx_); f = log_; where = hostPortText(host_, port_); }
+        if (f) f("Beast feed " + where + ": " + l);
     }
     void loop() {
         std::vector<uint8_t> buf(16 * 1024);
@@ -920,7 +989,9 @@ private:
                 std::lock_guard<std::mutex> lk(mtx_);
                 st_ = "connected"; err_.clear(); sinceUtc_ = (long)std::time(nullptr);
                 reader_ = Reader();
+                lastData_ = up;
             }
+            bool gotData = false;
             double lastData = up, rateT = up; uint64_t rateN = 0;
             std::string endWhy;
             while (running()) {
@@ -929,13 +1000,19 @@ private:
                 const double now = mono();
                 if (now - rateT >= 2.0) { std::lock_guard<std::mutex> lk(mtx_); perSec_ = rateN / (now - rateT); rateN = 0; rateT = now; }
                 if (pr <= 0) {
-                    if (now - lastData > t.silentAfter) { endWhy = hostPortText(host, port) + " sent nothing for " + std::to_string(int(t.silentAfter)) + " s"; break; }
+                    if (now - lastData > t.silentAfter) { endWhy = hostPortText(host, port) + " sent nothing for " + spanWords(t.silentAfter) + " (stalled)"; break; }
                     continue;
                 }
                 const ssize_t n = ::recv(fd, buf.data(), buf.size(), 0);
                 if (n == 0) { endWhy = hostPortText(host, port) + " closed the connection (restarting?)"; break; }
                 if (n < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue; endWhy = why(errno); break; }
                 lastData = now;
+                { std::lock_guard<std::mutex> lk(mtx_); lastData_ = now; }
+                if (!gotData) {   // ★ the outage ends when data flows, not on a bare connect (a refusing-after-accept peer)
+                    gotData = true;
+                    std::string l; { std::lock_guard<std::mutex> lk(mtx_); out_.up(now, l); downSinceUtc_ = 0; }
+                    logLine(l);
+                }
                 out.clear();
                 { std::lock_guard<std::mutex> lk(mtx_); reader_.feed(buf.data(), size_t(n), out); bytes_ += uint64_t(n); }
                 // Mode A/C (type '1') is not ADS-B: left out
@@ -957,7 +1034,10 @@ private:
     Sink sink_;
     bool run_ = false; std::thread th_;
     std::string st_ = "off", err_;
-    double nextTry_ = 0, backoff_ = 0, perSec_ = 0;
+    double nextTry_ = 0, perSec_ = 0, lastData_ = 0;
+    Outage out_;
+    long downSinceUtc_ = 0;
+    std::function<void(const std::string&)> log_;
     long sinceUtc_ = 0;
     uint64_t msgs_ = 0, bytes_ = 0, connects_ = 0;
     Reader reader_;
