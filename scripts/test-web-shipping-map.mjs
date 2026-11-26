@@ -128,11 +128,17 @@ try {
   for (let i = 0; i < 40 && !(await ev(`!!document.getElementById('galleryBtn')?.onclick`)); i++) await sleep(250);
   await ev(`document.getElementById('galleryBtn').click()`);
   ok(await until(`!!document.querySelector('#galList .galNav')`, 10000), 'the gallery\'s standing SHIPPING MAP row');
-  ok(/^SHIPPING MAP · NAVTEX stations received/.test(await ev(`document.querySelector('#galList .galNav .n')?.textContent || ''`)), '…named SHIPPING MAP');
+  ok(/^AVIATION & MARITIME MAP · NAVTEX stations received/.test(await ev(`document.querySelector('#galList .galNav .n')?.textContent || ''`)), '…named AVIATION & MARITIME MAP (beta96)');
   await ev(`document.querySelector('#galList .galNav .galMap').click()`);
-  ok(await until(`!!${view} && ${view}.querySelector('.ttl').textContent === 'SHIPPING MAP'`, 8000), `the title: ${await ev(`${view}?.querySelector('.ttl')?.textContent`)}`);
+  // ★★ beta96 THE AIR & SEA MAP (docs/v12/ONE-MAP.md): opened from the gallery's NAVTEX row with no NAVTEX decoder running —
+  //   nothing is live (a stored layer is never called live), NAVTEX's layers are put first
+  ok(await until(`!!${view} && ${view}.querySelector('.ttl').textContent === 'AVIATION & MARITIME'`, 8000), `the title: ${await ev(`${view}?.querySelector('.ttl')?.textContent`)}`);
+  ok(await ev(`${view}.querySelector('.exit').textContent`) === 'CLOSE MAP', 'CLOSE MAP (a box\'s map: the mode carries on)');
   const tg = `JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent))`;
-  ok(await until(`${tg} === JSON.stringify(['STATIONS','WARNINGS','WEATHER','SHIPS','DSC','SEA AREAS'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row), SEA AREAS last: ${await ev(tg)}`);
+  ok(await until(`${tg} === JSON.stringify(['NAVTEX','WARNINGS','WEATHER','SHIPS','DSC','SEA AREAS'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row), SEA AREAS last: ${await ev(tg)}`);
+  ok(await ev(`${view}.querySelectorAll('[data-tgl].live').length`) === 0, 'no decoder running: no layer marked LIVE');
+  ok(await ev(`JSON.stringify([...${view}.querySelectorAll('.tgl .grp')].map(g => g.textContent))`) === JSON.stringify(['MARITIME']) || await ev(`${view}.querySelectorAll('.tgl .grp').length`) === 0, 'one group drawn: no group names, or MARITIME once');
+  ok(!(await ev(`!!${view}.querySelector('.vsadsb-ctl, [class*="vsadsb-ctl"]')`)), 'no aircraft here: the ADS-B layer\'s AUTO / RINGS keys are not made (no dead controls)');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^(SOLENT TRADER|ISLAND FERRY|NAB PILOT):/.test(e.getAttribute('aria-label') || '')).length === 3`, 10000), 'the three stored ships on the map');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(e => /^DSC DISTRESS from MMSI 232001234/.test(e.getAttribute('aria-label') || '') && e.innerHTML.includes('SOS'))`, 5000), 'the DSC distress pin, with SOS');
   // ★★ beta90 a scale bar on every map — NM beside km on the sea map (vibemapgl.js / vibemap.js, TrackView 'marine')
@@ -140,8 +146,15 @@ try {
     ok(/km/.test(sc || '') && /nm|NM/.test(sc || ''), `beta90: the scale bar, km and NM (${sc})`); }
   const arrows = Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^Sea area/.test(e.getAttribute('aria-label') || '') && e.querySelector('.nvWind svg g[transform^="rotate("]')).length`));
   ok(arrows > 0, `the weather drawn as arrows (${arrows} sea areas)`);
-  const rows = JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('.trkList .rows .sec')].map(s => s.textContent))`));
-  ok(rows.includes('SHIPS') && rows.includes('DSC') && rows.includes('NAVTEX STATIONS'), `the RECEIVED list covers what is shown: ${rows.join(' · ')}`);
+  // ★★ beta96 the lists are TABS: NAVTEX (opened on it) and SHIPS (ships + DSC)
+  const tabs = JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('.trkList .hd .tab')].map(t => [t.dataset.tab, t.getAttribute('aria-selected')]))`));
+  ok(JSON.stringify(tabs) === JSON.stringify([['ships', 'false'], ['navtex', 'true']]), `the tabs SHIPS · NAVTEX, on NAVTEX: ${JSON.stringify(tabs)}`);
+  let rows = JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('.trkList .rows .sec')].map(s => s.textContent))`));
+  ok(rows.includes('NAVTEX STATIONS') && !rows.includes('SHIPS'), `the NAVTEX tab: ${rows.join(' · ')}`);
+  await ev(`${view}.querySelector('.trkList .hd .tab[data-tab="ships"]').click()`);
+  await sleep(300);
+  rows = JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('.trkList .rows .sec')].map(s => s.textContent))`));
+  ok(rows.includes('SHIPS') && rows.includes('DSC') && !rows.includes('NAVTEX STATIONS'), `the SHIPS tab: ${rows.join(' · ')}`);
   const key = await ev(`${view}.querySelector('.trkKey .kb').textContent`);
   ok(/Ship under way/.test(key) && /DSC DISTRESS position/.test(key) && /points DOWNWIND/.test(key) && /Gale force 8 or more: red/.test(key), 'the KEY: ships, DSC and the arrows beside the hazards');
   ok(/Sea area tinted red: a gale/.test(key) && /Sea areas: Met Office definitions/.test(key), 'the KEY: the sea-area outline, amber and red rows, and the sources');
@@ -222,7 +235,7 @@ try {
   // SHIPS off: the ships go, the toggle stays (it has data)
   await ev(`${view}.querySelector('[data-tgl="ships"]').click()`);
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^(SOLENT TRADER|ISLAND FERRY|NAB PILOT):/.test(e.getAttribute('aria-label') || '')).length === 0`, 5000), 'SHIPS off: the ships go');
-  ok(await ev(`localStorage.getItem('vibesdr.shipMapLayers').includes('"ships":false')`), '…remembered');
+  ok(await ev(`(localStorage.getItem('vibesdr.airSeaLayers') || '').includes('"ships":false')`), '…remembered');
   await ev(`${view}.querySelector('[data-tgl="ships"]').click()`);
   await ev(`${view}.querySelector('.exit').click()`);
   await sleep(800);

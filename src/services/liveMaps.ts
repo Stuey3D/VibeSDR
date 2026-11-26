@@ -121,12 +121,14 @@ export function liveChrome(map: LiveMapId, mode: LiveMode | string | null | unde
 }
 
 // ── presence: the layers with something, the live ones first ───────────────────────────────────────────────────────
-/** ★★ The layers drawn as chips, in order: the live layer(s) first, then the map's order — a layer with nothing is
+/** ★★ The layers drawn as chips, in order: the live layer(s) first, then `first` (the layer the map was opened on), then the map's order — a layer with nothing is
  *  absent. `always`: present whatever the count (AIRPORTS — the basemap always has them). One layer alone, no chips. */
-export function livePresent(map: LiveMapId, have: Partial<Record<LiveLayerId, number>>, live: LiveOf, always: LiveLayerId[] = []): LiveLayerId[] {
+export function livePresent(map: LiveMapId, have: Partial<Record<LiveLayerId, number>>, live: LiveOf, always: LiveLayerId[] = [], first: LiveLayerId[] = []): LiveLayerId[] {
   const out: LiveLayerId[] = [];
   const add = (id: LiveLayerId) => { if (MAP_LAYERS[map].includes(id) && !out.includes(id)) out.push(id); };
   for (const id of live.layers) if (id !== 'adsc' || (have.adsc ?? 0) > 0) add(id);   // ★ ADS-C rides the datalink: only when it has some
+  // ★ the layer a key or a gallery row opened the map on (not live — its decoder is not running): present and next
+  for (const id of first) add(id);
   for (const id of MAP_LAYERS[map]) if ((have[id] ?? 0) > 0 || always.includes(id)) add(id);
   return out;
 }

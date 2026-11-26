@@ -404,8 +404,9 @@ const CSS = `
 .trkTop .tgl .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
 .trkTop .tgl .grp:first-child{margin-left:0}
 .trkTop .tgl .btn.live{box-shadow:inset 0 -3px 0 #ff5a4d}
-.trkTop .tgl .btn.live::after{content:" LIVE";font-size:9px;color:#ff5a4d;letter-spacing:.06em}
-.trkTop .tgl .btn.live[aria-pressed="true"]::after{color:#7a0d06}
+.trkTop .tgl .btn.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff3b2f;margin-right:5px;vertical-align:1px;animation:trkLive 1.6s ease-in-out infinite}
+@keyframes trkLive{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.trkTop .tgl .btn.live::before{animation:none}}
 .trkList .hd .tabs{display:inline-flex;gap:2px;flex-wrap:wrap}
 .trkList .hd .tab{background:none;border:0;border-bottom:2px solid transparent;color:#8fa2b5;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.05em;padding:2px 5px;cursor:pointer}
 .trkList .hd .tab[aria-selected="true"]{color:#e8eef5;border-bottom-color:#ffd34d}
@@ -834,7 +835,7 @@ export class TrackView {
     try { this.af?.destroy(); } catch (e) { console.error('[tracks] auto fit destroy', e); }
     this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
-    this.acLayer = null; this.acKeys.clear(); this.acHex.clear();
+    this.acLayer = null; this.acMap = null; this.acAuto = null; this.acKeys.clear(); this.acHex.clear();
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
     this.layer = null;
     try { this.vm?.destroy(); } catch (e) { console.error('[tracks] map destroy', e); }
@@ -915,21 +916,10 @@ export class TrackView {
       // ★ beta92 the first framing is the auto fit's (a glide's rules), not an immediate fitBounds — unless it is absent
       firstFit: this.o.aircraft || !w.VibeAutoFit ? undefined : false,
     });
-    if (this.o.aircraft && w.VibeAdsbLayer) {
-      try {
-        let prefs: any = null;
-        try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || 'null'); } catch { /* private */ }
-        this.acLayer = w.VibeAdsbLayer.create(map, {
-          receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
-          imageBase: this.o.imageBase ?? null,
-          onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
-          // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
-          onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
-        });
-        this.placeAcObstacle();
-        w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
-      } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
-    }
+    this.acMap = map;
+    // ★ beta96 a MIXED map (AIR & SEA) makes the ADS-B layer only when it first has aircraft — a shipping-only view has no
+    //   dead AUTO / RINGS / RANGE keys and no rings over the sea (feed → makeAcLayer)
+    if (this.o.aircraft && !this.o.mixed) this.makeAcLayer();
     /* ★★★ beta92 THE AUTO FIT — every item heard and the receiver, clear of the list's corner; the FIT key is its AUTO key.
      *  On the aviation map the ADS-B layer frames the aircraft (its own AUTO / FIT), so the key is hidden there. */
     this.fitBtn.hidden = !!this.acLayer;
@@ -957,6 +947,26 @@ export class TrackView {
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
 
+  private acMap: any = null;
+  /** ★ beta90 the ADS-B layer (aircraft:true) — at attach, or (mixed) when the first aircraft arrives. */
+  private makeAcLayer() {
+    const w = window as any, map = this.acMap;
+    if (this.acLayer || !map || !w.VibeAdsbLayer) return;
+    try {
+      let prefs: any = null;
+      try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || 'null'); } catch { /* private */ }
+      this.acLayer = w.VibeAdsbLayer.create(map, {
+        receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
+        imageBase: this.o.imageBase ?? null,
+        onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
+        // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
+        onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
+      });
+      this.placeAcObstacle();
+      w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
+    } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
+    if (this.o.mixed) this.applyCamera();
+  }
   /** ★ The map's attribution (a licence line we may not hide) sits at the bottom; on a phone it wraps to three lines and
    *  the list's last row went under it. The list stands just above it, however tall it grows. */
   private attribObs: ResizeObserver | null = null;
@@ -978,6 +988,7 @@ export class TrackView {
   /** Every report: the whole list (items with key/lat/lon), the rows' HTML, the status line, the count. */
   /** ★ beta90 the items to their layers: aircraft (`_adsb`) to the ADS-B layer, the rest to the track layer. */
   private feed(items: any[]) {
+    if (!this.acLayer && this.o.mixed && this.acMap && items.some((it) => it && it._adsb)) this.makeAcLayer();
     if (!this.acLayer) { this.layer.update(items); return; }
     const rest: any[] = [], ac: any[] = [];
     this.acKeys.clear(); this.acHex.clear();

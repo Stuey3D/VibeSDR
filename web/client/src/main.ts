@@ -10511,7 +10511,8 @@ let asMsgs: LiveMsg[] = [];
 const asMsgSeen = new Map<string, number>();
 /** ★★ The receiver's current mode, as the maps see it (a whole-radio mode first; else the box the map was opened from). */
 function asMode(): LiveMode {
-  return adsbOn ? 'adsb' : aisOn ? 'ais' : avOn ? 'datalink' : sdOn ? 'sondes' : ndbOn ? 'ndb' : vmOn ? 'vormap' : asBox;
+  // ★ a box is live only while its decoder runs (a gallery row's DSC is stored, not live — it is only put FIRST)
+  return adsbOn ? 'adsb' : aisOn ? 'ais' : avOn ? 'datalink' : sdOn ? 'sondes' : ndbOn ? 'ndb' : vmOn ? 'vormap' : asBox && activeDec === asBox ? asBox : '';
 }
 /** For drivers (scripts/test-web-live-maps.mjs): the map's computed state, read-only. */
 (window as any).__vibeAirSea = () => asView ? { open: asView.open, title: asView.title, exit: asView.exitLabel, tab: asView.tab, mode: asMode() } : null;
@@ -10598,7 +10599,8 @@ function asRender() {
     ships: sh.ships, dsc: sh.dsc, navst: sh.stations, warnings: sh.warnings, weather: sh.weather, areas: sh.areas ?? 0,
   };
   const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l));
-  const present = livePresent('airsea', have, live, aviationAny ? ['airports'] : []);
+  const first: LiveLayerId[] = asBox === 'navtex' ? ['navst', 'warnings', 'weather'] : asBox === 'dsc' ? ['dsc'] : asBox === 'hfdl' ? ['hfdl', 'hfdlst'] : [];
+  const present = livePresent('airsea', have, live, aviationAny || asBox === 'hfdl' ? ['airports'] : [], first);
   const on = (id: LiveLayerId) => liveLayerOn(id, present, asToggled, live);
   v.setToggles(liveChips(present, live), Object.fromEntries(present.map((id) => [id, on(id)])));
   v.setProfile(liveProfile('airsea', present, on));
@@ -20046,7 +20048,7 @@ async function renderGallery(page = galPage) {
       // ★ V12 2026-11-02 an AIS day (its log or its card): MAP opens the SHIPPING MAP with the ships first
       if (it.k === 'ais') {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
-        mb.title = 'The ships, on the SHIPPING MAP'; mb.setAttribute('aria-label', 'Show the ships on the shipping map');
+        mb.title = 'The ships, on the AVIATION & MARITIME map'; mb.setAttribute('aria-label', 'Show the ships on the aviation and maritime map');
         mb.onclick = (e) => { e.stopPropagation(); void navMapOpen('ships'); };
         mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
         row.appendChild(mb);
@@ -20083,14 +20085,14 @@ async function renderGallery(page = galPage) {
         const f = document.createElement('span'); f.className = 'f'; f.textContent = 'NAVTEX';
         const n = document.createElement('span'); n.className = 'n';
         const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
-        n.appendChild(document.createTextNode(`SHIPPING MAP · NAVTEX stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
+        n.appendChild(document.createTextNode(`AVIATION & MARITIME MAP · NAVTEX stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
           + (far ? ` · furthest ${far.name} ${Math.round(far.km! / 1.852).toLocaleString('en-GB')} NM` : '')));   // ★ beta95 NM on the shipping map
         n.appendChild(document.createElement('br'));
         const src = document.createElement('span'); src.className = 'src';
         src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';
         n.appendChild(src);
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
-        mb.title = 'The NAVTEX stations received, on the SHIPPING MAP'; mb.setAttribute('aria-label', 'NAVTEX stations received, on the shipping map');
+        mb.title = 'The NAVTEX stations received, on the AVIATION & MARITIME map'; mb.setAttribute('aria-label', 'NAVTEX stations received, on the aviation and maritime map');
         mb.onclick = (e) => { e.stopPropagation(); void navMapOpen(); };
         row.onclick = () => void navMapOpen();
         row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void navMapOpen(); } };
@@ -20144,7 +20146,7 @@ async function renderGallery(page = galPage) {
         const src = document.createElement('span'); src.className = 'src'; src.textContent = DSC_GAL_WORDS;
         n.appendChild(src);
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.id = 'galDscMap'; mb.textContent = 'MAP';
-        mb.title = 'The DSC calls with a position, on the SHIPPING MAP'; mb.setAttribute('aria-label', 'DSC calls with a position, on the shipping map');
+        mb.title = 'The DSC calls with a position, on the AVIATION & MARITIME map'; mb.setAttribute('aria-label', 'DSC calls with a position, on the aviation and maritime map');
         mb.onclick = (e) => { e.stopPropagation(); void navMapOpen('dsc'); };
         mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
         row.onclick = () => void navMapOpen('dsc');

@@ -44,6 +44,7 @@ const have = { adsb: 12, vdl2: 3, ships: 40, navst: 5, warnings: 0, weather: 9 }
 eq('ADS-B live first, then the map order; empty layers absent', livePresent('airsea', have, liveOf('adsb'), ['airports']), ['adsb', 'vdl2', 'airports', 'ships', 'navst', 'weather']);
 eq('the live layer is present with nothing in it yet', livePresent('airsea', {}, liveOf('ais')), ['ships']);
 eq('ADS-C only when it has aircraft (DATALINK)', livePresent('airsea', { vdl2: 1 }, liveOf('datalink')), ['vdl2', 'acars']);
+eq('opened on DSC (not live): DSC next, present though empty', livePresent('airsea', { adsb: 2 }, liveOf(''), [], ['dsc']), ['dsc', 'adsb']);
 eq('amateur layers never on air/sea', livePresent('airsea', { aprs: 9, mesh: 2 } as any, liveOf('')), []);
 const chips = liveChips(livePresent('airsea', have, liveOf('ais'), ['airports']), liveOf('ais'));
 eq('chips: SHIPS first + LIVE, groups named once each', chips.map((c) => [c.label, c.group, c.live]),
