@@ -13,7 +13,8 @@ const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'
 
 ok(!/[`\\]/.test(DIGI_STATS_JS) && !/<\/script/i.test(DIGI_STATS_JS), 'the shared text has no backtick, backslash or closing script tag (it sits inside the pages)');
 // eslint-disable-next-line no-new-func
-const lib = new Function(`${DIGI_STATS_JS}; return { digiStats: digiStats, digiStatsHtml: digiStatsHtml };`)() as {
+const lib = new Function(`${DIGI_STATS_JS}; return { digiStats: digiStats, digiStatsHtml: digiStatsHtml, digiAprsToday: digiAprsToday };`)() as {
+  digiAprsToday: (list: Array<{ age: number; count?: number }>, now: number) => { n: number; pk: number };
   digiStats: (items: DigiStatItem[], me: { lat: number; lon: number } | null) => DigiStats;
   digiStatsHtml: (st: DigiStats, o: unknown) => { stats: string; legend: string; summary: string };
 };
@@ -108,6 +109,18 @@ ok(!/var ct=Object\.keys\(cm\)[^\n]*slice\(0,3\)/.test(app) || /kind === 'cw' \?
 console.log('── which panels open ──');
 ok(JSON.stringify(digiPanelsDefault(true)) === '{"stats":true,"summary":true,"legend":true}', 'a wide window: all three, beside the map (the web\'s)');
 ok(JSON.stringify(digiPanelsDefault(false)) === '{"stats":false,"summary":true,"legend":false}', 'a narrow window: the summary strip; the rest a key away');
+// ── ★★ beta95 APRS IN THE TOTALS, on its own line (Stuart 11-25): stations heard today (UTC) and their packets ──
+{
+  const noon = Date.UTC(2026, 10, 25, 12, 0, 0);
+  const today = lib.digiAprsToday([{ age: 60, count: 12 }, { age: 3600, count: 3 }, { age: 13 * 3600, count: 40 }], noon);
+  ok(today.n === 2 && today.pk === 15, `APRS today: 2 stations, 15 packets (yesterday's left out) — ${JSON.stringify(today)}`);
+  const st0 = lib.digiStats(items, me);
+  const h = lib.digiStatsHtml(st0, { aprs: { n: 3, on: true, far: null, leg: [], only: false, today }, tot: { srvOk: true, spotsSent: 900 } }).stats;
+  const tot = h.slice(h.indexOf('TOTALS'));
+  ok(/APRS today \(UTC\)<\/span><b>2 stations · 15 packets/.test(tot) && /not digital spots/.test(tot), 'the TOTALS carry APRS as its own line');
+  ok(/Spots sent to PSK Reporter<\/span><b>900</.test(tot) && /Transmitters on the map<\/span><b>6</.test(tot), '…and the spot counts are untouched by it');
+  ok(!/APRS today/.test(lib.digiStatsHtml(st0, { aprs: { n: 0, on: false, today: { n: 0, pk: 0 } }, tot: {} }).stats), 'no APRS heard today: no line');
+}
 ok(digiPanelsOf('{"stats":true}', false).stats === true && digiPanelsOf('junk', true).legend === true, 'a remembered choice, and junk → the default');
 ok(DIGI_PANELS.map((p) => p.label).join(' ') === 'STATS SUMMARY LEGEND', 'the keys: the web\'s checkboxes');
 

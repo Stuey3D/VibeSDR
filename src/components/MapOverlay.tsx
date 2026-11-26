@@ -2005,6 +2005,7 @@ if(KIND==='digi'||KIND==='cw'){
     aprsPts=a.filter(function(x){return x&&isFinite(Number(x.lat))&&isFinite(Number(x.lon));}).slice(0,1000).map(function(x){
       return {key:String(x.key||'').slice(0,40),call:String(x.call||'').slice(0,40),lat:Math.max(-90,Math.min(90,Number(x.lat))),lon:Math.max(-180,Math.min(180,Number(x.lon))),
         symName:String(x.symName||'').slice(0,40),comment:String(x.comment||'').slice(0,120),wx:String(x.wx||'').slice(0,120),km:x.km==null?null:Number(x.km),svg:x.svg,
+        age:isFinite(Number(x.age))?Number(x.age):1e9,count:Math.max(0,Number(x.count)||0),
         trail:Array.isArray(x.trail)?x.trail.filter(function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));}).slice(-200):[]};});
     if(focus){aprsWant=String(focus).slice(0,40);aprsOn=true;}
     aprsDraw();}catch(e){console.error('aprs push',e);}};
@@ -2127,7 +2128,7 @@ if(KIND==='digi'||KIND==='cw'){
       var un=pick?((u.by&&u.by[pick])||0)+(u.none||0):(u.all||0);
       var pan=digiStatsHtml(st,{modes:MODES_LEG,modeColour:function(m){return modeStyle(m).colour;},
         rx:(RX_LAT||RX_LON)?RX_SVG.replace('width="22" height="22"','width="12" height="12"'):'',
-        aprs:{n:aprsPts.length,on:aprsOn&&aprsPts.length>0,far:ak.length?{km:Math.round(ak[0].km),call:ak[0].call}:null,leg:APRS_LEG,only:false,newest:''},
+        aprs:{n:aprsPts.length,on:aprsOn&&aprsPts.length>0,far:ak.length?{km:Math.round(ak[0].km),call:ak[0].call}:null,leg:APRS_LEG,only:false,newest:'',today:digiAprsToday(aprsPts,Date.now())},
         svgOk:aprsSvgOk,overlay:dOverlay,
         tot:{srvOk:!!t.srvOk,winWords:dWinWords(),drawn:t.drawn||0,total:t.total||0,trunc:!!t.trunc,unplaced:un,
              decodesToday:typeof t.decodesToday==='number'?t.decodesToday:-1,falseToday:t.falseToday||0,notKeptToday:t.notKeptToday||0,spotsSent:t.spotsSent||0,radioOnly:!!pick}});

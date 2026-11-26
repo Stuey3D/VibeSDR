@@ -18976,7 +18976,7 @@ function cleanAprs(list) {
     kind: okStr(a.kind, /[^A-Za-z0-9 -]/g, 16), symName: okStr(a.symName, /[<>&"'\`]/g, 40),
     comment: okStr(a.comment, /[<>&"'\`]/g, 120), status: okStr(a.status, /[<>&"'\`]/g, 120), wx: okStr(a.wx, /[<>&"'\`]/g, 120),
     km: a.km == null ? null : Math.round(okNum(a.km)), speed: a.speed == null ? null : okNum(a.speed),
-    course: a.course == null ? null : okNum(a.course), alt: a.alt == null ? null : okNum(a.alt), svg: okSvg(a.svg),
+    course: a.course == null ? null : okNum(a.course), alt: a.alt == null ? null : okNum(a.alt), svg: okSvg(a.svg), count: Math.max(0, okNum(a.count)),
     trail: Array.isArray(a.trail) ? a.trail.slice(-200).filter((p) => Array.isArray(p) && isFinite(Number(p[0])) && isFinite(Number(p[1])))
       .map((p) => [Math.max(-90, Math.min(90, Number(p[0]))), Math.max(-180, Math.min(180, Number(p[1])))]) : [],
   }));
@@ -19342,7 +19342,7 @@ const pan = digiStatsHtml(st, {
   modes: MODES, modeColour: modeColour,
   rx: me ? RX_HOUSE.replace('width="22" height="22"', 'width="12" height="12"') : '',
   aprs: { n: aprs.length, on: show.aprs, far: ak.length ? { km: ak[0].km, call: ak[0].call } : null, leg: APRS_LEG,
-          only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '' },
+          only: !show.spots && show.aprs, newest: aprs.length ? aprs[0].call : '', today: digiAprsToday(aprs, Date.now()) },   // ★ beta95
   svgOk: okSvg, overlay: overlay,
   tot: { srvOk: srvOk, winWords: (WINDOWS.find((w) => w.id === win) || { words: '' }).words, drawn: stored.size, total: srvTotal, trunc: srvTrunc,
          unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent,
