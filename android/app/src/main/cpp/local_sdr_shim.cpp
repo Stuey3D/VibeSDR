@@ -275,6 +275,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_vfo_dc.h"           // ★★ V12: a FREE VFO's DC spike moved out of its way (vfoDcPlace)
 #include "vibe_icom_decode.h"      // ★★ V12: the mode / filter an Icom needs for a decoder to hear its signal
 #include "vibe_local_speaker.h"    // ★★★ V12 R36S: the handheld engine plays its own audio (no browser audio)
+#include "vibe_setup_code.h"        // ★★★ beta96 "Set up on another device" — first-time setup only
 #if VIBE_HAVE_ICOM
 #include "icom_source.h"            // ★★★ an Icom transceiver as a RECEIVER (docs/ICOM-SUPPORT-PLAN.md)
 #endif
@@ -6911,6 +6912,14 @@ struct VsAuth {
     }
 };
 VsAuth g_vsAuthState;
+/** ★★★ beta96 the one-time setup code and the first-password session (vibe_setup_code.h). */
+static vibe::setupcode::SetupCodes g_vsSetupCodes;
+static std::mutex g_vsSetupPwMtx;
+static std::function<std::string(const std::string&)> g_vsSetupPwFn;
+static int64_t vsSteadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+static bool vsAdminPasswordSet() { std::lock_guard<std::mutex> lk(g_vsAdminMtx); return !g_vsAdminSecret.empty(); }
 /** ★ The raw-IQ token/code ledger — a separate backoff so a bridge retrying a dead token cannot
  *  lock its owner out of the PIN (see acceptIqWs, audit 2026-10-03). Only blocked/recordFail/
  *  recordOk are used; its nonce map stays empty. */
@@ -28405,6 +28414,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/dabmot", 0) == 0
                 || path0.rfind("/vibeserver/auth", 0) == 0
                 || path0.rfind("/vibeserver/config", 0) == 0
+                || path0.rfind("/vibeserver/setup-code", 0) == 0   // ★★★ beta96 first-time setup on another device
                 // ★ The setup page's missing/new radio banner — the machine's USB bus, not a radio's.
                 || path0.rfind("/vibeserver/sdr-change", 0) == 0
                 // ★ The pocket image's Wi-Fi + first-run routes — the MACHINE's network, not a radio's.
@@ -29775,6 +29785,74 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const std::string out = setFn(body, code);
             LOGI("sdr-change by %s -> %d", ip.c_str(), code);
             reply(code, code == 200 ? "OK" : code == 409 ? "Conflict" : "Bad Request", out);
+            return;
+
+        /* ★★★ beta96 "SET UP ON ANOTHER DEVICE" — FIRST-TIME SETUP ONLY (vibe_setup_code.h, docs/v12/SERVER-CHOICE.md).
+         *  POST /vibeserver/setup-code            body code=ABCD-EFGH          → {ok, session} | {ok:false, why, triesLeft}
+         *  POST /vibeserver/setup-code/password   body session=…&password=…&password2=…  → {ok} | {ok:false, why}
+         *  ★ LOCAL NETWORK ONLY: the socket's own peer must be private and the request must not have come through the
+         *    tunnel — the RTL-TCP door's and RAW IQ OUT's rule. ★ Only while NO admin password exists: the code opens the
+         *    step that SETS the first one, and nothing else. After it, the page signs in with that password the ordinary
+         *    way (vsAdminProof). The code and the password are never logged. */
+        } else if (reqLine.rfind("POST /vibeserver/setup-code", 0) == 0) {
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            const std::string ip = sock->peerAddress();
+            const bool lan = isPrivateIp(sock->socketPeerAddress()) && !viaTunnel(*sock);
+            const long long clen = contentLength;
+            if (clen <= 0 || clen > 2048) { reply(400, "Bad Request", "{\"ok\":false,\"why\":\"bad_body\"}"); return; }
+            std::string body((size_t)clen, '\0');
+            size_t got = 0;
+            while (got < body.size()) {
+                int n = sock->recv((uint8_t*)&body[got], body.size() - got, false, 5000);
+                if (n <= 0) break;
+                got += (size_t)n;
+            }
+            if (got != body.size()) { reply(400, "Bad Request", "{\"ok\":false,\"why\":\"bad_body\"}"); return; }
+            const std::string form = "POST /?" + body + " HTTP/1.1";
+            const bool isPw = reqLine.rfind("POST /vibeserver/setup-code/password", 0) == 0;
+            if (!isPw) {
+                const auto r = g_vsSetupCodes.redeem(urlDecode(queryParam(form, "code")), lan, vsAdminPasswordSet(),
+                                                     vsSteadyMs(), &vsRandom64);
+                if (r.ok) {
+                    g_vsSetupCodes.setSessionPeer(ip);
+                    LOGI("setup code redeemed by %s — the first admin password is next", ip.c_str());
+                    reply(200, "OK", "{\"ok\":true,\"session\":\"" + r.session + "\"}");
+                } else {
+                    LOGI("setup code refused for %s (%s)", ip.c_str(), r.why.c_str());
+                    reply(r.why == "not_local" ? 403 : 401, r.why == "not_local" ? "Forbidden" : "Unauthorized",
+                          "{\"ok\":false,\"why\":\"" + r.why + "\",\"triesLeft\":" + std::to_string(r.triesLeft) + "}");
+                }
+                return;
+            }
+            if (!lan) { reply(403, "Forbidden", "{\"ok\":false,\"why\":\"not_local\"}"); return; }
+            if (vsAdminPasswordSet()) { g_vsSetupCodes.endSession(); reply(409, "Conflict", "{\"ok\":false,\"why\":\"password_exists\"}"); return; }
+            if (!g_vsSetupCodes.sessionOk(queryParam(form, "session"), vsSteadyMs())) {
+                reply(401, "Unauthorized", "{\"ok\":false,\"why\":\"no_session\"}"); return;
+            }
+            const std::string pw = urlDecode(queryParam(form, "password")), pw2 = urlDecode(queryParam(form, "password2"));
+            // ★ The usual rules: typed twice, at least 8 characters, at most 128, no control characters.
+            const char* bad = nullptr;
+            if (pw != pw2) bad = "mismatch";
+            else if (pw.size() < 8) bad = "too_short";
+            else if (pw.size() > 128) bad = "too_long";
+            else for (unsigned char c : pw) if (c < 0x20 || c == 0x7f) { bad = "bad_characters"; break; }
+            if (bad) { reply(400, "Bad Request", std::string("{\"ok\":false,\"why\":\"") + bad + "\"}"); return; }
+            std::function<std::string(const std::string&)> fn;
+            { std::lock_guard<std::mutex> lk(g_vsSetupPwMtx); fn = g_vsSetupPwFn; }
+            const std::string why = fn ? fn(pw) : std::string("this build cannot store an admin password");
+            if (!why.empty()) {
+                std::string w; for (char c : why) if (c != '"' && c != '\\') w += c;
+                reply(500, "Internal Server Error", "{\"ok\":false,\"why\":\"store\",\"message\":\"" + w + "\"}"); return;
+            }
+            g_vsSetupCodes.markPasswordSet();
+            LOGI("first admin password set from %s through a setup code (length %zu)", ip.c_str(), pw.size());
+            reply(200, "OK", "{\"ok\":true}");
             return;
 
         } else if (reqLine.rfind("GET /vibeserver/config", 0) == 0 ||
@@ -47959,6 +48037,12 @@ void LocalSdrShim::setSdrChangeHandlers(SdrChangesGetFn get, SdrChangeSetFn set)
     g_vsSdrChangeSet  = std::move(set);
 }
 
+void LocalSdrShim::setSetupPasswordHandler(SetupPasswordFn fn) {
+    std::lock_guard<std::mutex> lk(g_vsSetupPwMtx); g_vsSetupPwFn = std::move(fn);
+}
+std::string LocalSdrShim::setupCodeIssue() { return g_vsSetupCodes.issue(vsAdminPasswordSet(), vsSteadyMs(), &vsRandom64); }
+void LocalSdrShim::setupCodeCancel() { g_vsSetupCodes.cancel(); }
+std::string LocalSdrShim::setupCodeState() { return g_vsSetupCodes.stateJson(vsSteadyMs()); }
 void LocalSdrShim::setConfigHandlers(ConfigGetFn get, ConfigSetFn set) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsConfigGet = std::move(get);

@@ -565,6 +565,13 @@ object VibeLocalSDR {
     fun stopMdns() { if (loaded) nativeStopMdns() }
     /** The hostname actually taken (vibesdr-2 if vibesdr was already in use). */
     fun mdnsHostname(): String = if (loaded) nativeMdnsHostname() else ""
+    // ★★★ beta96 "Set up on another device" — the one-time setup code (vibe_setup_code.h); first-time setup only.
+    fun setupCodeIssue(): String { ensureLoaded(); return if (loaded) nativeSetupCodeIssue() else "" }
+    fun setupCodeCancel() { if (loaded) nativeSetupCodeCancel() }
+    fun setupCodeState(): String = if (loaded) nativeSetupCodeState() else "{}"
+    private external fun nativeSetupCodeIssue(): String
+    private external fun nativeSetupCodeCancel()
+    private external fun nativeSetupCodeState(): String
     private external fun nativeStartMdns(host: String, ipv4: String)
     private external fun nativeStopMdns()
     private external fun nativeMdnsHostname(): String

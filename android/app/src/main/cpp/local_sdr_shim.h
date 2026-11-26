@@ -771,6 +771,16 @@ public:
     using ConfigSetFn = std::function<bool(const std::string&, std::string&)>;    // JSON, &err
     static void setConfigHandlers(ConfigGetFn get, ConfigSetFn set);
 
+    /** ★★★ beta96 "SET UP ON ANOTHER DEVICE" — FIRST-TIME SETUP ONLY (vibe_setup_code.h). The screen asks for a one-time
+     *  code (refused, "" back, while an admin password exists), shows it, polls the state, and cancels it when the owner
+     *  backs out. The page redeems it at POST /vibeserver/setup-code and sets the FIRST admin password at
+     *  POST /vibeserver/setup-code/password, which calls this handler ("" = stored and in force, else the reason). */
+    using SetupPasswordFn = std::function<std::string(const std::string&)>;
+    static void setSetupPasswordHandler(SetupPasswordFn fn);
+    static std::string setupCodeIssue();
+    static void setupCodeCancel();
+    static std::string setupCodeState();
+
     /** ★★★ "SOMETHING CHANGED ON THE USB BUS" — GET /vibeserver/sdr-changes and POST
      *  /vibeserver/sdr-change (Stuart, 2026-10-04). Get = which configured radios are missing,
      *  paused or uncertain and which attached radios are new; Set = add / replace / remove / pause /

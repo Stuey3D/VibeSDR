@@ -86,6 +86,10 @@ object VibeServerOps {
         "settings.get"     -> VibeRemoteSetup.settingsGet(ctx)
         "settings.put"     -> VibeRemoteSetup.settingsPut(ctx, a)
         "remote.set"       -> VibeRemoteSetup.setRemoteAccess(ctx, a.optBoolean("on", false))
+        // ★★★ beta96 "Set up on another device" — first-time setup only (VibeRemoteSetup, vibe_setup_code.h)
+        "setupCode.issue"  -> VibeRemoteSetup.setupCodeIssue(ctx)
+        "setupCode.cancel" -> VibeRemoteSetup.setupCodeCancel(ctx)
+        "setupCode.state"  -> VibeRemoteSetup.setupCodeState(ctx)
         else               -> fail("unknown_method", "the server does not know \"$method\"")
     }
 
@@ -140,6 +144,13 @@ object VibeServerOps {
         val cfg = if (VibeServerBoot.isSimple(cfgIn))
             VibeServerBoot.simpleMerge(try { VibeRemoteSetup.settings(ctx) } catch (_: Throwable) { JSONObject() }, cfgIn)
         else cfgIn
+        /* ★★ A START NEVER WIPES THE ADMIN PASSWORD WITH AN EMPTY ONE. The first password can now be set from another
+         *  device (setupPasswordSet) while the phone's screen still holds an empty field; no server starts without one
+         *  from Full, so an empty field here only ever means "the screen does not know it yet". */
+        if (cfg.optString("adminPassword", "").isEmpty()) {
+            val kept = try { VibeRemoteSetup.settings(ctx).optString("adminPassword", "") } catch (_: Throwable) { "" }
+            if (kept.isNotEmpty()) cfg.put("adminPassword", kept)
+        }
 
         stopEngine(ctx)
         rtlStop(ctx)

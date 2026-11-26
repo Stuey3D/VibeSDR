@@ -322,4 +322,63 @@ object VibeRemoteSetup {
     }
 
     @JvmStatic private external fun nativeEnable(on: Boolean)
+
+    // ── ★★★ beta96 "SET UP ON ANOTHER DEVICE" — FIRST-TIME SETUP ONLY (vibe_setup_code.h, docs/v12/SERVER-CHOICE.md) ──
+    // The TV shows a one-time code; a laptop on the same network opens /setup, types it, and its first and only step is
+    // to SET the first admin password (typed there, twice). Then remote access to /setup is switched ON — the point of
+    // it — and the laptop carries on as an ordinary admin. With a password already set, no code is issued at all.
+    @JvmStatic private external fun nativeSetupInit()
+
+    /** setupCode.issue — "" + the code, or a fail. Serves /setup for the window (the switch's state comes back on cancel). */
+    fun setupCodeIssue(ctx: Context): JSONObject {
+        remember(ctx)
+        if (settings(ctx).optString("adminPassword", "").isNotEmpty())
+            return VibeServerOps.fail("password_exists",
+                "This server already has an admin password. Open /setup on another device and sign in with it.")
+        if (!VibeLocalSDR.isLoaded() || !VibeServerRestore.isShimServing())
+            return VibeServerOps.fail("not_serving", "Start the server first — the setup page is served by it.")
+        try { nativeSetupInit() } catch (t: Throwable) { return VibeServerOps.fail("engine", "the engine has no setup codes: $t") }
+        try { nativeEnable(true) } catch (t: Throwable) { Log.w(TAG, "could not serve /setup for the code: $t") }
+        val code = VibeLocalSDR.setupCodeIssue()
+        if (code.isEmpty()) { applySwitch(ctx); return VibeServerOps.fail("password_exists", "This server already has an admin password.") }
+        Log.i(TAG, "a one-time setup code was issued (five minutes)")   // ★ never the code itself
+        return VibeServerOps.ok().put("code", code)
+    }
+
+    /** setupCode.cancel — the owner backed out: the code and any session die; /setup goes back to the owner's switch. */
+    fun setupCodeCancel(ctx: Context): JSONObject {
+        remember(ctx)
+        try { VibeLocalSDR.setupCodeCancel() } catch (_: Throwable) {}
+        applySwitch(ctx)
+        return VibeServerOps.ok()
+    }
+
+    fun setupCodeState(ctx: Context): JSONObject {
+        remember(ctx)
+        val st = try { JSONObject(VibeLocalSDR.setupCodeState()) } catch (_: Throwable) { JSONObject() }
+        return VibeServerOps.ok().put("state", st).put("hasAdminPassword", settings(ctx).optString("adminPassword", "").isNotEmpty())
+            .put("remote", remoteOn(ctx))
+    }
+
+    /** ★ From the engine (JNI), on the shim's HTTP thread: the page set the FIRST admin password. "" = in force. */
+    @JvmStatic
+    fun setupPasswordSet(pw: String): String {
+        val ctx = appCtx ?: return "the server is not ready"
+        return try {
+            synchronized(this) {
+                val cur = settings(ctx)
+                if (cur.optString("adminPassword", "").isNotEmpty()) return "this server already has an admin password"
+                cur.put("adminPassword", pw)
+                save(ctx, cur)   // ★ the store AND the restore's config (replaceConfig) — a restored server keeps it
+            }
+            VibeLocalSDR.setVibeServerAdminSecret(pw)
+            // ★★★ Remote access to /setup ON — it is why the owner set the password from there (Stuart, 2026-11-26).
+            setRemoteAccess(ctx, true)
+            // ★ The phone's screen keeps its own copy of the password (vs_adminpw); hand it over so a Start from Full
+            //   sends this one rather than an empty field. Same device, the server's own link to its UI.
+            VibeServerOps.emit("adminPassword", JSONObject().put("password", pw))
+            Log.i(TAG, "the first admin password was set from another device; remote access to /setup is ON")
+            ""
+        } catch (t: Throwable) { "the password could not be stored (${t.javaClass.simpleName})" }
+    }
 }

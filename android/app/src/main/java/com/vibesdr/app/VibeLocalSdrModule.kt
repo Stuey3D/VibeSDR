@@ -1186,6 +1186,19 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     fun setRemoteAccess(on: Boolean, promise: Promise) =
         ask("remote.set", JSONObject().put("on", on), promise) { it.optBoolean("remote", false) }
 
+    // ── ★★★ beta96 "SET UP ON ANOTHER DEVICE" — first-time setup only (VibeRemoteSetup.setupCode*) ─────────────────
+    /** A one-time code (string) — rejects with the server's words (an admin password exists, the server is not running). */
+    @ReactMethod
+    fun setupCodeIssue(promise: Promise) = ask("setupCode.issue", JSONObject(), promise) { it.optString("code", "") }
+    @ReactMethod
+    fun setupCodeCancel(promise: Promise) {
+        if (!serverProcessUp()) { promise.resolve(null); return }
+        ask("setupCode.cancel", JSONObject(), promise) { null }
+    }
+    /** {state, hasAdminPassword, remote} as JSON. */
+    @ReactMethod
+    fun setupCodeState(promise: Promise) = ask("setupCode.state", JSONObject(), promise) { it.toString() }
+
     @ReactMethod
     fun stopVibeServer(promise: Promise) {
         // ★ Disarm, mDNS, NSD, the service, the engine, the secret, the public door — all in the server's process now

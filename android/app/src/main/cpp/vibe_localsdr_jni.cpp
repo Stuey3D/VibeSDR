@@ -512,6 +512,50 @@ Java_com_vibesdr_app_VibeRemoteSetup_nativeEnable(JNIEnv* env, jclass cls, jbool
     }
 }
 
+// ── ★★★ beta96 "SET UP ON ANOTHER DEVICE" — FIRST-TIME SETUP ONLY (vibe_setup_code.h) ─────────────────────────────
+// The screen showing the code reaches these through VibeServerOps ("setupCode.*"); the page's "set the first admin
+// password" reaches Kotlin through the handler registered here (VibeRemoteSetup.setupPasswordSet — stores it, puts it in
+// force, and switches remote access to /setup ON, which is the point of it).
+static jmethodID g_rsPw = nullptr;
+static jclass    g_rsPwCls = nullptr;
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeRemoteSetup_nativeSetupInit(JNIEnv* env, jclass cls) {
+    if (!g_rsPwCls) {
+        g_rsPwCls = (jclass)env->NewGlobalRef(cls);
+        g_rsPw = env->GetStaticMethodID(cls, "setupPasswordSet", "(Ljava/lang/String;)Ljava/lang/String;");
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); g_rsPw = nullptr; }
+    }
+    if (!g_rsPw) return;
+    vibe::LocalSdrShim::setSetupPasswordHandler([](const std::string& pw) -> std::string {
+        if (!g_vm || !g_rsPwCls || !g_rsPw) return "the phone is not ready";
+        JNIEnv* e = nullptr; bool attached = false;
+        if (g_vm->GetEnv((void**)&e, JNI_VERSION_1_6) != JNI_OK) {
+            if (g_vm->AttachCurrentThread(&e, nullptr) != JNI_OK) return "could not attach to the JVM";
+            attached = true;
+        }
+        std::string out = "the password could not be stored";
+        jstring jp = e->NewStringUTF(pw.c_str());
+        if (auto r = (jstring)e->CallStaticObjectMethod(g_rsPwCls, g_rsPw, jp)) {
+            if (const char* c = e->GetStringUTFChars(r, nullptr)) { out = c; e->ReleaseStringUTFChars(r, c); }
+            e->DeleteLocalRef(r);
+        }
+        e->DeleteLocalRef(jp);
+        if (e->ExceptionCheck()) { e->ExceptionClear(); out = "the phone could not store the password"; }
+        if (attached) g_vm->DetachCurrentThread();
+        return out;
+    });
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetupCodeIssue(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::setupCodeIssue().c_str());
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetupCodeCancel(JNIEnv*, jobject) { vibe::LocalSdrShim::setupCodeCancel(); }
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetupCodeState(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::setupCodeState().c_str());
+}
+
 // Start the local-SDR spectrum pipeline + localhost UberSDR server.
 // Returns the bound TCP port (>0), or -1 on failure (check logcat).
 extern "C" JNIEXPORT jint JNICALL
