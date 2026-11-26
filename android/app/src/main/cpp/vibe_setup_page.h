@@ -7656,7 +7656,7 @@ function refreshHw() {
  *     server's vsconfig::displayOrder, so this page and the landing cards agree. curRadio is an
  *     index into THIS list, which is why a re-order re-points it (orderSave). */
 function radioList() {
-  if (!Array.isArray(cfg.radios)) return [];
+  if (!cfg || !Array.isArray(cfg.radios)) return [];   // ★ beta96 before sign-in cfg is null: the sections' secInit asks at page load
   const key = (r, i) => (typeof r.order === "number" && r.order >= 0) ? r.order : i;
   return cfg.radios.map((r, i) => [r, i])
     .sort((a, b) => (key(a[0], a[1]) - key(b[0], b[1])) || (a[1] - b[1]))
