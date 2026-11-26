@@ -8,6 +8,9 @@
 //     no ID, no code. Nothing here could show one; nothing here tries.
 // ★ PURE: no React Native — node runs it.
 
+import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml,
+         type MeshKnown, type MeshRoute } from '../utils/meshRoute';
+
 export interface IsmDevice {
   key: string; kind: string; make: string; model: string; name: string; line: string;
   nick?: number; id?: string; ch?: number;
@@ -31,6 +34,9 @@ export interface IsmDevice {
   /** ★ V12 LoRa-APRS / FANET / MeshCom (vibe_lora_ham.h): movement (km/h, °, m/s), a FANET weather station's wind, the
    *  APRS symbol and digipeater path, and `online` = a FANET pilot's own public-tracking bit (exact position). */
   speed?: number; course?: number; climb?: number; sym?: string; path?: string; online?: number;
+  /** ★★ beta96 MeshCore (src/utils/meshRoute.ts): the relays of its newest flood packet, first relay first, each a hex
+   *  key hash ("5a"); `direct` 1 = heard first-hand at least once (the aerial's reach, though the newest came relayed). */
+  relays?: string[]; direct?: number;
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
 export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
@@ -203,7 +209,7 @@ function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n
   const msgs: IsmMsg[] = [];
   for (const m of Array.isArray(d.msgs) ? d.msgs.slice(0, 5) : []) if (m && typeof m.text === 'string') msgs.push({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '' });
   return {
-    node: str(d.node, 16), short: str(d.short, 8), long: str(d.long, 40), hw: str(d.hw, 40), role: str(d.role, 20), chan: str(d.chan, 20),
+    node: str(d.node, 16), short: meshName(d.short, 8) || undefined, long: meshName(d.long, 40) || undefined, hw: str(d.hw, 40), role: str(d.role, 20), chan: str(d.chan, 20),
     net: str(d.net, 30), mtype: str(d.mtype, 24), what: str(d.what, 24), lat: pos ? lat : undefined, lon: pos ? lon : undefined,
     posAge: num(d.posAge), prec: num(d.prec), alt: num(d.alt), battPct: num(d.battPct), volt: num(d.volt), chUtil: num(d.chUtil), hops: num(d.hops),
     fcnt: num(d.fcnt), fport: num(d.fport), encLen: num(d.encLen), priv: num(d.priv), sf: num(d.sf), bw: num(d.bw), cr: num(d.cr), sync: str(d.sync, 2),
@@ -211,11 +217,38 @@ function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n
     speed: num(d.speed), course: num(d.course), climb: num(d.climb), wind: num(d.wind), dir: num(d.dir), gust: num(d.gust),
     sym: str(d.sym, 2), path: str(d.path, 60), online: num(d.online),
     approx: num(d.approx), ntype: NODE_TYPES.includes(d.ntype) ? d.ntype : undefined,
+    relays: meshRelays(d.relays), direct: d.direct === 1 ? 1 : undefined,
   };
 }
 export const NODE_TYPES = ['repeater', 'room', 'sensor', 'companion', 'aircraft'];
 /** ★ V12 LoRa: does this row go on the map? */
 export function ismOnMap(d: IsmDevice): boolean { return d.lat !== undefined && d.lon !== undefined; }
+/** ★★ beta96 a mesh node's fix `km` from the receiver is believable for its hop count (meshPlausible; first-hand at least
+ *  once = one hop of air). Other kinds: no rule here. */
+export function ismPlausibleAt(d: IsmDevice, km: number): boolean {
+  if (d.kind !== 'meshcore' && d.kind !== 'meshtastic') return true;
+  return meshPlausible(km, meshHopsForRule(d));
+}
+/** ★★ beta96 PLOTTED: a position, and (the receiver's known) a believable one — a bad fix is never drawn (AIS's rule). */
+export function ismPlotted(d: IsmDevice, rx: { lat: number; lon: number } | null): boolean {
+  return ismOnMap(d) && (!rx || ismPlausibleAt(d, meshKm(rx, d.lat as number, d.lon as number)));
+}
+/** ★★ beta96 the repeaters and room servers a route may place (MeshCore ids, plotted positions; never a companion). */
+export function ismRouteKnown(devs: readonly IsmDevice[], rx: { lat: number; lon: number } | null): MeshKnown[] {
+  const out: MeshKnown[] = [];
+  for (const d of devs) {
+    if (d.kind !== 'meshcore' || !d.node || !/^[0-9a-fA-F]{2,16}$/.test(d.node) || !ismPlotted(d, rx)) continue;
+    const t = ismNodeType(d);
+    if (t !== 'repeater' && t !== 'room') continue;
+    out.push({ id: d.node.toLowerCase(), name: ismMapLabel(d), lat: d.lat as number, lon: d.lon as number });
+  }
+  return out;
+}
+/** ★★ beta96 a node's route on the map (meshRoute), or null — only MeshCore nodes carry one. */
+export function ismRouteOf(d: IsmDevice, known: readonly MeshKnown[], rx: { lat: number; lon: number } | null): MeshRoute | null {
+  if (d.kind !== 'meshcore' || !ismOnMap(d)) return null;
+  return meshRoute({ lat: d.lat as number, lon: d.lon as number, relays: d.relays, node: d.node }, known, rx);
+}
 /** The network's name as the list says it. */
 export function ismNetName(kind: string): string {
   return kind === 'meshtastic' ? 'Meshtastic' : kind === 'meshcore' ? 'MeshCore' : kind === 'lorawan' ? 'LoRaWAN'
@@ -223,14 +256,14 @@ export function ismNetName(kind: string): string {
 }
 
 /** ★ A LoRa row's detail (the tap): the radio side, then what the node published, then its recent public messages. */
-export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | null, withMsgs = true): string[] {
+export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | null, withMsgs = true, miles = false): string[] {
   const out: string[] = [];
   const head: string[] = [`${(d.freq / 1e6).toFixed(3)} MHz`];
   if (d.sf) head.push(`SF${d.sf}`);
   if (d.bw) head.push(`${d.bw >= 1e5 ? Math.round(d.bw / 1e3) : (d.bw / 1e3).toFixed(1)} kHz`);
   if (d.cr) head.push(`CR 4/${4 + d.cr}`);
   head.push(`SNR ${d.snr.toFixed(1)} dB`);
-  if (d.hops !== undefined) head.push(d.hops === 0 ? 'heard first-hand' : `${d.hops} ${d.hops === 1 ? 'hop' : 'hops'}`);
+  if (d.hops !== undefined) head.push(d.hops === 0 ? 'heard first-hand' : `${d.hops} ${d.hops === 1 ? 'hop' : 'hops'}${d.direct === 1 ? ' (also heard first-hand)' : ''}`);
   out.push(head.join(' · '));
   const me: string[] = [];
   if (d.node) me.push(d.kind === 'lorawan' ? `DevAddr ${d.node}` : d.kind === 'meshcore' ? `key ${d.node}…` : d.node);
@@ -250,7 +283,7 @@ export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | 
   if (d.lat !== undefined && d.lon !== undefined) {
     let p = `${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}`;
     if (d.alt !== undefined) p += ` · ${Math.round(d.alt)} m`;
-    if (rx) { const k = rangeKm(rx, d.lat, d.lon); p += ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}`; }
+    if (rx) { const k = rangeKm(rx, d.lat, d.lon); p += ` · ${meshDist(k.km, miles)} ${compass(k.brg)}`; if (!ismPlausibleAt(d, k.km)) p += ' · position implausible (not plotted)'; }
     if (d.approx) p += d.kind === 'fanet' ? ' · approximate (~1 km): the pilot has not chosen public tracking' : ' · approximate (~1 km): a companion node is a person';
     else if (d.prec && d.prec < 32) p += ' · position deliberately approximate';
     out.push(p);
@@ -428,6 +461,20 @@ export function ismEmptyText(filter: string): string {
   return `${filter === 'all' ? 'No sensors heard yet' : 'Nothing of that kind heard yet'} — most send every 30–60 s; tyres only while the car moves.`;
 }
 
+/** ★★ beta96 (Stuart 11-26) ONE km ↔ miles preference: the ISM list's KM/H ↔ MPH key (stored under ISM_PREF_KEY with
+ *  the rest of its choices) also sets the mesh maps' distances — the live map, the gallery's map, their lists and cards,
+ *  the route card, the furthest line and the AMATEUR map's MESH tab. IsmPanel sets it; the maps listen. No second setting. */
+export const ISM_PREF_KEY = 'lsv_ism_prefs';
+let ismMilesNow = false;
+const ismMilesSubs = new Set<(miles: boolean) => void>();
+export function ismMilesGet(): boolean { return ismMilesNow; }
+export function ismMilesSet(miles: boolean): void {
+  if (miles === ismMilesNow) return;
+  ismMilesNow = miles;
+  for (const f of Array.from(ismMilesSubs)) { try { f(miles); } catch { /* a listener's fault is its own */ } }
+}
+export function ismMilesOn(f: (miles: boolean) => void): () => void { ismMilesSubs.add(f); return () => { ismMilesSubs.delete(f); }; }
+
 /** The listener's choices, from storage — the web's loadPrefs (filter, wind units, tyre pressure units). */
 export function parseIsmPrefs(s: string | null | undefined): { filter: string; units: IsmUnits } {
   try {
@@ -515,46 +562,48 @@ export function ismMapRank(d: IsmDevice): number {
   return (t === 'repeater' ? 3e7 : t === 'companion' ? 0 : 2e7) - Math.min(d.seen, 1e7);
 }
 export function ismMapLabel(d: IsmDevice): string {
-  const n = d.long || d.short || d.name || d.node || d.key;
+  const n = meshName(d.long) || meshName(d.short) || meshName(d.name) || d.node || d.key;
   return d.approx ? `${n} (approximate)` : n;
 }
-export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null): string {
-  const lines = ismLoraDetail(d, rx, false);
+export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null, miles = false, route: MeshRoute | null = null): string {
+  const lines = [...ismLoraDetail(d, rx, false, miles), ...(route ? route.words : [])];   // ★★ beta96 the route card
   const t = NODE_TYPE_WORD[ismNodeType(d)];
   return `<div class="trkCard"><div style="white-space:normal;max-width:300px"><b>${escM(d.long || d.name)}</b>${d.short && d.short !== d.long ? ` (${escM(d.short)})` : ''}<br>`
     + `${escM(ismNetName(d.kind))} ${escM(t)} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
-    + lines.map(escM).join('<br>') + '</div></div>';
+    + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div></div>';
 }
 export const ISM_MAP_EMPTY = 'Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.';
 /** The pins: every row with a position. ★ `_lb` is plain text — the layer escapes it. */
-export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number } | null): Array<{ key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; _h: number; _rk: number }> {
+/** ★★ beta96 `known` = the repeaters and room servers a route may place (ismRouteKnown over EVERY node the map holds —
+ *  not only the time filter's); `_rt` = the node's route (MESH_ROUTE_JS draws it when the node is tapped). */
+export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number } | null, miles = false, known?: readonly MeshKnown[]): Array<{ key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; _h: number; _rk: number; _rt: MeshRoute | null }> {
   if (!r) return [];
-  return r.devices.filter(ismOnMap).map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismMapCard(d, rx), _h: d.count, _rk: ismMapRank(d) }));
+  const kn = known ?? ismRouteKnown(r.devices, rx);
+  return r.devices.filter((d) => ismPlotted(d, rx)).map((d) => {
+    const rt = ismRouteOf(d, kn, rx);
+    return { key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismMapCard(d, rx, miles, rt), _h: d.count, _rk: ismMapRank(d), _rt: rt };
+  });
 }
 type MapRow = { key: string; colour: string; flag: string; name: string; second: string; sp: string; trend: -1 | 0 | 1; range: string; brg: string; noPos: boolean; age: string; em: boolean };
 /** The live list (TrackRow's shape): nearest first when the receiver's position is known, else newest first. */
-export function ismMapRows(r: IsmReport | null, rx: { lat: number; lon: number } | null): MapRow[] {
+export function ismMapRows(r: IsmReport | null, rx: { lat: number; lon: number } | null, miles = false): MapRow[] {
   if (!r) return [];
-  const rows = r.devices.filter(ismOnMap).map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
+  const rows = r.devices.filter((d) => ismPlotted(d, rx)).map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
   if (rx) rows.sort((a, b) => a.k!.km - b.k!.km);
   return rows.map(({ d, k }) => ({
     key: d.key, colour: MAP_COLOURS[d.kind] || '#ffb833', flag: '', name: ismMapLabel(d),
-    second: [`${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, d.hw, d.hops !== undefined ? (d.hops === 0 ? 'first-hand' : `${d.hops} hop${d.hops === 1 ? '' : 's'}`) : '',
+    second: [`${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, d.hw, d.hops !== undefined ? (d.hops === 0 ? 'first-hand' : `${d.hops} hop${d.hops === 1 ? '' : 's'}${d.direct === 1 ? ' (also first-hand)' : ''}`) : '',
              d.battPct !== undefined && d.battPct <= 100 ? `${d.battPct} %` : '', `${d.snr.toFixed(0)} dB`].filter(Boolean).join(' · '),
-    sp: '', trend: 0 as const, range: k ? `${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km` : '', brg: k ? compass(k.brg) : '',
+    sp: '', trend: 0 as const, range: k ? meshDist(k.km, miles) : '', brg: k ? compass(k.brg) : '',
     noPos: false, age: ismAgo(d.seen), em: false,
   }));
 }
 /** The map's status line: how many on the map, of which repeaters, the furthest. */
-export function ismMapStatus(r: IsmReport | null, rx: { lat: number; lon: number } | null): string {
+export function ismMapStatus(r: IsmReport | null, rx: { lat: number; lon: number } | null, miles = false): string {
   if (!r) return '';
-  const items = r.devices.filter(ismOnMap);
-  let far = '';
-  if (rx && items.length) {
-    let best = 0, who = '';
-    for (const d of items) { const k = rangeKm(rx, d.lat as number, d.lon as number).km; if (k > best) { best = k; who = ismMapLabel(d); } }
-    far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
-  }
+  const items = r.devices.filter((d) => ismPlotted(d, rx));
+  // ★★ beta96 furthest DIRECT (first-hand) and VIA MESH, each plausible, in the list's km / miles
+  const far = meshFarText(meshFurthest(items, rx, ismMapLabel), miles);
   const rep = items.filter((d) => ismNodeType(d) === 'repeater').length;
   return `${items.length} on the map${rep ? ` · ${rep} ${rep === 1 ? 'repeater' : 'repeaters'}` : ''}${far}`;
 }
@@ -593,7 +642,7 @@ export function ismNodesParse(body: string, dayUtc: number, nowSec: number): { n
     if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
     let approx = pm[3] ? 1 : undefined;
     if (type === 'companion' && !approx) { lat = Math.round(lat * 100) / 100; lon = Math.round(lon * 100) / 100; approx = 1; }
-    const name = f[6].slice(0, 40), node = f[7] === '-' ? '' : f[7].slice(0, 16);
+    const node = f[7] === '-' ? '' : f[7].slice(0, 16), name = meshName(f[6], 40) || node || '?';
     out.push({
       key: `g${out.length}`, kind: net, make: ismNetName(net), model: '', name, long: name, node, line: '', ntype: type, approx,
       lat, lon, hops: f[9] === '-' ? undefined : Number(f[9]), snr: Number(f[10]) || 0, freq: (Number(f[11]) || 0) * 1e6,
@@ -601,47 +650,59 @@ export function ismNodesParse(body: string, dayUtc: number, nowSec: number): { n
       first, last, origin: f[3] === 'background' || f[3] === 'live' || f[3] === 'both' ? f[3] : '',
     });
   }
+  // ★★ beta96 the card's ROUTES section (vibe_ism_gallery.h): "<id> · 5a 9f 1c" — the relays of a node's newest packet
+  const ra = body.indexOf('\nRoutes heard (');
+  if (ra >= 0) {
+    const byId = new Map<string, IsmGalNode>();
+    for (const n of out) if (n.kind === 'meshcore' && n.node) byId.set(n.node, n);
+    for (const ln of body.slice(ra + 1).split('\n').slice(1, 502)) {
+      const f = ln.split(' · ');
+      if (f.length !== 2) continue;
+      const n = byId.get(f[0]); const r = meshRelays(f[1]);
+      if (n && r) n.relays = r;
+    }
+  }
   return { nodes: out, rx };
 }
 const galOrigin = (o: string) => (o === 'background' ? 'heard in the background' : o === 'live' ? 'heard live' : o === 'both' ? 'heard in the background and live' : '');
 const hhmm = (t: number) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
-export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | null): string {
+export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | null, miles = false, route: MeshRoute | null = null): string {
   const t = NODE_TYPE_WORD[ismNodeType(d)];
   const lines: string[] = [];
   const head = [`${(d.freq / 1e6).toFixed(3)} MHz`, `SNR ${d.snr.toFixed(1)} dB`];
-  if (d.hops !== undefined) head.push(d.hops === 0 ? 'heard first-hand' : `${d.hops} ${d.hops === 1 ? 'hop' : 'hops'}`);
+  if (d.hops !== undefined) head.push(d.hops === 0 ? 'heard first-hand' : `${d.hops} ${d.hops === 1 ? 'hop' : 'hops'} at the fewest`);
   lines.push(head.join(' · '));
   if (d.node) lines.push(d.kind === 'meshcore' ? `key ${d.node}…` : d.node);
   let p = `${d.lat!.toFixed(d.approx ? 2 : 4)}, ${d.lon!.toFixed(d.approx ? 2 : 4)}`;
-  if (rx) { const k = rangeKm(rx, d.lat!, d.lon!); p += ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}`; }
+  if (rx) { const k = rangeKm(rx, d.lat!, d.lon!); p += ` · ${meshDist(k.km, miles)} ${compass(k.brg)}`; if (!ismPlausibleAt(d, k.km)) p += ' · position implausible (not plotted)'; }
   if (d.approx) p += ' · approximate (~1 km): a companion node is a person';
   lines.push(p);
+  if (route) lines.push(...route.words);   // ★★ beta96 the route card
   return `<div class="trkCard"><div style="white-space:normal;max-width:300px"><b>${escM(d.name)}</b><br>${escM(ismNetName(d.kind))} ${escM(t)} · ${escM(galOrigin(d.origin))}<br>`
     + `first heard ${hhmm(d.first)} · last heard ${hhmm(d.last)} UTC · ${d.count} ${d.count === 1 ? 'time' : 'times'}<br>`
-    + lines.map(escM).join('<br>') + '</div></div>';
+    + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div></div>';
 }
 const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
-export function ismGalItems(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null) {
-  return nodes.map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx), _h: d.count, _rk: ismMapRank(d) }));
+export function ismGalItems(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false, known?: readonly MeshKnown[]) {
+  const kn = known ?? ismRouteKnown(nodes, rx);
+  return nodes.filter((d) => ismPlotted(d, rx)).map((d) => {
+    const rt = ismRouteOf(d, kn, rx);
+    return { key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx, miles, rt), _h: d.count, _rk: ismMapRank(d), _rt: rt };
+  });
 }
-export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): MapRow[] {
-  const rows = nodes.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
+export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false): MapRow[] {
+  const rows = nodes.filter((d) => ismPlotted(d, rx)).map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
   if (rx) rows.sort((a, b) => a.k!.km - b.k!.km);
   return rows.map(({ d, k }) => ({
     key: d.key, colour: MAP_COLOURS[d.kind] || '#ffb833', flag: '', name: ismMapLabel(d),
     second: [ORIGIN_TAG[d.origin] || '', `${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, `${d.count}×`, `${hhmm(d.first)}–${hhmm(d.last)}`].filter(Boolean).join(' · '),
-    sp: '', trend: 0 as const, range: k ? `${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km` : '', brg: k ? compass(k.brg) : '',
+    sp: '', trend: 0 as const, range: k ? meshDist(k.km, miles) : '', brg: k ? compass(k.brg) : '',
     noPos: false, age: hhmm(d.last), em: false,
   }));
 }
-export function ismGalStatus(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): string {
+export function ismGalStatus(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false): string {
   const rep = nodes.filter((d) => ismNodeType(d) === 'repeater').length;
-  let far = '';
-  if (rx && nodes.length) {
-    let best = 0, who = '';
-    for (const d of nodes) { const k = rangeKm(rx, d.lat as number, d.lon as number).km; if (k > best) { best = k; who = d.name; } }
-    far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
-  }
+  const far = meshFarText(meshFurthest(nodes.filter((d) => ismPlotted(d, rx)), rx, ismMapLabel), miles);   // ★★ beta96
   return `${nodes.length} ${nodes.length === 1 ? 'node' : 'nodes'} heard${rep ? ` · ${rep} ${rep === 1 ? 'repeater' : 'repeaters'}` : ''}${far}`;
 }
 
@@ -680,8 +741,10 @@ export function ismGalMerge(cards: IsmGalNode[][], nowSec: number): IsmGalNode[]
     const had = by.get(k);
     if (!had) { if (by.size < 2000) by.set(k, { ...n }); continue; }
     const newer = n.last > had.last ? n : had;
+    // ★ beta96 the FEWEST hops of the days (0 = heard first-hand), the newer day's route
+    const hops = had.hops === undefined ? n.hops : n.hops === undefined ? had.hops : Math.min(had.hops, n.hops);
     by.set(k, { ...newer, first: Math.min(had.first, n.first), last: Math.max(had.last, n.last), count: had.count + n.count,
-                origin: had.origin === n.origin ? had.origin : 'both' });
+                origin: had.origin === n.origin ? had.origin : 'both', hops, relays: newer.relays ?? (newer === n ? had.relays : n.relays) });
   }
   // ★ a STABLE key (network + id): a card fetched again must not move a marker to another node
   return [...by.entries()].map(([k, n]) => ({ ...n, key: `${n.kind === "meshcore" ? "c" : "t"}:${n.node || n.name}`.slice(0, 40), seen: Math.max(0, nowSec - n.last), age: Math.max(0, nowSec - n.first) }));

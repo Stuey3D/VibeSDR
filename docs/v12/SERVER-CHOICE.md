@@ -4,7 +4,44 @@ Branch `b96-serverchoice` (off `b96-integrate`, merged back in twice). Stuart, 2
 
 ## RESUME HERE
 
-Built and committed; **never run on a real phone, TV or radio**. What is left:
+**b96-appserver2 (2026-11-26, Stuart's decisions 1–7 + the three-state refinement) — built, tested off-device; never run on a
+phone, TV or radio.** What changed since the section below was written:
+
+| Decision | What is built | Where | Tested |
+|---|---|---|---|
+| 1. Entry labels | exactly "VibeServer Simple (Local Network Only)", "VibeServer Full", "RTL-TCP (Compatibility)" (`CHOICE_WORDS` titles, `ENTRY_LABELS`; the screens' headings use them) | `src/utils/serverChoice.ts` | test_server_choice |
+| 2a. Simple PIN | optional, digits only, ≤ 12 (`pinProblem` / `pinTyped` = the server PIN's rule); stored as **`simplePin`** (its own key: Full's PIN is never overwritten, and the other way round); the Simple view runs it as `pin` (Kotlin `simplePinOk` twin) | serverChoice.ts, VibeServerBoot.kt, SimpleServerScreen | test_server_choice |
+| 2b. Home network only | `lanOnly: true` in every Simple view → `VibeLocalSDR.setVibeServerLanOnly` → `LocalSdrShim::setVibeServerLanOnly` → **every request** from a peer that fails the RTL-TCP door's `isPrivateIp` (private IPv4, 169.254, IPv6 link-local / ULA / the box's own prefixes) — judged on the REAL socket peer — or that came through the tunnel is answered 403 "local network only", logged once a minute; `vibeserver.json` `lanOnly:{refused}`. Daemon twin: `--lan-only` (tests) | local_sdr_shim.cpp `handleConnection`, vibe_localsdr_jni.cpp, main.cpp | **test-server-lanonly.mjs 14/14** (e2e, the RTL-TCP door test's shape: `VIBE_TEST_LANONLY_PEER`) |
+| 2c. Simple RAW IQ | Full's RAW IQ OUT as Off / Local only (no public choice: dead on a LAN-only server); `simpleRawIq` → rawIq 0/1, rawIqMax 1; not on Lite or an Icom (as Full) | serverChoice.ts, SimpleServerScreen | test_server_choice |
+| 3. RTL-TCP | unchanged single screen (heading now "RTL-TCP (Compatibility)") | RtlTcpServerScreen | — |
+| 4. Full tabbed | **SERVER \| RADIO** (`SetupTabs`, `FULL_TABS`, the radio tab named after the radio); START bar (serverChoiceTop) first, then the tabs, OPEN/CLOSE ALL, the tab's sections in Stuart's order; RTL-TCP protocol = no radio tab | ServerModeScreen, SetupSection.tsx, setupSections.ts | test_setup_sections, test_nav_coverage (START → tabs → all-row → headers; each tab a focusable stop with its ring) |
+| 5. Red "!" | **only on a refused START**: `startBlocks` (admin password, flight-tracker entry, background profile, Icom CI-V) → `startRefusal` → the first blocker's tab selected, every blocker marked tried (red, opened — `reopenFor` undoes a by-hand close), one line under START ("Not started — <section>: <reason>"); red until fixed (`triedPrune`). Both START keys are green always. **Three states** (Stuart's refinement): green / amber (location, PSK Reporter no callsign, remote settings off; a blocker before any START reads amber) / red | setupSections.ts `secState` | test_setup_sections 89/0 |
+| 5b. The web page | **changed too** (it shared the rule, not the code): `SEC_MUST` → `SEC_BLOCK` / `SEC_ADVISE` + `secSaveStops` gate on both Save buttons — red only after a Save it stopped, on its own tab (`secGoTab`), opened, saveErr line, red until fixed. PSK Reporter with **no** callsign is amber and no longer refuses the save (the server just sends nothing); a **typed invalid** name still refuses (red). A radio never set up turns red at the master Save without refusing it. `SEC_RULES` = the app's `RULES.web` (tested word for word) | vibe_setup_page.h | test-setup-sections.mjs 63/0 |
+| 6. Full's Simple / Advanced | **removed**: `advanced = webServer` (the admin page needs the web client — as the old toggle forced); one listener or many = **Listeners** + **Operating mode** on the RADIO tab. The remote page's `androidAdvanced` select is gone too (`advanced` follows the web client) | ServerModeScreen, vibe_setup_page.h, vibe_android_setup.h | test-setup-android 76/0, parity 217/0 |
+| 7. Maritime boost | see MARITIME-COMBO.md ("ais+8m") | | maritime e2e 50/0 |
+
+**Owed:** the Sony + a phone (tabs with the remote, a refused START landing on the right tab, Simple's PIN typed on a TV,
+a non-LAN client really refused — e.g. a phone on mobile data at a port-forwarded Simple server); `npx tsx
+scripts/test_new_modes_clients.ts` (no tsx in this worktree); Lite gradle (no Lite gradlew here).
+
+**Builds (b96-appserver2):** vibeserver + test-radio-caps (lock) ✓; tsc whole project — 45 errors, identical to
+b96-integrate's (none new); app gradle — see the final report.
+
+### Stuart's answers (11-26) — applied
+1 separate keys: as built. 2 PSK Reporter with no callsign = amber "PSK Reporter: no callsign, so no spots are sent" (app +
+web); the uploader now refuses an INVALID name too (vibe_spot_report.h `receiverNameOk`, the page's 3–20 / a-letter rule —
+test-spot-report 103/0). 3 kept as built. 4 kept. 5 dec_aisdsc auto-ticks ais+8m (MARITIME-COMBO.md). 6 kept.
+
+### Open decisions for Stuart (b96-appserver2, one line each — answered above)
+- Simple's PIN and RAW IQ are their own keys (`simplePin`, `simpleRawIq`) — not Full's PIN. OK?
+- PSK Reporter with no callsign no longer blocks the web Save (amber, your example); a typed name that is not valid still does.
+- A radio never set up: red at the master Save but the Save still goes through (the other radios go on air). OK, or refuse?
+- With the web client OFF, Full still hides the admin-page parts (listeners count, gain limits, banning) exactly as the old toggle did.
+- Simple and RTL-TCP got no section marks: Simple's only blocker (the PIN) cannot be typed wrong (the box keeps digits only), RTL-TCP has nothing to warn about.
+
+(Everything below is b96-serverchoice's record, still true except where the table above says otherwise.)
+
+### Earlier resume list (b96-serverchoice)
 
 1. **Device test on the Sony (TV remote) and a phone (touch + a pad)**: first open → SET UP HERE / REMOTE SETUP; Simple
    start/stop; the remembered choice; Simple → Full hand-over while running; RTL-TCP's short screen; REMOTE SETUP end to

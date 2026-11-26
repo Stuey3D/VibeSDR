@@ -65,6 +65,7 @@ inline vibeavshare::Extra lookup(uint32_t icao, const std::string& flight, const
     vibeadsbdata::Db::resolveImages(hu, i);
     vibeavshare::Extra ex;
     ex.reg = i.r; ex.type = i.t;
+    ex.wtc = i.wtc; ex.species = i.species; ex.eng = i.eng; ex.mil = i.mil;   // ★ beta96 the glyph's inputs (community rows)
     // ★★ the ADS-B aircraft data's OWN JSON (Info::json — the same names the ADS-B layer reads), split: the members
     //    without r / t (the row's own reg / type win), and the route object on its own (the row's airports win)
     vibeadsbdata::Info f = i;

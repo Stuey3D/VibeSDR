@@ -40,7 +40,7 @@ import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
-import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_PRIO_WHAT, satPassKey, satSchedKeyText, satSchedPrioText, satSchedRowText,
+import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_PRIO_WHAT, SAT_SCHED_SHARED_NOTE, satPassKey, satSchedKeyText, satSchedPrioText, satSchedRowText,
          type SatSchedEntry, type SatSchedSlot, type SatSessionKind } from '../services/satSchedule';
 import { SAT_SINGLE_ONLY, SAT_SINGLE_WHY, satHybridText, satSingleHead, satSingleLastText, satSinglePlanRows, satSingleSub,
          type SatHybridInfo, type SatSingle } from '../services/satSingle';   // ★★★ beta96 single mode: satellites
@@ -110,6 +110,8 @@ export interface SatellitePanelProps {
   /** ★★★ beta96 SCHEDULE / REMIND (services/satSchedule.ts): the session's kind (absent = none: no key), its line, and the
    *  schedule — find a pass's entry, the plan's slot for it, the lines under the list, the key presses. */
   passKind?: SatSessionKind;
+  /** ★★★ beta96 a shared receiver: SCHEDULE tunes only if alone at AOS, else reminds (Stuart 11-26) */
+  passShared?: boolean;
   sessionLine?: string;
   sched?: {
     find: (norad: number, tx: number, aos: number) => SatSchedEntry | undefined;
@@ -561,6 +563,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))} fullWidth
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     outline={p.picked!.decoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
+                    gaps={p.picked!.decoder === 'lrpt' ? lrptOl.gaps : undefined} rot180={p.picked!.decoder === 'lrpt' && lrptOl.rot === 180}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>
               )}
@@ -787,7 +790,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   {pk === 'schedule' && !!p.sched && !!r.next && (
                     <View style={[s.remKey, s.schedKeys]}>
                       <DecoderKey label={satSchedKeyText(!!se)} active={!!se} onPress={() => p.sched!.onToggle(r.sat.norad, r.i, r.next!.aos)}
-                                  accessibilityLabel={se ? `${name}: ${SAT_SCHED_CANCEL_WHAT}` : `Schedule ${name}: tune at AOS, back after LOS — while the app is open and connected`} />
+                                  accessibilityLabel={se ? `${name}: ${SAT_SCHED_CANCEL_WHAT}` : p.passShared ? `Schedule ${name}: ${SAT_SCHED_SHARED_NOTE}` : `Schedule ${name}: tune at AOS, back after LOS — while the app is open and connected`} />
                       {!!se && !!slot?.over.length && (
                         <DecoderKey label={satSchedPrioText(!!se.prio)} active={!!se.prio} onPress={() => p.sched!.onPrio(se.key)}
                                     accessibilityLabel={`${name}: ${SAT_SCHED_PRIO_WHAT}`} />
@@ -808,7 +811,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
             <Text style={[s.detailNp, s.schedLine]}>{p.sessionLine}</Text>
           )}
           {listOpen && (p.sched?.lines ?? []).map((ln, i) => <Text key={`sl${i}`} style={[s.detail, s.schedLine]}>{ln}</Text>)}
-          {listOpen && !!p.onRemind && !greyed && rows.some((r) => satPassKey(p.list, r, p.passKind ?? 'none') === 'remind') && (
+          {listOpen && !!p.onRemind && !greyed && rows.some((r) => { const k = satPassKey(p.list, r, p.passKind ?? 'none'); return k === 'remind' || (k === 'schedule' && !!p.passShared); }) && (
             <View style={s.leadRow}>
               <Text style={s.detailNp}>REMIND</Text>
               {SAT_REMIND_LEADS.map((v) => (

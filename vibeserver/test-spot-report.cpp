@@ -295,6 +295,13 @@ int main() {
         CHECK(rp.pendingCount() == 0 && sink.drain().empty(), "off: nothing is kept or sent");
         c.on = true; c.call = ""; rp.configure(c); rp.note(s); rp.flushNow();
         CHECK(rp.pendingCount() == 0 && sink.drain().empty(), "no callsign: nothing is kept or sent");
+        // ★★★ beta96 (Stuart 11-26) no spots until a VALID name (the Setup page's rule): too short, no letter, nothing sent
+        for (const char* bad : { "X", "G4", "12345", "---" }) {
+            c.on = true; c.call = bad; rp.configure(c); rp.note(s); rp.flushNow();
+            CHECK(!rp.active() && rp.pendingCount() == 0 && sink.drain().empty(), (std::string("an invalid receiver name (\"") + bad + "\"): nothing kept or sent").c_str());
+        }
+        CHECK(receiverNameOk("G4ABC") && receiverNameOk("Stuey3D-VibeSDR") && receiverNameOk("PI4NOS/LPK") && !receiverNameOk("ab") && !receiverNameOk("2024"),
+              "receiverNameOk = the page's pskrWhy rule (3–20, a letter)");
         // ★ V12 beta90: an RTTY skimmer spot (the shape vibe_decoder_host.h noteReporter_ sends) — kept on, dropped off
         c.call = "G4ABC"; c.on = true; rp.configure(c);
         Spot rt; rt.mode = "RTTY"; rt.call = "DL1XYZ"; rt.snr = 14; rt.rfHz = 7043000; rt.slotUtc = now; rp.note(rt);

@@ -3,9 +3,11 @@
 // against a real vibeserver front door built from this tree (no radio process). A made-up two-radio machine with no
 // location: one radio never set up, one set up with its own 5 fps.
 //   • every card of the SERVER tab and a radio tab has a header (title + one-line summary), closed by default;
-//   • the red "!": no location → "Where this receiver is" red, open, "! Location not set …"; a locator typed clears it LIVE
-//     (and it stays open); PSK Reporter on with no name → red, a name → clear; a radio never set up → red name section;
-//     every mode off → Modes and decoders red;
+//   • ★★★ beta96 (Stuart 11-26) THREE STATES: green (set up), AMBER (worth setting; calm — a mark, the reason, NOT opened),
+//     RED "!" only after a SAVE it stopped — on its own tab, opened, refused with a line, red until fixed:
+//     no location → amber, a locator → green live; PSK Reporter with no name → amber, a typed name that is not one → amber
+//     until Save, then RED + "Not saved"; every mode off on a radio → amber, its Save → RED; the SERVER tab's Save with that
+//     radio still all-off → its tab selected, RED; a radio never set up → amber, red after the master save's gate;
 //   • a header click toggles and is remembered across a reload (localStorage); OPEN ALL / CLOSE ALL;
 //   • keys: ↓ / ↑ step header to header, Enter opens and moves focus inside, Escape goes back to the header;
 //   • the frame rate: the Server tab's Frame rate, the new radio follows it, the old one keeps its 5 — saved so.
@@ -66,7 +68,7 @@ const up = async (port) => { for (let i = 0; i < 100; i++) { if (await new Promi
 let call, js;
 const tab = (label) => js(`(() => { const b = [...document.querySelectorAll("#radioTabs button")].find(x => x.textContent.trim().startsWith(${JSON.stringify(label)})); if (!b) return false; b.click(); return true; })()`);
 const head = (pane, title) => `[...document.querySelectorAll("#${pane} .card.sec")].find(c => c.querySelector(".secTitle").textContent === ${JSON.stringify(title)})`;
-const state = (pane, title) => js(`(() => { const c = ${head(pane, title)}; if (!c) return null; return { open: c.classList.contains("secOpen"), must: c.classList.contains("secMust"), sum: c.querySelector(".secSum").textContent }; })()`);
+const state = (pane, title) => js(`(() => { const c = ${head(pane, title)}; if (!c) return null; return { open: c.classList.contains("secOpen"), must: c.classList.contains("secMust"), tone: c.dataset.secState, sum: c.querySelector(".secSum").textContent }; })()`);
 const key = async (k, code, vk, text) => { await call('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, ...(text ? { text } : {}) }); await call('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }); await sleep(60); };
 const focusTitle = () => js(`(() => { const a = document.activeElement; if (!a) return ""; if (a.classList.contains("secHead")) return "H:" + a.querySelector(".secTitle").textContent; const c = a.closest(".card.sec"); return c ? "IN:" + c.querySelector(".secTitle").textContent : a.tagName; })()`);
 const type = (id, v) => js(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(v)}; e.dispatchEvent(new Event("input", { bubbles: true })); e.dispatchEvent(new Event("change", { bubbles: true })); return 1; })()`);
@@ -96,7 +98,8 @@ try {
   ok(srv.filter((c) => !c.must).every((c) => !c.open), 'every section without a "!" starts closed');
   ok(await js(`[...document.querySelectorAll("#serverPane .card.sec:not(.secOpen)")].every(c => [...c.children].slice(1).every(x => getComputedStyle(x).display === "none"))`), 'a closed section shows its header only');
   let s = await state('serverPane', 'Where this receiver is');
-  ok(s && s.must && s.open && /^! Location not set: satellites and maps need it/.test(s.sum), `★ no location: RED, open, "${s && s.sum}"`);
+  ok(s && !s.must && s.tone === 'amber' && !s.open && /^Location not set: satellites and maps need it/.test(s.sum),
+     `★ no location: AMBER, calm (closed, no "!"), "${s && s.sum}"`);
   s = await state('serverPane', 'Audio');
   ok(s && !s.open && /Opus/.test(s.sum), `a closed section's one line says what it is set to (Audio · "${s && s.sum}")`);
   s = await state('serverPane', 'Frame rate');
@@ -104,10 +107,10 @@ try {
   await type('locator', 'IO91wm');
   await sleep(150);
   s = await state('serverPane', 'Where this receiver is');
-  ok(s && !s.must && s.open && /IO91wm/.test(s.sum), `★ a locator typed: the "!" clears live, the section stays open ("${s && s.sum}")`);
+  ok(s && !s.must && s.tone === 'green' && /IO91wm/.test(s.sum), `★ a locator typed: GREEN live ("${s && s.sum}")`);
   await type('locator', '');
   await sleep(150);
-  ok((await state('serverPane', 'Where this receiver is')).must, '…and comes back when it is emptied');
+  ok((await state('serverPane', 'Where this receiver is')).tone === 'amber', '…and amber again when it is emptied');
   await type('locator', 'IO91wm');
 
   // ★ SECTIONS_SHOT=<dir>: pictures to LOOK at (no visible polish gaps) — a wide window and a phone's width
@@ -125,11 +128,28 @@ try {
   await type('pskrCall', '');
   await sleep(150);
   s = await state('serverPane', 'PSK Reporter');
-  ok(s && s.must && s.open && /^! PSK Reporter needs a receiver name/.test(s.sum), `PSK Reporter on, no name: RED and open ("${s && s.sum}")`);
+  ok(s && !s.must && s.tone === 'amber' && /^PSK Reporter: no callsign, so no spots are sent$/.test(s.sum), `PSK Reporter on, no name: AMBER, "no spots are sent" (the uploader refuses without one) ("${s && s.sum}")`);
+  await type('pskrCall', 'X');
+  await sleep(150);
+  s = await state('serverPane', 'PSK Reporter');
+  ok(s && !s.must && s.tone === 'amber', `a name typed that is not one: still calm before a save ("${s && s.sum}")`);
+  const m0s = fs.statSync(cfgPath).mtimeMs;
+  await js(`document.getElementById("saveBtn").click(); 1`);
+  await sleep(400);
+  s = await state('serverPane', 'PSK Reporter');
+  ok(s && s.must && s.open && /^! PSK Reporter: that receiver name is not valid/.test(s.sum), `★ SAVE pressed: RED "!", opened ("${s && s.sum}")`);
+  ok(/^Not saved/.test(await js(`document.getElementById("saveErr").textContent`) || '') && fs.statSync(cfgPath).mtimeMs === m0s,
+     `…the save refused with its line: "${await js(`document.getElementById("saveErr").textContent`)}"`);
   await type('pskrCall', 'G4ABC-SDR');
   await sleep(150);
   s = await state('serverPane', 'PSK Reporter');
-  ok(s && !s.must && /On · G4ABC-SDR/.test(s.sum), `a name typed: clear ("${s && s.sum}")`);
+  ok(s && !s.must && s.tone === 'green' && /On · G4ABC-SDR/.test(s.sum), `a valid name typed: GREEN, the red gone ("${s && s.sum}")`);
+  await type('pskrCall', 'X');
+  await sleep(150);
+  ok(!(await state('serverPane', 'PSK Reporter')).must, 'broken again WITHOUT a new save: calm (red needs a save attempt)');
+  await type('pskrCall', 'G4ABC-SDR');
+  s = await state('serverPane', 'Audio');
+  ok(s && s.tone === 'green', `a section with nothing to set: GREEN (Audio: ${s && s.tone})`);
   await js(`(() => { const e = document.getElementById("pskrOn"); e.checked = false; e.dispatchEvent(new Event("change", { bubbles: true })); return 1; })()`);
 
   console.log('── toggle, remember, OPEN ALL / CLOSE ALL ──');
@@ -174,7 +194,7 @@ try {
   const rad = await js(`[...document.querySelectorAll("#radioPane .card")].filter(c => c.offsetParent !== null).map(c => c.querySelector(".secTitle") ? c.querySelector(".secTitle").textContent : "(none)")`) || [];
   ok(rad.length >= 8 && !rad.includes('(none)'), `every shown radio card has a header (${rad.join(' · ')})`);
   s = await state('radioPane', 'SDR display name');
-  ok(s && s.must && s.open && /^! Not set up yet/.test(s.sum), `a radio never set up: RED ("${s && s.sum}")`);
+  ok(s && !s.must && s.tone === 'amber' && /^Not set up yet/.test(s.sum), `a radio never set up: AMBER before any save ("${s && s.sum}")`);
   s = await state('radioPane', 'Operating mode');
   ok(s && /^Unlocked|^Locked|^Single use/.test(s.sum), `Operating mode · "${s && s.sum}"`);
   s = await state('radioPane', "This radio's hardware");
@@ -183,10 +203,32 @@ try {
   await js(`radio().blockedModes = Object.keys(MODE_GENS).join(","); modeBlockRender(); modeBlockSummary(); 1`);
   await sleep(200);
   s = await state('radioPane', 'Modes and decoders');
-  ok(s && s.must && /^! Every mode is off/.test(s.sum), `every mode off: RED ("${s && s.sum}")`);
+  ok(s && !s.must && s.tone === 'amber' && /^Every mode is off/.test(s.sum), `every mode off: AMBER until a save ("${s && s.sum}")`);
+  await js(`document.getElementById("saveRadioBtn").click(); 1`);
+  await sleep(400);
+  s = await state('radioPane', 'Modes and decoders');
+  ok(s && s.must && s.open && /^! Every mode is off/.test(s.sum), `★ Save radio pressed: RED "!", opened ("${s && s.sum}")`);
+  ok(/^Not saved/.test(await js(`document.getElementById("saveErr").textContent`) || ''), '…refused with its line');
+  // ★ the SERVER tab's Save with this radio still all-off: its tab is SELECTED and the section shown red
+  await js(`(() => { const t = [...document.querySelectorAll("#radioTabs button")].find(b => b.dataset.i === "-1"); t.click(); return 1; })()`);
+  await sleep(300);
+  ok(await js(`curRadio`) === -1, 'on the SERVER tab');
+  await js(`document.getElementById("saveBtn").click(); 1`);
+  await sleep(500);
+  ok(await js(`radio() && radio().serial`) === 'NEW00001' && await js(`curRadio`) >= 0, `★ the master Save selected the offending radio's tab (${await js(`radio() && radio().serial`)})`);
+  s = await state('radioPane', 'Modes and decoders');
+  ok(s && s.must && s.open, `…its Modes and decoders RED and open ("${s && s.sum}")`);
   await js(`radio().blockedModes = ""; modeBlockRender(); modeBlockSummary(); 1`);
   await sleep(200);
-  ok(!(await state('radioPane', 'Modes and decoders')).must, '…a mode back on: clear');
+  s = await state('radioPane', 'Modes and decoders');
+  ok(s && !s.must && s.tone === 'green', `…a mode back on: GREEN, the red gone (${s && s.tone})`);
+  // ★ the master save's gate marks a radio never set up red (it will not be on air) — without refusing
+  ok(await js(`secSaveStops(true)`) === false, 'the master gate does not refuse for a radio never set up…');
+  await sleep(150);
+  s = await state('radioPane', 'SDR display name');
+  ok(s && s.must && /^! Not set up yet/.test(s.sum), `…but shows it RED ("${s && s.sum}")`);
+  ok(await js(`SEC_RULES.block.join() + "|" + SEC_RULES.advise.join()`) === 'dir,modes,flight-trackers,beast,pskr-invalid,radio-never-set-up|location,pskr-no-callsign,radio-not-detected',
+     'the rule names (the app holds the same list)');
   ok(await tab('Old dongle'), 'the old radio\'s tab');
   await sleep(400);
   ok(await js(`document.getElementById("maxFps").value`) === '5', 'the old radio keeps its own 5 fps (saved before beta96: identical behaviour)');

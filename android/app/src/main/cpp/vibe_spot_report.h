@@ -292,6 +292,18 @@ inline const char* bandOf(double hz) {
  *  "WESSEX", "CMWEBSDR", "PI4NOS/LPK"), and Stuart reports as "Stuey3D-VibeSDR" beside "stuey3d" from his UberSDR
  *  (2026-11-21) — this used to upper-case it and strip the '-' silently ("STUEY3DVIBESDR"). */
 constexpr size_t kMaxReceiverName = 20;
+/** ★★★ beta96 a receiver name the uploader will send under (the Setup page's pskrWhy rule): 3–20 of A–Z a–z 0–9 / -, with a
+ *  letter. Anything else — empty, "X", "123" — sends nothing. */
+inline bool receiverNameOk(const std::string& n) {
+    if (n.size() < 3 || n.size() > kMaxReceiverName) return false;
+    bool letter = false;
+    for (char c : n) {
+        const unsigned char u = (unsigned char)c;
+        if (std::isalpha(u)) letter = true;
+        else if (!(std::isdigit(u) || c == '/' || c == '-')) return false;
+    }
+    return letter;
+}
 /** A HEARD station's call, before plausibleCall judges it: upper case, A–Z 0–9 / only, ≤ 15 (the strict rule stays for
  *  what came off the air — only the receiver's own name is free text, cleanCall). */
 inline std::string cleanHeardCall(const std::string& s) {
@@ -506,6 +518,9 @@ public:
     /** The owner's settings. ★ Off, or no callsign: nothing waits and nothing is sent. */
     void configure(Config c) {
         c.call = cleanCall(c.call);
+        // ★★★ beta96 (Stuart 11-26): NO SPOTS until a VALID receiver name — the Setup page's own rule (3–20 characters, at
+        //     least one letter). A name too short or with no letter is no name: active_() is false, nothing is queued or sent.
+        if (!receiverNameOk(c.call)) c.call.clear();
         c.wsprCall = cleanHeardCall(c.wsprCall);
         c.grid = cleanGrid(c.grid);
         c.antenna = cleanText(c.antenna);

@@ -55,15 +55,18 @@ const node = (key, kind, name, ntype, role, lat, lon, hops, seen, extra = {}) =>
   freq: kind === 'meshcore' ? 869.618e6 : 869.525e6, level: -80, snr: 5.5, seen, age: seen + 3600, count: 6, sf: kind === 'meshcore' ? 8 : 11, bw: kind === 'meshcore' ? 62500 : 250000, ...extra,
 });
 const FAKE = [
-  node('f1', 'meshcore', 'Benson', 'repeater', 'repeater', 51.6223, -1.1028, 7, 40, { msgs: [{ ago: 30, from: 'Benson', text: 'NEVER-ON-THE-MAP' }] }),
-  node('f2', 'meshcore', 'M0SWM AL3 7', 'repeater', 'repeater', 51.7990, -0.3967, 8, 300),
-  node('f3', 'meshcore', 'MeshCore Repeater', 'repeater', 'repeater', 52.2060, -0.9080, 3, 120),
+  node('f1', 'meshcore', 'Benson', 'repeater', 'repeater', 51.6223, -1.1028, 7, 40, { node: 'c1c2c3c4', msgs: [{ ago: 30, from: 'Benson', text: 'NEVER-ON-THE-MAP' }] }),
+  node('f2', 'meshcore', 'M0SWM AL3 7', 'repeater', 'repeater', 51.7990, -0.3967, 8, 300, { node: '9f001122' }),
+  node('f3', 'meshcore', 'MeshCore Repeater', 'repeater', 'repeater', 52.2060, -0.9080, 3, 120, { node: 'a3b4c5d6' }),
   node('f4', 'meshcore', 'Daventry Room', 'room', 'room server', 52.2570, -1.1610, 2, 900),
   node('f5', 'meshcore', 'Brixworth WX', 'sensor', 'sensor', 52.3330, -0.9050, 2, 1800),
   node('f6', 'meshcore', 'Alice T-Deck', 'companion', 'chat node', 52.24, -0.89, 1, 60, { approx: 1 }),
   node('f7', 'meshtastic', 'Hilltop Router', 'repeater', 'router', 52.3990, -0.7260, 4, 600),
   node('f8', 'meshtastic', 'Bob Handheld', 'companion', 'client', 52.22, -0.94, 2, 200, { approx: 1 }),
-  node('f9', 'meshcore', 'Kettering Hill', 'repeater', 'repeater', 52.4300, -0.6400, 5, 72000),
+  node('f9', 'meshcore', 'Kettering Hill', 'repeater', 'repeater', 52.4300, -0.6400, 5, 72000, { node: 'a3000001' }),
+  // ★★ beta96 THE ROUTE: its advert came 9f → a3 → 5e → c1: M0SWM (placed), a3 = MeshCore Repeater OR Kettering Hill
+  //   (ambiguous), 5e (nobody heard: unknown), Benson (placed)
+  node('f11', 'meshcore', 'Route Test', 'repeater', 'repeater', 51.9500, -0.7500, 4, 90, { node: 'ee112233', relays: '9f a3 5e c1' }),
 ];
 const INJECT = `(() => {
   const FAKE = ${JSON.stringify(FAKE)};
@@ -183,6 +186,76 @@ try {
      'it appears on the open map, pulsing — no reload');
   ok(await ev(`/Newcomer Rptr/.test(${view}.querySelector('.rows').textContent)`), '…and in its list');
   console.log('   screenshot', await shot('ismmap-live.png'));
+
+  /* ★★ beta96 (Stuart 11-26) THE ROUTE, A SELECTION HOLDS THE VIEW, ONE km ↔ miles */
+  console.log('── beta96: the route, the held view, km ↔ miles ──');
+  const st0 = await ev(`${view}.querySelector('.st').textContent`);
+  ok(/furthest direct: |furthest via mesh: /.test(st0) && / km/.test(st0), `the status says furthest direct / via mesh: ${st0}`);
+  await ev(`document.querySelector('#ismChips .ismUnits[data-u="speed"]').click()`);   // the ISM list's KM/H → MPH key
+  ok(await until(`/ mi/.test(${view}.querySelector('.st').textContent) && !/ km/.test(${view}.querySelector('.st').textContent)`, 4000),
+     `KM/H → MPH in the ISM list: the map's status in miles: ${await ev(`${view}.querySelector('.st').textContent`)}`);
+  const rowsMi = await ev(`${view}.querySelector('.rows').textContent`);
+  ok(/\d mi/.test(rowsMi) && !/\d km/.test(rowsMi) && !/\bNM\b/.test(rowsMi), `…its NODES list in miles too (never NM): ${rowsMi.slice(0, 140)}`);
+  const cam = `JSON.stringify((() => { const m = window.__vibeTrkMap, c = m.getCenter(); return { lat: +c.lat.toFixed(4), lng: +c.lng.toFixed(4), z: +m.getZoom().toFixed(2) }; })())`;
+  const inView = (pts) => `JSON.stringify((() => { const m = window.__vibeTrkMap, h = document.querySelector('.trkMapHost').getBoundingClientRect();
+    return ${JSON.stringify(pts)}.filter(p => { const q = m.latLngToContainerPoint(p); return !(q.x >= 0 && q.y >= 0 && q.x <= h.width && q.y <= h.height); }).length; })())`;
+  const routeBtn = `(document.querySelector('.vtl-card:not([hidden]) .vmrBtn') || null)`;
+  // ★★ (Stuart 11-26 refinement) a pick opens the card and ZOOMS IN — it never draws the route itself
+  const z0 = JSON.parse(await ev(cam)).z;
+  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Route Test/.test(x.textContent)); r && r.click(); })()`);
+  await sleep(2000);
+  const rcard = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
+  const zp = JSON.parse(await ev(cam));
+  ok(zp.z >= Math.max(z0, 10) && Math.abs(zp.lat - 51.95) < 0.02 && Math.abs(zp.lng + 0.75) < 0.02, `a NODES pick: zoomed in on the node (${z0} → ${zp.z})`);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && document.querySelectorAll('.vmr-ar').length === 0`), '…no route drawn by the pick');
+  ok(await ev(`!!${routeBtn} && ${routeBtn}.textContent === 'ROUTE' && ${routeBtn}.getAttribute('aria-pressed') === 'false'`), '…its card has a ROUTE key (this node\'s packet carried relays)');
+  ok(/route: 4 hops, 2 placed, 1 ambiguous, 1 unknown/.test(rcard) && /1 · 9f · M0SWM AL3 7/.test(rcard) && /one of MeshCore Repeater, Kettering Hill|one of Kettering Hill, MeshCore Repeater/.test(rcard)
+     && /unknown repeater 0x5e/.test(rcard) && /4 · c1 · Benson/.test(rcard), `the route card: ${rcard.slice(rcard.indexOf('route:'), rcard.indexOf('route:') + 160)}`);
+  ok(/ mi [NESW]/.test(rcard), '…the card in miles');
+  // ROUTE: drawn hop by hop, and the view fits the WHOLE PATH (node, the placed hops M0SWM and Benson, the receiver)
+  await ev(`${routeBtn}.click()`);
+  await sleep(2600);
+  const lit = JSON.parse(await ev(`JSON.stringify({ bd: document.querySelectorAll('.vmr-bd').length, ar: document.querySelectorAll('.vmr-ar').length, nums: [...document.querySelectorAll('.vmr-bd')].map(b => b.textContent).join(' ') })`));
+  ok(lit.bd === 4 && lit.ar === 6, `ROUTE: drawn hop by hop: ${lit.bd} badges (${lit.nums}), ${lit.ar} arrowheads (node→9f, 9f→each a3, each a3→c1 across the unknown, c1→receiver)`);
+  const outside = Number(await ev(inView([[51.95, -0.75], [51.799, -0.3967], [51.6223, -1.1028], [52.3125, -0.875]])));
+  ok(outside === 0, `…and the view fits the whole path: node, placed hops and receiver all in view (${outside} outside, zoom ${JSON.parse(await ev(cam)).z})`);
+  ok(await ev(`${routeBtn}.textContent === 'HIDE ROUTE' && ${routeBtn}.getAttribute('aria-pressed') === 'true'`), '…the key says HIDE ROUTE');
+  console.log('   screenshot', await shot('ismmap-route.png'));
+  const c1 = await ev(cam);
+  await ev(`window.__fakeAdd(${JSON.stringify(node('f12', 'meshcore', 'Far North Rptr', 'repeater', 'repeater', 53.9, -1.5, 6, 1))})`);   // a refresh with a node outside the view
+  await sleep(4500);
+  const c2 = await ev(cam);
+  ok(c1 === c2, `a selection HOLDS the view through refreshes (Stuart's recording): ${c1} → ${c2}`);
+  ok(await ev(`${view}.querySelector('.fit').classList.contains('paused')`), '…the FIT key shows the auto fit paused');
+  await ev(`${view}.querySelector('.fit').click()`);
+  await sleep(3500);
+  const c3 = await ev(cam);
+  ok(c3 !== c2 && !(await ev(`${view}.querySelector('.fit').classList.contains('paused')`)), `FIT re-frames: ${c3}`);
+  await ev(`${routeBtn}.click()`);
+  await sleep(500);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && ${routeBtn}.textContent === 'ROUTE'`), 'HIDE ROUTE: the route goes, the card stays');
+  await ev(`${routeBtn}.click()`);
+  await sleep(800);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length > 0`), 'ROUTE again: back');
+  // a node whose packets carried no relays: no ROUTE key at all (no dead control); choosing it clears the other's route
+  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Moulton Rptr/.test(x.textContent)); r && r.click(); })()`);
+  await sleep(1500);
+  ok(await ev(`/Moulton/.test((document.querySelector('.vtl-card:not([hidden])') || {}).textContent || '') && !${routeBtn}`), 'a node with no path: its card has no ROUTE key');
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0`), '…and choosing it cleared the other node\'s route');
+  ok(await ev(`${view}.querySelector('.fit').classList.contains('paused')`), 'chosen: the view held');
+  // a tap on a marker: its card AND a zoom in
+  await ev(`(() => { const m = window.__vibeTrkMap; m.setView([52.1, -0.8], 7); return true; })()`);
+  await sleep(1200);
+  await ev(`[...document.querySelectorAll('.vtl-mk')].find(m => /M0SWM AL3 7/.test(m.textContent))?.click()`);
+  await sleep(1800);
+  const zm = JSON.parse(await ev(cam));
+  ok(zm.z >= 10 && Math.abs(zm.lat - 51.799) < 0.03 && /M0SWM/.test(await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`)), `a marker tap: its card, zoomed in on it (zoom ${zm.z})`);
+  await ev(`${view}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await sleep(600);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && document.querySelectorAll('.vmr-ar').length === 0 && !document.querySelector('.vtl-card:not([hidden])')`), 'the card closed: no route');
+  ok(!(await ev(`${view}.querySelector('.fit').classList.contains('paused')`)), '…and the auto fit resumes');
+  await ev(`document.querySelector('#ismChips .ismUnits[data-u="speed"]').click()`);   // back to km/h
+  ok(await until(`/ km/.test(${view}.querySelector('.st').textContent)`, 4000), 'MPH → KM/H: km again');
   await ev(`${view}.querySelector('.exit').click()`);
   ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), 'CLOSE MAP');
 
@@ -238,7 +311,7 @@ try {
   // ★ the seeded day (several radios' cards may stand side by side — this run's own live card is one of them)
   const seeded = `[...document.querySelectorAll('#galList .sres')].find(r => r.querySelector('.galMap') && /MeshCore \\+ Meshtastic/.test(r.textContent) && /1\\d nodes heard/.test(r.textContent))`;
   const row = await ev(`${seeded}?.textContent || ''`);
-  ok(/LoRa \/ MeshCore \+ Meshtastic 868 MHz/.test(row) && /1\d nodes heard/.test(row) && /repeaters/.test(row) && /furthest \d+ km/.test(row), `the card: ${row.slice(0, 160)}`);
+  ok(/LoRa \/ MeshCore \+ Meshtastic 868 MHz/.test(row) && /1\d nodes heard/.test(row) && /repeaters/.test(row) && /furthest (direct|via mesh) \d+ km/.test(row), `the card: ${row.slice(0, 160)}`);
   console.log('   screenshot', await shot('ismmap-gallery-card.png'));
   await ev(`${seeded}.querySelector('.galMap').click()`);
   ok(await until(`!!${view} && ${view}.querySelectorAll('.trkRow').length >= 10`, 10000), `its MAP: ${await ev(`${view} ? ${view}.querySelectorAll('.trkRow').length : 0`)} nodes listed`);

@@ -16,7 +16,8 @@ import { loadLeafletInto } from './leafletAsset';
 import { dataUrl } from './origin';
 import { padRehighlight } from './gamepad';
 import { loadVibemapSource } from './chunkCache';
-import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
+import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
+import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
@@ -542,6 +543,8 @@ export interface TrackViewOpts {
   yieldGroups?: string[];
   aria?: (it: any) => string;
   onCard?: (key: string, el: HTMLElement) => void;
+  /** ★★ beta96 (Stuart 11-26) a tap on an icon ZOOMS IN to it as a row does (the ISM mesh maps) — not only its card */
+  zoomOnSelect?: boolean;
   /** ★★ V12 beta90 the SCALE BAR (every map has one — vibemapgl.js / vibemap.js): true = NM under the km (the marine
    *  and aviation maps). Default: NM for the 'marine' and 'aero' profiles, km alone otherwise. */
   nautical?: boolean;
@@ -845,14 +848,71 @@ export class TrackView {
     const hex = this.acKeys.get(k);
     // ★ beta96 a row chosen is where the person wants the map (mapAutoFit's own rule): the auto fit pauses, or its next
     //   tick glides straight back out to everything (the AIR & SEA map pokes it on every feed) — FIT brings AUTO back
-    if (!hex || !this.acLayer) try { this.af?.pause(); } catch { /* none */ }
+    if (!hex || !this.acLayer) this.selPause();
     if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
   }
   /** ★ beta96 the selection changed (an icon tapped, a row pressed) — the AIR & SEA map filters its MESSAGES by it. */
   onSel: ((key: string) => void) | null = null;
+  /* ★★ beta96 A MESH NODE's ROUTE (src/utils/meshRoute.ts — Stuart 11-26: "clicking a node lights up the repeaters its
+   *  advert passed through"): MESH_ROUTE_JS draws it hop by hop on this view's map; null clears it. The ISM maps call it
+   *  from onSel — another tap (another node, or the empty map) clears it. */
+  private rtMap: any = null; private rtL: any = null; private rtH: { clear(): void } | null = null;
+  showRoute(rt: unknown | null) {
+    try { this.rtH?.clear(); } catch { /* gone */ }
+    this.rtH = null;
+    if (!rt || !this.rtMap || !this.rtL) return;
+    const w = window as any;
+    if (!w.meshRouteDraw) runSource(MESH_ROUTE_JS);
+    try { this.rtH = w.meshRouteDraw(this.rtMap, this.rtL, rt); } catch (e) { console.error('[tracks] route', e); }
+  }
+  /** ★★ beta96 is a route drawn now (the test's handle) */
+  get routeShown(): boolean { return !!this.rtH; }
+  /* ★★ beta96 THE CARD's ROUTE BUTTON (meshRoute.ts meshRouteButtonHtml): `routeOf` gives a node's route; ROUTE draws it
+   *  (and fits the path), ROUTE again or the selection changing / clearing (the card closing) takes it away. The host
+   *  passes routeCard() as the view's onCard. */
+  private rtKey = '';
+  private routeOf: ((key: string) => unknown | null) | null = null;
+  setRouteSource(f: (key: string) => unknown | null) { this.routeOf = f; }
+  routeCard(_key: string, el: HTMLElement) {
+    const b = el.querySelector('.vmrBtn[data-rtk]') as HTMLButtonElement | null;
+    if (!b) return;
+    b.onclick = (e) => { e.stopPropagation(); this.routeToggle(b.dataset.rtk || ''); };
+    this.routeBtn();
+  }
+  routeToggle(k: string) {
+    if (!k || this.rtKey === k) { this.rtKey = ''; this.showRoute(null); }
+    else { const rt = this.routeOf?.(k) ?? null; this.rtKey = rt ? k : ''; this.showRoute(rt); }
+    this.routeBtn();
+  }
+  private routeBtn() {
+    for (const b of Array.from(this.root.querySelectorAll('.vmrBtn[data-rtk]')) as HTMLElement[]) {
+      const on = !!this.rtKey && b.dataset.rtk === this.rtKey;
+      b.setAttribute('aria-pressed', String(on)); b.textContent = on ? 'HIDE ROUTE' : 'ROUTE';
+    }
+  }
+  /* ★★ beta96 A SELECTION HOLDS THE VIEW (Stuart's 11-26 recording, the ISM mesh map: a node picked from NODES was flown
+   *  to, then the next refresh glided back out to all of England). mapAutoFit's rule, for every way a selection is made —
+   *  a row, a link, a tap on the map (and so a mesh route shown): the auto fit PAUSES until FIT is pressed or the
+   *  selection is cleared (then it resumes; AUTO switched OFF stays off).
+   *  Not while the ADS-B layer owns the camera (its AUTO / FIT keys). */
+  private selPaused = false;
+  private selPause() {
+    if (this.acLayer && this.camOwner !== 'track') return;
+    try { const st = this.af?.state?.(); if (st?.on) { if (!st.paused) this.af.pause(); this.selPaused = true; } } catch { /* none */ }
+  }
+  private selResume() {
+    if (!this.selPaused) return;
+    this.selPaused = false;
+    if (this.acLayer && this.camOwner !== 'track') return;
+    try { const st = this.af?.state?.(); if (st?.on && st.paused) this.af.resume(); } catch { /* none */ }
+  }
   private markSel(k: string) {
+    if (k && k !== this.sel) this.selPause(); else if (!k && this.sel) this.selResume();
     if (k !== this.sel) try { this.onSel?.(k); } catch (e) { console.error('[tracks] onSel', e); }
+    if (this.rtKey && k !== this.rtKey) { this.rtKey = ''; this.showRoute(null); this.routeBtn(); }   // ★★ beta96 the card closed / another chosen
+    // ★★ beta96 a tap zooms in too (the layer's own focus: the fly, the rings — select() on the same key does nothing more)
+    if (this.o.zoomOnSelect && k && k !== this.sel) setTimeout(() => { if (this.sel === k) try { this.layer?.focus(k); } catch { /* gone */ } }, 0);
     this.sel = k;
     for (const el of Array.from(this.rowsEl.querySelectorAll('.trkRow.sel'))) el.classList.remove('sel');
     const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
@@ -878,7 +938,7 @@ export class TrackView {
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
     this.refit = false;
-    try { this.af?.pause(); } catch { /* none */ }   // ★ a focus (a node's link) is where the map should be — FIT brings AUTO back
+    this.selPause();   // ★ a focus (a node's link) is where the map should be — FIT brings AUTO back
     if (!this.layer) { this.wantFocus = key; return false; }
     const hex = this.acKeys.get(key);
     const ok = hex && this.acLayer ? !!this.acLayer.focus(hex) : !!this.layer.focus(key);
@@ -924,6 +984,7 @@ export class TrackView {
     this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
     this.acLayer = null; this.acMap = null; this.acAuto = null; this.acKeys.clear(); this.acHex.clear();
+    this.showRoute(null); this.rtMap = null; this.rtL = null; this.rtKey = '';   // ★★ beta96 a route drawn goes with its map
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
     this.layer = null;
     try { this.vm?.destroy(); } catch (e) { console.error('[tracks] map destroy', e); }
@@ -934,7 +995,7 @@ export class TrackView {
     //   again had no KEY (and setLegend found nothing to fill)
     for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey') && !el.classList.contains('trkSlot')) el.remove();
     this.mapHost.className = 'trkMapHost';
-    this.lastRows = ''; this.sel = ''; this.pending = null;
+    this.lastRows = ''; this.sel = ''; this.pending = null; this.selPaused = false;
   }
   destroy() { this.hide(); this.root.remove(); }
 
@@ -996,6 +1057,7 @@ export class TrackView {
     // ★ A handle for drivers (scripts/test-web-navtex-map.mjs — the close-up coast check), like window.__vibeWf: the map of
     //   the track view last opened. Read-only use; nothing in the page reads it.
     w.__vibeTrkMap = map;
+    this.rtMap = map; this.rtL = L;   // ★★ beta96 showRoute draws on this map, with this map's Leaflet (or the GPU adapter)
     this.layer = w.VibeTrackLayer.create(map, L, {
       receiver: this.rx, icon: this.o.icon, label: this.o.label, card: this.o.card, trail: this.o.trail,
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,

@@ -296,8 +296,17 @@ console.log('— 1.3 telemetry values (the server fctlm_status + sat_tlm)');
     values: [{ k: 'eps.vbat', name: 'Battery voltage', v: 8.1349, unit: 'V' }, { k: 'eps.tbat', name: 'Battery temperature', v: 143, unit: 'C', raw: true },
              { k: 'x', name: 'Bad', v: NaN }, { k: 'y', v: 3 }, { name: 'Text', v: 'ON' }] })!;
   ok(fr.frames === undefined && fr.sat === 'AO-73' && fr.mode === 'Safe' && fr.at === 1763700000, 'sat_tlm: the frame (no counts)');
-  ok(fr.values!.map(satTelemetryLine).join(' | ') === 'Battery voltage 8.135 V | Battery temperature 143 raw | y 3 | Text ON',
+  ok(fr.values!.map(satTelemetryLine).map((l) => l.replace(/\u00a0/g, ' ')).join(' | ') === 'Battery voltage 8.135 V | Battery temperature 143 raw | y 3 | Text ON',
      `values with units; raw = the count, labelled, no unit: ${fr.values!.map(satTelemetryLine).join(' | ')}`);
+  // ★★ beta96 a reading never breaks inside itself (Stuart 11-26: "3.98⏎V", "temp⏎1 24 °C")
+  {
+    const L = (name: string, value: string, unit = '', raw = false) => satTelemetryLine({ name, value, unit, raw } as any);
+    ok(L('Photo voltage 1', '3.98', 'V') === 'Photo voltage\u00a01 3.98\u00a0V', 'value + unit joined; the name\'s index joined to its word');
+    ok(L('Boost converter temp 1', '24', '°C') === 'Boost converter temp\u00a01 24\u00a0°C', 'temp 1 stays together, 24 °C stays together');
+    ok(L('Sun sensor X+', '674', 'lux') === 'Sun sensor\u00a0X+ 674\u00a0lux', 'an axis suffix stays with its name');
+    ok(L('Battery temperature', '143', '', true) === 'Battery temperature 143\u00a0raw', 'raw stays with its count; a long last word is left alone');
+    ok(/^[^\u00a0]* /.test(L('Total system current', '215', 'mA')) && L('Total system current', '215', 'mA').endsWith('215\u00a0mA'), 'the only plain spaces are inside the name and before the reading');
+  }
   ok(fr.hex === '0a1B2c3d4e5f60718293', 'hex kept to hex digits');
   let t = satTelemetryMerge(null, st);
   ok(satTelemetryHead(t) === 'TELEMETRY · 14 frames · 13 good · 1 failed', `counts first (${satTelemetryHead(t)})`);

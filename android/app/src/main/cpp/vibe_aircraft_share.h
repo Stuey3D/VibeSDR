@@ -425,7 +425,13 @@ inline bool adsbHeardNow(const Row& w, int64_t adsbLiveMs, int64_t nowMs) {
  *  countryName, mil, desc, wtc, eng, species), pre-formatted as ",\"op\":\"RYR\",…" — and `route` (the ADS-B route
  *  object) used only where the row has no airports of its own. ★ A map lookup, never a table read: the network thread
  *  must not wait on the aircraft data. */
-struct Extra { std::string reg, type, fields, route; };
+struct Extra {
+    std::string reg, type, fields, route;
+    /** ★ beta96 what the glyph needs, plain (the community feed's compact rows carry them — iconClassOf in adsblayer.js
+     *  picks the glyph from them): wake class L/M/H/J, the description letter (L/S/A/H/G/T), engines ("2J"), military. */
+    std::string wtc, species, eng;
+    bool mil = false;
+};
 using ExtraFn = std::function<void(const Row&, Extra&)>;
 inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHeard>& gs, int64_t nowMs,
                           const std::function<std::string(const std::string&)>& labelName = nullptr,

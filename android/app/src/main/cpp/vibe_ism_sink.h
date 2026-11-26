@@ -37,6 +37,7 @@ struct NodeFix {
     int hops = -1;
     float snr = 0;
     double freqHz = 0;
+    std::string relays;   ///< ★ beta96 MeshCore: the relays its newest flood packet came through ("a3 9f 1c"), first first
 };
 
 /** ★ Called on the ISM decoder's OWN thread (never the DSP thread): heard() for each new reading, tick() about once a

@@ -981,6 +981,11 @@ static std::atomic<double> g_specGovCeil{0.0};
 // address in a browser gets nothing. The WS endpoints stay up (the app uses them);
 // only the human-facing page is withheld.
 static std::atomic<bool>   g_vsWebEnabled{true};
+// ★★★ beta96 VIBESERVER SIMPLE — LOCAL NETWORK ONLY (Stuart 11-26): every client that is not on the home network is refused,
+//     exactly as the RTL-TCP door refuses one (isPrivateIp: private IPv4, 169.254 link-local, IPv6 link-local / ULA, the
+//     box's own IPv6 prefixes) — and nothing through the tunnel. false = as before (Full, the Linux daemon).
+static std::atomic<bool>   g_vsLanOnly{false};
+static std::atomic<long long> g_vsLanOnlyRefused{0};
 // Pinned capture rate (Hz). 0 = client-controlled. When pinned, a client's
 // {"type":"sampleRate"} is IGNORED and the rate is advertised as locked, so the
 // client can hide a control it isn't allowed to use.
@@ -1050,6 +1055,10 @@ static vibendb::Service    g_ndb;
 static std::atomic<bool>   g_aisMode{false};
 /** ★★★ beta96 the AIS mode runs as THE MARITIME COMBINATION — AIS + DSC channel 70 from one wide capture (vibe_maritime_combo.h). */
 static std::atomic<bool>   g_aisDsc{false};
+/** ★★★ beta96 MARITIME RATE BOOST (Stuart 11-26; the datalink's "avdata+8m" in the sea's shape): while MARITIME (AIS + DSC)
+ *  has RAISED the capture to 8 MS/s under the owner's "ais+8m" switch, the rate it gives back (0 = it raised nothing). Never
+ *  persisted; the rate guard's marker is written before the raise — exactly as g_avBoostFrom. */
+static std::atomic<double> g_aisBoostFrom{0.0};
 static vibeais::Service    g_ais;
 /* ★★★ AIRCRAFT DATALINK MODE (V12, docs/v12/AVIATION.md). A whole-radio mode in AIS's shape with ISM's BANDS: ACARS
  *  (131.675 MHz, four channels) or VDL2 (136.8625 MHz, every channel 136.700–136.975) — or BOTH at once on a wide
@@ -1121,6 +1130,7 @@ static void endWholeRadioModesForStop() {
     const bool ism = g_ismMode.exchange(false), ndb = g_ndbMode.exchange(false), ais = g_aisMode.exchange(false),
                av = g_avMode.exchange(false), sd = g_sdMode.exchange(false), vor = g_vorMode.exchange(false);
     g_avBoostFrom.store(0.0);
+    g_aisBoostFrom.store(0.0);   // ★★★ beta96 the maritime boost too (never persisted; the next start opens at the owner's rate)
     g_av.stop();   // ★★★ beta96 b96-keeprun: the datalink's service too (kept VDL2, or VDL2 riding a pass) — the next start builds afresh
     const bool dab = g_dabMode.load();
     if (dab) dabModeEnd();
@@ -2194,6 +2204,7 @@ static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz 
 static std::string vsAisWhyNot();    // "" = AIS can run here now
 static std::string vsAisDscWhyNot(); // ★★★ beta96 "" = the maritime combination (AIS + DSC) can run here now
 static bool vsAisDscTunes();         // ★★★ beta96 …this radio tunes channel 70 and AIS together (the hw half)
+static double vsAisDscBoostRate();   // ★★★ beta96 the rate MARITIME would raise this radio to (the owner's "ais+8m"), or 0
 static bool vsAvdataReach(const vibeavi::Band& b);   // ★ V12 Aircraft datalink: this radio tunes the whole band (not an Icom) and may run it
 static double vsAvdataBoostRate();   // ★ the rate ACARS + VDL2 would raise the capture to (the owner's 8 MS/s switch), or 0
 static bool vsAvdataAnyBand();       // false = not offered at all
@@ -7968,7 +7979,7 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
         auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - std::max(kAircraftAgeSec, kAircraftDatalinkAgeSec) * 1000), nowMs);
         for (auto& w : rows) w.srcMask &= keep;
         rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return !(w.srcMask & 0x0F); }), rows.end());
-        const std::string c = aircraftCompact(rows, nowMs);
+        const std::string c = aircraftCompact(rows, nowMs, vibeavinfo::extraFn());   // ★ beta96 + the glyph's inputs
         if (!c.empty()) { r.json = "[" + c + "]"; r.layers = aircraftLayers(rows); }
     } else if (k == "s" && gal && communityLayerOk("ais", off)) {
         vibeais::store::Query q;
@@ -14230,6 +14241,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += ",\"mine\":" + std::string(!dialSession.empty() && dialSession == forSession ? "true" : "false");
         j += ",\"you\":" + std::to_string(handleForLocked(forSession));
         j += ",\"listeners\":" + std::to_string(specListenerCountLocked());
+        { const int away = awayCountLocked(); if (away > 0) j += ",\"away\":" + std::to_string(away); }   // ★ beta96 see awayCountLocked
         // ★★ WHY THE DIAL IS NOT MOVING, when it is not. A decode runs for ten minutes with no
         //    interaction, and a room that cannot see that is a room that starts retuning over it.
         if (decodingNow()) j += ",\"decoding\":true";
@@ -14302,8 +14314,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /* ★ A HELD session (V12) is not company here: nobody can ask a listener whose phone is suspended, so the one person
      *   actually present has the dial as normal. */
     bool askInForceLocked() {
-        return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() - heldCountLocked() + askGoneCountLocked() > 1;
+        return g_vsAskBeforeTuning.load() && vsSharedDial() && companyCountLocked() > 1;
     }
+    /** ★★ THE PEOPLE IN THE ROOM — the listeners less the held places, plus anybody inside the socket-swap grace (askGone_).
+     *  ONE count for the lock (askInForceLocked) and for what the banners are told (awayCountLocked). Under clientMtx. */
+    int companyCountLocked() { return specListenerCountLocked() - heldCountLocked() + askGoneCountLocked(); }
+    /* ★★★ beta96 THE COUNT AND THE LOCK MUST AGREE (11-26: a listener's sockets dropped; `listeners` stayed 2/4 for the
+     *  three-minute hold — rightly, a held place is still a place (Stuart: "their listener slot stays counted") — but the
+     *  lock lifted, because nobody can ask a suspended phone, and the one listener present read "ASK TO TUNE · 2/4"). So
+     *  the count now SAYS which of its places are held: `away` = places counted in `listeners` whose listener is not here
+     *  to ask (held, past the swap grace). Sent beside `listeners` in `dial` and `users` only when > 0, so an older client
+     *  reads what it always read; a new one is FREE TO TUNE when listeners − away ≤ 1 — the lock's own test. */
+    int awayCountLocked() { return std::max(0, specListenerCountLocked() - companyCountLocked()); }
+    /** What `away` was last told (askTick re-sends dial + users when it moves without anyone arriving or leaving — a
+     *  swap grace running out). Under clientMtx. */
+    int awaySent_ = 0;
     /* ★★★ A LISTENER WHOSE SOCKET IS SWAPPING IS STILL IN THE ROOM (Stuart, 2026-11-15, Almere B210, beta77): the other
      *  listener put the radio on 7D; entering DAB swaps a client's socket, and for that moment the room was Stuart alone —
      *  "alone, nothing is locked" — so his tap on KINK DISTORTION changed the station for everybody "just as the first
@@ -14613,8 +14638,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  `dial` to each listener whose lock CHANGED (a countdown alone is not a change; the client counts it down from
      *  the seconds it was given). Also tells everybody when the lock stops being in force, so nothing stays dimmed. */
     void askTick() {
-        if (!g_vsAskBeforeTuning.load() && askSent.empty()) return;
         if (!vsSharedDial()) return;
+        // ★★ beta96 a held place's swap grace ran out (or a held listener came back) with nobody arriving or leaving —
+        //    `away` moved, so the room is told: dial + users, whether or not the ask switch is on (awayCountLocked).
+        { bool moved;
+          { std::lock_guard<std::mutex> lk(clientMtx); moved = awayCountLocked() != awaySent_; }
+          if (moved) broadcastUsersSafe(); }
+        if (!g_vsAskBeforeTuning.load() && askSent.empty()) return;
         std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> out;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
@@ -19255,6 +19285,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void sendAisAll() {
         std::string r = g_ais.report();
         burstGainFields(r, aisGainSet_, aisManual_);
+        aisRateNote(r);
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
         for (auto& sk : socks) sendText(sk, r);
@@ -19280,10 +19311,54 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         h.finish = [tap] { if (tap) tap->finish(false); };
         return std::unique_ptr<vibeais::PreFront>(new vibemar::ComboFront(rate, hw, std::move(h)));
     }
+    /** ★★★ beta96 THE OWNER'S 8 MS/s FOR MARITIME ("ais+8m", the datalink's avApplyRate in the sea's shape). Entering AIS +
+     *  DSC on a capture that does not hold both raises the rate (the guard's marker down FIRST, then the change); AIS alone,
+     *  or leaving, gives the owner's rate back. Called with rtlCenter already where the mode puts the radio. */
+    void aisApplyRate(bool dsc) {
+        const double from = g_aisBoostFrom.load();
+        const double running = from > 0 ? from : LocalSdrShim::instance().usableSpanHz();
+        const double boost = dsc ? vsAisDscBoostRate() : 0.0;
+        if (dsc && !vibemar::fits(running) && boost >= vibemar::minRateHz()) {
+            if (from <= 0) g_aisBoostFrom.store(sampleRate);
+            if (std::fabs(boost - sampleRate) > 1000.0) {
+                LOGI("[AIS] rate %.3f -> %.3f MS/s for AIS + DSC (the owner's 8 MS/s switch; given back on leaving)",
+                     sampleRate / 1e6, boost / 1e6);
+                g_rateGuard.mark(boost, "MARITIME", (long long)vsNowEpoch());   // ★ the marker FIRST — vibe_rate_guard.h
+                rateBoostFellBack_.store(false);
+                noteHwMoved();
+                LocalSdrShim::instance().setSampleRate(boost);
+                applyAutoIf();
+            }
+        } else if (from > 0) {
+            g_aisBoostFrom.store(0.0);
+            if (std::fabs(from - sampleRate) > 1000.0) {
+                LOGI("[AIS] rate back to the owner's %.3f MS/s", from / 1e6);
+                noteHwMoved();
+                LocalSdrShim::instance().setSampleRate(from);
+                applyAutoIf();
+            }
+        }
+    }
+    /** ★ The report's word while the capture is raised: what happened and that it is temporary. */
+    void aisRateNote(std::string& r) {
+        const double from = g_aisBoostFrom.load();
+        if (from <= 0 || r.empty() || r.back() != '}') return;
+        char n[200];
+        std::snprintf(n, sizeof n, ",\"rateNote\":\"capture raised to %g MS/s for AIS + DSC \xe2\x80\x94 back to %g MS/s when you leave\"}",
+                      std::round(sampleRate / 1e3) / 1e3, std::round(from / 1e3) / 1e3);
+        r.pop_back(); r += n;
+    }
+
     /** ★★★ beta96 AIS ↔ AIS + DSC while the mode is on: the radio moves (162.000 ↔ 159.2625 MHz) and the service restarts
      *  keeping its ships — what the listener had is still saved from the first entry. */
     void aisRetarget(bool dsc) {
         g_aisDsc.store(dsc);
+        g_ais.stop();
+        {   // ★★★ beta96 into AIS + DSC: raised (the owner's 8 MS/s switch); back to AIS alone: the owner's rate back
+            const double hw0 = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
+            rtlCenter.store(hw0 - hwOffsetHz());
+            aisApplyRate(dsc);
+        }
         const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         const double hw = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
         const double logical = hw - hwOffsetHz();
@@ -19344,12 +19419,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (aisGainIdx_ >= 0) LocalSdrShim::instance().setGain(aisGainSet_);
         aisLastReport_ = aisLastGain_ = aisQuietSince_ = nowSecs();
         applyAutoIf();
-        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         // ★★★ beta96 the maritime combination sits between channel 70 and AIS (159.2625 MHz); AIS alone on 162.000
         g_aisDsc.store(dsc);
         const double hw = dsc ? vibemar::centreHz() : vibeais::kCentreHz;
         const double logical = hw - hwOffsetHz();
         rtlCenter.store(logical);
+        g_ais.stop();
+        aisApplyRate(dsc);   // ★★★ beta96 AIS + DSC on a narrower capture: the owner's 8 MS/s, if they allowed it (else no change)
+        rtlCenter.store(logical);
+        const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         audioFreq.store(hw);
         viewCenter.store(hw);
         noteHwMoved();
@@ -19386,6 +19464,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         g_ais.stop();                                   // ★ the gallery's buffer and card are written here (Service::stop)
         g_aisDsc.store(false);                          // ★★★ beta96 (the combination's DSC log was written by the stop)
+        // ★★★ beta96 the owner's rate back FIRST, if MARITIME raised it — before the locked centre is put back (as avLeave)
+        aisApplyRate(false);
         aisOrigin_ = "live"; aisProfile_.clear();
         const AdsbSaved& s = aisSaved_;
         rx.setSpectrumOnly(false);
@@ -19741,7 +19821,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** {"type":"avdata", on, band?, step?}. ★ The default is OFF, as every whole-radio mode's. Entering with nothing named:
-     *  where the mode last was, else ACARS (else the first band this radio reaches). */
+     *  where the mode last was, else VDL2 (beta96), else the first band this radio reaches. */
     void avControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         double onV = 0; jsonNum(msg, "on", onV);
         if (onV == 0 && onlyModeRefusesLeave(sock, "avdata", "AVDATA", "avdata_error")) return;   // ★★ V12 the only mode
@@ -19761,6 +19841,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             want = vibeavi::bandById(bid);
             if (!want) { if (sock) sendText(sock, "{\"type\":\"avdata_error\",\"why\":\"there is no such band\"}"); return; }
         }
+        // ★★ beta96 (Stuart 11-26: "default to VDL2 as that is in use"): with nothing named and no band from earlier this
+        //    run, VDL2 when this radio reaches it (it carries most traffic in Europe now), else the first band it reaches.
+        if (!want && !avBand_) for (const auto* b : can) if (std::string(b->id) == "vdl2") { want = b; break; }
         if (!want) want = avBand_ ? avBand_ : (can.empty() ? nullptr : can.front());
         const std::string why = vsAvdataWhyNot(want);
         if (!why.empty() || !want) {
@@ -27576,19 +27659,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  so the dial follows them: the server sends the full state, the clients have no vote (the shared-dial contract). */
     void broadcastUsersSafe() { broadcastUsers(); sendDialState(); }
 
+    /** The `users` message — `away` only when some of the places are held (see awayCountLocked). */
+    std::string usersJson() {
+        int n, away;
+        { std::lock_guard<std::mutex> lk(clientMtx); n = specListenerCountLocked(); away = awayCountLocked(); awaySent_ = away; }
+        char b[112];
+        if (away > 0) snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d,\"away\":%d}", n, g_vsMaxUsers.load(), away);
+        else          snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}", n, g_vsMaxUsers.load());
+        return b;
+    }
     void broadcastUsers() {
-        const int n = specListenerCount();
-        char b[96];
-        snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}", n, g_vsMaxUsers.load());
+        const std::string b = usersJson();
         for (auto& p : allSpecPeers()) sendText(p.sock, b);
     }
 
-    void sendUsers(const std::shared_ptr<net::Socket>& sock) {
-        char b[96];
-        snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}",
-                 specListenerCount(), g_vsMaxUsers.load());
-        sendText(sock, b);
-    }
+    void sendUsers(const std::shared_ptr<net::Socket>& sock) { sendText(sock, usersJson()); }
 
     /** ★★★ THE RATES THIS RADIO CAN ACTUALLY DO — ONE LIST, TWO READERS, AND NOW ONE SOURCE.
      *
@@ -28923,6 +29008,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                 xffHeader, xRealIpHeader);
             }
             if (real != sock->socketPeerAddress()) sock->setEffectiveAddress(real);
+        }
+
+        /* ★★★ beta96 VIBESERVER SIMPLE: LOCAL NETWORK ONLY — the RTL-TCP door's rule (rtlDoorAcceptLoop), on every request. The
+         *  REAL socket peer is judged (a proxy cannot nominate a local address), and a request through the tunnel is refused
+         *  even though cloudflared connects from loopback. Said in plain words, once a minute in the log. */
+        if (g_vsLanOnly.load(std::memory_order_relaxed)) {
+            static const char* testPeer = std::getenv("VIBE_TEST_LANONLY_PEER");   // ★ TESTS ONLY: pretend the client is there
+            const std::string peer = testPeer && *testPeer ? std::string(testPeer) : sock->socketPeerAddress();
+            if (!isPrivateIp(peer) || viaTunnel(*sock)) {
+                g_vsLanOnlyRefused.fetch_add(1);
+                static std::atomic<int64_t> lastSay{0};
+                const int64_t now = (int64_t)time(nullptr);
+                if (now - lastSay.load() >= 60) { lastSay = now; LOGI("local network only: refused %s (not on the home network)", peer.c_str()); }
+                const std::string body = "This VibeServer is local network only: it answers devices on its own home network.";
+                sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "
+                              + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close(); return;
+            }
         }
 
         /* ★★★ A WEB PAGE ON THIS MACHINE IS NOT THE PERSON AT THIS MACHINE (audit 2026-10-03). A local request
@@ -34159,7 +34262,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   bool left = false;
                   for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }
                   if (!left && !heldNow) sessionSquelch.erase(ses);   // ★ V12: a HELD listener keeps their squelch
-                  if (!left) {   // ★★ ask before tuning: the room keeps them through a socket swap (askGone_) — a just-HELD one too (every drop is held)
+                  /* ★★★ beta96 …but NOT a departure that is final ("bye"/"leave", a clean 1001 close in the foreground —
+                   *  noHoldLocked): that is nobody swapping a socket, they have gone. The count dropped at once and the lock
+                   *  stayed on for the 8 s grace (+ a 2 s tick) — the one listener present told "1" and locked. */
+                  if (!left && !noHoldPendingLocked(ses, Impl::nowSecs())) {   // ★★ ask before tuning: the room keeps them through a socket swap (askGone_) — a just-HELD one too (every drop is held)
                       const double nowS = Impl::nowSecs();
                       AskGone g; g.at = nowS;
                       auto rk = sockRankKey.find(sock.get());
@@ -46724,6 +46830,9 @@ int LocalSdrShim::occupantSecsLeft(int adminOverride) const {
 }
 
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
+void LocalSdrShim::setVibeServerLanOnly(bool on) {
+    if (g_vsLanOnly.exchange(on) != on) LOGI("local network only: %s", on ? "ON (VibeServer Simple)" : "off");
+}
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 /* ★★★ PINNED, NOT CAPPED — and they are different promises. `lockedRate` is a CEILING: a listener
  *   may still choose anything below it, which is fine on a personal receiver and wrong on a shared
@@ -47264,7 +47373,22 @@ static bool vsAisDscTunes() {
 static double vsAisDscRunning() {
     double running = LocalSdrShim::instance().usableSpanHz();
     if (g_dabMode.load(std::memory_order_relaxed) && g_dabSavedActualRate.load() > 0) running = g_dabSavedActualRate.load();
+    // ★★★ beta96 while MARITIME itself raised the capture, the question is asked of the rate it will give back
+    if (g_aisBoostFrom.load(std::memory_order_relaxed) > 0) running = g_aisBoostFrom.load(std::memory_order_relaxed);
     return running;
+}
+/** ★★★ beta96 THE OWNER'S "ais+8m" (Stuart 11-26 — the datalink's "avdata+8m" for the sea): the rate MARITIME would raise this
+ *  radio to — the smallest listed rate at or above 8 MS/s — or 0: switch off, the rate pinned, the guard holding it, an Icom,
+ *  a radio whose list stops short (an RTL, the HF+: the switch is not drawn there either — vibe_radio_caps.h). */
+static double vsAisDscBoostRate() {
+    if (g_icomOn.load()) return 0;
+    const std::vector<double> rates = LocalSdrShim::instance().listedRatesHz();
+    return vibeavi::wideBoostRate(vsModeBlocked("ais+8m"), g_vsRateLock.load(std::memory_order_relaxed),
+                                  !vsGuardAllows(vibeavi::boostRateFrom(rates)), rates);
+}
+/** Does MARITIME hold here — the running capture, or the owner's switch raising it to 8 MS/s? */
+static bool vsAisDscFitsOrBoosts() {
+    return vibemar::fits(vsAisDscRunning()) || vsAisDscBoostRate() >= vibemar::minRateHz();
 }
 static std::string vsAisDscWhyNot() {
     const std::string a = vsAisWhyNot();
@@ -47272,7 +47396,7 @@ static std::string vsAisDscWhyNot() {
     if (vsModeBlocked("dsc")) return "the server owner has switched DSC off on this receiver";
     if (!vsAisDscTunes()) return "this radio cannot tune channel 70 (156.525 MHz) and AIS (162 MHz) together";
     const double running = vsAisDscRunning();
-    if (!vibemar::fits(running)) return vibemar::rateWhy(running);
+    if (!vsAisDscFitsOrBoosts()) return vibemar::rateWhy(running);
     return {};
 }
 /** ★ Drawn (offered) only where it can run now — or while it runs, so it can be left. */
@@ -47657,7 +47781,7 @@ static std::string vsMapModesJson() {
         else if (m.kind == vibekeep::Ais && *m.band) {
             /* ★★★ beta96 AIS + DSC: "hw" only where the capture holds it NOW (or it runs) — not drawn elsewhere (no dead row);
              *  `minRate` lets the Setup page follow a rate the owner is editing before it is saved. */
-            hw = vsAisDscTunes() && (g_aisDsc.load(std::memory_order_relaxed) || vibemar::fits(vsAisDscRunning()));
+            hw = vsAisDscTunes() && (g_aisDsc.load(std::memory_order_relaxed) || vsAisDscFitsOrBoosts());
             why = hw ? vsAisDscWhyNot() : std::string();   // ★ the owner's AIS / DSC switch off: greyed, with the reason
             extra = ",\"minRate\":" + std::to_string((long long)std::ceil(vibemar::minRateHz())) + ",\"tunes\":" + (vsAisDscTunes() ? "true" : "false");
         }
@@ -48326,6 +48450,9 @@ static std::string vsTunableJson() {
         const std::string d = LocalSdrShim::instance().rtlTcpDoorStatus();
         if (d.find("\"running\":true") != std::string::npos) j += ",\"rtltcp\":" + d;
     }
+    // ★★★ beta96 VibeServer Simple: local network only (absent otherwise) — and how many it has turned away.
+    if (g_vsLanOnly.load(std::memory_order_relaxed))
+        j += ",\"lanOnly\":{\"refused\":" + std::to_string(g_vsLanOnlyRefused.load()) + "}";
     /* ★★★ WHAT THIS RECEIVER OFFERS, BY NAME — so a directory can badge and filter on it. The
      *  owner's "Modes and decoders" switches (blockedModes) were enforced here and published
      *  nowhere: a visitor searching for a WEFAX-capable receiver in Europe had no way to ask

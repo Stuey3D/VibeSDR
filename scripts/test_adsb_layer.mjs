@@ -447,5 +447,58 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(!M.commbRows({ acas_ra: { advisory: '<b>x</b>', active: true } }).join('').includes('<b>'), 'advisory text escaped');
 }
 
+// ── ★★ beta96 iconClassOf — THE ONE RULE for every aircraft on every map (Stuart 11-26) ──
+{
+  const C = M.iconClassOf;
+  const rows = [
+    // the emitter category wins over the aircraft data
+    [{ category: 'A7', t: 'A320', wtc: 'M', eng: '2J', species: 'L' }, 'heli', 'category A7 beats an A320 in the data'],
+    [{ category: 'a5' }, 'heavy', 'category is case-blind'],
+    [{ category: 'A3', species: 'H' }, 'jet', 'A3 says large aircraft: the jet, even with a helicopter letter'],
+    [{ category: 'A0', species: 'H' }, 'heli', 'A0 says nothing: the data decides'],
+    // the aircraft data (DB fields, readsb names; the aviation map's "type")
+    [{ t: 'EC35', species: 'H', wtc: 'L', eng: '2T' }, 'heli', 'description H → helicopter (before the turboprop rule)'],
+    [{ t: 'MTOS', species: 'G', wtc: 'L', eng: '1P' }, 'heli', 'description G (gyroplane) → helicopter'],
+    [{ t: 'B744', species: 'L', wtc: 'H', eng: '4J' }, 'heavy', 'wake H jet → heavy'],
+    [{ type: 'A388', wtc: 'J', eng: '4J' }, 'heavy', 'wake J (A380) → heavy, via "type"'],
+    [{ t: 'B752', wtc: 'M', eng: '2J' }, 'b757', 'B752 → the 757'],
+    [{ type: 'B753' }, 'b757', 'B753 alone → the 757'],
+    [{ t: 'AT76', wtc: 'M', eng: '2T', species: 'L' }, 'regional', 'turboprop → regional'],
+    [{ t: 'C172', wtc: 'L', eng: '1P', species: 'L' }, 'light', 'piston → light'],
+    [{ t: 'PIVI', eng: '1E' }, 'light', 'electric → light'],
+    [{ t: 'EA50', wtc: 'L', eng: '2J' }, 'regional', 'a light JET → regional, never the propeller glyph'],
+    [{ t: 'XXXX', wtc: 'L' }, 'light', 'wake L, engines unknown → light'],
+    [{ t: 'GLID', wtc: 'L' }, 'glider', 'GLID → glider'],
+    [{ t: 'DG80', desc: 'DG Flugzeugbau DG-800 glider' }, 'glider', 'a glider by its description'],
+    [{ t: 'BALL' }, 'balloon', 'BALL → balloon'],
+    [{ t: 'EUFI', wtc: 'M', eng: '2J', mil: 1 }, 'fighter', 'Eurofighter → fighter'],
+    [{ type: 'F16' }, 'fighter', 'F16 alone → fighter'],
+    [{ t: 'ULAC' }, 'ultralight', 'ULAC → ultralight'],
+    [{ t: 'A320', wtc: 'M', eng: '2J', species: 'L' }, 'jet', 'an A320 → the jet'],
+    // the type alone (an older server: no wake / engines / description)
+    [{ type: 'B77W' }, 'heavy', 'type alone: B77W → heavy'],
+    [{ type: 'A359' }, 'heavy', 'type alone: A359 → heavy'],
+    [{ type: 'EC45' }, 'heli', 'type alone: EC45 → helicopter'],
+    [{ type: 'DH8D' }, 'regional', 'type alone: DH8D → regional'],
+    [{ type: 'C152' }, 'light', 'type alone: C152 → light'],
+    [{ type: 'A20N' }, 'jet', 'type alone, unknown family → jet'],
+    // unknown
+    [{}, 'jet', 'nothing known → jet'], [null, 'jet', 'null → jet'], ['A7', 'jet', 'a bare string is not an aircraft → jet'],
+    [{ category: 'Z9', t: '' }, 'jet', 'unknown category, no data → jet'],
+  ];
+  for (const [a, want, what] of rows) ok(C(a) === want, `iconClassOf: ${what} (got ${C(a)})`);
+  ok(ctx.VibeAdsbLayer.ICONS.every((k) => typeof ctx.VibeAdsbLayer.AC_CLASS_NAME[k] === 'string'), 'every glyph class has words for the KEY');
+  // ★ the block the community kit lifts stands on its own (build-community-kit.mjs): evaluate it with nothing else defined
+  const b = src.indexOf('/* ══ ACICONS — BEGIN'), e = src.indexOf('/* ══ ACICONS — END');
+  ok(b > 0 && e > b, 'the ACICONS block is marked');
+  const lone = vm.createContext({});
+  let standalone = null;
+  try { standalone = vm.runInContext('(function(){' + src.slice(b, e) + '\nreturn { iconClassOf, acIconSvg, AC_CLASS_NAME, ICONS };})()', lone); } catch (err) { console.error(err); }
+  ok(!!standalone && standalone.iconClassOf({ type: 'B744' }) === 'heavy' && standalone.iconClassOf({ category: 'A7' }) === 'heli', 'the ACICONS block runs on its own, the same answers');
+  ok(!!standalone && standalone.acIconSvg('heli', '#ff0', 26, 90) === ctx.VibeAdsbLayer.acIconSvg('heli', '#ff0', 26, 90), 'the lifted block draws the same SVG');
+  ok(ctx.VibeAdsbLayer.iconSvg('jet', '1,2,3', 0.9, 45).includes('fill="rgba(1,2,3,0.9)"') && ctx.VibeAdsbLayer.iconSvg('jet', '1,2,3', 0.9, 45).includes('width="40"'),
+     'iconSvg still draws the layer\'s 40 px rgba glyph');
+}
+
 console.log(`${fails ? 'FAILED' : 'ok'} — ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

@@ -291,7 +291,7 @@ inline const std::vector<Control>& controlTable() {
         { "place lat lon locFollow country locator",     D_ANY,   0 },
         { "dirList dirName dirShareSec",                 D_ANY,   P_TUNNEL },
         // ★ The phone's own three, which the Linux page never needed (androidSrvCard): the web client, Opus, Simple/Advanced.
-        { "androidWebServer androidCompress androidAdvanced", D_ANY, 0 },
+        { "androidWebServer androidCompress", D_ANY, 0 },   // ★★★ beta96 androidAdvanced gone (Full is the full set)
         // ── the radio tab ──
         { "radioName antenna",                           D_ANY,   0 },
         { "radioPin radioPinClear",                      D_ANY,   0 },

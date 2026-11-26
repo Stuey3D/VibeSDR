@@ -130,9 +130,17 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
   ok(/\{open && <View style=\{s\.body\}>\{children\}<\/View>\}/.test(t), `${f}: a closed section mounts nothing — the D-pad steps header to header`);
   ok(/onFocus=\{\(\) => setFocused\(true\)\}/.test(t) && /focused && \{ backgroundColor: C\.keySelBg \}/.test(t), `${f}: the header draws its focus ring`);
   const sm = readFileSync(path.join(root, 'src/screens/ServerModeScreen.tsx'), 'utf8');
-  const order = sm.indexOf('<SectionAllRow') < sm.indexOf('{secRender(serverSecs, SERVER_ORDER)}')
-             && sm.indexOf('{secRender(serverSecs, SERVER_ORDER)}') < sm.indexOf('{secRender(radioSecs, RADIO_ORDER)}');
-  ok(order, 'ServerModeScreen: D-pad order — OPEN ALL / CLOSE ALL, then the server headers, then the radio headers');
+  // ★★★ beta96 FULL IS TABBED: START (the top bar) → the SERVER | RADIO tabs → OPEN ALL / CLOSE ALL → the tab's headers
+  const iTop = sm.indexOf('{serverChoiceTop}'), iTabs = sm.indexOf('<SetupTabs'), iAll = sm.indexOf('<SectionAllRow'),
+        iSrv = sm.indexOf("{tabNow === 'server' && secRender(serverSecs, SERVER_ORDER)}"),
+        iRad = sm.indexOf("{tabNow === 'radio' && secRender(radioSecs, RADIO_ORDER)}");
+  ok(iTop > 0 && iTop < iTabs && iTabs < iAll && iAll < iSrv && iSrv < iRad,
+     'ServerModeScreen: D-pad order — START, the SERVER | RADIO tabs, OPEN ALL / CLOSE ALL, then the chosen tab\'s headers');
+  ok((t.match(/focusable=\{Platform\.OS === 'android'\}/g) || []).length >= 3 && /accessibilityRole="tab"/.test(t)
+     && /onFocus=\{\(\) => setFocused\(t\.id\)\}/.test(t) && /borderWidth: foc \? 2 : 1/.test(t),
+     `${f}: each tab is a focusable D-pad stop with its own focus ring`);
+  ok(/tabs\.map\(\(t\) =>/.test(t) && /onPress=\{\(\) => onTab\(t\.id\)\}/.test(t), `${f}: a tab press switches the tab`);
+  ok(/setFullTab\(ref\.first\.group\)/.test(sm), 'ServerModeScreen: a refused START selects the offending tab');
   ok(/<SetupSection key=\{s\.key\} sectionKey=\{s\.key\}/.test(sm), 'ServerModeScreen: every section is drawn through SetupSection (one header each)');
 }
 // ★★★ beta96 maps2 THE AMATEUR MAP's TABS (SPOTS · APRS · MESH · BEACONS): TrackLiveList over the 'digi' page — drawn by React
@@ -149,5 +157,8 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
   ok(/usePanelNav\(!nb\.modal && !p\.nav,/.test(tl) && /const \{ navCtx, scrollProps \} = p\.nav \?\? own;/.test(tl), 'TrackLiveList: a shared order replaces its own (never two owners)');
   ok(/usePanelNav\(!p\.navCtx,/.test(dk) && /const navCtx = p\.navCtx \?\? own\.navCtx;/.test(dk), 'DigiMapKeys: a shared order replaces its own');
   ok(/accessibilityRole="tablist"[^]*?\{tabs\.map\(\(t\) => <RangeKey /.test(tl) && /function RangeKey[^]*?useNavButton\(onPress\)/.test(tl), 'TrackLiveList: every tab is a pad key');
+  // ★★ beta96 the MESH ROUTE key (the card's ROUTE lives in the map page, out of the pad's reach): a ToggleKey in its own NavRow
+  ok(/\{open && !!p\.route && \(\s*<NavRow>\s*<View style=\{s\.ranges\}>\s*<ToggleKey /.test(tl) && /function ToggleKey[^]*?useNavButton\(onPress\)/.test(tl),
+     'TrackLiveList: the mesh ROUTE key is a pad key (ISM and AMATEUR maps)');
 }
 process.exit(fails ? 1 : 0);

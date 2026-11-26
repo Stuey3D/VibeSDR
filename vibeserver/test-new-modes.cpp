@@ -77,6 +77,18 @@ int main() {
         const std::string e87 = effectiveBlocked(p87, 0);
         CHECK(in(e87, "vormap") && in(e87, "orbcomm") && only(e87) == "adsb", "an ADS-B-only list from 87: VOR MAP / ORBCOMM off, locked");
     }
+    {   // ★★ single-mode on a mode NEWER than every token it blocks (test-server-vormap's exact list): every demodulator and
+        // every whole-radio mode but the VOR MAP (93) — its newest blocked token is 87 (dvsig). Dated by that, the VOR map
+        // itself came in "new" and off: no modes, no lock. Dated by the mode it left on, it stays the only mode.
+        const std::string own = "wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig,dab,adsb,ism,ndb,ais,avdata,sondes";
+        const NewModesState s = newModesState(tokens(own));
+        CHECK(s.restricted && s.single && s.seen == 93 && s.off, "VOR-map-only list: single-mode, dated 93 by the mode left on (seen %d)", s.seen);
+        const std::string e = effectiveBlocked(own, 0);
+        CHECK(!in(e, "vormap") && in(e, "sat"), "…the VOR map stays on, SATELLITE (96) comes in off");
+        CHECK(only(e) == "vormap", "★★ …the VOR map is the only mode, locked (got '%s')", only(e).c_str());
+        // and the old rule still holds where a mode of the list's own era is left: Paul's ADS-B list stays dated 80
+        CHECK(newModesState(tokens(allOffAt(80, {"adsb", "commb"}))).seen == 80, "Paul's list still dated 80 (ADS-B is of its era)");
+    }
     {   // single-mode, a demodulator-free DAB-only radio from 63
         const std::string dabOnly = allOffAt(63, {"dab"});
         const std::string e = effectiveBlocked(dabOnly, 0);

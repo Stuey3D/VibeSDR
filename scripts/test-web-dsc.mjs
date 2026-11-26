@@ -132,8 +132,9 @@ try {
   //   this check still asked for the old window and failed on every run (found 2026-11-20, beta88; base commit too).
   const SV = `document.querySelector('.trkView:not([hidden])')`;
   await trustedClick('#dscRows .dscr.distress .dscMap');
-  ok(await until(`!!${SV} && /SHIPPING MAP/.test(${SV}.querySelector('.ttl')?.textContent || '')`, 8000),
-     `the call's MAP opens the SHIPPING MAP (${await ev(`${SV}?.querySelector('.ttl')?.textContent || 'none'`)})`);
+  // ★ beta96 b96-onemap: the shipping map is the AIR & SEA map, titled "AVIATION & MARITIME · DSC" in the DSC state
+  ok(await until(`!!${SV} && /AVIATION & MARITIME · DSC/.test(${SV}.querySelector('.ttl')?.textContent || '')`, 8000),
+     `the call's MAP opens AVIATION & MARITIME in its DSC state (${await ev(`${SV}?.querySelector('.ttl')?.textContent || 'none'`)})`);
   ok(await until(`/DISTRESS · MMSI 235012345/.test(document.querySelector('.vtl-card')?.textContent || '') || /235012345/.test(${SV}?.querySelector('.rows')?.textContent || '')`, 8000),
      `…on the call (${(await ev(`(document.querySelector('.vtl-card')?.textContent || ${SV}?.querySelector('.rows')?.textContent || '')`) || '').slice(0, 80)})`);
   await ev(`${SV}?.querySelector('.exit')?.click()`);
@@ -179,7 +180,8 @@ try {
     const sG = await shot('dsc-gallery-shipmap-row-desktop.png'); shots88.push(sG);
     await trustedClick('#galDscMap');
     const V = `document.querySelector('.trkView:not([hidden])')`;
-    ok(await until(`!!${V} && /SHIPPING MAP/.test(${V}.querySelector('.ttl')?.textContent || '')`, 8000), 'MAP opens the SHIPPING MAP');
+    ok(await until(`!!${V} && /AVIATION & MARITIME · DSC/.test(${V}.querySelector('.ttl')?.textContent || '')`, 8000),
+     `MAP opens AVIATION & MARITIME in its DSC state (${await ev(`${V}?.querySelector('.ttl')?.textContent || 'none'`)})`);   // ★ beta96 b96-onemap
     ok(await until(`/366123450/.test(${V}?.querySelector('.rows')?.textContent || '') && /235012345/.test(${V}?.querySelector('.rows')?.textContent || '')`, 15000),
        `…the DSC list has the position reply AND the distress alert (${(await ev(`${V}?.querySelector('.rows')?.textContent || ''`) || '').slice(0, 120)})`);
     ok(await until(`document.querySelectorAll('.vtl-mk').length >= 2`, 10000), `…both pinned on the map (${await ev(`document.querySelectorAll('.vtl-mk').length`)} markers)`);

@@ -85,7 +85,7 @@ import SondesPanel from '../components/SondesPanel';   // ★ V12 the radiosonde
 import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../components/SatellitePanel';
 // ★★★ beta96 SCHEDULE A PASS (Stuart 11-26) — one set of rules with the web (src/services/satSchedule.ts)
 import { SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_REMIND_NOTE, SatSchedule, satPassKey, satSchedDegradedText,
-         satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine,
+         satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine, satKeyKind, satOnSharedDial, SAT_SCHED_SHARED_NOTE,
          type SatSchedPrev, type SatSchedRun } from '../services/satSchedule';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindWhy,
          SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
@@ -96,7 +96,8 @@ import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSu
 import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
 import { ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
          ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode,
-         ismIsNodeCard, ismNodeCardBand, ismNodesParse, ismGalMerge, ismGalCard, ismGainChip } from '../services/ism';
+         ismIsNodeCard, ismNodeCardBand, ismNodesParse, ismGalMerge, ismGalCard, ismGainChip,
+         ismRouteKnown, ismRouteOf, ismMilesGet, ismMilesSet, ismMilesOn, parseIsmPrefs, ISM_PREF_KEY } from '../services/ism';
 import { NdbTracks, ndbRows, ndbStatText, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
 // ★ V12 held session: the "VibeSDR paused" note (docs/v12/BACKGROUND-DECODING.md, "The held session")
@@ -12444,6 +12445,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     status: `${dscCalls.filter((c) => c.lat !== null).length} of ${dscCalls.length} calls sent a position`,
     empty: DSC_MAP_EMPTY, focus: dscFocus, trail: () => Promise.resolve([] as [number, number][]),
   }), [dscCalls, trkRx?.lat, trkRx?.lon, dscFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★ beta96 ONE km ↔ miles (Stuart 11-26): the ISM list's KM/H ↔ MPH key — read from its stored choices at start, and
+   *  followed while the app runs (IsmPanel sets it) — drives every mesh map's distances. */
+  const [ismMiles, setIsmMiles] = useState(ismMilesGet());
+  useEffect(() => {
+    const off = ismMilesOn(setIsmMiles);
+    AsyncStorage.getItem(ISM_PREF_KEY).then((v) => { if (v) ismMilesSet(parseIsmPrefs(v).units.mph); }).catch(() => {});
+    return off;
+  }, []);
   const ismTrk = useMemo(() => {
     // ★ a link to a node outside the chosen range shows 24 h, so the node asked for is there
     const range = ismFocus && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === ismFocus), ismRange).length ? '24h' : ismRange;
@@ -12455,14 +12464,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       : [];
     const storedBy = new Map(stored.map((n) => [n.key, n]));
     const r = ismReport ? { ...ismReport, devices: ismInRange([...ismReport.devices, ...stored], range) } : null;
+    // ★★ beta96 the repeaters a route may place: every node this map holds (live + remembered), not only the time filter's
+    const known = ismRouteKnown([...(ismReport?.devices ?? []), ...stored], trkRx);
     return {
-      items: ismMapItems(r, trkRx).map((it) => { const n = storedBy.get(it.key); return n ? { ...it, _cd: ismGalCard(n, trkRx) } : it; }),
-      rows: ismMapRows(r, trkRx), status: ismMapStatus(r, trkRx),
+      items: ismMapItems(r, trkRx, ismMiles, known).map((it) => { const n = storedBy.get(it.key); return n ? { ...it, _cd: ismGalCard(n, trkRx, ismMiles, ismRouteOf(n, known, trkRx)) } : it; }),
+      rows: ismMapRows(r, trkRx, ismMiles), status: ismMapStatus(r, trkRx, ismMiles),
       empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
       ranges: ISM_LIVE_RANGES, range, rangeHint: ISM_RANGE_HINT_LIVE,
       onRange: (id: string) => { setIsmRange(id); setIsmFocus(''); AsyncStorage.setItem('lsv_ism_map_range', id).catch(() => {}); },
     };
-  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange, ismMiles]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ V12 the SONDES map: the sondes at their last position, a chosen one's track from the newest report (no request). */
   /** ★★★ beta96 THE AIR & SEA MAP is up (any of its openers: ADS-B, AIS, the shipping / NAVTEX / aviation MAPs, and since
    *  stage 8 SONDES and the VOR map) — its polls (aircraft.json, the ship store) run while it is */
@@ -12609,11 +12620,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
-    return { items: ismGalItems(nodes, rx), rows: ismGalRows(nodes, rx), status: `${ismGalStatus(nodes, rx)}${ismGal ? ' · ' + ismGal.title.split(' · ').slice(2).join(' · ') : ''}`,
+    const known = ismRouteKnown(ismGal?.nodes ?? [], rx);   // ★★ beta96 every day's repeaters may place a route
+    return { items: ismGalItems(nodes, rx, ismMiles, known), rows: ismGalRows(nodes, rx, ismMiles), status: `${ismGalStatus(nodes, rx, ismMiles)}${ismGal ? ' · ' + ismGal.title.split(' · ').slice(2).join(' · ') : ''}`,
              empty: 'Nothing heard with a position in this time.', focus: '', trail: () => Promise.resolve([] as [number, number][]),
              ranges: ISM_RANGES, range: ismGalRange, rangeHint: ISM_RANGE_HINT_GAL,
              onRange: (id: string) => { setIsmGalRange(id); AsyncStorage.setItem('lsv_ism_gal_range', id).catch(() => {}); } };
-  }, [ismGal, trkRx?.lat, trkRx?.lon, ismGalRange]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismGal, trkRx?.lat, trkRx?.lon, ismGalRange, ismMiles]);   // eslint-disable-line react-hooks/exhaustive-deps
   const navFetch = useCallback(async (range: string): Promise<NavReport | null> => {
     try {
       const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`,
@@ -14853,7 +14865,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ Ask before tuning — the server's word on whether this listener may move the dial (dialChat.AskState).
     ...(dialState?.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
                                       askUntil: dialState.askUntil }, onLockedTouch: nudgeAsk } : {}),
-  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
+  } : null, [sharedDial, dialState?.listeners, dialState?.away, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
              dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow, scanLockText,
              dabOwnFree, dabFreeOn]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
@@ -15593,10 +15605,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else {
       const now = Date.now() / 1000;
       const row = satModeRows(satList, now).find((r) => r.sat.norad === norad && r.i === tx && r.next?.aos === aos);
-      if (!row || satPassKey(satList, row, satSess.kind) !== 'schedule') return;
+      if (!row || satPassKey(satList, row, satKeyKind(satSess)) !== 'schedule') return;
       if (!b.add(satSrvKey, row, now)) { setSatWhy(SAT_SCHED_FULL); return; }
     }
-    setSatSchedNote('');
+    // ★★★ beta96 a shared receiver: say what the booking will do (Stuart 11-26)
+    setSatSchedNote(!ex && satOnSharedDial(satSess) ? SAT_SCHED_SHARED_NOTE : '');
     satSchedSave();
   };
   const satSchedEntries = satSchedRef.current.all(satSrvKey);
@@ -17170,7 +17183,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           skyRadio={skyRadioFromBase(connectBase)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
-          passKind={satSess.kind}
+          passKind={satKeyKind(satSess)}
+          passShared={satOnSharedDial(satSess)}
           sessionLine={satSessionLine(satSess, 'app')}
           sched={{
             find: (n, t, aos) => satSchedRef.current.find(satSrvKey, n, t, aos),

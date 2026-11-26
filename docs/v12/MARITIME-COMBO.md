@@ -5,6 +5,22 @@ Stuart, 11-26: *"do this for HackRFs, SDRplay etc"* — the ACARS + VDL2 combina
 
 ## RESUME HERE
 
+**★★★ b96-appserver2 (2026-11-26) THE RATE BOOST IS BUILT** (Stuart: an owner switch like the datalink's "avdata+8m"):
+**`ais+8m`**, a "+" token IN the CSV when ticked, under AIS in Modes offered to listeners — "MARITIME: AIS + DSC together
+(raise the capture to 8 MS/s)". Offered only where the radio can (vibe_radio_caps.h: 8 MS/s listed AND 156.51–162.04 MHz in
+reach; dropped without AIS or DSC) — an RSP, an Airspy R2, a HackRF, a USRP; never an RTL, the HF+ or an Airspy Mini.
+Server (local_sdr_shim.cpp): `vsAisDscBoostRate` (vibeavi::wideBoostRate: switch, not pinned, the rate guard allows it) →
+MARITIME offered at any running rate (`vsAisDscFitsOrBoosts` in WhyNot, mapModes, caps); `aisApplyRate` raises to 8 MS/s on
+entering AIS + DSC (the guard's marker first, "MARITIME"), gives the owner's rate back on AIS alone (retarget) and on leaving
+(before the locked centre returns); `g_aisBoostFrom` (never persisted; cleared by endWholeRadioModesForStop); the AIS report's
+`rateNote`. Web Setup + app: the row and its notice (`AIS_8M_NOTICE`, one text two readers), the keep / landing rule follows
+it (web keepFacts; app keepAvailLocal `ais8mOk` from the radio's caps). Default OFF; **the benchmark's GREEN `dec_aisdsc` ticks it ON on a first setup**, exactly as `dec_avboth` does for
+avdata+8m (Stuart 11-26) — app `applyBench` (caps "ais+8m" only) and the page's `benchApplyDefaults` (fresh setup only, the
+box exists only where caps draw it); the owner's own choice always wins after that. Tests:
+**test-server-maritime.mjs §5 (19 new, 50/50)**: RTL caps never; 2 MS/s switch off → not offered; on → offered, enters at
+159.2625 MHz / 8 MS/s, rateNote, log, AIS alone → 2 MS/s back, back to 8, leave → 2 MS/s + 96.1 MHz; pinned → never.
+**test-radio-caps 285/0**, **test_keep_run.ts 60/0**. Not run on a real RSP.
+
 | Piece | Where | State |
 |---|---|---|
 | The combination: geometry, rule, front end | `android/app/src/main/cpp/vibe_maritime_combo.h` (`vibemar::`) | built, unit tested |
@@ -80,6 +96,5 @@ spectrum), which any 8 MS/s use of the radio pays. The `dec_aisdsc` benchmark ro
 
 ## Open decisions for Stuart
 
-- No rate boost: the combination is offered only where the RUNNING rate already holds it (an RSP the owner runs at 8 MS/s).
-  Add an owner switch like the datalink's "avdata+8m" ("let AIS + DSC raise the rate to 8 MS/s")?
+- ~~No rate boost~~ — built 11-26 (`ais+8m`, above). Should the benchmark's `dec_aisdsc` tick it on a green box, as `dec_avboth` does for avdata+8m?
 - The landing card lists "AIS + DSC (channel 70)" as its own row beside AIS (one choice), not a tick of AIS plus a tick of DSC.

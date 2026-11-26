@@ -140,7 +140,8 @@ object VibeServerBoot {
     // ── ★★★ beta96 VIBESERVER SIMPLE (src/utils/serverChoice.ts — the same three lists, test_server_choice.ts compares) ──
     // The store keeps every Full setting; a config marked "simple" RUNS a view of it: Simple's own four, the radio's own
     // front-end settings, the engine's defaults for everything else, and LOCAL NETWORK ONLY (LAN_ONLY_OFF + no tunnel).
-    val SIMPLE_KEYS = listOf("name", "mdnsName", "sampleRate", "lockedRate", "rateLock", "maxFftRate", "simple")
+    val SIMPLE_KEYS = listOf("name", "mdnsName", "sampleRate", "lockedRate", "rateLock", "maxFftRate", "simple",
+                             "simplePin", "simpleRawIq")
     val RADIO_KEYS = listOf(
         "ppm", "ppb", "biasT", "directSampling", "autoDirectSampling", "directSamplingBelowHz",
         "converterOffsetHz", "converterInputLoHz", "converterInputHiHz",
@@ -154,6 +155,11 @@ object VibeServerBoot {
     /** LAN_ONLY_OFF — community map, PSK Reporter / WSPRnet, DMR ID lookups, the ADS-B feed, background decoding, DX scan. */
     val LAN_ONLY_OFF_FALSE = listOf("communityMap", "pskrOn", "wsprnetOn", "dmrIdLookup")
     val LAN_ONLY_OFF_EMPTY = listOf("adsbFeed", "aircraftFeeds", "bgDecode", "dxScan")   // ★★ beta96 + feed sources (Simple = the defaults)
+    /** ★★★ beta96 (Stuart 11-26) …and the engine REFUSES a client not on the home network (the RTL-TCP door's rule). */
+    val LAN_ONLY_OFF_TRUE = listOf("lanOnly")
+
+    /** Simple's PIN (serverChoice.ts pinProblem): digits only, up to 12; anything else runs with none. */
+    private fun simplePinOk(p: String): Boolean = p.isEmpty() || (p.length <= 12 && p.all { it in '0'..'9' })
 
     fun isSimple(cfg: JSONObject): Boolean = cfg.optBoolean("simple", false)
 
@@ -164,7 +170,13 @@ object VibeServerBoot {
         for (k in SIMPLE_KEYS + RADIO_KEYS) if (cfg.has(k)) out.put(k, cfg.get(k))
         for (k in LAN_ONLY_OFF_FALSE) out.put(k, false)
         for (k in LAN_ONLY_OFF_EMPTY) out.put(k, "")
-        out.put("maxUsers", 1); out.put("advanced", false); out.put("pin", ""); out.put("webServer", true)
+        for (k in LAN_ONLY_OFF_TRUE) out.put(k, true)
+        out.put("maxUsers", 1); out.put("advanced", false); out.put("webServer", true)
+        // ★ Simple's own PIN (none unless typed); RAW IQ OUT off or local network only — never public.
+        val sp = cfg.optString("simplePin", "")
+        out.put("pin", if (simplePinOk(sp)) sp else "")
+        val ri = if (cfg.optInt("simpleRawIq", 0) == 1) 1 else 0
+        out.put("rawIq", ri); out.put("rawIqMax", ri); out.put("rawIqLanMaxHz", 0)
         return out
     }
 
@@ -327,6 +339,8 @@ object VibeServerBoot {
         // ★ The battery floor — a phone on a solar panel must never run itself flat (2026-09-17).
         VibeLocalSDR.setBatteryPolicy(cfg.i("batteryPauseAt", 0), cfg.i("batteryResumeAt", 40))
         VibeLocalSDR.setVibeServerWebEnabled(cfg.b("webServer", true))
+        // ★★★ beta96 VibeServer Simple: refuse every client that is not on the home network (absent = false: Full as before)
+        VibeLocalSDR.setVibeServerLanOnly(cfg.b("lanOnly", false))
         // ★★★ THE CAPTURED WINDOW. Shared listening only works because everybody gets a slice of
         //     ONE window, so the centre must be pinned.
         VibeLocalSDR.setVibeServerLockedCentre(cfg.n("lockedCentre", 0.0))

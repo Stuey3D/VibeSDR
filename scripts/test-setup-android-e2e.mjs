@@ -76,7 +76,8 @@ ok(doc.getElementById('name').value === 'Allotment Moto', 'the phone\'s name is 
 ok(doc.getElementById('landingMessage').value === 'Hello', 'the landing message is in the box');
 ok(doc.getElementById('place').value === 'Moulton' && doc.getElementById('lat').value === '52.25000', 'the receiver\'s place and position are in the boxes');
 ok(doc.getElementById('dirName').value === 'Moulton V4', 'the public name is in the box');
-ok(doc.getElementById('androidAdvanced').value === '1' && doc.getElementById('androidCompress').checked, 'the phone\'s own server card shows Advanced and compression on');
+ok(!doc.getElementById('androidAdvanced') && doc.getElementById('androidWebServer').checked && doc.getElementById('androidCompress').checked,
+   'the phone\'s own server card: web client and compression on, no Simple / Advanced choice (beta96)');
 ok(doc.getElementById('rttySkimWorkers').value === '2', 'the RTTY skimmer workers');
 
 // Change things on the server tab, then on the radio tab, and Apply.

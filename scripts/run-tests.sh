@@ -627,6 +627,9 @@ for t in "$SRC"/test-*.cpp; do
     #   test-openrsp-names — OpenRSP's whole Enumerator (vendor/openrsp core + service sources); built and run by
     #   scripts/test-openrsp-names.sh further down, so here it only "did not build" (no -I vendor/openrsp/src).
     test-openrsp-names) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — built and run by scripts/test-openrsp-names.sh below\033[0m\n' "$name"; continue ;;
+    #   test-adsb-restart, test-keep-restart (beta96) — the real shim in-process; CMake targets, run by scripts/test-adsb-restart.sh
+    #   and scripts/test-keep-restart.sh further down (they read vibeserver/build), so here they only "did not build".
+    test-adsb-restart|test-keep-restart) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target, run by scripts/%s.sh below\033[0m\n' "$name" "$name"; continue ;;
     test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
@@ -882,6 +885,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    that says nothing are held as before (idle grace 12 s → 12 s holds, ~1.5 min). Same VIBESERVER_BIN rule. Silent.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-presence.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE COUNT AND THE LOCK AGREE when a listener leaves (11-26: listeners 2/4 and ASK TO TUNE while the lock had
+#    lifted): a web-shaped listener leaves four ways — a final departure drops count AND lock at once; a held place stays
+#    counted but `away`, and every dial has askFirst exactly when listeners − away > 1 (~1 min). Same VIBESERVER_BIN rule. Silent.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-leave-count.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the clients' half: the app client says background/foreground (again on every new socket's first hwinfo) and
 #    `leave` on destroy; the web page's presence/bye never raise "not connected" or wake a closed socket.
 if node --no-warnings scripts/test_presence_client.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1045,6 +1053,9 @@ if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fai
 # ★★★ beta96 THE AMATEUR MAP (src/utils/amateurMap.ts): the HEARD IN window for every layer, MESH (every ISM band's remembered
 #     nodes) and BEACONS, the app's list in tabs (amListRows, TrackLiveList), the pages wired
 if npx tsx scripts/test_amateur_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE MESH ROUTE (src/utils/meshRoute.ts, docs/v12/MESH-ROUTE.md): names, furthest direct / via mesh, the flood
+#    path, matching, the ordered drawing + the path fit, the card's ROUTE key (only with a path), km / miles, the app pages
+if npx tsx scripts/test_mesh_route.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 maps2 STORED SONDES AND VOR STATIONS on the AIR & SEA map (src/services/storedLayers.ts — the gallery's day cards)
 if npx tsx scripts/test_stored_layers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 THE MAP FOLLOWS THE MODE (Mac Ha 11-26: the AIS map's title over the ADS-B aircraft list) — the app's map page
@@ -1907,6 +1918,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     refused, 169.254 link-local served). Loopback, silent. ~60 s.
 printf '\n\033[1m── RTL-TCP front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-rtltcp.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ beta96 VIBESERVER SIMPLE: HOME NETWORK ONLY, enforced by the engine (lanOnly — the RTL-TCP door's isPrivateIp rule on
+#     every request; --lan-only on the daemon): 8.8.8.8 refused (page and JSON, logged), 192.168 / 169.254 / 10 / fd00:: served,
+#     without the switch as before, a request through the tunnel refused. Loopback, silent. ~20 s.
+printf '\n\033[1m── VibeServer Simple: home network only (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-lanonly.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ beta94 A CLEAN STOP WITH BACKGROUND DECODING EXITS CLEANLY: ~BgRunner published to the shim's BgRegistry after it
@@ -2866,6 +2884,9 @@ VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── ADS-B RANGE outline on the web map (test-web-adsb-range) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-web-adsb-range.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96 the right GLYPH for every aircraft, any source (test-web-ac-icons) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-web-ac-icons.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the

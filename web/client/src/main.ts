@@ -13,6 +13,8 @@ import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 // ★ V12 METEOR LRPT's MAP OUTLINE (the rule: src/utils/lrptOutline.ts; the drawing: lrptOutlineDom.ts)
 import { parseOutline, parseLiveOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl, type Outline } from '../../../src/utils/lrptOutline';
 import { drawOutline, outlineOn, setOutlineOn } from './lrptOutlineDom';
+// ★★★ beta96 METEOR LRPT's live preview: gaps squashed to short bands, FIT / FOLLOW in the SATELLITE box (shared with the app)
+import { bandPixels, lrptFitNow, lrptViewHint, lrptViewToggle, mapOutline, sameGaps, squashPlan, turnedTop, type LrptGap, type LrptView, type SquashPlan } from '../../../src/utils/lrptGaps';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
 import { initMenuCats, revealServerUnlock } from './menuCats';
@@ -37,9 +39,10 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
 import { rangeBearing as adsbRangeBearing, adsbListHtml, adsbStatus, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, adsbImageBase } from './adsb';
-import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
+import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
-         ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
+         ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode,
+         ismPlotted, ismRouteKnown, ismRouteOf, ismMilesPref, ISM_UNITS_EVENT, type IsmDevice } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
@@ -196,7 +199,7 @@ import {
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
-import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
+import { mediaSkipEnabled, dialAlone } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
@@ -1260,8 +1263,9 @@ function updateSharedBannerText() {
   // ★★★ V12 beta83 in DAB with own stations on, with company: the stations line alternates with the ask line (dialChat
   //     DAB_FREE_FLIP_MS — the app's bar does the same); dabFreeTick keeps it turning.
   const dabOwn = dabOn && !!dabState?.own?.on;
-  dabFreeTick(dabOwn && listenerCount > 1);
-  if (dabOwn && listenerCount > 1 && dabFreePhase(Date.now())) {
+  const company = listenerCount - listenerAway > 1;   // ★ beta96 held places are nobody to ask (dialAlone)
+  dabFreeTick(dabOwn && company);
+  if (dabOwn && company && dabFreePhase(Date.now())) {
     ms.classList.remove('alone'); ms.textContent = dabFreeText();
     ms.title = 'Any station in the list is free to choose — only changing multiplex or leaving DAB needs asking';
     return;
@@ -1276,7 +1280,7 @@ function updateSharedBannerText() {
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
   // ★ In the chat's language (dialChat sharedTunerText — the app's bar reads the same words).
   if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = sharedTunerText(false, -1, 0); return; }
-  const alone = listenerCount <= 1;
+  const alone = dialAlone({ listeners: listenerCount, away: listenerAway });   // ★ beta96 held places left out, as the lock leaves them out
   ms.classList.toggle('alone', alone);
   // ★ The words go in as TEXT (a text node), the person glyph as markup: no translated string is ever parsed as HTML.
   ms.textContent = alone ? sharedTunerText(true, listenerCount, listenerMax)
@@ -1285,7 +1289,7 @@ function updateSharedBannerText() {
       `<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" `
       + `style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>`);
   ms.title = alone ? 'Nobody else is listening — free to tune'
-    : `${listenerCount} listening on this shared dial — ask in chat before tuning`;
+    : `${listenerCount} listening on this shared dial${listenerAway > 0 ? ` (${listenerAway} away — their place is kept for a few minutes)` : ''} — ask in chat before tuning`;
 }
 
 /** ★ HIDDEN, not disabled, unless the operator opened it to listeners. An inert control still
@@ -1910,8 +1914,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
     //   visitor actually has — is there room, and is anyone else here — and it is the number the
     //   owner wanted at a glance. `busy` was a yes/no built for a one-at-a-time receiver.
-    onUsers: (n, max) => {
-      listenerCount = n; listenerMax = max;
+    onUsers: (n, max, away) => {
+      listenerCount = n; listenerMax = max; listenerAway = away;
       // ★★ ONLY WHEN SOMEONE ELSE IS HERE, AND NOT ON A SHARED DIAL (noobish via Stuart, 2026-09-19): "1 listening
       //    of 5" with you alone reads as one OTHER person, and a shared dial's banner now carries the count.
       // ★ The chat strip reads the same number — see onListenerCount. It used to follow dial events only, and
@@ -1926,6 +1930,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ── ★★ THE SHARED DIAL. Only a receiver running open or spectator tuning sends these; on an
     //    ordinary one this never fires, and the buttons stay in the disabled state they start in.
     onDial: (d) => {
+      listenerAway = d.away || 0;   // ★ beta96 the dial carries it too (it is re-sent when a swap grace runs out)
       chatDial(d);
       dialModeNow = d.mode;
       ncdxfFollowSync();   // ★ V12 FOLLOW: a dial that turns shared stops it (never a shared dial)
@@ -9943,10 +9948,14 @@ function ismMapOpen(key = '') {
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(), fitOnOpen: true,   // ★ 11-21 auto fit
     icon: ismMapIcon, label: ismMapLabel, labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     // ★ beta92 a node remembered from the gallery (no longer in this ISM session) gets the gallery's card: first / last heard
-    card: (d) => ('first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos()) : ismMapCard(d, myPos())),
+    card: (d) => { const rt = ismRouteOf(d, ismKnown, myPos()), mi = ismMilesPref();   // ★★ beta96 the route card, km or miles
+                   return 'first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos(), mi, rt) : ismMapCard(d, myPos(), mi, rt); },
     ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
     onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
+    // ★★ beta96 a tap opens the card AND zooms in; the card's ROUTE draws the route and fits the path (meshRoute.ts)
+    zoomOnSelect: true, onCard: (k, el) => ismMapView?.routeCard(k, el),
   });
+  ismMapView.setRouteSource((k) => { const d = ismMapDevs.find((x) => x.key === k); return d ? ismRouteOf(d, ismKnown, myPos()) : null; });
   // ★ a link to a node outside the chosen range widens it, so the node asked for is there
   if (key && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === key), ismMapRange).length) {
     ismMapRange = '24h';
@@ -10267,21 +10276,28 @@ async function ismGalMapOpen(it0: GalleryItem) {
   const rx = myPos() ?? cardRx;
   let range = ismRangeOf(lsGet(ISM_RANGE_GAL_KEY), false);
   const days = new Set(cards.map((c) => Math.floor(c.t / 86400))).size;
+  let known: ReturnType<typeof ismRouteKnown> = [], shown: IsmGalNode[] = [];
   const draw = () => {
     const all = ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
-    const nodes = ismInRange(all, range);
-    ismGalView?.update(nodes, ismGalRows(nodes, rx), per.size ? `${ismGalStatus(nodes, rx)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
+    known = ismRouteKnown(all, rx);   // ★★ beta96 every day's repeaters may place a route
+    const nodes = ismInRange(all, range).filter((d) => ismPlotted(d, rx));
+    shown = nodes;
+    const mi = ismMilesPref();
+    ismGalView?.update(nodes, ismGalRows(nodes, rx, mi), per.size ? `${ismGalStatus(nodes, rx, mi)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
   };
+  ismGalRedraw = draw;
   ismGalView?.destroy();
   if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; }
-  const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; };
+  const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; if (ismGalRedraw === draw) ismGalRedraw = null; };
   const t = `LoRa nodes heard · ${band ? band + ' MHz' : ''}`;
   ismGalView = new TrackView({ fitOnOpen: true,   // ★ 11-21 AUTO fit, as the live mesh map
     title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close,
-    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
+    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx, ismMilesPref(), ismRouteOf(d, known, rx)), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,
     onRange: (id) => { range = id; lsSet(ISM_RANGE_GAL_KEY, id); draw(); },
+    zoomOnSelect: true, onCard: (k, el) => ismGalView?.routeCard(k, el),   // ★★ beta96 a tap zooms in; the card's ROUTE
   });
+  ismGalView.setRouteSource((k) => { const d = shown.find((x) => x.key === k); return d ? ismRouteOf(d, known, rx) : null; });
   ismGalView.show(rx);
   draw();
   /* ★ LIVE: today's card is rewritten at most once a minute while ISM runs (a listener, or background decoding) — while
@@ -10304,10 +10320,20 @@ function ismMapRender() {
   const stored = r0 && r0.band === ismStoredBand
     ? ismStored.filter((n) => !(n.node && liveIds.has(`${n.kind}|n|${n.node.slice(0, 16)}`)) && !(n.name && liveIds.has(`${n.kind}|m|${n.name}`)))
     : [];
+  // ★★ beta96 the repeaters a route may place: every node this map holds (live + remembered), not only the time filter's
+  ismKnown = ismRouteKnown([...(r0?.devices ?? []), ...stored], myPos());
   const r = r0 ? { ...r0, devices: ismInRange([...r0.devices, ...stored], ismMapRange) } : null;   // ★ the time filter
-  const items = r ? r.devices.filter(ismOnMap) : [];
-  ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
+  const items = r ? r.devices.filter((d) => ismPlotted(d, myPos())) : [];   // ★★ beta96 an implausible fix is never drawn
+  ismMapDevs = items;
+  const mi = ismMilesPref();
+  ismMapView.update(items, r ? ismMapRows(r, myPos(), mi) : '', ismMapStatus(r, myPos(), mi), items.length, myPos());
 }
+/** ★★ beta96 the live mesh map's nodes drawn, and the repeaters its routes may place (ismMapRender) */
+let ismMapDevs: IsmDevice[] = [];
+let ismKnown: ReturnType<typeof ismRouteKnown> = [];
+/* ★★ beta96 ONE km ↔ miles (the ISM list's KM/H ↔ MPH key): every mesh map open redraws in the new units */
+let ismGalRedraw: (() => void) | null = null;
+window.addEventListener(ISM_UNITS_EVENT, () => { ismMapRender(); ismGalRedraw?.(); });   // (ismMapRender → amMapRender: the AMATEUR map too)
 
 /* ★★★ AIS MODE (V12, docs/v12/AIS-APRS.md) — ADS-B's shape on the page: the map IS the mode. The server puts the whole radio
  *  on 162.000 MHz and decodes both AIS channels; the page covers itself with the ship map and its live list (tracks.ts
@@ -11189,9 +11215,11 @@ let satImgFollow = true, satImgFollowOn = false;
 function satImgFollowStart(wrap: HTMLElement) {
   if (satImgFollowOn) return;
   satImgFollowOn = true;
-  wrap.addEventListener('scroll', () => { satImgFollow = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 24; }, { passive: true });
+  // ★★★ beta96 a turned (north-up) METEOR picture grows at its TOP: following it is staying at the top
+  const turned = () => decLrptRot && activeDec === 'lrpt';
+  wrap.addEventListener('scroll', () => { satImgFollow = turned() ? wrap.scrollTop <= 24 : wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 24; }, { passive: true });
   if (typeof ResizeObserver === 'undefined') return;
-  new ResizeObserver(() => { if (satImgFollow && wrap.closest('#satPanel')) wrap.scrollTop = wrap.scrollHeight; }).observe($('decImage'));
+  new ResizeObserver(() => { if (satImgFollow && wrap.closest('#satPanel')) wrap.scrollTop = turned() ? 0 : wrap.scrollHeight; }).observe($('decImage'));
 }
 /** Leave SATELLITE (another whole-radio mode is starting) — the drop is sent, the decoder stops. */
 function satModeOff() { if (satPanel?.active) satPanel.exit(); }
@@ -11949,7 +11977,7 @@ function webSkipAllowed(): boolean {
   const mode = dialModeNow !== 'exclusive' ? dialModeNow : (srvSharedDial ? 'open' : 'exclusive');
   // ★ Until the first count arrives (0), NOT alone — the banner's own caution ("never free on a guess").
   return mediaSkipEnabled({ serverType: 'vibeserver', admin: adminUnlocked,
-    dial: { mode, listeners: listenerCount > 0 ? listenerCount : 2 } });
+    dial: { mode, listeners: listenerCount > 0 ? listenerCount : 2, away: listenerCount > 0 ? listenerAway : 0 } });
 }
 function syncMediaSkip() {
   if (!('mediaSession' in navigator)) return;
@@ -14057,6 +14085,9 @@ function locLine(): string {
 // ★ It also means the clock keeps running if a warning frame is lost — the deadline is what we
 // hold, not the remaining seconds.
 let listenerCount = 0, listenerMax = 0;
+/** ★ beta96 how many of listenerCount are HELD places (a dropped phone's slot — counted, nobody there to ask): the
+ *  server's `away`, on `users` and `dial`. FREE TO TUNE when listenerCount − listenerAway ≤ 1 (blindTuneGate dialAlone). */
+let listenerAway = 0;
 /** ★ Direct sampling as the RADIO reports it (2 = tuner bypassed, HF only) and the crossover it uses. Reported
  *  by the server so every listener sees the same state, not only whoever switched it. */
 let dsMode = 0, dsBelowHz = 24e6;
@@ -15485,6 +15516,9 @@ function initDecoders(host: string, auth: AuthState) {
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);
+      // ★★★ beta96 the live picture's gaps (merged on the server): redrawn as short bands when they change
+      const gs = st?.gaps ?? [], rot = st?.rot === 180;
+      if (!sameGaps(gs, decLrptGaps) || rot !== decLrptRot) { decLrptGaps = gs; decLrptRot = rot; if (!decViewingPrev) blitToVisible(decLiveCv); decOutlinePaint(); }
       decStateText = lrptStatusText(st); $('decStatus').textContent = decStateText;
       if (satDec === 'lrpt') satPanel?.status(decStateText);   // ★★★ SATELLITE: the LRPT line in the window
       setDecLive(!!st && (st.sync || st.lines > 0));
@@ -18008,14 +18042,64 @@ function setDecLive(on: boolean) {
 function visibleRows(src: HTMLCanvasElement): number {
   return src === decLiveCv && activeDec === 'lrpt' && decLiveMaxY >= 0 ? Math.min(src.height, decLiveMaxY + 1) : src.height;
 }
+/* ★★★ beta96 METEOR LRPT: THE GAPS SQUASHED (Stuart 11-26, a Meteor-M2-4 pass: 616 rows of no signal took as much room as
+ *  the picture; near LOS a label for every short gap scrolled the good cloud out of view). The live canvas stays the
+ *  server's TRUE-geometry preview (SAVE writes it; the gallery's pictures are the server's); the visible canvas shows each
+ *  gap lrpt_status lists as one short hatched band with its label (src/utils/lrptGaps.ts — the app draws the same). */
+let decLrptGaps: LrptGap[] = [];
+let decLrptPlan: SquashPlan | null = null;      // the shown picture's squash (null = row for row)
+let decLrptView: LrptView = 'auto';             // the SATELLITE box: whole pass when it fits, else follow; a click flips it
+let decLrptBlitPending = 0;
+/* ★★★ beta96 NORTH UP: a northbound pass (lrpt_status "rot":180) is shown turned round — the picture's rows drawn under a
+ *  180° canvas transform, the bands put at their turned place UPRIGHT (putImageData ignores the transform: never turned
+ *  text), the outline's points turned with its label text upright (lrptGaps.ts mapOutline). Newest rows at the top. */
+let decLrptRot = false;
+function lrptSquashed(src: HTMLCanvasElement): boolean { return src === decLiveCv && activeDec === 'lrpt' && (decLrptGaps.length > 0 || decLrptRot); }
+/** Rows arriving while the gaps are squashed: one redraw a frame, not one per row. */
+function lrptBlitSoon() {
+  if (decLrptBlitPending) return;
+  decLrptBlitPending = requestAnimationFrame(() => { decLrptBlitPending = 0; if (!decViewingPrev) blitToVisible(decLiveCv); });
+}
+/** FIT (the whole pass in the SATELLITE box) or FOLLOW (full width, the box scrolls to the newest lines). */
+function lrptFitApply() {
+  const wrap = $('decImgWrap'), c = $<HTMLCanvasElement>('decImage');
+  const inSat = !!wrap.closest('#satPanel') && activeDec === 'lrpt' && !decViewingPrev;
+  const boxW = wrap.clientWidth, boxH = parseFloat(getComputedStyle(wrap).maxHeight) || 440;
+  // ★ only when it would not fit at the box's width anyway (then fitting changes nothing)
+  const tall = c.width > 0 && c.height * boxW / c.width > boxH;
+  const fit = inSat && tall && lrptFitNow(decLrptView, c.width, c.height, boxW, boxH);
+  wrap.classList.toggle('lrptFit', fit);
+  if (inSat && tall) c.title = lrptViewHint(fit); else c.removeAttribute('title');
+}
 function blitToVisible(src: HTMLCanvasElement | null) {
   const c = $<HTMLCanvasElement>('decImage');
   if (!src) return;
   const h = visibleRows(src);
+  if (lrptSquashed(src)) {
+    const plan = squashPlan(decLrptGaps, h);
+    if (plan.bands || decLrptRot) {
+      decLrptPlan = plan;
+      if (c.width !== src.width || c.height !== plan.h) { c.width = src.width; c.height = plan.h; }
+      const ctx = c.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      if (decLrptRot) ctx.setTransform(-1, 0, 0, -1, c.width, c.height);   // the picture turned round
+      for (const sg of plan.segs) {
+        if (sg.gap) ctx.putImageData(new ImageData(bandPixels(src.width, sg.dstH, sg.label), src.width, sg.dstH), 0, decLrptRot ? turnedTop(plan, sg.dst0, sg.dstH) : sg.dst0);
+        else ctx.drawImage(src, 0, sg.src0, src.width, sg.dstH, 0, sg.dst0, src.width, sg.dstH);
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      lrptFitApply();
+      return;
+    }
+  }
+  decLrptPlan = null;
   if (c.width !== src.width || c.height !== h) { c.width = src.width; c.height = h; }
   const ctx = c.getContext('2d');
   ctx?.clearRect(0, 0, c.width, c.height);
   ctx?.drawImage(src, 0, 0);
+  lrptFitApply();
 }
 
 /** ★ Picture zoom over FIT, as in the app: 1, 1.5, 2, 3, 4×. − only once zoomed; + stops at 4×. */
@@ -18085,7 +18169,7 @@ function decOutlinePaint() {
   svg.style.left = `${c.offsetLeft}px`; svg.style.top = `${c.offsetTop}px`;
   svg.style.width = `${c.offsetWidth}px`; svg.style.height = `${c.offsetHeight}px`;
   const scale = Math.min(c.offsetWidth / c.width, c.offsetHeight / Math.max(1, c.height));
-  drawOutline(svg, decOutline!, decOutline!.w * scale);
+  drawOutline(svg, decLrptPlan ? mapOutline(decOutline!, decLrptPlan, decLrptRot) : decOutline!, decOutline!.w * scale);   // ★ beta96 moved with the squash (and turned)
   svg.setAttribute('viewBox', `0 0 ${c.width} ${c.height}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   svg.removeAttribute('hidden');
@@ -18116,6 +18200,7 @@ function startDecImage(w: number, h: number) {
   decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
   decLiveComplete = false;
   decLiveMaxY = -1;
+  decLrptGaps = []; decLrptPlan = null; decLrptView = 'auto'; decLrptRot = false;   // ★ beta96 a new picture: its own gaps, AUTO fit / follow
   decLiveRaw = []; decLiveAl = []; decLiveHist = newHist();
   decAuto = {}; decManualShift = null; decRaw = false;   // ★ a new chart finds its own margin / border, unRAW
   decSlantTouched = false;                                // …and measures its own slant (2026-10-07)
@@ -18420,7 +18505,8 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   // Mirror the just-drawn line to the visible canvas when we're watching live.
   if (!decViewingPrev) {
     const vis = $<HTMLCanvasElement>('decImage');
-    if (vis.width !== cv.width || vis.height !== visibleRows(cv)) blitToVisible(cv);   // ★ beta95 LRPT: grows with its rows
+    if (lrptSquashed(cv)) lrptBlitSoon();   // ★ beta96 the gaps squashed: the shown rows are not the true ones
+    else if (vis.width !== cv.width || vis.height !== visibleRows(cv)) blitToVisible(cv);   // ★ beta95 LRPT: grows with its rows
     else vis.getContext('2d')?.putImageData(img, 0, y);
   }
 }
@@ -18790,7 +18876,7 @@ function amMeshStart() {
 }
 function amExtras(): { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | '' } {
   return {
-    mesh: amMeshPoints(ismReport?.devices ?? [], amMeshStored ?? ismStored, Math.floor(Date.now() / 1000)),
+    mesh: amMeshPoints(ismReport?.devices ?? [], amMeshStored ?? ismStored, Math.floor(Date.now() / 1000), { rx: myPos(), miles: ismMilesPref() }),   // ★★ beta96 km / miles, routes
     beacons: amBeaconPoints(ncdxfLast, NCDXF_BANDS.map((b) => b.label)),
     live: amLiveOf(activeDec ?? (decoders?.spotsEnabled ? 'spots' : ''), ismOn),
   };
@@ -19454,6 +19540,7 @@ function setupMap() {
   overlayLayer = L.layerGroup().addTo(map);
   aprsLayer = L.layerGroup().addTo(map);
   meshLayer = L.layerGroup().addTo(map);      // ★ beta96 stage 7
+  amRouteBind();                              // ★★ beta96 a click on the empty map clears a mesh route
   beaconLayer = L.layerGroup().addTo(map);
   map.on('zoomend', aprsLabels); aprsLabels();
   if (me) {
@@ -19613,8 +19700,8 @@ function beaconsIn() { return beacons.filter((x) => amKeep(x.age, win)); }
 function amCounts() { return { spots: spots.length, aprs: aprsIn().length, mesh: meshIn().length, beacons: beaconsIn().length }; }
 function cleanMesh(list) {
   if (!Array.isArray(list)) return [];
-  return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => ({
-    key: okStr(x.key, /[<>&"'\`]/g, 48), name: okStr(x.name, /[<>&"'\`]/g, 40) || '?', net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',
+  return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => amMeshExtra(x, {
+    key: okStr(x.key, /[<>&"'\`]/g, 48), name: String(x.name || '?').slice(0, 40), net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',   // ★★ beta96 the name as advertised (esc() where shown)
     lat: Math.max(-90, Math.min(90, okNum(x.lat))), lon: Math.max(-180, Math.min(180, okNum(x.lon))), age: Math.max(0, okNum(x.age)),
     approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live }));
 }
@@ -19648,7 +19735,7 @@ function amList() {
       (s.km != null ? s.km + ' km \u00b7 ' : '') + amAgo((nowMs - s.timestamp) / 1000))).join('');
   else if (tab === 'aprs') rows = aprsIn().slice(0, 300).map((a) => amRow(a.key, '#88CCEE', a.call, [a.symName || 'APRS', a.comment].filter(Boolean).join(' \u00b7 '),
       (a.km != null ? a.km + ' km \u00b7 ' : '') + amAgo(a.age))).join('');
-  else if (tab === 'mesh') rows = meshIn().slice(0, 300).map((x) => amRow(x.key, AM_MESH_COL[x.net] || '#67ea94', x.name, [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), amAgo(x.age))).join('');
+  else if (tab === 'mesh') rows = meshIn().slice(0, 300).map((x) => amRow(x.key, AM_MESH_COL[x.net] || '#67ea94', x.name, [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), (x.dist ? x.dist + ' \u00b7 ' : '') + amAgo(x.age))).join('');
   else rows = beaconsIn().map((x) => amRow(x.key, '#d2a8ff', x.call, x.where + ' \u00b7 ' + x.bands.join(' '), amAgo(x.age))).join('');
   host.innerHTML = rows || '<div class="amEmpty">' + esc(tab === 'mesh' ? 'No mesh node with a position in this window — ISM mode hears MeshCore and Meshtastic.'
     : tab === 'beacons' ? 'No NCDXF beacon heard in this window — the NCDXF decoder tracks them.' : tab === 'aprs' ? 'No APRS station with a position in this window.' : 'No station with a locator in this window.') + '</div>';
@@ -20636,6 +20723,15 @@ function initGallery() {
   $('galBack').onclick = () => { galTrReset(); galleryBack(); };
   $('galOutline').onclick = () => galOutlineToggle();   // ★ V12 METEOR LRPT's MAP OUTLINE switch
   $('decOutline').onclick = () => { setOutlineOn(!outlineOn()); decOutlinePaint(); };   // ★ …and the live picture's (the same choice)
+  // ★★★ beta96 METEOR in the SATELLITE box: a click on the picture flips WHOLE PASS / FOLLOW (lrptGaps.ts)
+  $('decImage').addEventListener('click', () => {
+    const wrap = $('decImgWrap');
+    if (activeDec !== 'lrpt' || decViewingPrev || !wrap.closest('#satPanel')) return;
+    decLrptView = lrptViewToggle(wrap.classList.contains('lrptFit'));
+    lrptFitApply();
+    satImgFollow = true; wrap.scrollTop = decLrptRot && activeDec === 'lrpt' ? 0 : wrap.scrollHeight;
+    decOutlinePaint();
+  });
   decOutlineWatch();
   for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
     b.onclick = () => {

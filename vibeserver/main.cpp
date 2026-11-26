@@ -239,6 +239,8 @@ struct Opts {
     /** ★★ beta96 --beast-in host:port: run this process as an ADS-B-only receiver reading a Beast output (the former "Beast
      *  feed radio", kept as a DIAGNOSTIC / TEST mode — owners add feeds at server level now: ServerConfig::aircraftFeeds). */
     std::string beastIn;
+    /** ★★★ beta96 (--lan-only) refuse every client not on the local network — the Android app's VibeServer Simple rule. */
+    bool        lanOnly = false;
     bool        useUsb  = true;          // default: drive the dongle directly
     int         radio   = 0;             // index into the FLAT list (dongles, then RSPs, then HF+)
     std::string radioSerial;             // ★ preferred: identity that does not move
@@ -459,6 +461,7 @@ void usage() {
         "                    Both give the same detail at high zoom.\n"
         "  --no-web          do not serve the browser client at GET /\n"
         "  --rtltcp-port N   also serve the radio as an rtl_tcp server on port N (local network only)\n"
+        "  --lan-only        answer only clients on the local network (private IPv4, link-local, IPv6 ULA / own prefix)\n"
         "  --icom PORT          an Icom transceiver, RECEIVE ONLY: usb | usb:<bus>-<ports> | /dev/… (with --icom-tty-ok)\n"
         "  --icom-baud N        the radio's CI-V USB Baud Rate (default 115200)\n"
         "  --icom-civ HEX       CI-V address (default: the model's own, 94 on an IC-7300)\n"
@@ -623,6 +626,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--dab-notch")  o.dabNotch = true;
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--rtltcp-port") o.rtlTcpPort = std::atoi(need(i));
+        else if (a == "--lan-only")  o.lanOnly  = true;
         else if (a == "--admin-pass")     o.adminPass       = need(i);
         else if (a == "--beast-in")       o.beastIn         = need(i);   // ★★ beta96 diagnostic: ADS-B-only from a Beast output
         else if (a == "--agc-lock")       o.agcLock         = 1;   // ★ the owner's AGC lock, from the command line (tests)
@@ -4673,6 +4677,7 @@ int main(int argc, char** argv) {
     std::printf("VibeServer: channel method = %s (for %d listener%s)\n",
                 shared ? "shared / fast convolution" : "direct", o.users, o.users == 1 ? "" : "s");
     LocalSdrShim::setVibeServerWebEnabled(o.web);
+    LocalSdrShim::setVibeServerLanOnly(o.lanOnly);
     // ★★★ THE OPERATOR SETTINGS — every one of these setters already existed and the CLI simply
     // never called any of them. So a headless VibeServer had no admin password, no per-listener
     // limit, no audio policy and no identity: it was the LEAST safe place to host a public

@@ -36,7 +36,7 @@ export type BlindTuneInput = {
   /** Route server type ('fmdx', 'ubersdr', 'owrx', 'kiwi', 'vibeserver', …). */
   serverType: string;
   /** The server's dial message, or null when none has arrived (an ordinary receiver never sends one). */
-  dial: Pick<DialState, 'mode' | 'listeners'> | null;
+  dial: Pick<DialState, 'mode' | 'listeners' | 'away'> | null;
   /** The receiver will not take a tune from us at all (SpyServer canControl=0). */
   readOnly?: boolean;
   /** Unlocked admin of this receiver — on a spectator dial the owner is the one who tunes. */
@@ -46,9 +46,12 @@ export type BlindTuneInput = {
 export type BlindTuneReason =
   | 'ok' | 'not-a-tune' | 'fmdx-shared-tuner' | 'listen-only' | 'spectator' | 'others-listening';
 
-/** FREE TO TUNE — the banner's own test (ControlsBar: `alone: listeners <= 1`). ONE rule, two readers. */
-export function dialAlone(d: Pick<DialState, 'listeners'>): boolean {
-  return d.listeners <= 1;
+/** FREE TO TUNE — the banner's own test (SDRScreen's `alone`). ONE rule, two readers.
+ *  ★★ beta96 the HELD places (`away`) are left out, as the server's ask lock leaves them out — a dropped phone keeps
+ *  its slot in the count, but there is nobody to ask, so the one listener present is free to tune (11-26: the count
+ *  said 2/4 and ASK TO TUNE while the lock had lifted). */
+export function dialAlone(d: Pick<DialState, 'listeners'> & { away?: number }): boolean {
+  return d.listeners - Math.max(0, d.away || 0) <= 1;
 }
 
 /** Why a blind tune may or may not go ahead. */

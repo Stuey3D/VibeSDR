@@ -295,6 +295,8 @@ inline const std::vector<ModeGen>& modeGens() {
         {"fctlm",90,false},{"satlabels",91,false},{"ft8+deep",91,true},{"ft8-deep",91,true},
         // 93 — ORBCOMM, VOR MAP, the datalink's 8 MS/s
         {"orbcomm",93,false},{"vormap",93,false},{"avdata+8m",93,true},
+        // 96 — MARITIME's 8 MS/s (AIS + DSC channel 70)
+        {"ais+8m",96,true},
         // 96 — SATELLITE mode as its own switch (it ran from beta90, with no switch)
         {"sat",96,false},
     };
@@ -362,6 +364,21 @@ inline NewModesState newModesState(const std::vector<std::string>& t) {
      *  would switch OFF every mode since (ADS-B, ISM, SAM … for a "dab" list), on servers whose owners chose none of that.
      *  So such a list counts as having seen this build's predecessor's list (kUnstampedRestrictedSeen): only switches new
      *  in THIS update come in off. One constant, three copies (vibe_setup_page.h, src/utils/newModes.ts). */
+    /* ★★ …AND A SINGLE-MODE LIST IS ALSO DATED BY THE MODE IT LEFT ON (b96 integrate, test-server-vormap): an owner who
+     *  blocked every demodulator and every whole-radio mode but the VOR MAP (93) names nothing newer than 87 (dvsig), so
+     *  dating it by its newest BLOCKED token made the VOR map itself "new" and switched it off — a receiver with no modes
+     *  and no only-mode lock. A list leaves at least one mode on, so when none of its newest token's era is left, the one
+     *  left on is newer: the list is dated by the oldest whole-radio mode it did not block. One rule, three copies. */
+    if (!s.stamped && s.restricted && singleAt(evidence)) {
+        int leftOfEra = 0, lo = 0;
+        for (const char* w : wholeRadioModes()) {
+            const ModeGen* g = modeGen(w);
+            if (!g || has(w)) continue;
+            if (g->gen <= evidence) ++leftOfEra;
+            else if (!lo || g->gen < lo) lo = g->gen;
+        }
+        if (!leftOfEra && lo) evidence = lo;
+    }
     if (!s.stamped) s.seen = !s.restricted ? kModeGenNow : singleAt(evidence) ? evidence : std::max(evidence, kUnstampedRestrictedSeen);
     s.single = singleAt(s.seen);
     s.off = s.single || s.policy < 0 || (s.policy == 0 && s.restricted);

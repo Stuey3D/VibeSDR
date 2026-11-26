@@ -4,6 +4,6 @@
  *     its in-app VibeServer serves, unpacked to mapgl-bundled/ by VibeMapGL.kt. Same version as mapglAssets.ts.
  *     check-map-overlay.mjs fails when this file is stale. */
 /* eslint-disable */
-export const MAPGL_BYTES = 33410715;
-export const MAPGL_VERSION = "33410715-75-3e2fee586428";
+export const MAPGL_BYTES = 33411118;
+export const MAPGL_VERSION = "33411118-75-3b02616d31fb";
 export const MAPGL_FILES: ReadonlyArray<readonly [string, number]> = [];

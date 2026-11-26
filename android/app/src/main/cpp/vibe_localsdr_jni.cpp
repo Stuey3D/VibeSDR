@@ -937,6 +937,11 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerWebEnabled(JNIEnv*, jobject
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLanOnly(JNIEnv*, jobject, jboolean on) {
+    vibe::LocalSdrShim::setVibeServerLanOnly(on);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLockedRate(JNIEnv*, jobject, jdouble rate) {
     vibe::LocalSdrShim::setVibeServerLockedRate(rate);
 }

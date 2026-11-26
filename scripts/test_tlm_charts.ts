@@ -83,7 +83,7 @@ console.log('§3b ★★ beta94 units and absent boards, live');
   ok(t.layout === 'JY1Sat' && t.absent!.join() === 'EPS,iMTQ', 'layout and absent boards parsed');
   ok(satTelemetryAbsentText(t) === 'No EPS or iMTQ data in this frame (their data-valid flags are off)', satTelemetryAbsentText(t));
   ok(tlmAbsentText(['EPS']) === 'No EPS data in the latest frame (its data-valid flag is off)' && tlmAbsentText([]) === '', 'one board / none');
-  const lines = t.values.map(satTelemetryLine);
+  const lines = t.values.map(satTelemetryLine).map((l) => l.replace(/\u00a0/g, ' '));   // ★ beta96 no-break spaces read as spaces here
   ok(lines.join(' | ') === 'Sun sensor X+ 26303 lux | RF temperature -1.6 \u00b0C | Receiver RSSI 255 raw | Reset cause Watchdog reset', lines.join(' | '));
   ok(t.values[2].note === '"no conversion required" in the published sheet', 'a raw channel keeps its own reason');
   const lp = tlmLivePass(t.hist, 'JO-97')!;

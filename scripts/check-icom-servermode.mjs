@@ -103,7 +103,9 @@ has(S, 'An Icom? Press Start and allow it.', '…in the words the plan gives');
 has(S, '<IcomSettingsFields phone ', 'the shared settings, phone variant');
 has(S, 'ink={icomInk} Input={TextInput} />', '…with the TV-safe text field (a remote can move past it)');
 has(S, '<IcomFacts icom={icomRadioNow}', 'the shared facts while serving');
-has(S, 'if (isIcom && parseCivHex(icomCivTxt) === null)', 'Start refuses a CI-V address the radio could not have');
+// ★★★ beta96 Start's refusals are one list (startBlocks, read by pressStart): the CI-V address is its 'hardware' entry
+has(S, 'const civBad = isIcom && parseCivHex(icomCivTxt) === null;', 'Start refuses a CI-V address the radio could not have');
+has(S, "block: civBad ? 'The Icom", '…named in the Icom transceiver section (red after a refused START)');
 const fieldsFn = C.slice(C.indexOf('export function IcomSettingsFields'));
 ok(fieldsFn.indexOf('{!phone && (<>') > 0 && fieldsFn.indexOf('{!phone && (<>') < fieldsFn.indexOf('icomAudio'),
    'the phone form draws no audio / port / serial-device (not settings on Android)');

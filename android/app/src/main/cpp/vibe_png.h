@@ -26,8 +26,9 @@ inline void chunk(std::string& o, const char* type, const std::string& data) {
     o += td;
     put32(o, vibegz::crc32(reinterpret_cast<const uint8_t*>(td.data()), td.size()));
 }
-/** `px` is w*h*channels bytes, rows top to bottom; channels 1 (grey) or 3 (RGB). Empty on nonsense input. */
-inline std::string encode(int w, int h, int channels, const uint8_t* px) {
+/** `px` is w*h*channels bytes, rows top to bottom; channels 1 (grey) or 3 (RGB). Empty on nonsense input.
+ *  `comment` (★ beta96): a tEXt "Comment" chunk when not empty (Latin-1 text; e.g. METEOR's "rotated 180°" note). */
+inline std::string encode(int w, int h, int channels, const uint8_t* px, const std::string& comment = std::string()) {
     if (w <= 0 || h <= 0 || (channels != 1 && channels != 3) || !px) return "";
     const size_t row = (size_t)w * (size_t)channels;
     std::string raw;
@@ -50,6 +51,7 @@ inline std::string encode(int w, int h, int channels, const uint8_t* px) {
     put32(ih, (uint32_t)w); put32(ih, (uint32_t)h);
     ih += (char)8; ih += (char)(channels == 3 ? 2 : 0); ih += (char)0; ih += (char)0; ih += (char)0;
     chunk(o, "IHDR", ih);
+    if (!comment.empty()) chunk(o, "tEXt", std::string("Comment") + '\0' + comment);
     chunk(o, "IDAT", z);
     chunk(o, "IEND", "");
     return o;

@@ -93,6 +93,27 @@ int main() {
             CHECK(c.find("[\"600002\",") != std::string::npos && c.find(",1740,") != std::string::npos,
                   "the row carries its position age (29 min = 1740 s) for the map's fade: %.120s", c.c_str());
         }
+        // ★★ beta96 THE GLYPH's INPUTS (Stuart 11-26: "the correct icon for the aircraft type"): field 11 "wake|letter|engines|m"
+        //    from the aircraft data (the Cache's answer, here a stub); the type filled where the row has none; "" when unknown
+        {
+            std::vector<vibeavshare::Row> w3;
+            w3.push_back(plane(0x400001, nowMs - 1000, true));                        // a 747 the data knows, the row no type
+            w3.push_back(plane(0x400002, nowMs - 2000, true)); w3.back().type = "EC35"; // a helicopter, the row's own type
+            w3.push_back(plane(0x400003, nowMs - 3000, true));                        // nothing known
+            w3.push_back(plane(0x400004, nowMs - 4000, true));                        // a hostile answer: the separator stays out
+            const vibeavshare::ExtraFn stub = [](const vibeavshare::Row& r, vibeavshare::Extra& ex) {
+                if (r.icao == 0x400001) { ex.type = "B744"; ex.wtc = "H"; ex.species = "L"; ex.eng = "4J"; }
+                if (r.icao == 0x400002) { ex.type = "XXXX"; ex.wtc = "L"; ex.species = "H"; ex.eng = "2T"; ex.mil = true; }
+                if (r.icao == 0x400004) { ex.wtc = "|"; ex.species = "\""; ex.eng = "2J|x"; }
+            };
+            const std::string c = "[" + aircraftCompact(w3, nowMs, stub) + "]";
+            CHECK(c.find("\"B744\",\"H|L|4J|\"]") != std::string::npos, "the 747: the data's type and \"H|L|4J|\": %.200s", c.c_str());
+            CHECK(c.find("\"EC35\",\"L|H|2T|m\"]") != std::string::npos, "the helicopter: the ROW's type wins, military marked");
+            { const size_t at = c.find("[\"400003\","), end = c.find(']', at);
+              CHECK(at != std::string::npos && c.compare(end - 5, 5, "\"\",\"\"") == 0, "nothing known: an empty type and an empty what: %.80s", c.c_str() + at); }
+            CHECK(c.find("\"||2J|\"]") != std::string::npos, "a part never carries the separator or a quote");
+            CHECK(aircraftCompact(w3, nowMs).find(",\"\"]") != std::string::npos, "no extra (an older caller): the field is there, empty");
+        }
         std::vector<vibeavshare::Row> lots;
         for (uint32_t i = 0; i < 1000; i++) lots.push_back(plane(0x500000 + i, nowMs - i * 100, true));
         const auto capped = aircraftRows(lots, nowMs);
@@ -257,7 +278,12 @@ int main() {
     if (const char* fx = std::getenv("COMMUNITY_FIXTURE")) {
         std::vector<vibeavshare::Row> rows;
         for (uint32_t i = 0; i < 3; i++) rows.push_back(plane(0x4CA000 + i, nowMs - i * 4000, true));
-        std::ofstream(fx) << assemble(now, { { "a", "[" + aircraftCompact(rows, nowMs) + "]", aircraftLayers(rows) } });
+        // ★ beta96: a heavy, a helicopter and an unknown — the page test draws each class's glyph
+        const vibeavshare::ExtraFn fxExtra = [](const vibeavshare::Row& r, vibeavshare::Extra& ex) {
+            if (r.icao == 0x4CA000) { ex.type = "B77W"; ex.wtc = "H"; ex.species = "L"; ex.eng = "2J"; }
+            if (r.icao == 0x4CA001) { ex.type = "EC35"; ex.wtc = "L"; ex.species = "H"; ex.eng = "2T"; }
+        };
+        std::ofstream(fx) << assemble(now, { { "a", "[" + aircraftCompact(rows, nowMs, fxExtra) + "]", aircraftLayers(rows) } });
         std::printf("   (fixture written to %s)\n", fx);
     }
 

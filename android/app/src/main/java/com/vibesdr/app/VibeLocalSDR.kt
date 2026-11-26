@@ -506,6 +506,8 @@ object VibeLocalSDR {
     fun setVibeServerCompressAudio(on: Boolean) { ensureLoaded(); nativeSetVibeServerCompressAudio(on) }
     /** Serve the browser client at GET /. Off = app-only: a browser gets 403. */
     fun setVibeServerWebEnabled(on: Boolean) { ensureLoaded(); nativeSetVibeServerWebEnabled(on) }
+    /** ★★★ beta96 VibeServer Simple: the engine refuses clients that are not on the home network. */
+    fun setVibeServerLanOnly(on: Boolean) { ensureLoaded(); nativeSetVibeServerLanOnly(on) }
     /** Pin the capture rate (Hz). 0 = client-controlled. */
     fun setVibeServerLockedRate(rate: Double) { ensureLoaded(); nativeSetVibeServerLockedRate(rate) }
 
@@ -545,6 +547,7 @@ object VibeLocalSDR {
     /** Seconds after the last listener before the capture parks. The device stays CLAIMED. */
     fun setVibeServerIdleGrace(sec: Double) { ensureLoaded(); nativeSetVibeServerIdleGrace(sec) }
     private external fun nativeSetVibeServerWebEnabled(on: Boolean)
+    private external fun nativeSetVibeServerLanOnly(on: Boolean)
     private external fun nativeSetVibeServerLockedRate(rate: Double)
     /** Station list (JSON array) served at GET /stations for the web client's
      *  search. The app supplies it — it already downloads + caches EiBi, and a

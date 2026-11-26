@@ -451,7 +451,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       //   ★★ Never name Android on iOS (App Review guideline 2.3.10).
       body: 'Under Directories, first in the list, as VibeServer. Running VibeServer yourself? '
           + (Platform.OS === 'android'
-            ? 'Tap Use as server, choose VibeServer Full and turn on List this server publicly, and yours appears there too. (VibeServer Simple stays on your own network.)'
+            // ★★★ beta96 RE-VERIFIED (b96-appserver2): the entry's labels, and the listing switch is on Full's RUNNING screen
+            //     (ADVERTISE ON VIBESDR.NET, after START) — not on the SERVER | RADIO setup tabs.
+            ? 'Tap Use as server, choose VibeServer Full, press START, then turn on List this server publicly, and yours appears there too. (VibeServer Simple (Local Network Only) stays on your own network.)'
             : 'Host it with VibeServer on a Mac or Linux and turn on public listing there, and yours appears here too.') },
     { id: 'custom', title: 'Your own server',
       body: 'Got a private UberSDR, OpenWebRX, KiwiSDR or Web-888? Enter its address here to connect to it directly.',

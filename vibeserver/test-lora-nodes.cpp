@@ -92,7 +92,7 @@ static void feed(MeshTable& t, const Msg& m, double at, vibeism::Sink* s) {
     t.accept(m, at, &ev, &fx);
     for (auto& f : fx) {
         vibeism::NodeFix n; n.net = f.net; n.type = f.type; n.name = f.name; n.node = f.node; n.lat = f.lat; n.lon = f.lon; n.approx = f.approx;
-        n.hops = f.hops; n.snr = f.snr; n.freqHz = f.freqHz; s->node(n);
+        n.hops = f.hops; n.snr = f.snr; n.freqHz = f.freqHz; n.relays = f.relays; s->node(n);
     }
 }
 
@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
                && body.find("51.622300, -1.102800") != std::string::npos, "Benson: heard 21×, in the background, at its advertised position");
             ok(body.find("52.24, -0.89 approx") != std::string::npos && body.find("52.2413") == std::string::npos, "Alice (a companion): rounded and approx");
             ok(lg->nodesTitleNow().find("LoRa / MeshCore 868 MHz") == 0 && lg->nodesTitleNow().find("2 nodes heard") != std::string::npos
-               && lg->nodesTitleNow().find("1 repeater") != std::string::npos && lg->nodesTitleNow().find("furthest 7") != std::string::npos,
+               && lg->nodesTitleNow().find("1 repeater") != std::string::npos && lg->nodesTitleNow().find("furthest via mesh 7") != std::string::npos,
                "the title: " + lg->nodesTitleNow());
             ok(index(dir).find("\"s\":\"ismnodes-868-") != std::string::npos, "indexed with the slot the clients draw MAP for (ismnodes-)");
             lg->finish();
@@ -269,6 +269,74 @@ int main(int argc, char** argv) {
             lg->finish();
             ok(lg->nodesText().find("Not listed:   23") != std::string::npos, "…and says how many it dropped");
         }
+    }
+
+    // ── ★ beta96 THE ROUTE + FURTHEST DIRECT / VIA MESH (Stuart 11-26: "furthest t::1 334 km", "show the route") ──
+    std::printf("── beta96: the relays kept, fewest hops, furthest direct vs via mesh, plausibility ──\n");
+    {
+        // A flood advert as MeshCore's packet_format.md lays it out: header (route FLOOD = 1, type ADVERT = 4, version 0),
+        // path_len (bits 0-5 hop count, bits 6-7 hash size - 1), the path (one hash a relay, appended in relay order),
+        // then the advert. Here: 1-byte hashes 5a, 9f, 1c.
+        std::vector<uint8_t> b = mcAdvert(0x8d76bb29, "t::1", 50.59271, -4.82283, 2, 0);
+        b[1] = 3; b.insert(b.begin() + 2, {0x5a, 0x9f, 0x1c});
+        Msg m; ok(meshcore::parse(b, m) && m.pathLen == 3 && m.relays == "5a 9f 1c" && m.node == "8d76bb29" && m.longName == "t::1",
+                  "a FLOOD advert's path is kept in relay order (\"" + m.relays + "\"), the node 8d76bb29 named t::1");
+        // 2-byte hashes (path_len bits 6-7 = 1): two hops, four bytes
+        std::vector<uint8_t> b2 = mcAdvert(0x11223344, "Two", 52.0, -1.0, 2, 0);
+        b2[1] = uint8_t(1 << 6 | 2); b2.insert(b2.begin() + 2, {0xab, 0xcd, 0x01, 0x02});
+        Msg m2; ok(meshcore::parse(b2, m2) && m2.pathLen == 2 && m2.relays == "abcd 0102", "2-byte hashes: \"" + m2.relays + "\"");
+        // a DIRECT-routed packet's path is the route still to go: not kept
+        std::vector<uint8_t> b3 = b; b3[0] = uint8_t(0x04 << 2 | 0x02);
+        Msg m3; ok(meshcore::parse(b3, m3) && m3.relays.empty() && m3.pathLen == 3, "a DIRECT packet's path is not called a route travelled");
+        // first-hand: path_len 0 → no relays
+        Msg m4; ok(meshcore::parse(mcAdvert(0x0a0b0c0d, "Near", 52.27, -0.65, 2, 0), m4) && m4.relays.empty() && m4.pathLen == 0, "heard first-hand: no relays");
+        // a path claiming more than 64 bytes is refused
+        std::vector<uint8_t> b5 = mcAdvert(0x01010101, "Long", 52.0, -1.0, 2, 0); b5[1] = uint8_t(2 << 6 | 30);   // 30 × 3 = 90 bytes
+        b5.insert(b5.begin() + 2, 90, uint8_t(0x77));
+        Msg m5; ok(!meshcore::parse(b5, m5), "a path over 64 bytes: not a packet");
+
+        // the table: the fewest hops and the newest flood route; JSON carries both
+        MeshTable t;
+        Msg d0 = m4; d0.freqHz = 869.618e6; t.accept(d0, 0);
+        std::vector<uint8_t> rel = mcAdvert(0x0a0b0c0d, "Near", 52.27, -0.65, 2, 0); rel[1] = 2; rel.insert(rel.begin() + 2, {0x5a, 0x9f});
+        Msg d1; meshcore::parse(rel, d1); d1.freqHz = 869.618e6; t.accept(d1, 2);   // the same advert relayed, after
+        std::string j; for (auto& r : t.rowsJson(3)) j += r.second;
+        ok(j.find("\"hops\":2") != std::string::npos && j.find("\"direct\":1") != std::string::npos && j.find("\"relays\":\"5a 9f\"") != std::string::npos,
+           "heard first-hand then relayed: hops 2 (newest), direct:1 (fewest 0), relays \"5a 9f\"");
+
+        // the gallery's card: furthest DIRECT and VIA MESH; an implausible fix is neither; the routes section round-trips
+        vibe::gallery::Store st; const std::string dir = tmpDir("route"); st.setDir(dir); st.setLimitBytes(50ull << 20);
+        int64_t clk = vibe::gallery::nowUtc(); clk = clk - clk % 86400 + 3600;
+        vibe::ismgal::DayLog::Options o; o.bandId = "868"; o.bandName = "868 MHz SRD"; o.bandHz = 868.6e6; o.origin = "live";
+        o.clock = [&clk] { return clk; }; o.rxLat = 52.3125; o.rxLon = -0.875;
+        {
+            auto lg = std::make_shared<vibe::ismgal::DayLog>(st, o);
+            MeshTable tt;
+            feed(tt, mc(0x92771c35, "N-Ise repeater NN29", 52.271268, -0.645521, 2, 0), double(clk), lg.get());         // 16 km, first-hand
+            feed(tt, mc(0x92771c35, "N-Ise repeater NN29", 52.271268, -0.645521, 2, 2), double(clk + 1), lg.get());     // …relayed copy after
+            Msg far; meshcore::parse(b, far); far.freqHz = 869.619e6; far.snrDb = -7; feed(tt, far, double(clk + 2), lg.get());   // t::1, 334 km, 3 relays
+            feed(tt, mc(0x0bad0bad, "Typo", -33.9, 151.2, 2, 1), double(clk + 3), lg.get());                              // Sydney, 1 hop: implausible
+            clk += 400; lg->tick();
+            const std::string body = lg->nodesText(), title = lg->nodesTitleNow();
+            ok(body.find("furthest direct 16 km (N-Ise repeater NN29)") != std::string::npos && body.find("via mesh 334 km (t::1)") != std::string::npos,
+               "the card: furthest direct N-Ise 16 km, via mesh t::1 334 km");
+            ok(title.find("furthest direct 16 km") != std::string::npos && title.find("via mesh 334 km") != std::string::npos, "the title: " + title);
+            ok(body.find("Typo") != std::string::npos && body.find("17000") == std::string::npos && title.find("km") != std::string::npos && body.find("(Typo)") == std::string::npos,
+               "Sydney at 1 hop is listed but never the furthest (implausible)");
+            ok(body.find("N-Ise repeater NN29 \xc2\xb7 92771c35 \xc2\xb7 52.271268, -0.645521 \xc2\xb7 0 \xc2\xb7") != std::string::npos,
+               "N-Ise keeps its FEWEST hops (0) after the relayed copy");
+            ok(body.find("\nRoutes heard (") != std::string::npos && body.find("8d76bb29 \xc2\xb7 5a 9f 1c\n") != std::string::npos
+               && body.find("92771c35 \xc2\xb7 b0 b1\n") != std::string::npos, "the routes section: 8d76bb29 · 5a 9f 1c (and N-Ise's newest, relayed)");
+            lg->finish();
+        }
+        {
+            auto lg = std::make_shared<vibe::ismgal::DayLog>(st, o);
+            ok(lg->nodesText().find("8d76bb29 \xc2\xb7 5a 9f 1c\n") != std::string::npos && lg->nodes() == 3,
+               "after a restart the routes are read back with the table");
+            lg->finish();
+        }
+        ok(vibe::ismgal::relaysSafe("5A 9f zz") == "" && vibe::ismgal::relaysSafe("5A 9f") == "5a 9f" && vibe::ismgal::relaysSafe("5 9f") == "9f",
+           "a relays field from a file: hex groups only");
     }
 
     std::printf("%d passed, %d failed\n", passes, fails);

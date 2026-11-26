@@ -2059,7 +2059,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #galImgWrap #galImg { margin: 0; }
 #galGeo { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 #galGeo[hidden] { display: none; }
-#galOutline.on, .satOutline.on { border-color: var(--accent, #ffd600); color: var(--accent, #ffd600); }
+/* ★ beta96 (Stuart 11-26): MAP OUTLINE ON took button.btn.on's yellow fill AND a yellow text colour here = yellow on yellow. The fill now carries the dark text like every other ON key. */
+#galOutline.on, .satOutline.on { color: #0c0f0c; }
 #galWrap { margin: 8px 0; }
 #galWrap > #galText { margin: 0; }
 #galWrap.snr > #galText { padding-left: 16px; }

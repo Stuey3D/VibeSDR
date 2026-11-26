@@ -13,6 +13,8 @@ T=$(mktemp -d /tmp/vs-lxloop-XXXXXX)
 nice -n 10 c++ -std=c++17 -O2 -I $W/vibeserver -I $W/android/app/src/main/cpp -o $T/ta $W/vibeserver/test-adsb.cpp && $T/ta --write-clip $T/c.u8 2 2560000 >/dev/null
 RP=$((47900 + RANDOM % 50)); SP=$((48100 + RANDOM % 50)); FP=$((48200 + RANDOM % 50))
 nice -n 10 node --max-old-space-size=256 $W/vibeserver/fake-rtl-tcp.mjs --port $RP --rate 2400000 --adsb $T/c.u8 > $T/fake.log 2>&1 & RTL=$!
+# ★ wait for the fake to listen — start 1 used to race it ("could not connect to rtl_tcp", the daemon exits; b96 integration run)
+for k in $(seq 1 50); do (exec 3<>/dev/tcp/127.0.0.1/$RP) 2>/dev/null && break; sleep 0.1; done
 mkdir -p $T/data $T/run
 cat > $T/config.json <<J
 {"configured":true,"fullMode":true,"sharing":"public","port":$FP,"radios":[{"serial":"fake","driver":"rtlsdr","enabled":true,"configured":true,"freq":96100000,"rate":2400000,"demodMode":"wfm","landingFreq":96100000,"users":10,"dabRateBoost":true,"adsb256":true,"landingAdsb":true,"adsbKeepRunning":true}]}

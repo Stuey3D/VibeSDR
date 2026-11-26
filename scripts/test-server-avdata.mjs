@@ -113,7 +113,8 @@ async function signIn(S, sock) {
     await until(() => sp.open, 3000);
     await sleep(1200);
     const before = lastOf(sp, 'config');
-    sp.send({ type: 'avdata', on: 1, band: 'vdl2' });
+    // ★★ beta96 (Stuart 11-26): a PLAIN entry, nothing named, nothing used before, lands on VDL2 (it was ACARS)
+    sp.send({ type: 'avdata', on: 1 });
     ok(await until(() => !!lastOf(sp, 'avdata'), 6000), 'an avdata report arrives');
     const cfg = lastOf(sp, 'config');
     ok(cfg && Math.abs(cfg.centerFreq - 136.8625e6) < 1, `the radio on 136.8625 MHz (centre ${cfg && cfg.centerFreq})`);

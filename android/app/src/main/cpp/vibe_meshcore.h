@@ -75,6 +75,16 @@ inline bool parse(const std::vector<uint8_t>& b, Msg& m) {
     if (hsz == 4) return false;
     const size_t plen = size_t(hops) * size_t(hsz);
     if (plen > 64 || i + plen > b.size()) return false;
+    // ★ beta96 THE ROUTE (Stuart 11-26: "show the route"): a FLOOD packet's path is each relaying repeater's hash
+    //   (the first hsz bytes of its public key), appended as it was relayed — kept, in order. A DIRECT packet's path is
+    //   the route it is told to take, not one it travelled: not kept.
+    if (route == 0 || route == 1) {
+        static const char* hx = "0123456789abcdef";
+        for (int h = 0; h < hops; ++h) {
+            if (h) m.relays += ' ';
+            for (int k = 0; k < hsz; ++k) { const uint8_t c = b[i + size_t(h) * size_t(hsz) + size_t(k)]; m.relays += hx[c >> 4]; m.relays += hx[c & 15]; }
+        }
+    }
     i += plen;
     const uint8_t* p = b.data() + i; const size_t n = b.size() - i;
     m.proto = "meshcore";

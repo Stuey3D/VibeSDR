@@ -8,9 +8,10 @@
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { OUTLINE_KEY, outlineFromStored, outlineToStored, type Outline } from '../utils/lrptOutline';
+import { sameGaps, type LrptGap } from '../utils/lrptGaps';   // ★ beta96 the live picture's gaps (squashed bands)
 
-interface State { outline: Outline | null; why: string; on: boolean }
-let state: State = { outline: null, why: '', on: outlineFromStored(null) };
+interface State { outline: Outline | null; why: string; on: boolean; gaps: LrptGap[]; rot: 0 | 180 }
+let state: State = { outline: null, why: '', on: outlineFromStored(null), gaps: [], rot: 0 };
 const subs = new Set<(s: State) => void>();
 const emit = () => { for (const f of subs) f(state); };
 let loaded = false;
@@ -23,7 +24,9 @@ function load() {
 /** DecoderClient: the server's live outline (or why there is none). */
 export function setLiveOutline(outline: Outline | null, why: string) { state = { ...state, outline, why }; emit(); }
 /** A new picture (or the decoder changed): the last outline does not belong to it. */
-export function clearLiveOutline() { if (state.outline || state.why) { state = { ...state, outline: null, why: '' }; emit(); } }
+export function clearLiveOutline() { if (state.outline || state.why || state.gaps.length || state.rot) { state = { ...state, outline: null, why: '', gaps: [], rot: 0 }; emit(); } }
+/** ★★★ beta96 DecoderClient: the live picture's gaps from lrpt_status (src/utils/lrptGaps.ts) — emitted only when changed. */
+export function setLiveGaps(gaps: LrptGap[], rot: 0 | 180 = 0) { if (!sameGaps(gaps, state.gaps) || rot !== state.rot) { state = { ...state, gaps, rot }; emit(); } }
 export function setOutlineOn(on: boolean) {
   state = { ...state, on }; emit();
   AsyncStorage.setItem(OUTLINE_KEY, outlineToStored(on)).catch(() => {});
