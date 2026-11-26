@@ -76,7 +76,7 @@ both roads run the same code.
 
 ## START / STOP first on Full; device-only password / PIN; reset
 
-`src/components/ServerTopBar.tsx` — one line at the top of each of Full's two views (START, or STOP when running, takes
+`src/components/ServerTopBar.tsx` — in b96-setupux's `serverChoiceTop` hook (setup view: above the banners and every section) and as the first line of the running view (START, or STOP when running, takes
 the TV remote's first focus) plus the remote-settings line. Its START runs `pressStart` — the bottom START's own checks
 (no admin password → red key, Icom CI-V) — so the two cannot drift.
 
@@ -85,11 +85,11 @@ device: http://<ip>:<port>/setup or <name>.local:<port>/setup — sign in with y
 settings: off (turn on here to change settings from another device)".
 
 `src/components/DeviceCredentials.tsx` — **Change admin password / PIN**, no old password (the device is the proof).
-Typed twice, 8–128 characters (`passwordProblem`, the shim's rule too). Saves to the screen's copy, the server's store
+In Full's setup view it is the `devicePassword` section (b96-setupux's slot, before "Admin password and PIN"); in the running view and on Simple it sits at the bottom. Typed twice, 8–128 characters (`passwordProblem`, the shim's rule too). Saves to the screen's copy, the server's store
 (`settings.put`) and the running engine (`setVibeServerAdminSecret`, and a new live `setVibeServerPin`). The PIN half is
 Full only. The remote /setup page still needs the current password and can never change it.
 
-`src/components/DeviceReset.tsx` — **RESET ALL SETTINGS AND START AGAIN**, at the very bottom of Simple and Full:
+`src/components/DeviceReset.tsx` — **RESET ALL SETTINGS AND START AGAIN**, at the very bottom of Simple and Full (after every section):
 the admin password typed (or the word RESET where none was ever set), then "Are you sure?" listing what goes.
 `VibeRemoteSetup.resetAll` (binder only — no HTTP route; a /setup save naming `factoryReset` / `resetAll` is refused):
 
@@ -145,7 +145,7 @@ window) and reset on the device.
   Finish, uniformity over 32 000 symbols, rejection of the top of the range, the lock-out guard and reset refused from
   /setup. In CMake (`add_test setup-code`) and picked up by run-tests' C++ loop.
 - `vibeserver/test-android-setup.cpp` — still all passed after the guard.
-- `scripts/test_server_choice.ts` — **68/68**: the pure rules (choices, first open, remote setup offered, the label,
+- `scripts/test_server_choice.ts` — **70/70**: the pure rules (choices, first open, remote setup offered, the label,
   Simple's config, merge keeps Full, view is LAN-only, the status line, password rule, reset keys), the Kotlin twins,
   the native wiring (tunnel gates on both start paths, no permanent remote access from first-time setup, code refused
   with a password, LAN-only, never logged, reset's password check and no HTTP route, the page's code → password →
@@ -163,7 +163,16 @@ are reviewed and compiled — see Builds); the Lite bundle under RN 0.73.
 
 ## Builds
 
-See the final report for what compiled via the lock (vibeserver_core + test-setup-code with cmake; gradle).
+- `cmake --build … --target vibeserver_core test-setup-code` (via the lock) — **built**: the shim with the new routes
+  compiles; `test-setup-code` 42/42 from the CMake build too.
+- `./gradlew :app:assembleDebug -PreactNativeArchitectures=arm64-v8a` (via the lock) — **built** (Kotlin, the JNI
+  file, the arm64 native library, the JS bundle). Built before the last merge of b96-integrate (b96-setupux), which
+  touched only ServerModeScreen's TypeScript here; tsc is clean for it.
+- **Lite**: no Gradle run (its prebuilt native kit is not in this worktree). Its JS was bundled with Metro under its own
+  RN 0.73 (`react-native bundle`, Lite's metro config with the real node_modules path) — **bundles**, and contains the
+  new screens with no Reanimated / Skia.
+- The tunnel / Kotlin shared files Lite compiles (`VibeServerBoot`, `VibeServerOps`, `VibeServerRestore`,
+  `VibeRemoteSetup`, `VibeLocalSDR`) are the ones the app build compiled.
 
 ## Open decisions for Stuart
 
