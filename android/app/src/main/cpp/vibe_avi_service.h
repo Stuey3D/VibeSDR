@@ -75,6 +75,8 @@ struct Aircraft {
     int count = 0;
     std::string via;                 ///< "VDL2 136.975", "ACARS 131.725", "HFDL 8977 (Reykjavik)"
     float level = -120;
+    float snr = NAN;                  ///< ★ beta96 the aircraft's LAST message's SNR, dB (its decoder's own measure)
+    const char* snrMode = "";        ///< ★ which scale: "acars" "vdl2" "hfdl300" "hfdl600" "hfdl1200" "hfdl1800" (src/utils/snrColour.ts)
     std::string lastLabel, lastText; ///< lastText: only kept when bodies are on
     // ★ HFDL: the last burst's ground station, frequency and level, and when (the map's /addon/hfdl/aircraft fields)
     int gsId = -1; double hfdlKhz = 0, hfdlAt = -1; float hfdlLevel = 0;
@@ -113,6 +115,8 @@ public:
         a.via = via;
         heard_(a, vibeavshare::kVdl2, now);
         if (fromAc) a.level = f.levelDb;
+        a.snr = fromAc ? f.snrDb : NAN;   // ★ beta96 an uplink's SNR is the ground station's, not this aircraft's
+        a.snrMode = "vdl2";
         if (f.hasAcars && f.acarsCrcOk) acars_(a, f.acars, now);
         ++msgs_; heardAt_(now);
     }
@@ -121,7 +125,7 @@ public:
         if (b.reg.empty()) { ++other_; return; }
         Aircraft& a = row_(0, b.reg, now);
         char via[48]; std::snprintf(via, sizeof via, "ACARS %.3f", b.hz / 1e6);
-        a.via = via; a.level = b.levelDb;
+        a.via = via; a.level = b.levelDb; a.snr = b.downlink ? b.snrDb : NAN; a.snrMode = "acars";
         heard_(a, vibeavshare::kAcars, now);
         acars_(a, b, now);
         ++msgs_; heardAt_(now);
@@ -134,7 +138,8 @@ public:
         char via[64]; std::snprintf(via, sizeof via, "HFDL %.0f%s%s", m.hz / 1e3, *vibehfdl::gsName(m.dstId) ? " " : "", vibehfdl::gsName(m.dstId));
         a.via = via;
         heard_(a, vibeavshare::kHfdl, now);
-        a.gsId = m.dstId; a.hfdlKhz = m.hz / 1e3; a.hfdlAt = now; a.hfdlLevel = m.snrDb;
+        a.gsId = m.dstId; a.hfdlKhz = m.hz / 1e3; a.hfdlAt = now; a.hfdlLevel = m.snrDb; a.snr = m.snrDb;
+        { const int bps = vibehfdl::bitRate(m.mode); a.snrMode = bps >= 1800 ? "hfdl1800" : bps >= 1200 ? "hfdl1200" : bps >= 600 ? "hfdl600" : "hfdl300"; }
         if (!m.flight.empty()) a.flight = m.flight;
         if (!std::isnan(m.lat)) { a.lat = m.lat; a.lon = m.lon; a.posAt = now; a.posSrc = "HFDL"; a.posTime.clear(); a.hasAlt = false; }
         if (m.hasAcars && m.acarsCrcOk) acars_(a, m.acars, now);
@@ -179,6 +184,9 @@ public:
             if (!a.lastLabel.empty()) o += "\"label\":\"" + jsonEsc(a.lastLabel) + "\",\"labelName\":\"" + jsonEsc(labelName(a.lastLabel)) + "\",";
             if (bodies_ && withText && !a.lastText.empty()) o += "\"text\":\"" + jsonEsc(a.lastText) + "\",";
             std::snprintf(b, sizeof b, "\"level\":%.1f,\"n\":%d,\"age\":%.0f,", a.level, a.count, now - a.last); o += b;
+            // ★ beta96 the last message's SNR (MESSAGE-SNR.md: ACARS carrier / VDL2 burst over the channel floor, HFDL the
+            //   equaliser's) — only when it came from the aircraft, as the level (a ground uplink says nothing of our aerial)
+            if (a.snr == a.snr) { std::snprintf(b, sizeof b, "\"snr\":%.1f,\"sm\":\"%s\",", a.snr, a.snrMode); o += b; }
             o += "\"via\":\"" + jsonEsc(a.via) + "\"}";
         }
         o += "]}";

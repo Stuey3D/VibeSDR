@@ -229,5 +229,18 @@ int main(int argc, char** argv) {
         tr.clear();
         CHECK(rate(5000) == 0, "cleared: 0 /min");
     }
+    {   // ★★ beta96 THE LAST MESSAGE'S SNR per aircraft (docs/v12/MESSAGE-SNR.md) — from the aircraft only
+        std::printf("── message SNR ──\n");
+        vibeavi::Tracker tr(false);
+        vibeacars::Block b; b.reg = "G-EUPT"; b.flight = "BA123"; b.label = "H1"; b.hz = 131.725e6; b.levelDb = -30; b.snrDb = 17.26f; b.downlink = true;
+        tr.addAcars(b, 10);
+        CHECK(tr.json(11).find("\"snr\":17.3,\"sm\":\"acars\",") != std::string::npos, "a downlink's SNR is the row's: %s", tr.json(11).c_str());
+        b.downlink = false; b.snrDb = 30;
+        tr.addAcars(b, 12);
+        CHECK(tr.json(13).find("\"snr\":") == std::string::npos, "an uplink (the ground station's signal) leaves no SNR on the aircraft");
+        vibeacars::Block c; c.reg = "G-NONE"; c.hz = 131.725e6; c.levelDb = -30; c.downlink = true; c.snrDb = 0;
+        vibeavi::Tracker t2(false); t2.addAcars(c, 1);
+        CHECK(t2.json(2).find("\"snr\":0.0,") != std::string::npos, "0 dB is a number, not 'none'");
+    }
     return g_fail ? 1 : 0;
 }

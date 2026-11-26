@@ -26,7 +26,8 @@ static void dig(const void* p, size_t n) { const uint8_t* b = static_cast<const 
 using vibeavitx::putAddr; using vibeavitx::avlcAcars;   // ★ vibe_avi_tx.h (the transmitters)
 static std::vector<int> burstSymbols(const std::vector<std::vector<uint8_t>>& f) { return vibeavitx::vdl2Symbols(f); }
 template <class... A> static void addBurst(A&&... a) { vibeavitx::vdl2Burst(std::forward<A>(a)...); }
-struct Res { int good = 0, wrong = 0; };
+struct Res { int good = 0, wrong = 0; std::vector<float> snr;   // ★ beta96 the good frames' Frame::snrDb
+             float med() const { if (snr.empty()) return -99; auto v = snr; std::sort(v.begin(), v.end()); return v[v.size() / 2]; } };
 static Res synth(double fs, double snrDb, int nb, uint32_t seed) {
     const double hw = 136.850e6;
     const std::vector<double> ch = { 136.775e6, 136.875e6, 136.975e6 };
@@ -57,7 +58,7 @@ static Res synth(double fs, double snrDb, int nb, uint32_t seed) {
             if (!f.hasAcars) { ++r.wrong; return; }
             std::string t = f.acars.msgNo + f.acars.flight + f.acars.text;
             bool m = false; for (auto& x : sent) if (x == t) m = true;
-            if (m && f.acarsCrcOk) ++r.good; else ++r.wrong;
+            if (m && f.acarsCrcOk) { ++r.good; r.snr.push_back(f.snrDb); } else ++r.wrong;
             dig(t.data(), t.size());
         });
     return r;
@@ -185,7 +186,7 @@ int main(int argc, char** argv) {
         if (argc > 2) { const double snr = std::atof(argv[2]); Res r = synth(2.4e6, snr, 3, 1); std::printf("%d good %d wrong\n", r.good, r.wrong); return 0; }
         for (double fs : { 2.4e6, 2.048e6 }) for (double snr = 8; snr <= 20; snr += 2) {
             Res r = synth(fs, snr, 10, uint32_t(snr * 10 + fs / 1e5));
-            std::printf("%.3f MS/s %4.1f dB: %2d of 30, wrong %d\n", fs / 1e6, snr, r.good, r.wrong);
+            std::printf("%.3f MS/s %4.1f dB: %2d of 30, wrong %d, reported SNR %.1f dB\n", fs / 1e6, snr, r.good, r.wrong, r.med());
         }
         return 0;
     }
@@ -284,7 +285,9 @@ int main(int argc, char** argv) {
             std::printf("   %.3f MS/s   SNR (10.5 kHz) : frames of %d\n", fs / 1e6, quick ? 9 : 24);
             for (double snr : { 10.0, 12.0, 14.0, 16.0, 20.0, 30.0 }) {
                 Res r = synth(fs, snr, quick ? 3 : 8, uint32_t(snr * 7 + fs / 1e5));
-                std::printf("               %4.0f dB      : %3d  wrong %d\n", snr, r.good, r.wrong);
+                std::printf("               %4.0f dB      : %3d  wrong %d  reported SNR %.1f dB\n", snr, r.good, r.wrong, r.med());
+                // ★ beta96 the reported SNR (burst power over the channel floor, MESSAGE-SNR.md) follows the transmitted one
+                if (r.snr.size() >= 3) CHECK(r.med() > float(snr) - 6 && r.med() < float(snr) + 6, "VDL2 reported SNR %.1f dB at %.0f dB", r.med(), snr);
                 CHECK(r.wrong == 0, "wrong frames at %.0f dB", snr);
                 if (snr >= 20) CHECK(r.good >= (quick ? 8 : 22), "frames at %.0f dB (%d): the RNG differs between libc++ and libstdc++, so a statistical bar, not all", snr, r.good);
             }
