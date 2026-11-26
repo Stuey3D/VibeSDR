@@ -134,6 +134,20 @@ scratch copy of the tree; the "Cost" column says where.
 
 NAVTEX keeps its beta96 strip, timeline and line (now on this scale).
 
+## The ADS-B list at every width (Stuart 11-26: "the signal hides the aircraft details")
+A beta95 server in Safari, the list panel ~232 px on a ~1190 px window: every row showed the meter and a clipped "[", no
+callsign. The fixed altitude / speed / range columns took the row, the thing beside the name never shrinks, and the only
+narrow rule was a viewport `@media` — never true for a narrow PANEL on a wide window. The chip is wider than the bars, so
+beta96 was worse. Fixed by width of the LIST, in one order on both readers:
+- web: a container query on `#adsbList` (web/client/index.html) — < 420 px speed goes; < 360 the chip (and a MIL /
+  emergency tag) moves under the callsign; < 320 altitude over range in one end column, "tracked" goes; < 210 the bearing
+  word goes. The chip beside the name keeps a 5 px gap (TrackView's `.trkRow .snrChip` margin had removed it).
+- app: `adsbRowLayout(listW)` (src/services/adsbList.ts), fed TrackLiveList's `adsbListWidth` — speed, then chip under, then
+  stacked; checked at every width 160–300 pt in scripts/test_adsb_list.ts (layout arithmetic only: RN text is not measured).
+- scripts/test-web-adsb-list-width.mjs: the REAL page on a real vibeserver + fake rtl_tcp ADS-B clip, panel forced to
+  232 / 300 / 400 / 600 px and 390 / 320 phones — failed 86/18 before (0 px of callsign at 232 and 300), 122/0 after.
+- Not changed: the other aircraft rows (`.trkRow`, auto columns) and NDB's `#ndbList` still narrow by the viewport only.
+
 ## Stored / logged
 
 Decoder logs are one per server across radios.
