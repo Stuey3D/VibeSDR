@@ -1427,6 +1427,7 @@ export default function DecoderPanel({
               maxHeight={maxH}
               decoderName={activeDecoder ?? 'image'}
               outline={activeDecoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
+              gaps={activeDecoder === 'lrpt' ? lrptOl.gaps : undefined}
               zoom={IMG_ZOOMS[imgZoomI]}
               onInfo={setImageInfo}
               onStatus={(s: string) => onImageStatus?.(s)}

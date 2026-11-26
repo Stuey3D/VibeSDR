@@ -2,6 +2,8 @@
 // both need to start the decoder and read its status. The picture itself comes as the SSTV frames (0x07 start · 0x01
 // line · 0x05 complete), a half-size colour preview growing during the pass; the full-size PNGs go to the gallery.
 
+import { parseLrptGaps, type LrptGap } from '../utils/lrptGaps';
+
 /** {"type":"lrpt_status","data":{…}} once a second (vibe_lrpt_run.h Run::status). */
 export interface LrptStatus {
   carrier: boolean;      // the demodulator is locked to the satellite's carrier
@@ -24,6 +26,9 @@ export interface LrptStatus {
   /** ★ beta95 of those, the lines with picture, and the lines of no signal between them (drawn hatched and labelled
    *  "NO SIGNAL hh:mm-hh:mm" in the picture itself, vibe_lrpt_run.h gapart). undefined from an older server. */
   decoded?: number; gapLines?: number;
+  /** ★★★ beta96 the live preview's gaps, merged (vibe_lrpt_run.h gapart::mergeGaps) — the clients draw each as one short
+   *  band (src/utils/lrptGaps.ts). [] from an older server or with none. */
+  gaps: LrptGap[];
   channels: string[];    // live MSU-MR channels ("1 visible", "2 near-IR", "5 thermal" …)
   why?: string;          // a reason it cannot run here (the IQ slice's rate)
 }
@@ -50,6 +55,7 @@ export function parseLrptStatus(d: unknown): LrptStatus | null {
     lines: Math.max(0, Math.round(n('lines'))),
     decoded: typeof o.decoded === 'number' && isFinite(o.decoded) ? Math.max(0, Math.round(o.decoded)) : undefined,
     gapLines: typeof o.gapLines === 'number' && isFinite(o.gapLines) ? Math.max(0, Math.round(o.gapLines)) : undefined,
+    gaps: parseLrptGaps(o.gaps),
     channels: Array.isArray(o.channels) ? (o.channels as unknown[]).filter((c) => typeof c === 'string').map((c) => (c as string).slice(0, 24)).slice(0, 6) : [],
     why: typeof o.why === 'string' && o.why ? (o.why as string).slice(0, 160) : undefined,
   };

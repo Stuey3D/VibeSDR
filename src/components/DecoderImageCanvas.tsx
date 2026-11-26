@@ -21,13 +21,15 @@
 import React, {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
-import { PanResponder, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { PanResponder, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 // ★★ A REAL FILE, NOT A data: URL — see save() below for why.
 import { File, Paths } from 'expo-file-system';
 import { WEFAX_ALIGN_ZERO, chartAlignStep, drawnAlign, wefaxOffset, type ChartAlignState, type WefaxAlign, type WefaxFormat } from '../utils/wefaxAlign';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../utils/wefaxCrisp';
 import { HELL_STRIP_ROWS, HellPager } from '../services/feldHell';   // ★ V12 FELD HELL: a page of strips
 import { OUTLINE_INK, type Outline } from '../utils/lrptOutline';   // ★ V12 METEOR LRPT's MAP OUTLINE on the live picture
+// ★★★ beta96 METEOR LRPT's live preview with its gaps squashed to short bands + FIT / FOLLOW (src/utils/lrptGaps.ts)
+import { lrptFitNow, lrptViewHint, lrptViewToggle, mapOutline, renderSquashed, squashPlan, type LrptGap, type LrptView, type SquashPlan } from '../utils/lrptGaps';
 import {
   Canvas, Image as SkiaImage, Path as SkiaPath, Skia,
   AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
@@ -144,6 +146,11 @@ export interface DecoderImageCanvasProps {
   /** ★ V12 METEOR LRPT: the live picture's MAP OUTLINE (src/utils/lrptOutline.ts) in the picture's own pixels — drawn over
    *  it when given (the caller passes it only with the viewer's switch ON); never over PREV (another picture). */
   outline?: Outline | null;
+  /** ★★★ beta96 METEOR LRPT: the live picture's gaps (lrpt_status "gaps", src/utils/lrptGaps.ts) — each drawn as one short
+   *  hatched, labelled band so the decoded picture fills the box. Given (even empty) = this is an LRPT picture: in the
+   *  SATELLITE box (fullWidth) it then shows the WHOLE pass when that fits (lrptFits), else follows the newest lines, and
+   *  a tap flips between the two. undefined = any other picture, unchanged. The buffers (SAVE, PREV) stay true geometry. */
+  gaps?: LrptGap[] | null;
 }
 
 /** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
@@ -203,7 +210,11 @@ function mkBuf(w: number, h: number): PixBuf {
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, fullWidth = false, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
                                autoMargin = false, autoSlant = true, stationSlant = 0, stationFormat, onAutoAlign,
-                               alignPreview, onAlignDrag, raw = false, onNewChart, outline = null }, ref) {
+                               alignPreview, onAlignDrag, raw = false, onNewChart, outline = null, gaps }, ref) {
+    const gapsRef = useRef(gaps);
+    gapsRef.current = gaps;
+    const [plan, setPlan] = useState<SquashPlan | null>(null);   // ★ beta96 the shown picture's squash (null = row for row)
+    const [lrptView, setLrptView] = useState<LrptView>('auto');
     const rawRef = useRef(raw);
     rawRef.current = raw;
     // ★ beta92 fullWidth: the outer scroller, and whether it is at the foot (then each new strip keeps the newest in view)
@@ -302,8 +313,16 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       lastBuild.current = now;
       // Crop display to written lines (+2 margin) so a fresh 500-row WEFAX
       // buffer doesn't show as a giant black void
-      const visH = Math.max(1, Math.min(buf.h, buf.maxLine + 2));
-      const slice = buf.data.subarray(0, buf.w * visH * 4);
+      let visH = Math.max(1, Math.min(buf.h, buf.maxLine + 2));
+      let slice = buf.data.subarray(0, buf.w * visH * 4);
+      // ★★★ beta96 METEOR LRPT: the live picture's gaps as short bands (the buffer itself stays true geometry)
+      const gs = gapsRef.current;
+      let pl: SquashPlan | null = null;
+      if (gs && gs.length && buf === live.current) {
+        pl = squashPlan(gs, visH);
+        if (pl.bands) { slice = renderSquashed(slice, buf.w, pl); visH = pl.h; } else pl = null;
+      }
+      setPlan(pl);
       const data = Skia.Data.fromBytes(slice);
       const sk = Skia.Image.MakeImage(
         { width: buf.w, height: visH, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
@@ -335,6 +354,14 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       if (!viewingPrev) rebuild(buf, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [alignKey]);
+
+    // ★ beta96 new gaps (once a second at most, with lrpt_status): the live picture redrawn with them
+    const gapsKey = gaps ? gaps.map((g) => `${g.r0}-${g.r1}-${g.lines}-${g.patchy ? 1 : 0}`).join(',') : '';
+    useEffect(() => {
+      if (gaps === undefined || viewingPrev || !live.current) return;
+      rebuild(live.current, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [gapsKey]);
 
     const rollToPrev = useCallback(() => {
       if (live.current && live.current.maxLine > 0) live.current.complete = true;
@@ -375,6 +402,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       imageStart(w: number, h: number) {
         rollToPrev();
         live.current = mkBuf(w, h); store.live = live.current;
+        setLrptView('auto');   // ★ beta96 a new pass starts on AUTO (fit while it fits)
         onInfo(`${w}x${h}`);
         onStatus(`receiving ${w}x${h}`);
         rebuild(live.current, true);
@@ -608,7 +636,11 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     /* ★★ FIT FIRST, THEN THE LISTENER'S ZOOM (Stuart, 2026-10-04: "the picture needs to be scaled to the box but
      *  we could add a zoom in and out to the header"). zoom 1 is exactly the fit above; more magnifies from there,
      *  still never past MAX_UPSCALE source pixels — beyond that there is nothing more to see. */
-    const fit = Math.min(fitsWhole ? Math.min(wScale, hScale) : wScale, MAX_UPSCALE);
+    /* ★★★ beta96 METEOR LRPT in the SATELLITE box: the whole pass when it fits (its gaps squashed, it usually does), so the
+     *  early clean picture never scrolls away; else follow the newest lines as before. A tap flips it (lrptGaps.ts). */
+    const lrpt = gaps !== undefined && fullWidth && !viewingPrev;
+    const lrptFit = lrpt && lrptFitNow(lrptView, dispDims.w, dispDims.h, panelW, maxHeight);
+    const fit = Math.min(fitsWhole || lrptFit ? Math.min(wScale, hScale) : wScale, MAX_UPSCALE);
     const scale = zoom > 1 ? Math.min(fit * zoom, Math.max(fit, MAX_UPSCALE)) : fit;
     const drawW  = Math.max(1, Math.round(dispDims.w * scale));
     const drawH  = Math.max(1, Math.round(dispDims.h * scale));
@@ -654,7 +686,10 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     }, []);
     // The shift as the listener reads it: px, signed, the short way round (−904…+904 on a 1809 px chart).
     // ★ V12 the MAP OUTLINE as Skia paths at the drawn scale (rebuilt only when the outline or the scale changes)
+    // ★ beta96 the outline moved with the squashed picture (its rows through the same plan)
+    const shownOutline = useMemo(() => (outline && plan ? mapOutline(outline, plan) : outline), [outline, plan]);
     const olPaths = useMemo(() => {
+      const outline = shownOutline;
       if (!outline || viewingPrev) return null;
       const mk = (ls: number[][]) => {
         if (!ls.length) return null;
@@ -663,7 +698,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         return p;
       };
       return { coast: mk(outline.lines.coast), lake: mk(outline.lines.lake), border: mk(outline.lines.border), grid: mk(outline.lines.grid) };
-    }, [outline, scale, viewingPrev]);
+    }, [shownOutline, scale, viewingPrev]);
     const hintShift = W0 > 1 ? ((((shown % W0) + W0 + W0 / 2) % W0) - W0 / 2) : shown;
     const alignHint = `SHIFT ${hintShift > 0 ? '+' : ''}${Math.round(hintShift)}`;
     // ★ Room for the hint on a chart only a few lines tall (it is fitted whole, so early on it is a sliver).
@@ -684,6 +719,8 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         {/* ★ Zoomed wider than the box: the picture pans SIDEWAYS too (the outer view scrolls down). */}
         <ScrollView horizontal showsVerticalScrollIndicator={false} scrollEnabled={drawW > panelW + 1} showsHorizontalScrollIndicator={drawW > panelW + 1}
                     contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}>
+          <Pressable disabled={!lrpt} onPress={() => { followRef.current = true; setLrptView(lrptViewToggle(lrptFit)); }}
+                     accessibilityRole={lrpt ? 'button' : undefined} accessibilityLabel={lrpt ? lrptViewHint(lrptFit) : undefined}>
           <View style={[styles.canvasWrap, { width: drawW, height: drawH, alignSelf: 'center' }]}>
             {img && (
               <Canvas style={{ width: drawW, height: drawH }}>
@@ -697,10 +734,11 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
                 {olPaths?.coast && <SkiaPath path={olPaths.coast} style="stroke" strokeWidth={1.4} color={OUTLINE_INK.coast} />}
               </Canvas>
             )}
-            {!!olPaths && outline!.labels.map((l, i) => (
+            {!!olPaths && shownOutline!.labels.map((l, i) => (
               <Text key={i} pointerEvents="none" style={[styles.olLabel, { left: l.x * scale + 3, top: l.y * scale + 2 }]}>{l.text}</Text>
             ))}
           </View>
+          </Pressable>
         </ScrollView>
       </ScrollView>
       {aligning && (
