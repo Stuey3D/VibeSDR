@@ -20,10 +20,12 @@ Stuart, 11-26: *"do this for HackRFs, SDRplay etc"* — the ACARS + VDL2 combina
 | In-process restart (endWholeRadioModesForStop covers it: it is the AIS mode) | `vibeserver/test-keep-restart.cpp` phase 3 | see Tests |
 | Benchmark row `dec_aisdsc` ("AIS + DSC together", 8 MS/s, hottest thread; shown beside AIS, never primary) | `vibe_benchmark_more.h`, `_hw.h`, `vibe_benchmark.h`, setup page label | built; **not run in the setup benchmark here** |
 | Web: MARITIME key (mode menu + Tunes the radio itself), AIS status "DSC ch 70: N calls" | `main.ts`, `mobile.ts`, `spectrum.ts`, `tracks.ts` | built (esbuild + build-web's type gate) |
-| Setup page: "AIS + DSC (channel 70)" under MARITIME; single mode "MARITIME: AIS + DSC (channel 70)" | `vibe_setup_page.h` KEEP_MODES, keepFacts, singleOptions | built; **page tests not extended** |
+| Setup page: "AIS + DSC (channel 70)" under MARITIME; single mode "MARITIME: AIS + DSC (channel 70)" | `vibe_setup_page.h` KEEP_MODES, keepFacts, singleOptions | built; test-setup-keep-run 73/73 (8 new) |
 | App: MARITIME key, keep card + single mode (own engine) | `ModeSelector.tsx` marKey, `SDRScreen.tsx` onMar, `VibeServerClient.ais(on, band)`, `tracks.ts`, `utils/keepRun.ts` | built; esbuild syntax OK; **not type-checked**; `test_keep_run.ts` 42/42 |
 | R36S handheld | — | **not done** (its radios are RTLs: the combination would never be offered there) |
-| Copy | About beta96 note; KEEP-RUNNING.md | done; tours mention no AIS location (checked) |
+| Copy | About beta96 note; KEEP-RUNNING.md | done; tours mention no AIS location (checked); website has no AIS copy |
+| `vibe_web_page.h` | rebuilt via the lock (build-web's type gate clean) | regenerate again if integration changes web/ |
+| Android | the shim, NDK 27 clang `-fsyntax-only` for arm64 with the gradle build's defines; the combination's test TU for arm64 + armv7 NEON | clean; **gradle not run** (no RN node_modules in the worktree) |
 
 ## How it works
 
@@ -55,8 +57,11 @@ Stuart, 11-26: *"do this for HackRFs, SDRplay etc"* — the ACARS + VDL2 combina
 | `vibeserver/test-maritime-combo.cpp` (run-tests.sh) | 50/50 | the rule per radio (16 cases); slices inside at 6.25 / 8 / 20 MS/s, the half-band only at 20; **4 ships on both channels + a DSC distress alert decoded at 8 and 20 MS/s** (synthetic, in noise); through `vibeais::Service` on its thread in real time (report `combo`/`dsc`, the gallery hook, tick, finish, no drops, restart as AIS alone); 20 s of noise → 0 AIS frames, 0 DSC calls; CPU |
 | `vibeserver/test-keep-run.cpp` §9 | 118/118 overall | entry, CSV, a bad pair, the gate (RTL: not drawn; RSP 8: drawn, one at a time with AIS; DSC off: greyed), single-mode token / switch / enforcement |
 | `scripts/test_keep_run.ts` | 42/42 | the app's local rule: RTL / RSP 6 / Mini 6 not drawn, RSP 8 / HackRF 20 / R2 10 drawn, DSC off greyed, single-mode list |
-| `scripts/test-server-maritime.mjs` | see report | **e2e on the Mac binary** (fake rtl_tcp at 8 MS/s with an RSP's rate list — `VIBE_TEST_TCP_RATES`, tests only — replaying `test-maritime-combo --write-clip`): RTL not offered + refused; 8 MS/s offered, centre 159.2625, 4 ships + 1 call, gallery distress pin + day log, AIS alone in place, back, leave; kept at start; single mode |
-| `vibeserver/test-keep-restart.cpp` phase 3 | see report | kept AIS + DSC at 8 MS/s back after every IN-PROCESS restart |
+| `scripts/test-server-maritime.mjs` (run-tests.sh) | 31/31 | **e2e on the Mac binary** (fake rtl_tcp at 8 MS/s with an RSP's rate list — `VIBE_TEST_TCP_RATES`, tests only — replaying `test-maritime-combo --write-clip`): RTL not offered + refused; 8 MS/s offered, centre 159.2625, 4 ships + 1 call, gallery distress pin + day log, AIS alone in place, back, leave; kept at start; single mode |
+| `vibeserver/test-keep-restart.cpp` phase 3 (`scripts/test-keep-restart.sh`) | 7/7 | kept AIS + DSC at 8 MS/s back after every IN-PROCESS restart (with kept VDL2 ×3, ISM ×2) |
+| `scripts/test-setup-keep-run.mjs` | 73/73 | the page's real functions: RTL not drawn (card nor single list), RSP 8 drawn + one choice + keep label + single mode, DSC off greyed, the form raised to 8 MS/s draws it |
+| `scripts/test_ais_aprs_app.ts` (web = app tracks) | 181/181 | unchanged behaviour with the report's new fields |
+| `test_admin_bg.ts` 63/63, `check-setup-page` clean, `check-android-settings-parity` 211/1 | | the 1 = b96-newmodes' `newModesPolOn/Off`, pre-existing on b96-integrate |
 
 ## CPU
 
