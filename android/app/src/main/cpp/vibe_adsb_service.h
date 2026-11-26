@@ -13,6 +13,7 @@
 #include "vibe_adsb_capture.h"   // ★ CaptureMeter — the live "capture N %"
 #include "vibe_aircraft_share.h"   // ★ V12 2026-11-16 the shared table every radio on the machine writes (the AVIATION MAP)
 #include "vibe_adsb_data.h"     // what an aircraft IS (registration, type, operator, route) — V12 aircraft data
+#include "vibe_adsb_delta.h"    // ★ V12 beta96 the DELTA protocol for listeners
 #include "vibe_adsb_range.h"    // ★ V12 beta94 the RANGE OUTLINE: the furthest position per bearing (rangeStore())
 #include <ctime>
 #include <atomic>
@@ -90,6 +91,8 @@ public:
         cap_.reset(rateHz, 0.0);
         winMsgs_ = winStrong_ = 0; lastGood_ = 0; winStart_ = 0; msgsTotal_ = 0;
         health_ = Health{};
+        phiSet_ = false;
+        { std::lock_guard<std::mutex> el(encMtx_); enc_.reset(); }   // ★ beta96 the next tick is a keyframe for everyone
         run_ = true;
         worker_ = std::thread([this] { loop(); });
         if (onRun_) onRun_(true);
@@ -153,16 +156,39 @@ public:
 
     /** The aircraft report: {"type":"adsb", …Tracker::json…, "rate":…, "noise":…, "dropped":…, "capture":…}.
      *  ★ capture: % of the promised samples this service RECEIVED over the last ~10 s, -1 until it knows (CaptureMeter). */
-    std::string report() {
+    std::string report(bool withAircraft = true) {   // ★ beta96 false: the header only, for the delta (aircraft:[])
         std::lock_guard<std::mutex> lk(mtx_);
         const double tn = now();
-        std::string t = tracker_.json(tn);
+        std::string t = tracker_.json(tn, withAircraft);
         char tail[192];
         std::snprintf(tail, sizeof tail, ",\"rate\":%.0f,\"noise\":%.1f,\"msgRate\":%.0f,\"dropped\":%llu,\"capture\":%d}",
                       rate_, health_.noiseDbfs, health_.msgsPerSec, (unsigned long long)dropped_, cap_.percent(tn));
         // Tracker::json is {"now":…,"messages":…,"aircraft":[…]} — open it up and add the type and the tail
         return "{\"type\":\"adsb\"," + t.substr(1, t.size() - 2) + tail;
     }
+
+    /** ★★ V12 beta96 THE DELTA PROTOCOL (vibe_adsb_delta.h): one tick's changes, built ONCE for every delta listener.
+     *  `headerObj` is the report's header as the shim finishes it (report(false) + gain / feed warning). `keyAll`: send
+     *  deltaKeyframe() to every delta listener this tick instead (ADS-B just started, or the 60 s keyframe). "" when
+     *  ADS-B is not running. The rows are copied under the tracker lock; the encoding is done outside it. */
+    std::string deltaTick(const std::string& headerObj, bool& keyAll) {
+        keyAll = false;
+        std::vector<delta::Row> rows;
+        double tn, phi;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (!run_.load(std::memory_order_relaxed)) return {};
+            tn = now();
+            if (!phiSet_) { phi_ = tn - 0.85; phiSet_ = true; }   // ★ this tick sits 0.85 s into its second (the header)
+            phi = phi_;
+            delta::rowsOf(tracker_, tn, phi, rows);
+        }
+        const int64_t T = (int64_t)std::floor(tn - phi);
+        std::lock_guard<std::mutex> el(encMtx_);
+        return enc_.tick(std::move(rows), headerObj, T, keyAll);
+    }
+    /** The whole table as the delta listeners hold it after the last tick: a joiner's, a resync's, the 60 s one. */
+    std::string deltaKeyframe() { std::lock_guard<std::mutex> el(encMtx_); return enc_.keyframe(); }
 
     /** ★★ WHAT EACH AIRCRAFT IS, SENT ONCE — not in the 1 fps report. `{"type":"adsb_info","aircraft":{"<hex>":{r, t,
      *  desc, wtc, eng, species, country, countryName, mil, op, opName, logo, sil, route{…}}}}` (ADSB.md), for the
@@ -246,6 +272,10 @@ public:
     }
 
 private:
+    // ★ beta96 the delta protocol's encoder and its tick grid (deltaTick). encMtx_ is never taken with mtx_ wanted after.
+    std::mutex encMtx_;
+    delta::Encoder enc_;
+    double phi_ = 0; bool phiSet_ = false;   // under mtx_
     static constexpr double kMaxQueuedSec = 0.5;           // capture the decoder may fall behind by before dropping
 
     double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }

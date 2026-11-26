@@ -15,6 +15,7 @@
 // ★★ WHAT IS *NOT* HERE, DELIBERATELY: everything both servers speak. That is SdrWsClient, one
 //    copy, so a fix to the shared half still reaches both — which is the good half of the old
 //    arrangement and worth keeping. Only the divergence is below.
+import { AdsbDeltaStore } from './adsbDelta';   // ★★ V12 beta96 ADS-B as deltas
 import { VibeServerWsClient, LADDERS_FOR } from './VibeServerWsClient';
 import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 import { holdNativeHealing } from '../components/AudioPlayer';
@@ -187,6 +188,8 @@ export class VibeServerClient extends VibeServerWsClient {
   /** ★★★ Reports that arrive after our own `adsb off` are ghosts — the DabExitGuard rule, unchanged
    *  (a report already on the wire re-opened the box over the receiver we had just been given back). */
   private adsbExit = new DabExitGuard();
+  /** ★★ V12 beta96 the ADS-B table as the delta listener holds it (adsbDelta.ts). */
+  private adsbDelta = new AdsbDeltaStore();
   /** ★ What each aircraft is (adsb_info), per hex, merged into every report — adsbInfo.ts. */
   private adsbInfo = new AdsbInfoStore();
   /** Date.now() of the last report — see adsbSilentMs. */
@@ -414,6 +417,16 @@ export class VibeServerClient extends VibeServerWsClient {
       if (r.report) msg = r.report as Record<string, unknown>;
     }
     if (msg.type === 'dab_off') this.dabAsm.reset();
+    /* ★★ V12 beta96 ADS-B AS DELTAS (adsbd=1 — src/services/adsbDelta.ts, shared with the web client): the table is kept
+     *  here and comes back as an ordinary `adsb` message, so everything below is unchanged. Always applied, even while
+     *  the exit guard drops reports, so the table never misses a tick; a gap asks for the whole table again. */
+    if (msg.type === 'adsb_k' || msg.type === 'adsb_d') {
+      const r = this.adsbDelta.take(msg);
+      if (r.resync) this.sendSpectrum({ type: 'adsb_resync' });
+      if (!r.report) return true;
+      msg = r.report;
+    }
+    if (msg.type === 'adsb_off') this.adsbDelta.clear();
     switch (msg.type) {
       case 'dab': {
         /* ★★★ NOT A REPORT WE ASKED TO STOP. Dropped before it touches anything — dabHeld above all,
