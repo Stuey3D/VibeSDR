@@ -66,7 +66,7 @@ const FAKE = [
   node('f9', 'meshcore', 'Kettering Hill', 'repeater', 'repeater', 52.4300, -0.6400, 5, 72000, { node: 'a3000001' }),
   // ★★ beta96 THE ROUTE: its advert came 9f → a3 → 5e → c1: M0SWM (placed), a3 = MeshCore Repeater OR Kettering Hill
   //   (ambiguous), 5e (nobody heard: unknown), Benson (placed)
-  node('f11', 'meshcore', 'Route Test', 'repeater', 'repeater', 51.3000, -0.2000, 4, 90, { node: 'ee112233', relays: '9f a3 5e c1' }),
+  node('f11', 'meshcore', 'Route Test', 'repeater', 'repeater', 51.9500, -0.7500, 4, 90, { node: 'ee112233', relays: '9f a3 5e c1' }),
 ];
 const INJECT = `(() => {
   const FAKE = ${JSON.stringify(FAKE)};
@@ -194,7 +194,8 @@ try {
   await ev(`document.querySelector('#ismChips .ismUnits[data-u="speed"]').click()`);   // the ISM list's KM/H → MPH key
   ok(await until(`/ mi/.test(${view}.querySelector('.st').textContent) && !/ km/.test(${view}.querySelector('.st').textContent)`, 4000),
      `KM/H → MPH in the ISM list: the map's status in miles: ${await ev(`${view}.querySelector('.st').textContent`)}`);
-  ok(await ev(`/\d mi/.test(${view}.querySelector('.rows').textContent) && !/\d km/.test(${view}.querySelector('.rows').textContent) && !/NM/.test(${view}.textContent)`), '…its NODES list in miles too (never NM)');
+  const rowsMi = await ev(`${view}.querySelector('.rows').textContent`);
+  ok(/\d mi/.test(rowsMi) && !/\d km/.test(rowsMi) && !/\bNM\b/.test(rowsMi), `…its NODES list in miles too (never NM): ${rowsMi.slice(0, 140)}`);
   const cam = `JSON.stringify((() => { const m = window.__vibeTrkMap, c = m.getCenter(); return { lat: +c.lat.toFixed(4), lng: +c.lng.toFixed(4), z: +m.getZoom().toFixed(2) }; })())`;
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Route Test/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2600);   // the fly-to, and four hops at 300 ms

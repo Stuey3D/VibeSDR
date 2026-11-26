@@ -19542,7 +19542,7 @@ function cleanMesh(list) {
   return list.slice(0, 1000).filter((x) => x && isFinite(Number(x.lat)) && isFinite(Number(x.lon))).map((x) => amMeshExtra(x, {
     key: okStr(x.key, /[<>&"'\`]/g, 48), name: String(x.name || '?').slice(0, 40), net: x.net === 'MeshCore' ? 'MeshCore' : 'Meshtastic',   // ★★ beta96 the name as advertised (esc() where shown)
     lat: Math.max(-90, Math.min(90, okNum(x.lat))), lon: Math.max(-180, Math.min(180, okNum(x.lon))), age: Math.max(0, okNum(x.age)),
-    approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live })));
+    approx: !!x.approx, what: okStr(x.what, /[<>&"'\`]/g, 40), live: !!x.live }));
 }
 function cleanBeacons(list) {
   if (!Array.isArray(list)) return [];

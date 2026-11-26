@@ -5,6 +5,7 @@
 //   map · km ↔ miles on every map surface (one preference) · the web and app copies agree.
 //   npx tsx scripts/test_mesh_route.ts
 import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
 import * as web from '../web/client/src/ism.ts';
 import * as app from '../src/services/ism.ts';
 import { meshName, meshPlausible, meshKm, meshDist, meshFurthest, meshFarText, meshRelays, meshRoute, MESH_ROUTE_JS,
@@ -247,6 +248,19 @@ eq('meshDist', [meshDist(16.09), meshDist(16.09, true), meshDist(5), meshDist(5,
   eq('…km by default', ptsKm[0].dist, '16 km');
   const withRt = amMeshPoints([{ ...t1, age: 60, relays: ['92'] }, { ...nise, age: 60 }], [], 0, { rx: RX });
   eq('…a MeshCore node carries its route, matched to the repeaters on the map', withRt.find((p) => p.name === 't::1')?.rw?.slice(0, 2), ['route: 1 hop, 1 placed', '1 · 92 · N-Ise repeater NN29']);
+}
+
+// ── 8. THE APP's MAP PAGES carry it (MapOverlay.tsx is page text: read as source) ─────────────────────────────────────
+{
+  const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
+  const am = readFileSync(new URL('../src/utils/amateurMap.ts', import.meta.url), 'utf8');
+  ok('app ISM page: MESH_ROUTE_JS carried on the ism page', mo.includes("${kind === 'ism' ? MESH_ROUTE_JS : ''}"));
+  ok('app ISM page: a tap draws the route, another clears it (onSelect → trkRoute)', mo.includes("trkSelFit(k);if(KIND==='ism')trkRoute(k);"));
+  ok('app ISM page: each item\'s _rt kept by key', /trkRt\[String\(a\[r0\]\.key\)\]=a\[r0\]\._rt/.test(mo));
+  ok('AMATEUR pages: MESH_ROUTE_JS rides with AMATEUR_JS', /export const AMATEUR_JS = MESH_ROUTE_JS \+/.test(am));
+  ok('AMATEUR pages: a mesh marker click draws its route; the empty map clears it', am.includes("AM_MK[n.key].on('click',function(){amRouteShow(n);})") && mo.includes('amRouteBind();'));
+  ok('AMATEUR: a route shown holds the auto fit (digiFit) until FIT or cleared', /if\(s1&&s1\.on\)\{if\(!s1\.paused\)f\.pause\(\);AM_RT_HELD=true;\}/.test(am) && /if\(s0&&s0\.on&&s0\.paused\)f\.resume\(\)/.test(am));
+  ok('app: the maps follow the ISM list\'s units', readFileSync(new URL('../src/components/IsmPanel.tsx', import.meta.url), 'utf8').includes('ismMilesSet(u.mph)'));
 }
 
 console.log(`test_mesh_route: ${pass} passed, ${fail} failed`);
