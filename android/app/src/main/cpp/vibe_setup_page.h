@@ -994,7 +994,8 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <input type="number" id="mapViewers" min="0" max="1000" step="1" value="20" style="max-width:110px">
           <div class="hint">How many may have the map open at once. 0 = no limit. The next one is told &ldquo;The map is full
             &mdash; try again shortly&rdquo;. Counted per open map, not per address, so a household or a mobile network sharing
-            one address is counted properly. You, signed in as the owner, are never turned away.</div></label>
+            one address is counted properly. You, signed in as the owner, are never turned away. <b>Separate from the radios&rsquo;
+            listeners:</b> 20 map viewers and a radio limited to 5 listeners means up to 25 people in all.</div></label>
         <label><span class="lbl">Map time limit</span>
           <input type="number" id="mapTimeMin" min="0" max="1440" step="1" value="0" style="max-width:110px"> minutes
           <div class="hint">How long one address may keep the map open. 0 = no limit. A minute before the end the map says so;

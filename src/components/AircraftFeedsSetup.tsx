@@ -127,7 +127,7 @@ export function AirSeaMapLimits({ C, F, viewers, minutes, onViewers, onMinutes, 
         <TextInput value={String(viewers)} keyboardType="number-pad" maxLength={4} accessibilityLabel="Map viewers"
                    onChangeText={(t) => onViewers(Math.max(0, Math.min(1000, Number(t.replace(/[^0-9]/g, '')) || 0)))} style={input} />
       </View>
-      <Text style={hint}>How many may have the map open at once. 0 = no limit. The next one is told {'“'}The map is full {'—'} try again shortly{'”'}.</Text>
+      <Text style={hint}>How many may have the map open at once. 0 = no limit. The next one is told {'“'}The map is full {'—'} try again shortly{'”'}. Separate from the radios{'’'} listeners: 20 map viewers and a radio limited to 5 listeners means up to 25 people in all.</Text>
       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
         <Text style={{ color: C.text, fontFamily: F, fontSize: 14, flex: 1 }}>Map time limit (minutes)</Text>
         <TextInput value={String(minutes)} keyboardType="number-pad" maxLength={4} accessibilityLabel="Map time limit in minutes"
