@@ -122,6 +122,23 @@ Both maps are built on **one map kit and one shared code path**:
 - NM scale bar on air/sea, km on amateur. The greyline on both. High Detail Maps packs are used by both, unchanged
   (`mapgl.ts probeMapGL` / app `mapglDetail`).
 
+### 5b. The click order (coordinator 11-26, after Stuart's community-map bug, fixed there in main 55a69c998)
+On the community map, an aircraft drawn over a NAVTEX area opened the AREA's card: each layer had its own click
+handler, and the area's ran last and replaced the aircraft's. Both live maps press in ONE order: **receiver → points
+(aircraft, ships, stations, spots) → lines / tracks → areas** (sea areas, NAVTEX area warnings, forecast arrows, the range
+outline), and an area answers only when nothing else is under the finger.
+- Our maps have one place where this matters. The track layer's markers are DOM elements (they take the press first),
+  while the aircraft are GPU symbols on the ADS-B layer. Areas' shapes are not clickable at all
+  (`interactive:false`); only their MARKERS are: a sea area's name, an area warning's icon, a forecast arrow.
+- `tracklayer.js opts.yieldClick(item, ev)`: an area-class item (`isAreaItem`: `_nofit`, cluster `'m'`, or a shape of
+  kind `'area'`) first asks the host. The host asks the ADS-B layer: `adsblayer.js pickAt(clientX, clientY, touch)`,
+  which takes 12 px of slack, or 20 on touch. If an aircraft is there, it is selected and the area's card is not opened.
+  The same rule runs on the web (`TrackView`) and in the app (the `'airsea'` page's trkMake).
+- Hover: DOM markers show the pointer and aircraft show the canvas pointer (adsblayer `onGlHover`). Both say "this is
+  pressable", so the order shows only when a press is made.
+- Test: `test-web-avmap` drops an aircraft onto a sea area's marker and presses it, expecting the aircraft's card and no
+  area card.
+
 ### 6. Menus: nobody loses their way
 Each existing entry opens the right map, layer and tab:
 

@@ -35,6 +35,7 @@
  *                                                     //   higher item's icon or a placed name (the selected one stays)
  *       aria:    function (item) { return '…'; },     // ★ a marker is a button (keyboard, gamepad, TV focus): its words
  *       onCard:  function (key, el) {}                // ★ the card was drawn (or redrawn): the host fills what it fetches
+ *       yieldClick: function (item, ev) { return false; }  // ★ beta96 an AREA item asks the host for a point under the press first
  *   ★ V12 2026-11-02 (the SEA AREAS): an item may carry, without any option —
  *       _mz: 5        its icon shows from this Leaflet zoom only (a sea area's name drops before its outline)
  *       _vb: [s, w, n, e]  ★ beta95 drawn only while this box is in (or near) the view — the worldwide sea areas: ~900 of
@@ -255,6 +256,8 @@
       yieldPass(placed);
     }
     map.on('moveend', declutterSoon);
+    // ★ beta96 the map's box changed size (the AIR & SEA map's top bar grows and shrinks with its chips): place again
+    try { map.on('resize', declutterSoon); } catch (e) { /* a map without the event */ }
     map.on('movestart', nogOn); map.on('zoomstart', nogOn);
     map.on('moveend', nogOff); map.on('zoomend', nogOff);
     map.on('zoomend', zoomed);
@@ -331,6 +334,14 @@
         });
       }
       el._vtlK = k;
+    }
+    /* ★★ beta96 THE CLICK ORDER (Stuart's community-map bug: an aircraft over a NAVTEX area opened the AREA's card):
+     *  receiver → points (aircraft, ships, stations) → lines → areas. opts.yieldClick(item, ev) — the host asks the other
+     *  layers for a point under the press; true = it took it, and this item's card is not opened. */
+    function yielded(key, ev) {
+      if (!opts.yieldClick || !ev) return false;
+      var e = items.get(key);
+      try { return !!(e && opts.yieldClick(e.item, ev)); } catch (err) { console.error('[tracklayer] yieldClick', err); return false; }
     }
     function activate(k, byKey) {
       var e = items.get(k); if (!e) return;
@@ -419,12 +430,13 @@
         var ic = iconFor(it, k === sel);
         if (!e) {
           var mk = L.marker([it.lat, it.lon], { icon: divIcon(ic, ' vtl-new' + (k === sel ? ' vtl-sel' : '')), keyboard: false, riseOnHover: true });
-          (function (key) { mk.on ? mk.on('click', function () { activate(key, false); }) : null; })(k);
+          // ★★ beta96 THE CLICK ORDER: an area-class item (opts.yieldClick says) gives the press to a point under it first
+          (function (key) { mk.on ? mk.on('click', function (e) { if (yielded(key, e && e.originalEvent)) return; activate(key, false); }) : null; })(k);
           mk.addTo(map);
           // compat markers have no .on — bind on the element
           (function (key, m) {
             var el = elOf(m);
-            if (el && !m.on) el.addEventListener('click', function (ev) { ev.stopPropagation(); activate(key, false); });
+            if (el && !m.on) el.addEventListener('click', function (ev) { ev.stopPropagation(); if (yielded(key, ev)) return; activate(key, false); });
             // ★ fade in on the next frame (a marker placed at opacity 0, then shown)
             setTimeout(function () { var el2 = elOf(m); if (el2) el2.classList.remove('vtl-new'); }, 30);
           })(k, mk);

@@ -1770,6 +1770,10 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
           setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
         },
         onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});},
+        /* ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a press on an AREA's marker (a sea area's name, an
+         *  area warning, a forecast arrow) goes to an aircraft under it first (Stuart's community-map bug) */
+        yieldClick:function(it,ev){if(!acLayer||!acLayer.pickAt||!it||!(it._nofit||it._cl==='m'||(it._sh&&it._sh.kind==='area')))return false;
+          var t=(ev&&ev.changedTouches&&ev.changedTouches[0])||ev;return !!acLayer.pickAt(t.clientX,t.clientY,!!(ev&&(ev.changedTouches||ev.pointerType==='touch')));},
         firstFit:(KIND==='avdata'||!window.VibeAutoFit)?undefined:false   // ★ beta92 the shared auto fit frames it (trkFitMake)
       });
       /* ★★ beta95 THE SEA AREAS WORLDWIDE: the shipping maps tell React Native where the view is (padded, rounded out to 2°),

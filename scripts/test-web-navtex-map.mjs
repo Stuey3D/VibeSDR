@@ -320,7 +320,7 @@ try {
   const without = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
   ok(without < before && Number(await ev(`document.querySelector('[data-vtl-shapes]')?.getAttribute('data-vtl-shapes') || 0`)) === 0, `WARNINGS off: ${before} → ${without} markers, no shapes`);
   // ★ V12 2026-11-02: the SHIPPING MAP keeps its layers under its own key (every layer, the NAVTEX ones among them)
-  ok(/"warnings":false/.test(await ev(`localStorage.getItem('vibesdr.airSeaLayers') || ''`)) && /"navst":true/.test(await ev(`localStorage.getItem('vibesdr.airSeaLayers') || ''`)), '…remembered (beta96: the AIR & SEA map\'s toggles)');
+  ok(/"warnings":false/.test(await ev(`localStorage.getItem('vibesdr.airSeaLayers') || ''`)) && !/"navst":false/.test(await ev(`localStorage.getItem('vibesdr.airSeaLayers') || ''`)), '…remembered (beta96: the AIR & SEA map\'s toggles)');
   await ev(`${view}.querySelector('[data-tgl="weather"]').click()`); await sleep(1500);
   await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
   console.log('   screenshot', await shot('navtex-map-stations-only.png'));

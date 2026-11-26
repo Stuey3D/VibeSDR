@@ -163,6 +163,33 @@ try {
       L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0 })]);
       const s = L.shown().find(x => x.hex === '~abc123'); return JSON.stringify(s || null); })()`) || 'null');
     ok(glide && Math.abs(glide.track - 90) < 2 && glide.gliding && glide.sparse, `beta90: a sparse aircraft faces east (${glide && glide.track?.toFixed(1)}°) and glides to its new fix (${glide && glide.gliding})`);
+    // ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas; Stuart's community-map bug): an aircraft over a sea area's
+    //    marker — a press there opens the AIRCRAFT's card, never the area's
+    {
+      await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'SEA AREAS' && b.getAttribute('aria-pressed') === 'false')?.click()`);
+      const areaSel = `[...document.querySelectorAll('.trkView:not([hidden]) .vtl-mk')].find(e => / sea area/.test(e.getAttribute('aria-label') || '') && getComputedStyle(e).display !== 'none' && !e.closest('.vtl-yhid') && e.getBoundingClientRect().width > 0 && (() => { const r = e.getBoundingClientRect(); return r.left > 60 && r.top > 120 && r.right < innerWidth - 60 && r.bottom < innerHeight - 200; })())`;
+      const got = await until(`!!${areaSel}`, 12000);
+      ok(got, 'SEA AREAS on: a sea area\'s marker in view');
+      if (got) {
+        const pt = JSON.parse(await ev(`(() => {
+          const el = ${areaSel}; const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+          el.setAttribute('data-test-area', '1');
+          const gl = window.__vibeTrkMap._gl || window.__vibeTrkMap; const c = gl.getCanvas().getBoundingClientRect();
+          const ll = gl.unproject([x - c.left, y - c.top]);
+          window.__vibeAcLayer.update([{ hex: '~a5ea00', flight: 'OVERSEA', lat: ll.lat, lon: ll.lng, alt_baro: 30000, seen_pos: 1 }]);
+          return JSON.stringify({ x, y });
+        })()`) || '{}');
+        await sleep(1500);
+        await ev(`document.querySelectorAll('.vtl-card .vtl-x').forEach((b) => b.click())`);
+        await ev(`(() => { const el = document.querySelector('[data-test-area="1"]'); el && el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: ${pt.x}, clientY: ${pt.y}, view: window })); })()`);
+        await sleep(800);
+        const res = JSON.parse(await ev(`(() => { const ac = document.querySelector('.vsadsb-pop-dark'); const vc = document.querySelector('.vtl-card:not([hidden])');
+          return JSON.stringify({ ac: ac ? ac.textContent.slice(0, 80) : '', area: vc ? vc.textContent.slice(0, 60) : '' }); })()`) || '{}');
+        ok(/OVERSEA/.test(res.ac || '') && !res.area, `beta96: a press on a sea area with an aircraft over it opens the aircraft (${JSON.stringify(res)})`);
+        await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button, .vsadsb-pop-dark [class*="close"]').forEach((b) => b.click())`);
+        await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'SEA AREAS')?.click()`);
+      }
+    }
     // ★ beta88 the status line counts NOW: radio A's ADS-B is decoding, its three aircraft heard within the minute
     ok(await until(`/\\bADS-B 3\\b/.test(${V}?.querySelector('.st')?.textContent || '') && !/ADS-B:/.test(${V}?.querySelector('.st')?.textContent || '')`, 10000),
        `beta88: the status line counts ADS-B now (${await ev(`${V}?.querySelector('.st')?.textContent`)})`);

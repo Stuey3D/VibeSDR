@@ -1334,8 +1334,8 @@
       drawRx(); drawRings(); drawRange();
       kick();
     }
-    function hitHex(point) {
-      const r = 12;
+    function hitHex(point) { return hitHexR(point, 12); }
+    function hitHexR(point, r) {
       const f = gl.queryRenderedFeatures([[point.x - r, point.y - r], [point.x + r, point.y + r]], { layers: ['vsadsb-icons'] });
       if (!f.length) return null;
       // ★ The nearest of whatever is under the finger, not the first MapLibre happened to list.
@@ -1978,6 +1978,16 @@
         return true;
       },
       prefs() { return Object.assign({}, prefs); },
+      /** ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a host whose AREA marker took a press asks whether an
+       *  aircraft is under it (client px; more slack on touch) — true = this layer selected it and the area must not. */
+      pickAt(clientX, clientY, touch) {
+        if (!gl || !glReady) return false;
+        const r = gl.getCanvas().getBoundingClientRect();
+        const h = hitHexR({ x: clientX - r.left, y: clientY - r.top }, touch ? 20 : 12);
+        if (!h) return false;
+        select(h);
+        return true;
+      },
       /** ★ beta94 what the range outline draws (a test's view): null until the server has answered or (beta95) the map
        *  has grown one live. live = the bearings grown from this map's own positions; liveFar its furthest. */
       rangeShown() {

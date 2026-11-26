@@ -542,6 +542,10 @@ export interface TrackViewOpts {
   /** ★★ beta96 THE AIR & SEA MAP: aircraft AND other layers on one map — both cameras made, setCamera picks one. */
   mixed?: boolean;
 }
+/** ★★ beta96 an AREA-class item (the click order's last tier): a sea area, an area-shaped NAVTEX warning, a forecast arrow. */
+export function isAreaItem(it: any): boolean {
+  return !!it && (!!it._nofit || it._cl === 'm' || (!!it._sh && it._sh.kind === 'area'));
+}
 export class TrackView {
   readonly root: HTMLElement;
   private mapHost: HTMLElement;
@@ -915,8 +919,17 @@ export class TrackView {
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,
       shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, yieldGroups: this.o.yieldGroups, aria: this.o.aria, onCard: this.o.onCard,
       onSelect: (k: string | null) => this.markSel(k || ''),
+      // ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a press on an AREA's marker (a sea area's name, a
+      //   NAVTEX area warning, a forecast arrow) goes to an aircraft under it first — Stuart's community-map bug
+      yieldClick: (it: any, ev: any) => {
+        if (!this.acLayer || !isAreaItem(it)) return false;
+        const t = ev?.changedTouches?.[0] ?? ev;
+        const took = !!this.acLayer.pickAt?.(t?.clientX, t?.clientY, !!ev?.changedTouches || ev?.pointerType === 'touch');
+        if (took) this.layer?.select?.(null);
+        return took;
+      },
       // ★ beta92 the first framing is the auto fit's (a glide's rules), not an immediate fitBounds — unless it is absent
-      firstFit: this.o.aircraft || !w.VibeAutoFit ? undefined : false,
+      firstFit: (this.o.aircraft && !this.o.mixed) || !w.VibeAutoFit ? undefined : false,   // ★ beta96 a mixed map is the auto fit's
     });
     this.acMap = map;
     // ★ beta96 a MIXED map (AIR & SEA) makes the ADS-B layer only when it first has aircraft — a shipping-only view has no
