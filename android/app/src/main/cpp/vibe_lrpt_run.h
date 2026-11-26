@@ -73,6 +73,57 @@ inline bool lit(const std::string& t, int scale, int x0, int y0, int x, int y) {
     const uint8_t* g = glyph(t[size_t(ci)]);
     return g && ((g[gy] >> (4 - col)) & 1);
 }
+/* ★★★ beta96 THE LIVE PREVIEW SQUASHES ITS GAPS (Stuart, 2026-11-26, Meteor-M2-4: 616 rows of no signal took as much
+ *  room as the decoded picture, and near LOS a fade of thin strips between short gaps pushed the clean cloud out of
+ *  view). The server keeps drawing the preview in TRUE geometry (the rows above — an older client shows those, the
+ *  live outline is in those coordinates); it ALSO lists the gaps in lrpt_status ("gaps"), merged here, and the clients
+ *  (src/utils/lrptGaps.ts) draw each listed gap as one short hatched band with its label. The gallery's pictures and
+ *  the outline are untouched.
+ *  MERGING: two gaps with only a short run of decoded strips between them (≤ kMergeStrips strips, or under kMergeMs of
+ *  satellite time) are ONE gap, "patchy" — so a fading tail is one band and one label, never "NO SIGNAL 14:42" ×6. */
+struct Gap {
+    int s0 = 0, s1 = 0;          ///< strips [s0, s1), the decoded slivers of a patchy gap included
+    int32_t msA = -1, msB = -1;  ///< the satellite time of the decoded strip before / after (−1 none)
+    int lines = 0;               ///< lines of no signal in it (8 a strip; a patchy gap's slivers not counted)
+    bool patchy = false;
+};
+constexpr int kMergeStrips = 1;        ///< a run of decoded strips this short (8 lines) never separates two gaps
+constexpr int32_t kMergeMs = 5000;     ///< …nor one shorter than this (≈ 4 strips at 1.232 s)
+constexpr size_t kMaxGaps = 64;        ///< the status carries at most this many (the closest pairs merge first)
+/** `raw`: each gap's strips [s0, s1) in order; `ms`: a strip's satellite time (−1 unknown). */
+inline std::vector<Gap> mergeGaps(const std::vector<std::pair<int, int>>& raw, const std::function<int32_t(int)>& ms) {
+    std::vector<Gap> out;
+    auto span = [&](int a, int b) -> int32_t {   // satellite time from strip a to strip b (−1 unknown); midnight wraps
+        const int32_t x = ms(a), y = ms(b);
+        if (x < 0 || y < 0) return -1;
+        return y >= x ? y - x : y + 86400000 - x;
+    };
+    for (const auto& r : raw) {
+        if (r.second <= r.first) continue;
+        if (!out.empty()) {
+            Gap& p = out.back();
+            const int run = r.first - p.s1;   // decoded strips between
+            // the run's own length in satellite time: first to last strip, plus one strip's period (span / (run − 1))
+            const int32_t sp = run > 1 ? span(p.s1, r.first - 1) : -1;
+            const int32_t t = sp >= 0 ? int32_t(int64_t(sp) * run / (run - 1)) : -1;
+            if (run <= kMergeStrips || (t >= 0 && t < kMergeMs)) {
+                p.s1 = r.second; p.lines += (r.second - r.first) * 8; p.patchy = true; p.msB = ms(r.second);
+                continue;
+            }
+        }
+        Gap g; g.s0 = r.first; g.s1 = r.second; g.lines = (r.second - r.first) * 8;
+        g.msA = r.first > 0 ? ms(r.first - 1) : -1; g.msB = ms(r.second);
+        out.push_back(g);
+    }
+    while (out.size() > kMaxGaps) {   // bounded: the two closest gaps become one (patchy)
+        size_t best = 1; int bestRun = 1 << 30;
+        for (size_t i = 1; i < out.size(); i++) { const int run = out[i].s0 - out[i - 1].s1; if (run < bestRun) { bestRun = run; best = i; } }
+        Gap& p = out[best - 1]; const Gap& q = out[best];
+        p.s1 = q.s1; p.lines += q.lines; p.patchy = true; p.msB = q.msB;
+        out.erase(out.begin() + long(best));
+    }
+    return out;
+}
 }   // namespace gapart
 
 class Run {
@@ -419,6 +470,29 @@ private:
         }
         liveGeo();
     }
+    /** ★★★ beta96 the preview's gaps (gapart::mergeGaps) as ,"gaps":[[r0,r1,msA,msB,lines,patchy],…] in PREVIEW rows
+     *  [r0, r1) — only gaps whose rows have all been sent (a gap is closed by the decoded strip after it); "" for none. */
+    std::string previewGapsJson() const {
+        if (!rx_ || !previewOpen_ || sentRows_ <= 0) return std::string();
+        const int sEnd = previewS0_ + sentRows_ / kPreviewRowsPerStrip;
+        std::vector<std::pair<int, int>> raw;
+        for (int s = previewS0_; s < sEnd; s++) {
+            if (stripDecoded(s)) continue;
+            int e = s; while (e < sEnd && !stripDecoded(e)) e++;
+            if (e >= sEnd) break;            // not yet closed by a decoded strip that has been sent
+            raw.emplace_back(s, e); s = e;
+        }
+        if (raw.empty()) return std::string();
+        const auto gs = gapart::mergeGaps(raw, [this](int s) { return rx_->stripTimeMs(s); });
+        std::string j = ",\"gaps\":[";
+        for (size_t i = 0; i < gs.size(); i++) {
+            char b[96];
+            std::snprintf(b, sizeof b, "%s[%d,%d,%d,%d,%d,%d]", i ? "," : "", (gs[i].s0 - previewS0_) * kPreviewRowsPerStrip,
+                          (gs[i].s1 - previewS0_) * kPreviewRowsPerStrip, int(gs[i].msA), int(gs[i].msB), gs[i].lines, gs[i].patchy ? 1 : 0);
+            j += b;
+        }
+        return j + "]";
+    }
     /** ★ beta95 strip `s` carries any picture in a live channel (else it is a gap: gapart). */
     bool stripDecoded(int s) const {
         if (!rx_) return false;
@@ -444,6 +518,7 @@ private:
             // ★★ beta95 decoded lines apart from the gap's (the "656 lines" of 11-25 held ~450 of no signal)
             { int dec = 0; for (int k = s0; k < s1; k++) if (stripDecoded(k)) dec++;
               j += ",\"decoded\":" + std::to_string(dec * 8) + ",\"gapLines\":" + std::to_string((s1 - s0 - dec) * 8); }
+            j += previewGapsJson();
             j += ",\"channels\":[";
             bool first = true;
             for (int a : rx_->liveApids()) { j += std::string(first ? "" : ",") + "\"" + channelName(a) + "\""; first = false; }
