@@ -234,7 +234,9 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
       onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
       <View style={[dp.spotLine, compact && dp.spotLineCompact]}>
         <Text style={[dp.spotCell, dp.spotTime, compact && dp.spotTimeCompact, { fontFamily: font }]}>
-          {fmtSpotTime(s.time)}
+          {/* ★ Compact (half-open lower panel): HH:MM, so the callsign keeps its room — the seconds (the slot) are on
+              the EXPAND line, which carries the full HH:MM:SSz. */}
+          {compact ? fmtSpotTime(s.time).slice(0, 5) : fmtSpotTime(s.time)}
         </Text>
         {/* ★ V12: the callsign opens its QRZ.COM page (CwView CallLink) — its own tap, not the row's tune. */}
         <CallLink call={s.call} style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]} />
@@ -2247,7 +2249,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   spotTime:    { width: 56 },   // ★ HH:MM:SS (was HH:MM, 42)
   // ★ Half-open lower panel (SpotRowView compact): see the prop.
   spotLineCompact: { gap: 4 },
-  spotTimeCompact: { width: 48 },   // ★ V12: HH:MM:SS (56 at full width; V11 had HH:MM in 36)
+  spotTimeCompact: { width: 36 },   // ★ HH:MM in compact (V12's full width is HH:MM:SS, 56)
   spotBandCompact: { width: 34 },
   spotModeCompact: { width: 35 },
   spotDistCompact: { width: 48 },

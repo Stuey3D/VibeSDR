@@ -132,9 +132,9 @@ ok(same === n, `${same} / ${n} placements identical with no hinge`);
       const l = advRdsPlotLayout(contentW);
       ok(advRdsPlotsWidth(l) <= contentW,
          `${W} pt window, ${inset ? 'metal' : 'glass'}: Advanced RDS plots ${advRdsPlotsWidth(l)} pt in ${contentW} pt (${l.stacked ? 'stacked' : 'side by side'}, trace ${l.eyeW})`);
-      // Spots, compact (the lower panel): time 48 (V12 HH:MM:SS) + band 34 + mode 35 + SNR 30 + distance 48 (+4) + call margin 6, five
+      // Spots, compact (the lower panel): time 36 + band 34 + mode 35 + SNR 30 + distance 48 (+4) + call margin 6, five
       // 4 pt gaps, 10 + 10 row padding, no country column; the callsign takes the rest — at least 48 pt (six characters; a longer one ends in an ellipsis, never clipped).
-      const spotsFixed = 48 + 34 + 35 + 30 + 48 + 4 + 6 + 5 * 4 + 20;
+      const spotsFixed = 36 + 34 + 35 + 30 + 48 + 4 + 6 + 5 * 4 + 20;
       ok(body - spotsFixed >= 48, `${W} pt, ${inset ? 'metal' : 'glass'}: spots table fits, callsign ${body - spotsFixed} pt`);
       // ADS-B: flag 22 + altitude 78 + distance 82, three 8 pt gaps, 10 + 10 padding; the callsign takes the rest.
       const adsbFixed = 22 + 78 + 82 + 3 * 8 + 20;
