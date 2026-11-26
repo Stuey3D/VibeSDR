@@ -346,6 +346,8 @@ flags_for() {
     # ★★★ beta94 the sky plot by POSITION (vibe_skyplot.h cells): grid, aggregation, expiry, ≤ 400 KB, AUTO, the heatmap PNG, reset
     test-skyplot-cells)    echo "-O2" ;;
     test-sat-pass-sched)   echo "-O2 -lpthread" ;;
+    # ★★★ beta96 the landing map + keep-running modes (vibe_keep_run.h): migration, the rate gate, the shared 137 MHz capture
+    test-keep-run)         echo "-O2 -lpthread" ;;
     # ★ ORBCOMM through the server's OWN slice paths (shared FFT + one-pipeline WideTap) at an HF+'s 912/768/456 kS/s, float IQ, a dial move
     test-orbcomm-slice)    echo "-O2 -I $VDSP -I $KISS -lpthread" ;;
     # ★ V12 beta90 a satellite CW beacon through the listener's CW decoder (locked residual pinned; lock off printed)
