@@ -49,7 +49,9 @@ int main() {
             ok(effectiveBlocked("", 0) == "", "a fresh config: nothing off");
             ok(effectiveBlocked(D, 1) == D + ",same,sat", "every demodulator off but every whole-radio mode on (not single-mode), Region 1: SAME's default and only this update's switch");
             const std::string vorOnly = adsbOnly + ",adsb";
-            ok(effectiveBlocked(vorOnly, 0) == vorOnly + NEW, "★ every whole-radio mode it names off: VOR MAP is newer than the list, so off too");
+            // ★★★ beta96 (926ba8f56) a list that names every whole-radio mode but VOR MAP is dated by the mode it LEFT ON (VOR MAP, 93):
+            //     VOR MAP stays on (its only mode — test-server-vormap's owner list), only the switches newer than 93 come in off
+            ok(effectiveBlocked(vorOnly, 0) == vorOnly + ",sat", "★ every whole-radio mode it names off but VOR MAP: dated by VOR MAP (93), so VOR MAP stays on and only SATELLITE (96) is new");
         }
 
         ok(regionJson(0).empty(), "region unknown: no region JSON at all");

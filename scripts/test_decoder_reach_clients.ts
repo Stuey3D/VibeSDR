@@ -90,7 +90,7 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
     const adsbOnly = D + ',dab,ism,ndb,ais,avdata,sondes';
     ctx.R.blockedModes = adsbOnly;               ok(off().split(',').includes('vormap'), '★ an ADS-B-only list from before VOR MAP: VOR MAP off');
     ctx.R.blockedModes = adsbOnly + ',+vormap';  ok(!off().split(',').includes('vormap'), '…ticked on by the owner: on');
-    ctx.R.blockedModes = adsbOnly + ',adsb';     ok(off().split(',').includes('vormap'), 'every whole-radio mode it names off: VOR MAP is newer than the list — off too');
+    ctx.R.blockedModes = adsbOnly + ',adsb';     ok(!off().split(',').includes('vormap') && off().split(',').includes('sat'), '★★★ beta96 every whole-radio mode it names off but VOR MAP: dated by the mode it left on (VOR MAP, 93) — VOR MAP on, SATELLITE (96) off');
     ctx.R.blockedModes = 'wfm,dab,seen@96';      ok(!off().split(',').includes('vormap'), 'a list stamped by this build: VOR MAP is not new — on');
   }
   const change = page.slice(page.indexOf('const set = modeOwnerSet();\n      // ★ CHECKED means OFFERED'), page.indexOf('radio().blockedModes = [...set].join(",");\n      modeBlockSummary();\n      if (!el.dataset.on)'));
