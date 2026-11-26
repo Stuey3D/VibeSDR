@@ -160,3 +160,30 @@ export function snrChipHtml(mode: SnrMode | string | null | undefined, db: unkno
   // ★ `bare`: the number alone ("−15"), for a table whose column is already headed SNR (the digital spots)
   return `<span class="snrChip ${c.band}" role="img" aria-label="${escAttr(c.title)}" title="${escAttr(c.title)}">${escAttr(bare ? c.text.replace(/ dB$/, '') : c.text)}</span>`;
 }
+
+// ── ★★ beta96 the SNR KEPT IN THE DAY LOGS (Stuart 11-26: "yes save snr history") ─────────────────────────────────────
+/** The gallery kinds whose day-log lines end with " · SNR 18 dB" (vibe_station_sink.h snrToken) and the scale each uses. */
+export const SNR_LOG_MODE: Readonly<Record<string, SnrMode>> = { ais: 'ais', aprs: 'aprs', ism: 'ism', orbcomm: 'orbcomm' };
+/** Above this a log is shown as plain text (a 4 MB day on a 1 GB phone is not cut into chips). */
+export const SNR_LOG_MAX_CHARS = 200_000;
+const SNR_TOKEN = / · SNR (−|-)?(\d{1,3}) dB(?=\r?\n|$)/g;
+/** A log's text cut at each line-end SNR token: strings, and { db } where a chip goes (the " · " before it is kept). */
+export function snrTokenParts(text: string): Array<string | { db: number }> {
+  const out: Array<string | { db: number }> = [];
+  let at = 0;
+  SNR_TOKEN.lastIndex = 0;
+  for (let m = SNR_TOKEN.exec(text); m; m = SNR_TOKEN.exec(text)) {
+    out.push(text.slice(at, m.index) + ' · ');
+    out.push({ db: (m[1] ? -1 : 1) * Number(m[2]) });
+    at = m.index + m[0].length;
+  }
+  out.push(text.slice(at));
+  return out.filter((p) => p !== '');
+}
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** The web's gallery text with its SNR tokens as chips ('' → the caller keeps plain text: no tokens, or too long). */
+export function snrLogHtml(text: string, kind: string | undefined): string {
+  const mode = kind ? SNR_LOG_MODE[kind] : undefined;
+  if (!mode || text.length > SNR_LOG_MAX_CHARS || !text.includes(' · SNR ')) return '';
+  return snrTokenParts(text).map((p) => (typeof p === 'string' ? escHtml(p) : snrChipHtml(mode, p.db))).join('');
+}

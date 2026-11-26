@@ -2,7 +2,7 @@
 // mode's rows use (web + app). The colour is the MARGIN over that mode's decode threshold — "if a mode only needs a weak
 // signal to work great no point listing all as red". docs/v12/MESSAGE-SNR.md is the table these numbers come from.
 //   node --no-warnings scripts/test_snr_colour.ts
-import { SNR_SCALES, SNR_COLOURS, SNR_CHIP_TEXT, spotSnrMode, loraSnrMode, ismSnrMode, snrBandFor, snrChip, snrChipHtml, snrModeOf, snrText, snrTitle, type SnrMode }
+import { SNR_SCALES, SNR_COLOURS, SNR_CHIP_TEXT, snrTokenParts, snrLogHtml, SNR_LOG_MODE, SNR_LOG_MAX_CHARS, spotSnrMode, loraSnrMode, ismSnrMode, snrBandFor, snrChip, snrChipHtml, snrModeOf, snrText, snrTitle, type SnrMode }
   from '../src/utils/snrColour.ts';
 import { SNR_RED_DB, SNR_GREEN_DB, snrBand } from '../src/utils/navtexQuality.ts';
 import fs from 'node:fs';
@@ -64,6 +64,18 @@ ok(snrBandFor('lora12', -15) === 'green' && snrBandFor('lora7', -15) === 'red', 
 ok(spotSnrMode('FT8') === 'ft8' && spotSnrMode('ft4') === 'ft4' && spotSnrMode('JS8') === 'js8' && spotSnrMode('WSPR') === 'wspr' && spotSnrMode('CW') === null && spotSnrMode('PSK31') === null && spotSnrMode(undefined) === null,
    'spots: the FT8 family by mode; CW / PSK / RTTY keep a plain number');
 ok(snrChipHtml('ft8', -15, true).includes('>\u221215</span>'), 'a bare chip (the spot table) is the number alone');
+
+// ★★ beta96 the day logs' kept SNR (vibe_station_sink.h snrToken " · SNR 18 dB" at a line's end) → chips
+{ const log = '17:01:12  WILSON GOOLE \u00b7 cargo \u00b7 SNR 18 dB\n17:02:00  SEA BREEZE \u00b7 SNR \u22127 dB\n17:03:00  NO SNR LINE\n17:04:00  SNR 12 dB mid-line \u00b7 x\n';
+  const parts = snrTokenParts(log);
+  ok(JSON.stringify(parts.filter((p) => typeof p !== 'string')) === JSON.stringify([{ db: 18 }, { db: -7 }]), 'the line-end tokens only (a mid-line "SNR 12 dB" is text)');
+  ok(parts.map((p) => (typeof p === 'string' ? p : `[${p.db}]`)).join('') === log.replace('SNR 18 dB', '[18]').replace('SNR \u22127 dB', '[-7]'), 'the text round-trips around the chips');
+  const h = snrLogHtml(log, 'ais');
+  ok((h.match(/class="snrChip /g) || []).length === 2 && h.includes('snrChip green') && h.includes('snrChip red') && h.includes('NO SNR LINE'), 'the web log: two chips, AIS colours (18 green, −7 red)');
+  ok(snrLogHtml('<b>x \u00b7 SNR 9 dB', 'aprs').startsWith('&lt;b&gt;x'), 'the log text is escaped');
+  ok(snrLogHtml(log, 'navtex') === '' && snrLogHtml('plain', 'ais') === '' && snrLogHtml('x \u00b7 SNR 9 dB'.padEnd(SNR_LOG_MAX_CHARS + 1, ' '), 'ais') === '',
+     'not a kept-SNR kind, no tokens, or too long: plain text');
+  ok(['ais', 'aprs', 'ism', 'orbcomm'].every((k) => !!SNR_LOG_MODE[k]), 'the four logs that keep it'); }
 
 // 2. The number is the real dB (rounded), signed where negatives are normal; nothing for no number.
 ok(snrText('ft8', -15.4) === '−15 dB' && snrText('ft8', 3) === '+3 dB' && snrText('ais', 12.6) === '13 dB' && snrText('ais', 0) === '0 dB', 'the text');

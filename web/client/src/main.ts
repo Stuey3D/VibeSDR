@@ -150,7 +150,7 @@ import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, gallery
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { bodyTextBase, fileBodyStart, fileTextBase, navtexQualityDetail, navtexQualityLine, navtexSnrLine, snrColour, snrOfItem, snrRanges, splitOfItem,
          type NavtexQualityFields } from '../../../src/utils/navtexQuality';
-import { snrChipHtml, spotSnrMode } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
+import { snrChipHtml, snrLogHtml, spotSnrMode } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { paintSnrStrip, qualityBar, snrHBar, watchSnrStrip } from './navtexSnrDom';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../../../src/services/squelchNeighbours';
@@ -20958,7 +20958,9 @@ async function openGalleryItem(it: GalleryItem) {
   try {
     const r = await fetch(url, { cache: 'no-store' });
     const body = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
-    $('galText').textContent = body;
+    // ★ beta96 a day log's kept SNRs (" · SNR 18 dB" at a line's end) drawn as the chips (AIS, APRS, ISM, ORBCOMM)
+    const snrHtml = r.ok ? snrLogHtml(body, it.k) : '';
+    if (snrHtml) $('galText').innerHTML = snrHtml; else $('galText').textContent = body;
     if (r.ok) galQualSetup(it, body);   // ★ beta96 NAVTEX: the quality bar and the SNR strip beside the text
     if (r.ok && it.k === 'fctlm' && /\.csv$/i.test(it.f) && galShowTlm(it, body)) return;   // ★★ beta91 charts, not a CSV wall
     if (r.ok) void galTranslateSetup(it, body);
