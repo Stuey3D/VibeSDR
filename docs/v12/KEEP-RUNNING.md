@@ -6,6 +6,50 @@ memory `map_landing_toggles.md` specifies.
 
 ## RESUME HERE
 
+### ★★★ b96-bgsplit (Stuart 11-26): BACKGROUND DECODING and WHERE NEW LISTENERS LAND are two choices now
+
+*"for ADS-B, VDL2, AIS etc to work the user needs to have the map as the landing page. Listen-Amateur uses FM radio as his
+landing zone, so if he enabled background AIS that would break that."* Everything below this block describes b96-keeprun's
+"landing map + keep it running"; read it with this block's renames in mind (mapKeep is a MIRROR now, keepHolds() /
+mapKeepTick / mapByKeep_ run on the BACKGROUND entry).
+
+| Piece | Where | State |
+|---|---|---|
+| The model: `bgMode` ("" = manual BgRunner, else ONE whole-radio token of any map) beside the landing words | `vibe_keep_store.h` `Stored::bgMode/bgSet`, `bgNormalise`, `migrate`, `applyRead(…, sawBg)`, `bgEntry` | built, unit tested (test-keep-run §10) |
+| Migration: no `bgMode` key → `mapKeep` (or beta95 `adsbKeepRunning`) means background = the landing's mode; `mapKeep` / `adsbKeepRunning` written as MIRRORS (an older build reads the same) | same | built, tested — every old shape a case |
+| Config: `RadioConfig::bgMode`, both readers (seeded `bgSet=true`, so a partial read never loses it), both writers, the merges, `main.cpp` start / reload / door re-read (`setVibeServerBackground`) | `vibeserver_config.*`, `main.cpp` | built (vibeserver compiled) |
+| Android: bridge reads/writes `bgMode`; the engine reads it off the config JSON (`vsMapFromConfigJson`, no new JNI); the private DAB scan / rtl_tcp configs PUT it empty | `vibe_android_setup.h`, `VibeServerBoot.kt`, `VibeServerOps.kt` | built; **gradle not run** |
+| Runtime: landing = `g_vsLandingAdsb` / `g_vsMapEntry`; background = `g_vsAdsbKeep` (ADS-B) / `g_vsBgEntry` (the rest); `vsApplyLanding` resolves both, single mode overrides both | `local_sdr_shim.cpp` | built, e2e tested |
+| **The switch on arrival**: `bgWholePauseForListener` (in `resumeCaptureIdle`, beside `bgStopForListener`) pauses a background mode the KEEP put there unless the landing IS that mode; `afterBg` lets the first arrival be landed even on a shared dial (startOnDab's rule). The last listener leaving: the landing's mode leaves as ever, the keep tick puts the background back | same | e2e tested |
+| Stored data stays: the ship store (`ais-ships.json`) answers while ADS-B has the radio | — | e2e tested (the map drawing stored ships beside live aircraft is b96-onemap's) |
+| hwinfo `ismPlan` / `ismRegion` (the page), caps `ismOwn` / `ismRegion` (the app): ISM is WORLDWIDE — any band of the plan this radio reaches, the server's region's own first (`vibeism::regionBands`, the ISM mode's landing order, unchanged) | shim | built, tested (page + app + C++) |
+| Admin line `keepRun` → *"Background decoding · AIS · paused — listeners have the radio …"*, a row *"new listeners land on 96.100 MHz WFM — AIS pauses while they are on"*; `"bg":false` = manual (bgLines says that one) | `keepRunJson`, `adminBg.ts keepRunLines / landWords` | built, unit tested |
+| Setup page: **Where new listeners land** (on a frequency / a DAB station / a map starting on a decoder) then **Background decoding** (Manual = the profiles, with Unattended satellites and the DX scanner, or a whole-radio mode — gated by the same `keepGate`, map "" = every map) | `vibe_setup_page.h` `landKind*`, `bgCard`, `bgWholeRender`, `bgSetWhole` | built, stand-in tested |
+| ALL OFF keeps the background mode's switch on as well as the landing's | page `modeBgId`, app `NM.allSet(…, keepAlso)` | tested |
+| App's server screen: BACKGROUND DECODING (Manual / A whole-radio mode) before the profiles editor (shown only for Manual); the landing map's keep switch replaced by a note; `vs_bgmode` | `ServerModeScreen.tsx`, `utils/keepRun.ts` | esbuild OK; **not type-checked** (tsc on the screen needs > 1 GB) |
+| Setup page ORDER (Stuart 11-26) — per radio and the server tab — `scripts/test-setup-order.mjs` | `vibe_setup_page.h` | built, tested (DOM order = every width: no CSS `order`) |
+
+**Behaviour, in one place:** nobody here → the background mode (kept-ADS-B / mapKeepTick, unchanged ticks). First arrival →
+it pauses (its own door, stores written, the radio back on the plain landing it was entered from) and the newcomer is landed
+per the landing (plain / DAB / map in its decoder) — unless the landing IS the background mode: they join it, as b96-keeprun.
+Last listener leaves → whatever the landing opened leaves as ever; the background comes back within a tick (no wait, as before).
+Single mode (Operating mode → Single use) is both. Manual: BgRunner exactly as before (it never runs while a whole-radio
+background mode holds the radio — `keepHolds()`, as before).
+
+**Tests (all silent):** test-keep-run 176/176 (§10 the two choices + every migration, §11 ISM worldwide) · test-server-bg-split
+(e2e, the Mac binary + fake rtl_tcp: bg AIS → FM landing → bg AIS twice; bg AIS → map-on-ADS-B with the ship store served → bg
+AIS; bg ADS-B → FM → bg ADS-B; bg = landing joined; the rate gate; single mode over both; manual) · test-server-keep-run 39/39
+(the b96-keeprun configs unchanged on the new binary) · test-keep-restart (+ a background-AIS-with-FM-landing phase) ·
+test-setup-keep-run 87/87 · test-setup-order 15/15 · test_keep_run 56/56 · test_admin_bg 66/66 · test_new_modes_clients 95/95 ·
+check-android-settings-parity 217/0 · check-setup-page clean.
+
+**Not done here (coordinator's later asks, own branches):** collapsible sections + red "!" must-set headers (web + app), the
+app screen's card order, a machine-wide frame-rate default with per-radio override (the rate is ALREADY per radio since
+2026-10-11 — there is no server-tab frame rate to fall back to), Android gradle, the app's type-check.
+
+### b96-keeprun (before the split)
+
+
 | Piece | Where | State |
 |---|---|---|
 | The model: modes, CSV, entry, migration | `vibe_keep_store.h` (no DSP; the config reader uses it) | built, unit tested |
@@ -86,7 +130,7 @@ such as ADS-B / AIS / VDL2. Only the selected decoder is available."*
 
 ## What the owner sees
 
-Setup page, **Where new listeners start**: *"Start new listeners on a **map**?"*, then the map (Aviation & Maritime, or Amateur). On
+Setup page (b96-keeprun; b96-bgsplit renamed it **Where new listeners land** and moved keep-running to **Background decoding**), **Where new listeners start**: *"Start new listeners on a **map**?"*, then the map (Aviation & Maritime, or Amateur). On
 Aviation & Maritime the radio's modes are listed under AVIATION (ADS-B, VDL2, ACARS, VOR / ILS map) and MARITIME (AIS), each with its setup-benchmark cost.
 The facts come from the SERVER (`hwinfo.mapModes`): a mode this radio can never do is not drawn (an HF+ has no ADS-B or VOR
 row); one it cannot do now is greyed with the server's reason (blocked, the rate). The form's own rate and blocks apply on
