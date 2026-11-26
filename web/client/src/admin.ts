@@ -1155,14 +1155,17 @@ async function renderAdsbRange(): Promise<void> {
   } finally { rangeBusy = false; }
 }
 
-/* ── ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS, per radio (vibe_beast.h statusJson via GET /vibeserver/admin/adsbfeed) ──
- *  Stuart 2026-11-26 ("like we did for PSKReporter"): what each radio sends, where, and whether it is getting there. Only
- *  where sharing is set up on a radio that can run ADS-B. Read-only; the settings are on the Setup page's radio tab. */
+/* ── ★★ V12 beta96 AIRCRAFT FEEDS + SHARE ADS-B WITH FLIGHT TRACKERS, SERVER-LEVEL (GET /vibeserver/admin/adsbfeed, answered by
+ *  the front door or a Simple server: vibe_beast.h statusJson + vibe_feeds.h "sources") ──
+ *  Stuart 2026-11-26: feeds are not radios; the server is a middle man. Each source (connected / listening / down, msg/s,
+ *  aircraft, the last error) and what the hub sends where. Read-only; the settings are on the Setup page's SERVER tab. */
 const fmtBytes = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`);
 export function adsbFeedLines(d: any): string[] {
   const out: string[] = [];
-  // ★ a Beast feed radio: where its ADS-B comes from, first (connected, msg/s — or what is wrong, in words)
+  // ★ a Beast feed radio (an older server): where its ADS-B comes from, first (connected, msg/s — or what is wrong, in words)
   if (d && d.input) out.push(String(d.input.line || ''));
+  // ★★ beta96 the server-level feed sources, one line each: "PiAware (ADS-B): connected …"
+  for (const src of (d && Array.isArray(d.sources) ? d.sources : [])) out.push(`${src.title} (${src.label}): ${src.line || src.state}`);
   if (!d || !d.on) return out;
   const s = d.serve || {};
   if (s.on) {
@@ -1176,7 +1179,7 @@ export function adsbFeedLines(d: any): string[] {
   if (d.push) for (const f of (Array.isArray(d.feeds) ? d.feeds : [])) {
     if (!f.on) continue;
     let l = `${f.host}:${f.port}${f.uuid ? ' (station UUID)' : ''} \u2014 `;
-    if (f.state === 'skipped') l += 'not sent \u2014 this radio\'s ADS-B comes from there (the loop guard)';
+    if (f.state === 'skipped') l += 'not sent \u2014 ADS-B comes into this server from there (the loop guard)';
     else if (f.state === 'connected') l += `connected, ${Number(f.msgs).toLocaleString()} messages, ${fmtBytes(Number(f.bytes))}`;
     else if (f.state === 'waiting') l += `retrying in ${f.retryIn} s${f.error ? ` (${f.error})` : ''}`;
     else if (f.state === 'connecting') l += 'connecting';
@@ -1184,7 +1187,7 @@ export function adsbFeedLines(d: any): string[] {
     if (Number(f.dropped)) l += ` \u00b7 ${Number(f.dropped).toLocaleString()} dropped (the link was too slow)`;
     out.push(l);
   }
-  if (!d.adsb && !d.input) out.push('ADS-B is not running on this radio now, so nothing is being sent.');
+  if (!d.adsb && !d.input && !(Array.isArray(d.sources) && d.sources.length)) out.push('ADS-B is not running on this server now, so nothing is being sent.');
   return out;
 }
 let feedBusy = false;
@@ -1193,12 +1196,13 @@ async function renderAdsbFeed(): Promise<void> {
   if (!box || feedBusy) return;
   feedBusy = true;
   try {
-    const all = await fromEveryRadio('adsbfeed');
-    const rows = all.filter((r) => r.data && !r.data.none && (r.data.on || r.data.input));
-    const many = rows.length > 1;
-    box.innerHTML = rows.map((r) => `<div class="admScanRow"><b>${r.data.input && !r.data.on ? 'ADS-B BEAST FEED' : 'SHARING ADS-B WITH FLIGHT TRACKERS'}${many ? ` \u2014 ${esc(r.radio)}` : ''}</b>`
-      + adsbFeedLines(r.data).map((l) => `<p class="wrap">${esc(l)}</p>`).join('')
-      + `<p class="dim wrap">Set up on the Setup page, this radio's tab. Only what aircraft broadcast is sent; MLAT is not supported.</p></div>`).join('');
+    // ★★ beta96 SERVER-level: the front door (or a Simple server) answers for the whole machine — one request
+    let d: any = null;
+    try { const r = await fetch(`${base()}/vibeserver/admin/adsbfeed?${await qCached()}`, { cache: 'no-store' }); if (r.ok) d = await r.json(); } catch { d = null; }
+    const has = d && !d.none && (d.on || d.input || (Array.isArray(d.sources) && d.sources.length));
+    box.innerHTML = !has ? '' : `<div class="admScanRow"><b>AIRCRAFT FEEDS AND FLIGHT TRACKERS</b>`
+      + adsbFeedLines(d).map((l) => `<p class="wrap">${esc(l)}</p>`).join('')
+      + `<p class="dim wrap">Set up on the Setup page, SERVER tab. Only what aircraft broadcast is sent; HFDL, VDL2 and ACARS feeds are never sent to flight trackers; MLAT is not supported.</p></div>`;
   } finally { feedBusy = false; }
 }
 

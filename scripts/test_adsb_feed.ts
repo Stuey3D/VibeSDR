@@ -38,6 +38,8 @@ ok(adsbFeedLines({ on: true, adsb: false, serve: { on: false }, push: false, fee
 ok(adsbFeedLines({ on: false }).length === 0, 'admin: off = no row');
 ok(adsbFeedLines({ on: false, input: { line: 'Beast feed from 192.168.86.12:30005: connected, 1450 messages a second' } })[0].includes('192.168.86.12:30005: connected'),
    'admin: a Beast feed radio shows its input even with sharing off');
+ok(adsbFeedLines({ on: false, sources: [{ title: 'UberSDR HFDL', label: 'HFDL', state: 'connected', line: 'connected from 192.168.86.13, 0.2 messages a second · 41 aircraft' }] })[0]
+   === 'UberSDR HFDL (HFDL): connected from 192.168.86.13, 0.2 messages a second · 41 aircraft', 'admin: a server-level feed source, one line');
 ok(/loop guard/.test(adsbFeedLines({ on: true, adsb: true, serve: { on: false }, push: true, feeds: [{ host: 'h', port: 1, on: true, state: 'skipped' }] })[0]),
    'admin: a push to the input\'s own host says it is skipped');
 console.log(`test_adsb_feed: ${pass} passed, ${fail} failed`);
