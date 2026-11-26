@@ -21,6 +21,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import TextInput from '../components/TvTextInput';
 import ServerKey, { useKeyList } from '../components/ServerKey';
 import DeviceCredentials from '../components/DeviceCredentials';
+import DeviceReset from '../components/DeviceReset';
 import { themeFor } from '../constants/theme';
 import { serverPalette } from '../constants/serverPalette';
 import type { PopupTokens } from '../constants/popupTokens';
@@ -226,6 +227,8 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
             title="‹ Server type" onPress={toChoice} />
           <DeviceCredentials ink={credInk} hasPassword={!!facts?.hasAdminPassword}
             onSavePassword={async (pw) => { await saveAdminPasswordOnDevice(pw); setFacts(await storeFacts()); }} />
+        <DeviceReset ink={credInk} hasPassword={!!facts?.hasAdminPassword} danger={C.danger}
+          onDone={() => { runningRef.current = false; navigation.replace('ServerChoice', {}); }} />
         </ScrollView>
       </SafeAreaView>
     );
@@ -282,6 +285,8 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
         <ServerKey {...ink} focused={hl === 2} onFocusHere={() => setHl(2)} title="‹ Server type" onPress={toChoice} />
         <DeviceCredentials ink={credInk} hasPassword={!!facts?.hasAdminPassword}
           onSavePassword={async (pw) => { await saveAdminPasswordOnDevice(pw); setFacts(await storeFacts()); }} />
+        <DeviceReset ink={credInk} hasPassword={!!facts?.hasAdminPassword} danger={C.danger}
+          onDone={() => { runningRef.current = false; navigation.replace('ServerChoice', {}); }} />
       </ScrollView>
     </SafeAreaView>
   );

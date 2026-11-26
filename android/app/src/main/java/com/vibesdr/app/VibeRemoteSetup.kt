@@ -377,6 +377,14 @@ object VibeRemoteSetup {
     @JvmStatic
     fun setupFinish(remote: Boolean): String {
         val ctx = appCtx ?: return ""
+        // ★★ The owner set this server up on the page — every setting — so it is a FULL server from now on: the Simple
+        //    mark the screen started it with (to serve /setup on the local network) comes off, and the engine restarts on
+        //    the whole config shortly after this answer has gone back.
+        synchronized(this) {
+            val cur = settings(ctx)
+            if (cur.has("simple")) { cur.remove("simple"); save(ctx, cur) }
+        }
+        VibeServerOps.restartFromSettings(ctx)
         if (!remote) return ""
         val r = setRemoteAccess(ctx, true)
         return if (r.optBoolean("ok", false)) "" else r.optString("message", "remote access was not switched on")
