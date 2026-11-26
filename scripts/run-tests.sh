@@ -1066,6 +1066,10 @@ if npx tsx scripts/test_satellites_app.ts; then pass=$((pass+1)); else fail=$((f
 if node --no-warnings scripts/test_sat_labels.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 SATELLITE MODE, the clients' pure half: the timetable's order + greying, the words, the box size, the half-globe
 if TZ=UTC npx tsx scripts/test_satellite_mode.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 SCHEDULE A PASS, the pure half: which key, the book, overlaps + PRIORITISE, the runner, degrade (satSchedule.ts)
+if TZ=UTC npx tsx scripts/test_sat_schedule.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 satellite box polish: no address on the globe, SMALL without words + the glyph, the readout layout, opaque text
+if npx tsx scripts/test_sat_layout.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SATELLITE IN LOCAL HARDWARE: the key / the position prompt / which position / nothing published (satPlace.ts)
 if npx tsx scripts/test_sat_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows — groups from the downlinks, tick boxes, stored by
