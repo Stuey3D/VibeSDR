@@ -63,13 +63,15 @@ import { bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, ty
 import { CW_Q_COLOURS } from '../services/cwList';
 import { cwWpmText } from '../utils/cwFormat';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
-         DECODER_FONT, decoderBodyInset, useDecoderSplit, useFlow, FlowUpper, FlowLower, engraveStyle, useDecoderTokens, useDecoderStyles,
+         DECODER_FONT, decoderBodyInset, useDecoderSplit, useFlow, FlowUpper, FlowLower, usePanelSlot, PanelSlotOutlet, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
 import StationLogo from './StationLogo';
 import { scrollLane } from '../constants/popupTokens';
 import type { Aircraft } from '../services/SDRBackend';
 import { useRenderBank } from '../utils/renderBank';
 import ScannerPanel, { type ScannerPanelProps, type ScannerNav } from './ScannerPanel';
+import { useLinkedList } from './LinkedList';   // ★ beta96 DSC's one list across the crease
+import { bigOffered } from '../utils/decoderShellLayout';
 import type { ScanSource } from '../services/scanner';
 /** ★ A tuning move this large (Hz) while WEFAX or NAVTEX is open is a different transmission — see the retune effects.
  *  It is wider than a USB passband, so the tones have left it; fine-tuning a station onto its tones stays under it. */
@@ -450,15 +452,12 @@ export default function DecoderPanel({
    *  the header and a summary above, the log / list below; text with no natural split FLOWS from one into the other.
    *  Offered whenever the split is. */
   const splitAt = useDecoderSplit();
-  /* ★★ V12: the list decoders (CW / PSK / RTTY rows, JT-TTY, DSC, NCDXF, balloons, APRS) and the scanner have no
-   *  two-panel layout yet — in half-open they stay the one box below the fold and BIG is not offered (the same as a
-   *  window with no room for the split). Same tests as the is… flags below, made here from the props. */
-  const noSplitBody = dabProgrammes.length === 0 && spotsKind === null && (
-    ((activeDecoder === 'cw' || activeDecoder === 'psk' || activeDecoder === 'rtty') && !!cw) || (activeDecoder === 'jtty' && !!jtty)
-    || (activeDecoder === 'dsc' && !!dsc) || (activeDecoder === 'ncdxf' && !!ncdxf) || (activeDecoder === 'balloon' && !!balloon)
-    || (activeDecoder === 'aprs' && !!aprs) || (activeDecoder === 'scanner' && !!scanner));
-  const split = noSplitBody ? null : splitAt;
-  const bigUseful = splitAt ? !noSplitBody : bigH >= smallFit + 40;
+  /* ★★★ beta96 EVERY decoder has its two-panel layout now — the list decoders too (CW / PSK / RTTY and the skimmers, JT-TTY,
+   *  DSC, NCDXF, balloons, APRS, the scanner; decoderShellLayout LIST_DECODER_SPLIT; Stuart 2026-11-26: "the duo needs the
+   *  layout we just built with decoder list split across the crease"). In beta95 they stayed one box below the fold with
+   *  BIG not offered. So BIG is offered wherever the split is; elsewhere exactly as before (bigOffered). */
+  const split = splitAt;
+  const bigUseful = bigOffered(!!splitAt, bigH, smallFit);
   const tall = tallPick && bigUseful;
   const bodyH = Math.round(tall ? bigH : Math.min(availH, smallFit));
   // ★★★ EVERY SCROLLING BODY MUST USE THIS. `dp.body` used to carry `maxHeight: 200` and FOUR
@@ -752,6 +751,14 @@ export default function DecoderPanel({
   const aircraftRef = useRef<ScrollView | null>(null);
   const spotsRef = useRef<any>(null);
   const bodyScrollY = useRef(0);
+  /* ★★ beta96 half-open BIG, the list decoders: the UPPER panel's own scroll (the live view — signals, stations, the grid);
+   *  the lower panel keeps outputRef (the pad's arrows scroll it where a body has no rows). */
+  const upperListRef = useRef<ScrollView | null>(null);
+  /** DSC's one list across the crease — both panels, one offset (LinkedList); unused by every other body. */
+  const dscLinked = useLinkedList(upperBodyH, lowerBodyH, outputRef, (y) => { bodyScrollY.current = y; });
+  /** The scanner's lower half, handed from its one instance to the lower panel (PanelSlot). */
+  const scanSlot = usePanelSlot();
+  const scanSplit = React.useMemo(() => ({ slot: scanSlot, lowerStyle: { height: lowerBodyH } }), [scanSlot, lowerBodyH]);
   // ★ Offset tracked in a REF, never state. The removed green bar kept it in state and set it
   // on every scroll frame — and onContentSizeChange fired when a spot row expanded, which is
   // the likely source of the list scrolling wildly on EXPAND. A ref costs nothing and cannot
@@ -1533,6 +1540,7 @@ export default function DecoderPanel({
    *  Minimised: the header alone, no lower panel. */
   const splitOn = tall && !!split && !minimised;
   const lowerSize = { height: lowerBodyH };
+  const upperSize = { height: upperBodyH };
   const spotSummary = (() => {
     if (!isSpotsMode || !splitOn) return '';
     const count = (key: (r: SpotRow) => string) => {
@@ -1638,6 +1646,32 @@ export default function DecoderPanel({
       {isTextFlow && (
         <FlowUpper flow={flow} height={upperBodyH} style={[dp.bodyContent, scrollLane]}>{flowText}</FlowUpper>
       )}
+      {/* ★★ beta96 the list decoders (LIST_DECODER_SPLIT): the live view above the fold, each panel its own scroll —
+          except DSC, one list continuing across the fold, both panels scrolling together (LinkedList). */}
+      {isCw && (
+        <CwView part="upper" skim={cw!.skim} psk={activeDecoder === 'psk'} plain={cwPlain} list={cw!.list} spots={cw!.spots} text={decoderText}
+                bodySize={upperSize} rttyHistory={activeDecoder === 'rtty' ? rtty?.history : undefined} cardId={rttyCard} onCard={setRttyCard}
+                focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune} scrollRef={upperListRef} />
+      )}
+      {isJtty && (
+        <JttyView part="upper" list={jtty!.list} spots={jtty!.spots} bodySize={upperSize}
+                  focusIdx={kbZone === 'list' ? listIdx : -1} onTune={jtty!.onTune} scrollRef={upperListRef} />
+      )}
+      {/* ★ NCDXF: the grid takes the pad's arrows (outputRef) — it is the view; the log under it is the history */}
+      {isNcdxf && <NcdxfView part="upper" report={ncdxf!.report} log={decoderText} bodySize={upperSize} scrollRef={outputRef} />}
+      {isBalloon && <BalloonView part="upper" report={balloon!.report} pictures={balloon!.pictures} log={decoderText} bodySize={upperSize} scrollRef={upperListRef} />}
+      {isDsc && (
+        <DscView calls={dsc!.calls} keys={dsc!.keys} bodySize={upperSize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
+                 linked={{ part: 'upper', list: dscLinked }} />
+      )}
+      {isAprs && (
+        <AprsView part="upper" rows={aprs!.rows} messages={aprs!.messages} log={aprs!.log} baud={aprs!.baud} frames={aprs!.frames} idle={aprs!.idle}
+                  bodySize={upperSize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={aprs!.onMap ? (k: string) => aprs!.onMap?.(k) : null}
+                  scrollRef={upperListRef} />
+      )}
+      {isScanner && (
+        <ScannerPanel {...scanner!} focusIdx={kbZone === 'list' ? listIdx : -1} navRef={scanNav} bodyStyle={upperSize} split={scanSplit} />
+      )}
     </DecoderBody>
   );
   const lowerBody = !splitOn ? undefined : (
@@ -1664,6 +1698,28 @@ export default function DecoderPanel({
           {flowText}
         </FlowLower>
       )}
+      {isCw && (
+        <CwView part="lower" skim={cw!.skim} psk={activeDecoder === 'psk'} plain={cwPlain} list={cw!.list} spots={cw!.spots} text={decoderText}
+                bodySize={lowerSize} focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune}
+                scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+      )}
+      {isJtty && (
+        <JttyView part="lower" list={jtty!.list} spots={jtty!.spots} bodySize={lowerSize}
+                  focusIdx={kbZone === 'list' ? listIdx : -1} onTune={jtty!.onTune}
+                  scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+      )}
+      {isNcdxf && <NcdxfView part="lower" report={ncdxf!.report} log={decoderText} bodySize={lowerSize} scrollRef={upperListRef} />}
+      {isBalloon && <BalloonView part="lower" report={balloon!.report} pictures={balloon!.pictures} log={decoderText} bodySize={lowerSize} scrollRef={outputRef} />}
+      {isDsc && (
+        <DscView calls={dsc!.calls} keys={dsc!.keys} bodySize={lowerSize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
+                 linked={{ part: 'lower', list: dscLinked }} />
+      )}
+      {isAprs && (
+        <AprsView part="lower" rows={aprs!.rows} messages={aprs!.messages} log={aprs!.log} baud={aprs!.baud} frames={aprs!.frames} idle={aprs!.idle}
+                  bodySize={lowerSize} focusIdx={-1} onMap={null}
+                  scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
+      )}
+      {isScanner && <PanelSlotOutlet slot={scanSlot} />}
     </DecoderBody>
   );
 
