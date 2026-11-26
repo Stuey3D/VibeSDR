@@ -61,7 +61,7 @@ export default function AdsbFeedSetup({ C, F, model, onChange, status, error, ke
             FlightAware: install PiAware from FlightAware{'’'}s own instructions on a computer on this network, then
             {' '}sudo piaware-config receiver-type other, sudo piaware-config receiver-host {'<this phone’s address>'},
             {' '}sudo piaware-config receiver-port {model.port || 30005}, restart piaware and claim the feeder on flightaware.com.
-            ADS-B Exchange and other sites with their own feed program can read this port the same way.
+            Sites with their own feed program (ADS-B Exchange{'’'}s, for its MLAT and stats page) can read this port the same way.
           </Text>
         </View>
       )}
@@ -108,7 +108,8 @@ export default function AdsbFeedSetup({ C, F, model, onChange, status, error, ke
           <Text style={hint}>
             Each site gets a stream with repeats thinned to two a second per aircraft and message kind, as their own feed programs
             send. A station UUID identifies your feed to the site. VibeServer makes one for you where the site{'’'}s own program
-            would; for map.flights paste the one from your station page there.
+            would; for map.flights paste the one from your station page there. ADS-B Exchange: your aircraft reach their map this
+            way, but their MLAT and their feeder stats page need their own feed program (it can read the Beast port above).
           </Text>
         </View>
       )}

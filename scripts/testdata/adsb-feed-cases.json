@@ -10,5 +10,8 @@
     "blob": "{\"serve\":false,\"port\":30005,\"open\":false,\"push\":false,\"feeds\":[{\"host\":\"10.0.0.5\",\"port\":30004,\"on\":true}]}" },
   { "name": "map.flights without its UUID", "serve": false, "port": 30005, "open": false, "push": true, "edit": { "3": { "on": true } },
     "error": "map.flights needs the station UUID" },
+  { "name": "ADS-B Exchange ticked with its UUID (11-26 preset)", "serve": false, "port": 30005, "open": false, "push": true,
+    "edit": { "4": { "on": true, "uuid": "9a8b7c6d-1111-4222-8333-444455556666" } },
+    "blob": "{\"serve\":false,\"port\":30005,\"open\":false,\"push\":true,\"feeds\":[{\"host\":\"feed1.adsbexchange.com\",\"port\":30004,\"on\":true,\"uuid\":\"9a8b7c6d-1111-4222-8333-444455556666\"}]}" },
   { "name": "port 99", "serve": true, "port": 99, "open": false, "push": false, "error": "1024 to 65535" }
 ]

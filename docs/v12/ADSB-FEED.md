@@ -93,12 +93,15 @@ airplanes.live refused automated fetches of their websites, so their facts come 
 | adsb.fi | feed.adsb.fi:30004 | UUID (their script generates one) | adsbfi/adsb-fi-scripts setup.sh |
 | airplanes.live | feed.airplanes.live:30004 | UUID (their script generates one) | airplanes-live/feed setup.sh |
 | map.flights | feed.map.flights:30004 | **the station UUID from the owner's map.flights station page** (refused without it) | read from map.flights' own JS bundle (the station generator), not from a written page |
+| ADS-B Exchange (added 11-26, Stuart) | feed1.adsbexchange.com:30004 | UUID (we make one when ticked; their client keeps one in `adsbx-uuid`) | github.com/ADSBexchange/feedclient `configure.sh` (last commit 2026-05-13): `TARGET="--net-connector feed1.adsbexchange.com,30004,beast_reduce_out,feed2.adsbexchange.com,64004"`, `REDUCE_INTERVAL="0.5"`, readsb `--uuid-file` |
 
 Rows were left out on purpose:
 
-- **ADS-B Exchange is not a preset.** Its published route is its own feed client. The endpoint exists
-  (feed1.adsbexchange.com:30004, `beast_reduce_out`), but account linking goes through their scripts. Their client can
-  read our Beast port instead, and the card says so.
+- **ADS-B Exchange is a preset since 11-26** (Stuart asked; it was first left out because they publish their own
+  client). Their client is readsb sending reduced Beast (`beast_reduce_out`, 0.5 s) to feed1.adsbexchange.com:30004 with
+  the UUID from `--uuid-file`, which readsb announces the same way as the others (0x1A 0xE4 + the UUID): exactly what our
+  push sends. Their failover (feed2.adsbexchange.com:64004) is not used. **Their MLAT (feed.adsbexchange.com:31090) and
+  their feeder stats page need their own client**; the card says so, and that client can read our Beast port instead.
 - **map.flights is s.r.o. in Prague**, not Dutch.
 - **MLAT** for all of these is a separate mlat-client on port 31090, which we do not run.
 
@@ -345,6 +348,6 @@ drive a Beast feed radio).
 
 ## Open questions for Stuart
 
-1. Offer ADS-B Exchange as a preset (`feed1.adsbexchange.com:30004`, `beast_reduce_out`), or keep "use their own client"?
+1. ~~Offer ADS-B Exchange as a preset?~~ Done 11-26 (Stuart): a preset, with MLAT and stats left to their client.
 2. Put the push feeds on the phone's server screen too? They are there now. Is that wanted for phones on mobile data?
 3. MLAT: worth a future job (our own mlat-client-compatible timing)? Not promised anywhere.
