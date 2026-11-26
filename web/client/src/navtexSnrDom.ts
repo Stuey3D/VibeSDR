@@ -9,7 +9,7 @@
  *    line box a slice's characters touch), so it follows re-wrapping at any width; repainted when the box resizes.
  * Nothing here is interactive (a title tooltip only) — nothing for a pad to reach.
  */
-import { lineWorst, snrBand, snrColour, SNR_COLOURS, navtexSplitPct, type NavtexSnr, type NavtexSplit } from '../../../src/utils/navtexQuality';
+import { lineWorst, snrBand, snrColour, SNR_COLOURS, SNR_RED_DB, SNR_GREEN_DB, navtexSplitPct, type NavtexSnr, type NavtexSplit } from '../../../src/utils/navtexQuality';
 
 /** Fill `el` with the timeline (hidden without one). */
 export function snrHBar(el: HTMLElement, q: NavtexSnr | null | undefined): void {
@@ -17,9 +17,9 @@ export function snrHBar(el: HTMLElement, q: NavtexSnr | null | undefined): void 
   if (!q || !q.tl.length) { el.hidden = true; return; }
   el.hidden = false;
   const tot = q.tl.length * q.sliceSec;
-  el.title = `SNR over the message, ${q.sliceSec} s a segment (${tot} s): red under 5 dB, amber 5–10, green over 10`;
+  el.title = `SNR over the message, ${q.sliceSec} s a segment (${tot} s): red under ${SNR_RED_DB} dB, amber ${SNR_RED_DB}–${SNR_GREEN_DB}, green from ${SNR_GREEN_DB}`;
   el.setAttribute('role', 'img');
-  el.setAttribute('aria-label', `SNR timeline: ${q.tl.filter((d) => snrBand(d) === 'red').length} of ${q.tl.length} segments under 5 dB`);
+  el.setAttribute('aria-label', `SNR timeline: ${q.tl.filter((d) => snrBand(d) === 'red').length} of ${q.tl.length} segments under ${SNR_RED_DB} dB`);
   for (const db of q.tl) {
     const s = document.createElement('i');
     s.style.background = snrColour(db);

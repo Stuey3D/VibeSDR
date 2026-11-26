@@ -1461,10 +1461,6 @@ body.adsbMap #srvHealth { right: 0 !important; }
 #adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
 #adsbList .adsbRow .id .ex { flex: 0 0 auto; display: inline-flex; align-items: center; white-space: nowrap; }
 /* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
-#adsbList .adsbRow .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; margin-left: 6px; vertical-align: 0; }
-#adsbList .adsbRow .sig i { display: block; width: 2.5px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
-#adsbList .adsbRow .sig i:nth-child(1) { height: 40%; } #adsbList .adsbRow .sig i:nth-child(2) { height: 70%; } #adsbList .adsbRow .sig i:nth-child(3) { height: 100%; }
-#adsbList .adsbRow .sig.l1 i.on { background: #e04040; } #adsbList .adsbRow .sig.l2 i.on { background: #e0b020; } #adsbList .adsbRow .sig.l3 i.on { background: #33cc44; }
 /* ★ The (i) beside the list's header: the map layer's colour key (toggleLegend), opened above the list. */
 #adsbLegendBtn { all: unset; box-sizing: border-box; position: absolute; top: 5px; right: 30px; width: 24px; height: 24px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; font: italic 600 12px Georgia, serif; color: rgba(255, 184, 51, 0.8);
@@ -3103,6 +3099,12 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
           color: var(--text-dim); margin: -2px 0 6px; }
 #nvQual[hidden] { display: none; }
 #nvSnrBar { flex: 1 1 100px; min-width: 60px; max-width: 220px; }
+/* ★★ beta96 THE MESSAGE SNR CHIP (src/utils/snrColour.ts snrChipHtml — every mode's rows, the app's SnrChip the same): the
+ *    number always, the band colour FILLED behind it with dark text, so it reads on every faceplate, transparency on or
+ *    off. The colour is the margin over THAT mode's decode threshold (red < 3 dB, amber 3–6, green ≥ 6). Never shrinks. */
+.snrChip { display: inline-block; flex: 0 0 auto; margin-left: 5px; padding: 0 4px; border-radius: 3px; font-size: 10px; line-height: 13px;
+  font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; color: #111111; vertical-align: 1px; }
+.snrChip.red { background: #e5484d; } .snrChip.amber { background: #f0a020; } .snrChip.green { background: #3dbb5f; }
 #navtexView.has #nvIdle, #navtexView:not(.has) #nvHead, #navtexView:not(.has) #nvText { display: none; }
 #decImage { display: none; width: 100%; background: #000; image-rendering: pixelated; }
 #decImage.on { display: block; }

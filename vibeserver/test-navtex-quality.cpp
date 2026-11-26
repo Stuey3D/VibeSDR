@@ -2,7 +2,7 @@
 // gallery keeps them (vibe_gallery.h NavtexAsm + navtexQualityJson / navtexQualityLine / navtexSnrLine; vibe_bgdecode.h's
 // tap reads ops 0x07 and 0x08). DISPLAY ONLY — nothing here touches the decoder.
 //  · slices tied to the text: each slice's character END in the cleaned text; a mid-message fade = the right lines red;
-//  · redPct (characters decoded under 5 dB) and minSnr; an all-green message has 0 % weak;
+//  · redPct (characters decoded under kSnrRed, 9 dB since the shared scale) and minSnr; an all-green message has 0 % weak;
 //  · the slice cap (≤ 120, pairs merged, the slice length doubled);
 //  · a fade's lock loss: its slices cover the gap marker line;
 //  · the tap end to end: 0x08 slices + text + the 21-byte 0x07 → an index line with nqc/nqf/nql/nqd, snr, tl, tc, and the
@@ -45,7 +45,7 @@ int main() {
             const size_t two = m.text.find("LINE TWO"), three = m.text.find("LINE THREE"), four = m.text.find("LINE FOUR");
             ok(m.tc.size() == 5 && (size_t)m.tc[1] == two && (size_t)m.tc[2] == three && (size_t)m.tc[3] == four && (size_t)m.tc[4] == m.text.size(),
                "each slice ENDS where the next line starts in the cleaned text: " + ints(m.tc));
-            // the characters decoded under 5 dB: LINE TWO RED + LINE THREE RED (newlines not counted)
+            // the characters decoded under kSnrRed (9 dB): LINE TWO RED + LINE THREE RED (newlines not counted)
             int red = 0, all = 0; for (char c : m.text) if (!std::isspace((unsigned char)c)) all++;
             for (char c : std::string("LINE TWO RED") + "LINE THREE RED") if (!std::isspace((unsigned char)c)) red++;
             ok(m.redPct == (int)std::lround(100.0 * red / all), "redPct " + std::to_string(m.redPct) + " % (want " + std::to_string((int)std::lround(100.0 * red / all)) + ")");
@@ -77,7 +77,7 @@ int main() {
         ok(got.size() == 1 && got[0].tl.size() == 75, "...75 of them, all the same length (" + std::to_string(got.empty() ? 0 : got[0].tl.size()) + ")");
         bool mono = true; for (size_t i = 1; !got.empty() && i < got[0].tc.size(); i++) mono = mono && got[0].tc[i] >= got[0].tc[i - 1];
         ok(mono, "...character ends still in order");
-        int red = 0; for (int v : got.empty() ? std::vector<int>() : got[0].tl) red += v < 5;
+        int red = 0; for (int v : got.empty() ? std::vector<int>() : got[0].tl) red += v < gallery::kSnrRed;
         ok(red == 5, "...the 20 s fade still reads red after merging (" + std::to_string(red) + " slices of 4 s)");
     }
     std::printf("── 3. a fade that cost the lock: its slices cover the gap marker ──\n");

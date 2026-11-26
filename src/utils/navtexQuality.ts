@@ -11,15 +11,16 @@
  *   (nqc / nqf / nql / nqd).
  * ★ SNR — measured by the decoder at each bit centre, in the BIT BANDWIDTH (100 Hz, as the SITOR-A status), sent a slice
  *   a second (op 0x08). A slice is tied to the TEXT: `tc[i]` is the character index (in the message text) where slice i
- *   ENDED, so the card can colour the lines decoded during a fade. Colours: < 5 dB red (that text may be junk), 5–10
- *   amber, > 10 green.
+ *   ENDED, so the card can colour the lines decoded during a fade. Colours (src/utils/snrColour.ts, margin over NAVTEX's
+ *   ~6 dB threshold): < 9 dB red (at the edge — that text may be junk), 9–12 amber, ≥ 12 green.
  */
 
-import { SNR_COLOURS, SNR_SCALES, snrBandFor, type SnrBand } from './snrColour.ts';
+import { SNR_COLOURS, SNR_SCALES, SNR_RED_MARGIN, SNR_GREEN_MARGIN, snrBandFor, type SnrBand } from './snrColour.ts';
 export { SNR_COLOURS, type SnrBand };
-/** ★ The shared scale's NAVTEX thresholds (src/utils/snrColour.ts — one scale for every mode's messages). */
-export const SNR_RED_DB = SNR_SCALES.navtex.red;
-export const SNR_GREEN_DB = SNR_SCALES.navtex.green;
+/** ★ The shared scale's NAVTEX bands (src/utils/snrColour.ts — the colour is the margin over the mode's decode threshold,
+ *  ~6 dB in the bit bandwidth): red under 9 dB, amber 9–12, green from 12. vibe_gallery.h kNavtexRedDb must match. */
+export const SNR_RED_DB = SNR_SCALES.navtex.thr + SNR_RED_MARGIN;
+export const SNR_GREEN_DB = SNR_SCALES.navtex.thr + SNR_GREEN_MARGIN;
 /** ≤ this many slices a message; longer ones merge pairs (each slice then covers twice the time). */
 export const SNR_MAX_SLICES = 120;
 
@@ -38,7 +39,7 @@ export interface NavtexSnr {
   sliceSec: number;
   /** Mean SNR (from mean powers), signal and noise dBFS (noise in 100 Hz). */
   avg: number; sig: number; noise: number;
-  /** The lowest slice (dB) and the share of the text's characters decoded under 5 dB (whole %). */
+  /** The lowest slice (dB) and the share of the text's characters decoded under SNR_RED_DB (whole %). */
   min: number; redPct: number;
 }
 
@@ -61,7 +62,7 @@ export function navtexQualityDetail(s: NavtexSplit | null | undefined): string |
   if (!p) return null;
   return `${p.n.toLocaleString('en-GB')} characters` + (s!.disagreed > 0 ? ` · copies disagreed ${p1(p.disagreed)} %` : '');
 }
-/** "SNR 8 dB avg · 22 % weak" (weak = decoded under 5 dB) — or null. `long` adds the lowest slice and the levels. */
+/** "SNR 8 dB avg · 22 % weak" (weak = decoded in the red, under SNR_RED_DB) — or null. `long` adds the lowest slice and the levels. */
 export function navtexSnrLine(q: NavtexSnr | null | undefined, long = false): string | null {
   if (!q || !q.tl.length) return null;
   const base = `SNR ${Math.round(q.avg)} dB avg · ${q.redPct} % weak`;
