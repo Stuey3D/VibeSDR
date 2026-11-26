@@ -878,6 +878,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    that says nothing are held as before (idle grace 12 s → 12 s holds, ~1.5 min). Same VIBESERVER_BIN rule. Silent.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-presence.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE COUNT AND THE LOCK AGREE when a listener leaves (11-26: listeners 2/4 and ASK TO TUNE while the lock had
+#    lifted): a web-shaped listener leaves four ways — a final departure drops count AND lock at once; a held place stays
+#    counted but `away`, and every dial has askFirst exactly when listeners − away > 1 (~1 min). Same VIBESERVER_BIN rule. Silent.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-leave-count.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the clients' half: the app client says background/foreground (again on every new socket's first hwinfo) and
 #    `leave` on destroy; the web page's presence/bye never raise "not connected" or wake a closed socket.
 if node --no-warnings scripts/test_presence_client.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

@@ -194,7 +194,7 @@ import {
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
-import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
+import { mediaSkipEnabled, dialAlone } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
@@ -1258,8 +1258,9 @@ function updateSharedBannerText() {
   // ★★★ V12 beta83 in DAB with own stations on, with company: the stations line alternates with the ask line (dialChat
   //     DAB_FREE_FLIP_MS — the app's bar does the same); dabFreeTick keeps it turning.
   const dabOwn = dabOn && !!dabState?.own?.on;
-  dabFreeTick(dabOwn && listenerCount > 1);
-  if (dabOwn && listenerCount > 1 && dabFreePhase(Date.now())) {
+  const company = listenerCount - listenerAway > 1;   // ★ beta96 held places are nobody to ask (dialAlone)
+  dabFreeTick(dabOwn && company);
+  if (dabOwn && company && dabFreePhase(Date.now())) {
     ms.classList.remove('alone'); ms.textContent = dabFreeText();
     ms.title = 'Any station in the list is free to choose — only changing multiplex or leaving DAB needs asking';
     return;
@@ -1274,7 +1275,7 @@ function updateSharedBannerText() {
   // ★ Until the first count arrives (0), the cautious wording — never "free" on a guess.
   // ★ In the chat's language (dialChat sharedTunerText — the app's bar reads the same words).
   if (listenerCount <= 0) { ms.classList.remove('alone'); ms.textContent = sharedTunerText(false, -1, 0); return; }
-  const alone = listenerCount <= 1;
+  const alone = dialAlone({ listeners: listenerCount, away: listenerAway });   // ★ beta96 held places left out, as the lock leaves them out
   ms.classList.toggle('alone', alone);
   // ★ The words go in as TEXT (a text node), the person glyph as markup: no translated string is ever parsed as HTML.
   ms.textContent = alone ? sharedTunerText(true, listenerCount, listenerMax)
@@ -1283,7 +1284,7 @@ function updateSharedBannerText() {
       `<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" `
       + `style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>`);
   ms.title = alone ? 'Nobody else is listening — free to tune'
-    : `${listenerCount} listening on this shared dial — ask in chat before tuning`;
+    : `${listenerCount} listening on this shared dial${listenerAway > 0 ? ` (${listenerAway} away — their place is kept for a few minutes)` : ''} — ask in chat before tuning`;
 }
 
 /** ★ HIDDEN, not disabled, unless the operator opened it to listeners. An inert control still
@@ -1908,8 +1909,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★ Shown to EVERYONE, not only the admin. "3 of 30 listening" answers the question a
     //   visitor actually has — is there room, and is anyone else here — and it is the number the
     //   owner wanted at a glance. `busy` was a yes/no built for a one-at-a-time receiver.
-    onUsers: (n, max) => {
-      listenerCount = n; listenerMax = max;
+    onUsers: (n, max, away) => {
+      listenerCount = n; listenerMax = max; listenerAway = away;
       // ★★ ONLY WHEN SOMEONE ELSE IS HERE, AND NOT ON A SHARED DIAL (noobish via Stuart, 2026-09-19): "1 listening
       //    of 5" with you alone reads as one OTHER person, and a shared dial's banner now carries the count.
       // ★ The chat strip reads the same number — see onListenerCount. It used to follow dial events only, and
@@ -1924,6 +1925,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ── ★★ THE SHARED DIAL. Only a receiver running open or spectator tuning sends these; on an
     //    ordinary one this never fires, and the buttons stay in the disabled state they start in.
     onDial: (d) => {
+      listenerAway = d.away || 0;   // ★ beta96 the dial carries it too (it is re-sent when a swap grace runs out)
       chatDial(d);
       dialModeNow = d.mode;
       ncdxfFollowSync();   // ★ V12 FOLLOW: a dial that turns shared stops it (never a shared dial)
@@ -11854,7 +11856,7 @@ function webSkipAllowed(): boolean {
   const mode = dialModeNow !== 'exclusive' ? dialModeNow : (srvSharedDial ? 'open' : 'exclusive');
   // ★ Until the first count arrives (0), NOT alone — the banner's own caution ("never free on a guess").
   return mediaSkipEnabled({ serverType: 'vibeserver', admin: adminUnlocked,
-    dial: { mode, listeners: listenerCount > 0 ? listenerCount : 2 } });
+    dial: { mode, listeners: listenerCount > 0 ? listenerCount : 2, away: listenerCount > 0 ? listenerAway : 0 } });
 }
 function syncMediaSkip() {
   if (!('mediaSession' in navigator)) return;
@@ -13962,6 +13964,9 @@ function locLine(): string {
 // ★ It also means the clock keeps running if a warning frame is lost — the deadline is what we
 // hold, not the remaining seconds.
 let listenerCount = 0, listenerMax = 0;
+/** ★ beta96 how many of listenerCount are HELD places (a dropped phone's slot — counted, nobody there to ask): the
+ *  server's `away`, on `users` and `dial`. FREE TO TUNE when listenerCount − listenerAway ≤ 1 (blindTuneGate dialAlone). */
+let listenerAway = 0;
 /** ★ Direct sampling as the RADIO reports it (2 = tuner bypassed, HF only) and the crossover it uses. Reported
  *  by the server so every listener sees the same state, not only whoever switched it. */
 let dsMode = 0, dsBelowHz = 24e6;

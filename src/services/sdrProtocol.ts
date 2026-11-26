@@ -409,7 +409,7 @@ export interface SDRCallbacks {
    *  IS the mechanism by which two strangers sort the dial out between themselves.
    *  ★ `mode` is 'exclusive' on an ordinary receiver, and nothing chat-shaped should be shown. */
   onDial?:      (d: { mode: string; tuner: number; mine: boolean; you: number;
-                      listeners: number; decoding: boolean } & AskState) => void;
+                      listeners: number; away?: number; decoding: boolean } & AskState) => void;
   /** ★★ ASK BEFORE TUNING: something tried to tune while the server says this listener may not — the screen
    *  flashes the chat key and the shared-tuner banner (docs/TUNING-ETIQUETTE.md). Nothing was sent. */
   onTuneLocked?: () => void;

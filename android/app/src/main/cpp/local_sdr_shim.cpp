@@ -14124,6 +14124,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += ",\"mine\":" + std::string(!dialSession.empty() && dialSession == forSession ? "true" : "false");
         j += ",\"you\":" + std::to_string(handleForLocked(forSession));
         j += ",\"listeners\":" + std::to_string(specListenerCountLocked());
+        { const int away = awayCountLocked(); if (away > 0) j += ",\"away\":" + std::to_string(away); }   // ★ beta96 see awayCountLocked
         // ★★ WHY THE DIAL IS NOT MOVING, when it is not. A decode runs for ten minutes with no
         //    interaction, and a room that cannot see that is a room that starts retuning over it.
         if (decodingNow()) j += ",\"decoding\":true";
@@ -14196,8 +14197,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /* ★ A HELD session (V12) is not company here: nobody can ask a listener whose phone is suspended, so the one person
      *   actually present has the dial as normal. */
     bool askInForceLocked() {
-        return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() - heldCountLocked() + askGoneCountLocked() > 1;
+        return g_vsAskBeforeTuning.load() && vsSharedDial() && companyCountLocked() > 1;
     }
+    /** ★★ THE PEOPLE IN THE ROOM — the listeners less the held places, plus anybody inside the socket-swap grace (askGone_).
+     *  ONE count for the lock (askInForceLocked) and for what the banners are told (awayCountLocked). Under clientMtx. */
+    int companyCountLocked() { return specListenerCountLocked() - heldCountLocked() + askGoneCountLocked(); }
+    /* ★★★ beta96 THE COUNT AND THE LOCK MUST AGREE (11-26: a listener's sockets dropped; `listeners` stayed 2/4 for the
+     *  three-minute hold — rightly, a held place is still a place (Stuart: "their listener slot stays counted") — but the
+     *  lock lifted, because nobody can ask a suspended phone, and the one listener present read "ASK TO TUNE · 2/4"). So
+     *  the count now SAYS which of its places are held: `away` = places counted in `listeners` whose listener is not here
+     *  to ask (held, past the swap grace). Sent beside `listeners` in `dial` and `users` only when > 0, so an older client
+     *  reads what it always read; a new one is FREE TO TUNE when listeners − away ≤ 1 — the lock's own test. */
+    int awayCountLocked() { return std::max(0, specListenerCountLocked() - companyCountLocked()); }
+    /** What `away` was last told (askTick re-sends dial + users when it moves without anyone arriving or leaving — a
+     *  swap grace running out). Under clientMtx. */
+    int awaySent_ = 0;
     /* ★★★ A LISTENER WHOSE SOCKET IS SWAPPING IS STILL IN THE ROOM (Stuart, 2026-11-15, Almere B210, beta77): the other
      *  listener put the radio on 7D; entering DAB swaps a client's socket, and for that moment the room was Stuart alone —
      *  "alone, nothing is locked" — so his tap on KINK DISTORTION changed the station for everybody "just as the first
@@ -14507,8 +14521,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  `dial` to each listener whose lock CHANGED (a countdown alone is not a change; the client counts it down from
      *  the seconds it was given). Also tells everybody when the lock stops being in force, so nothing stays dimmed. */
     void askTick() {
-        if (!g_vsAskBeforeTuning.load() && askSent.empty()) return;
         if (!vsSharedDial()) return;
+        // ★★ beta96 a held place's swap grace ran out (or a held listener came back) with nobody arriving or leaving —
+        //    `away` moved, so the room is told: dial + users, whether or not the ask switch is on (awayCountLocked).
+        { bool moved;
+          { std::lock_guard<std::mutex> lk(clientMtx); moved = awayCountLocked() != awaySent_; }
+          if (moved) broadcastUsersSafe(); }
+        if (!g_vsAskBeforeTuning.load() && askSent.empty()) return;
         std::vector<std::pair<std::shared_ptr<net::Socket>, std::string>> out;
         {
             std::lock_guard<std::mutex> lk(clientMtx);
@@ -27472,19 +27491,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  so the dial follows them: the server sends the full state, the clients have no vote (the shared-dial contract). */
     void broadcastUsersSafe() { broadcastUsers(); sendDialState(); }
 
+    /** The `users` message — `away` only when some of the places are held (see awayCountLocked). */
+    std::string usersJson() {
+        int n, away;
+        { std::lock_guard<std::mutex> lk(clientMtx); n = specListenerCountLocked(); away = awayCountLocked(); awaySent_ = away; }
+        char b[112];
+        if (away > 0) snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d,\"away\":%d}", n, g_vsMaxUsers.load(), away);
+        else          snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}", n, g_vsMaxUsers.load());
+        return b;
+    }
     void broadcastUsers() {
-        const int n = specListenerCount();
-        char b[96];
-        snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}", n, g_vsMaxUsers.load());
+        const std::string b = usersJson();
         for (auto& p : allSpecPeers()) sendText(p.sock, b);
     }
 
-    void sendUsers(const std::shared_ptr<net::Socket>& sock) {
-        char b[96];
-        snprintf(b, sizeof b, "{\"type\":\"users\",\"n\":%d,\"max\":%d}",
-                 specListenerCount(), g_vsMaxUsers.load());
-        sendText(sock, b);
-    }
+    void sendUsers(const std::shared_ptr<net::Socket>& sock) { sendText(sock, usersJson()); }
 
     /** ★★★ THE RATES THIS RADIO CAN ACTUALLY DO — ONE LIST, TWO READERS, AND NOW ONE SOURCE.
      *
@@ -33983,7 +34004,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   bool left = false;
                   for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }
                   if (!left && !heldNow) sessionSquelch.erase(ses);   // ★ V12: a HELD listener keeps their squelch
-                  if (!left) {   // ★★ ask before tuning: the room keeps them through a socket swap (askGone_) — a just-HELD one too (every drop is held)
+                  /* ★★★ beta96 …but NOT a departure that is final ("bye"/"leave", a clean 1001 close in the foreground —
+                   *  noHoldLocked): that is nobody swapping a socket, they have gone. The count dropped at once and the lock
+                   *  stayed on for the 8 s grace (+ a 2 s tick) — the one listener present told "1" and locked. */
+                  if (!left && !noHoldPendingLocked(ses, Impl::nowSecs())) {   // ★★ ask before tuning: the room keeps them through a socket swap (askGone_) — a just-HELD one too (every drop is held)
                       const double nowS = Impl::nowSecs();
                       AskGone g; g.at = nowS;
                       auto rk = sockRankKey.find(sock.get());

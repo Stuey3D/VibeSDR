@@ -603,7 +603,7 @@ export interface SpectrumCallbacks {
    *  them anyway; this exists so the client can HIDE them. Per AGENTS.md, a control that is
    *  visible and refused reads as a broken feature, not a blocked one. */
   /** How many are listening, and the owner's cap. Sent when the count CHANGES. */
-  onUsers?: (n: number, max: number) => void;
+  onUsers?: (n: number, max: number, away: number) => void;   // ★ beta96 away = held places (dialChat DialState.away)
   /** ★ Global server-side DSP state. These SURVIVE a listener leaving, so the next
    *  listener inherits them — the client must render what the server says rather
    *  than its own saved prefs, or the control lies about the radio.
@@ -721,7 +721,7 @@ export interface SpectrumCallbacks {
    *  listening, who moved the dial last (an ordinal — never an identity), and whether somebody is
    *  mid-decode. Absent on an exclusive receiver, which is every existing one. */
   onDial?: (d: { mode: string; tuner: number; mine: boolean; you: number;
-                 listeners: number; decoding?: boolean } & AskState) => void;
+                 listeners: number; away?: number; decoding?: boolean } & AskState) => void;
   /** ★★ Ask before tuning: a tune was refused here because the server has not let this listener in yet. */
   onTuneLocked?: () => void;
   /** Spectator mode refused a control. ★ Said out loud, because a control that silently does
@@ -2114,6 +2114,7 @@ export class SpectrumClient {
           mine: msg.mine === true,
           you: Number(msg.you) || 0,
           listeners: Number(msg.listeners) || 0,
+          away: Number(msg.away) || 0,   // ★ beta96 held places (dialChat DialState.away)
           decoding: msg.decoding === true,
           ...ask,
         });
@@ -2137,7 +2138,7 @@ export class SpectrumClient {
                          msg as Record<string, unknown>);
         break;
       case 'users':
-        this.cb.onUsers?.(Number(msg.n) || 0, Number(msg.max) || 0);
+        this.cb.onUsers?.(Number(msg.n) || 0, Number(msg.max) || 0, Number(msg.away) || 0);
         break;
       case 'admin':
         // ok=true after a correct password; refused=true when a protected control was

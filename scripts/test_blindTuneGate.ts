@@ -69,6 +69,12 @@ for (const server of SERVERS) {
 // ★ The banner's FREE TO TUNE and the gate's "alone" are one test.
 eq('alone at 1', dialAlone({ listeners: 1 }), true);
 eq('not alone at 2', dialAlone({ listeners: 2 }), false);
+// ★ beta96 a HELD place (`away`: a dropped phone's slot, still counted) is nobody to ask — the server's lock leaves it out
+eq('alone at 2 with 1 away (held)', dialAlone({ listeners: 2, away: 1 }), true);
+eq('not alone at 3 with 1 away', dialAlone({ listeners: 3, away: 1 }), false);
+eq('an older server (no away) unchanged', dialAlone({ listeners: 2, away: undefined }), false);
+eq('a bogus away never makes a crowd', dialAlone({ listeners: 1, away: -3 }), true);
+eq('skip allowed alone with a held place', mediaSkipEnabled({ serverType: 'vibeserver', dial: { mode: 'open', listeners: 2, away: 1 } }), true);
 
 // ★ A refused voice/car tune must say WHY — a silent no reads as a broken feature.
 for (const r of ['others-listening', 'spectator', 'listen-only', 'fmdx-shared-tuner'] as const) {

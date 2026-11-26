@@ -14845,7 +14845,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ Ask before tuning — the server's word on whether this listener may move the dial (dialChat.AskState).
     ...(dialState?.askFirst ? { ask: { askFirst: true, tuneLocked: dialState.tuneLocked, askState: dialState.askState,
                                       askUntil: dialState.askUntil }, onLockedTouch: nudgeAsk } : {}),
-  } : null, [sharedDial, dialState?.listeners, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
+  } : null, [sharedDial, dialState?.listeners, dialState?.away, occMaxUsers, dialState?.tuner, dialState?.mine, dialState?.decoding, bannerSaidShown,
              dialState?.askFirst, dialState?.tuneLocked, dialState?.askState, dialState?.askUntil, nudgeAsk, chatLangNow, scanLockText,
              dabOwnFree, dabFreeOn]);
   const onFreqOpen  = useCallback(() => setFreqModalOpen(true), []);
