@@ -151,5 +151,21 @@ if (stray.length) {
   } else ok(`GPU-map manifest matches assets/mapgl (${want.version})`);
 }
 
+/* ★★ THE BASIC PACK: ONE MAP EVERYWHERE (beta96, the rivers). The app bundles assets/mapgl's copy; servers, the Mac app and
+ *  the APK's in-app server bundle directory/public/mapgl's (CMake, build-app.sh, mapgl-assets.gradle). Two different packs
+ *  = two different maps. And the style's vibesdr:basicRev must be THAT pack's, or browsers keep a stale cached copy
+ *  (vibemapgl.js). Fix: node scripts/sync-mapgl-assets.mjs --scripts (after copying the pack to both places). */
+{
+  const { readFileSync } = await import('node:fs');
+  const { basicRev } = await import('./lib/basic-water.mjs');
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const a = path.join(repo, 'assets/mapgl/vibemap-basic.pmtiles'), d = path.join(repo, 'directory/public/mapgl/vibemap-basic.pmtiles');
+  const ra = basicRev(a), rd = basicRev(d);
+  const st = JSON.parse(readFileSync(path.join(repo, 'web/mapkit/vibemap-style.json'), 'utf8'));
+  if (ra !== rd) fail(`the basic pack differs: assets/mapgl ${ra}, directory/public/mapgl ${rd} — the app and the servers would draw different maps`);
+  else if (st.metadata['vibesdr:basicRev'] !== ra) fail(`vibemap-style.json vibesdr:basicRev ${st.metadata['vibesdr:basicRev']} is not the pack's ${ra} — run node scripts/sync-mapgl-assets.mjs --scripts`);
+  else ok(`basic pack the same for app and servers, style revision ${ra}`);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

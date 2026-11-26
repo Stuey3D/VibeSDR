@@ -13,11 +13,12 @@
  *    The style reads the rivers through their own source on the same pack (vibemapgl.js prepareStyle, vs-basic-rivers,
  *    maxzoom 8); the basic source stays maxzoom 6, so the land never asks for the empty z7/z8 tiles.
  *
- * ★ tile-join re-encodes each tile but keeps every feature and geometry as it was; check-basic-water (below) and the
- *   commit's decode comparison are the proof. tile-join is part of tippecanoe (brew install tippecanoe).
+ * ★ tile-join re-encodes each tile but keeps every feature and geometry as it was: 337 tiles decoded identically for every
+ *   old layer (commit 13bdc62bc). tile-join is part of tippecanoe (brew install tippecanoe).
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
 import { execFileSync } from 'node:child_process';
-import { renameSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 export const BASIC_WATER_LAYER = 'riverareas';
 export const BASIC_WATER_MIN_WIDTH_M = 200, BASIC_WATER_MINZ = 5, BASIC_WATER_MAXZ = 8;
@@ -40,4 +41,10 @@ export function joinBasicWater(basicIn, waterPack, out) {
     basicIn, waterPack], { stdio: 'inherit' });
   renameSync(part, out);
   return statSync(out).size;
+}
+
+/** The basic pack's content revision (style metadata vibesdr:basicRev — sync-mapgl-assets.mjs stamps it, vibemapgl.js
+ *  puts it on the pack's URL, check-map-overlay.mjs holds it equal to the pack). */
+export function basicRev(file) {
+  return createHash('sha1').update(readFileSync(file)).digest('hex').slice(0, 10);
 }

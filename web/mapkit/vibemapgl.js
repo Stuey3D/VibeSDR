@@ -234,7 +234,11 @@
       let basicUrl, reliefUrl = null, detailUrl = null, runwaysUrl = null, hasDetail = false;
       if (o.rangeBase) {
         // ★ A browser: stream by HTTP range, only the tiles in view.
-        basicUrl = 'pmtiles://' + o.rangeBase + 'vibemap-basic.pmtiles';
+        /* ★★ ?r= the basic pack's revision (style vibesdr:basicRev, stamped by sync-mapgl-assets.mjs): /mapgl/ goes out with
+         *  a day's max-age and no ETag, so after an upgrade a browser could pair the OLD pack's cached header with the NEW
+         *  pack's bytes (beta96: 11 -> 18 MB). The style is always fetched fresh, so a new pack is a new URL at once. */
+        const bRev = o.style && o.style.metadata && o.style.metadata['vibesdr:basicRev'];
+        basicUrl = 'pmtiles://' + o.rangeBase + 'vibemap-basic.pmtiles' + (bRev ? '?r=' + encodeURIComponent(bRev) : '');
         reliefUrl = 'pmtiles://' + o.rangeBase + 'vibemap-relief.pmtiles';
         runwaysUrl = 'pmtiles://' + o.rangeBase + 'vibemap-runways.pmtiles';
         if (o.detail) { hasDetail = true; detailUrl = 'pmtiles://' + o.rangeBase + 'vibemap-detail.pmtiles'; }
