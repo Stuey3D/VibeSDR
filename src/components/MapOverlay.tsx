@@ -84,7 +84,8 @@ import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type
 import { langName } from '../services/transcriber';
 import { NAV_HAZARDS, NAV_HAZARD_COLOURS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../services/navtexIcons';
 import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';
-import { MAP_TITLE } from '../services/liveMaps';   // ★★★ beta96 the AIR & SEA map   // ★ V12 2026-11-02 the SHIPPING MAP
+import { MAP_TITLE } from '../services/liveMaps';
+import { STORED_SONDE_ICON, STORED_VOR_ICON } from '../services/storedLayers';   // ★★★ beta96 maps2 the remembered sondes / VOR stations' KEY rows   // ★★★ beta96 the AIR & SEA map   // ★ V12 2026-11-02 the SHIPPING MAP
 import { seaLegendRows, seaAttributionAll } from '../services/seaAreas';   // ★ beta95 every source: the areas are drawn worldwide   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
@@ -385,8 +386,14 @@ function buildHtml(
       <div class="lg-row"><span style="color:#33cc44">&#9646;&#9646;&#9646;</span><span>20 dB and over &middot; dim = not heard this minute</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Range rings in nautical miles</span></div>
 `;
+  /* ★★★ beta96 maps2 the REMEMBERED sondes / VOR stations (storedLayers.ts — the gallery's day cards): their KEY rows, shown only
+   *  while such items are on the map ('sds:' / 'vos:' keys, as the live sections are) */
+  const legStored = (k: string, ic: string, words: string) => `<div class="lgLive" data-l="${k}" style="display:none"><div class="lg-row"><span style="display:inline-flex">${ic}</span><span>${words}</span></div></div>`;
   const airSeaLegend = () => `<div class="lgLive" data-l="ndb" style="display:none">${legNdb}</div><div class="lgLive" data-l="vor" style="display:none">${legVor}</div>`
-    + `<div class="lgLive" data-l="sondes" style="display:none">${legSd}</div>${legAv}${legShip}`;
+    + `<div class="lgLive" data-l="sondes" style="display:none">${legSd}</div>`
+    + legStored('vos', STORED_VOR_ICON.html.replace('width="20" height="18"', 'width="16" height="14"'), 'VOR / localiser remembered by this server (7 days) &mdash; fainter as it ages')
+    + legStored('sds', STORED_SONDE_ICON.html.replace('width="20" height="22"', 'width="14" height="15"'), 'Radiosonde remembered by this server (24 h) &mdash; fainter as it ages')
+    + `${legAv}${legShip}`;
   return `<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
@@ -1804,7 +1811,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
       var nH=0;for(var j=0;j<a.length;j++)if(!(a[j]&&a[j]._nofit))nH++;cnt.textContent=String(nH);   // ★ beta95 what was heard, not the chart
-      if(KIND==='airsea'){var hv=false,hs=false;for(var j2=0;j2<a.length;j2++){var kk=String(a[j2]&&a[j2].key||'');if(kk.indexOf('vor:')===0)hv=true;else if(kk.indexOf('sd:')===0)hs=true;}legShow('vor',hv);legShow('sondes',hs);}
+      if(KIND==='airsea'){var hv=false,hs=false,hvs=false,hss=false;for(var j2=0;j2<a.length;j2++){var kk=String(a[j2]&&a[j2].key||'');if(kk.indexOf('vor:')===0)hv=true;else if(kk.indexOf('sd:')===0)hs=true;else if(kk.indexOf('vos:')===0)hvs=true;else if(kk.indexOf('sds:')===0)hss=true;}
+        legShow('vor',hv);legShow('sondes',hs);legShow('vos',hvs);legShow('sds',hss);}   // ★ maps2 the remembered ones' rows too
       var l=trkMake();if(!l)return;
       var ac=KIND==='airsea'&&!acLayer&&!a.some(function(it){return it&&it._adsb;})?null:acMake();   // ★ beta96 AIR & SEA: made when the first aircraft comes
       if(ac){var rest=[],planes=[];acHexKey={};acKeyHex={};

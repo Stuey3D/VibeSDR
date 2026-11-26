@@ -275,6 +275,25 @@ public:
         }
         return o;
     }
+    /** ★★★ beta96 maps2 the gallery's day card (vibe_posgal.h): each IDENTIFIED station heard since `sinceUtc` — its
+     *  published ident, name, site and channel, and when it was heard. At most `maxRows`. */
+    struct HeardStation { std::string ident, name, kind, cc; double lat = NAN, lon = NAN; int64_t hz = 0, firstUtc = 0, lastUtc = 0; };
+    std::vector<HeardStation> heardStations(int64_t sinceUtc, size_t maxRows) {
+        std::lock_guard<std::mutex> lk(m_);
+        std::vector<HeardStation> out;
+        for (const auto& kv : beacons_) {
+            const Beacon& x = kv.second;
+            if (!x.heard || x.lastUtc < sinceUtc || identOf_(x).empty()) continue;
+            const vibevor::Station* st = stationOf_(x);
+            if (!st) continue;
+            HeardStation h;
+            h.ident = st->r->ident; h.name = st->name(); h.kind = x.expect == 2 ? "loc" : "vor"; h.cc = st->r->cc;
+            h.lat = st->r->lat; h.lon = st->r->lon; h.hz = x.hz; h.firstUtc = x.firstUtc; h.lastUtc = x.lastUtc;
+            out.push_back(std::move(h));
+            if (out.size() >= maxRows) break;
+        }
+        return out;
+    }
     /** For the admin line / the bench. */
     int heardNow() const { return heard_.load(); }
     int identifiedNow() const { return identified_.load(); }

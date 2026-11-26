@@ -266,6 +266,9 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★★ beta96 maps2 THE DAY's SONDES AND VOR STATIONS (vibe_posgal.h): one card per kind per UTC day, never a write per report,
+    #     the 10-field table, newest position / first heard / highest kept, a restart, midnight, the 300-row bound. Fast.
+    test-posgal)           echo "-O2 -lpthread" ;;
     # ★★★ THE GALLERY'S STORE at any size (vibe_gallery.h, 2026-11-01): the owner's SIZE is the limit (no 5,000 cap), the
     #     index counted inside it, per-kind counts, oldest-first eviction fair between kinds, append-only + compaction,
     #     two processes on one folder, the 1,000,000 backstop. ~2 s.
@@ -1030,6 +1033,11 @@ if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 AIS + APRS in the app (src/services/tracks.ts) against the web's tracks.ts — one rule, two readers
 if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 THE AMATEUR MAP (src/utils/amateurMap.ts): the HEARD IN window for every layer, MESH (every ISM band's remembered
+#     nodes) and BEACONS, the app's list in tabs (amListRows, TrackLiveList), the pages wired
+if npx tsx scripts/test_amateur_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 maps2 STORED SONDES AND VOR STATIONS on the AIR & SEA map (src/services/storedLayers.ts — the gallery's day cards)
+if npx tsx scripts/test_stored_layers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta96 THE MAP FOLLOWS THE MODE (Mac Ha 11-26: the AIS map's title over the ADS-B aircraft list) — the app's map page
 #    kept with its kind and opening (src/utils/mapPage.ts), the screen's map precedence, one whole-radio map at a time (app + web).
 if node --no-warnings scripts/test_map_page_kind.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

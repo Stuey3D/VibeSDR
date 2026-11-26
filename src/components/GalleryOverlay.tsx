@@ -87,6 +87,8 @@ const KINDS: { id: string; label: string }[] = [
   { id: 'fctlm', label: 'FUNCUBE' },
   // ★★ 2026-11-24 ORBCOMM: each pass's sky plot (a PNG, "ORBCOMM · …") — and the SKY PLOT row on its first page
   { id: 'orbcomm', label: 'ORBCOMM' },
+  // ★★★ beta96 maps2 SONDES and the VOR MAP: each day's positions as a card (vibe_posgal.h) — the AIR & SEA map draws them when the mode is off
+  { id: 'sondes', label: 'SONDES' }, { id: 'vormap', label: 'VOR' },
 ];
 /** ★★ 2026-11-24 the gallery kinds whose first page carries the SKY PLOT row */
 const SKY_KINDS = ['', 'orbcomm'];

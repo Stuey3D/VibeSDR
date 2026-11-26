@@ -177,7 +177,8 @@ import { parseSkimBands, skimPickable, type SkimBands, type SkimKind } from '../
 import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
          mergeRttyHistory, type CwList, type CwSpot } from '../services/cwList';
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
-import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, type AmLayer } from '../utils/amateurMap';
+import { storedLoader, storedSondeItems, storedVorItems, storedSondeRows, storedVorRows, storedStatus, type GalPos, type StoredKind } from '../services/storedLayers';   // ★★★ beta96 maps2   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { NCDXF_BANDS, NCDXF_CALLS, ncdxfFollowAllowed, ncdxfFollowBand, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { TONES_DEFAULTS, type TonesOptions } from '../services/tones';   // ★ V12 DTMF + 5-tone
 import { BALLOON_AUTO, balloonMerge, type BalloonPayload, type BalloonPicture, type BalloonReport, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
@@ -12779,6 +12780,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { if (!airSeaUp) { setAsMsgKey(''); setAsPicked(null); } }, [airSeaUp]);
   const asMsgs = useRef<LiveMsg[]>([]);
   const asMsgSeen = useRef(new Map<string, number>());
+  /* ★★★ beta96 maps2 STORED SONDES AND VOR STATIONS (services/storedLayers.ts — the gallery's day cards, vibe_posgal.h): while
+   *  SONDES / the VOR map is NOT running, the AIR & SEA map draws what this server remembers of them, faded by age (sondes
+   *  24 h, VOR stations 7 days). Read when the map is up and every 2 minutes (the cards change at most every 5); one request
+   *  at a time; the server's own HTTP with the read auth. No gallery: nothing stored is drawn. */
+  const storedLoads = useMemo(() => {
+    if (!satGalleryGet) return null;
+    const list = async (kind: StoredKind) => { const lj = await satGalleryGet(`/vibeserver/gallery.json?kind=${kind}&limit=60`); if (!lj) return null;
+                                               try { const it = JSON.parse(lj)?.items; return Array.isArray(it) ? it : null; } catch { return null; } };
+    const text = (f: string) => satGalleryGet(`/vibeserver/gallery/file/${encodeURIComponent(f)}`);
+    return { sd: storedLoader('sondes', { list, text }), vm: storedLoader('vormap', { list, text }) };
+  }, [satGalleryGet]);
+  const [sdStored, setSdStored] = useState<GalPos[]>([]);
+  const [vmStored, setVmStored] = useState<GalPos[]>([]);
+  useEffect(() => {
+    if (!airSeaUp || !storedLoads) return;
+    let live = true;
+    const go = async () => {
+      const now = Math.floor(Date.now() / 1000);
+      if (!sdOn) { const r = await storedLoads.sd(now); if (live && r) setSdStored(r); }
+      if (!vmOn) { const r = await storedLoads.vm(now); if (live && r) setVmStored(r); }
+    };
+    void go();
+    const t = setInterval(() => { void go(); }, 120_000);
+    return () => { live = false; clearInterval(t); };
+  }, [airSeaUp, storedLoads, sdOn, vmOn]);
   const airSeaMode: LiveMode = adsbLiveHere ? 'adsb' : aisOn && aisViewOpen ? 'ais' : sdOn && sdMapOpen ? 'sondes' : vmOn && vmMapOpen ? 'vormap' : ndbOn && ndbViewOpen ? 'ndb' : avOn ? 'datalink' : activeDecoder === 'hfdl' && avMapOpen ? 'hfdl'
     : activeDecoder === 'navtex' && navMapOpen ? 'navtex' : activeDecoder === 'dsc' && navMapOpen ? 'dsc' : '';
   const adsbStatusLine = adsbLiveHere ? `ADS-B ${adsbStatusText(adsbReport)}` : '';
@@ -12800,11 +12826,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     const vmLive = airSeaMode === 'vormap', sdLive = airSeaMode === 'sondes';
     if (vmLive && vmTrk.items.length) have.vor = vmTrk.items.length;
     if (sdLive && sdTrk.items.length) have.sondes = sdTrk.items.length;
+    // ★★★ maps2 else what the gallery remembers of them (faded by age, never live)
+    const vmMem = !vmOn && vmStored.length > 0, sdMem = !sdOn && sdStored.length > 0;
+    if (vmMem) have.vor = vmStored.length;
+    if (sdMem) have.sondes = sdStored.length;
+    const nowStored = Math.floor(Date.now() / 1000);
     // ★ stage 8 NDB while it runs: its beacons are the beacon layer's (NdbLiveList's body, the NAVAIDS tab)
     const ndbLive = airSeaMode === 'ndb';
     const ndbN = ndbLive && ndbReport ? ndbRows(ndbReport).length : 0;
     if (ndbLive) have.ndb = Math.max(1, ndbN);
-    const aviationAny = (av.planes?.length ?? 0) > 0 || live.layers.some((l) => avLayerOf(l) != null || l === 'vor' || l === 'ndb');
+    const aviationAny = (av.planes?.length ?? 0) > 0 || live.layers.some((l) => avLayerOf(l) != null || l === 'vor' || l === 'ndb') || vmMem;
     const present = livePresent('airsea', have, live, aviationAny ? ['airports'] : []).filter((id) => have[id] || live.layers.includes(id) || id === 'airports');
     const toggled: Record<string, boolean> = {};
     // ★ beta96 SEA AREAS: on by default only near a coast (b96-fixes) AND with something maritime here (ONE-MAP.md) —
@@ -12850,9 +12881,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     const acRows = order.map((x) => byKey.get(x.key)).filter((r): r is TrackRow => !!r);
     const shipRows = (on('ships') || on('dsc')) ? (ship.shipRows ?? []) : [];
     const navRows = ship.navRows ?? [];
-    const vorRows = vmLive ? vmTrk.rows.map((r) => ({ ...r, key: `vor:${r.key}` })) : [];
-    const sondeRowsA = sdLive ? sdTrk.rows.map((r) => ({ ...r, key: `sd:${r.key}` })) : [];
-    const tabHave: Partial<Record<LiveTab, number>> = { navaids: vmLive ? Math.max(1, vorRows.length) : ndbLive ? Math.max(1, ndbN) : 0, sondes: sdLive ? Math.max(1, sondeRowsA.length) : 0,
+    const vorRows = vmLive ? vmTrk.rows.map((r) => ({ ...r, key: `vor:${r.key}` })) : vmMem && on('vor') ? storedVorRows(vmStored, nowStored, trkRx) : [];
+    const sondeRowsA = sdLive ? sdTrk.rows.map((r) => ({ ...r, key: `sd:${r.key}` })) : sdMem && on('sondes') ? storedSondeRows(sdStored, nowStored, trkRx) : [];
+    const tabHave: Partial<Record<LiveTab, number>> = { navaids: vmLive ? Math.max(1, vorRows.length) : ndbLive ? Math.max(1, ndbN) : vorRows.length,
+      sondes: sdLive ? Math.max(1, sondeRowsA.length) : sondeRowsA.length,
       aircraft: liveHex.size + acRows.length || (adsbLiveHere ? 1 : 0), messages: asMsgs.current.length, ships: shipRows.length || (aisViewOpen ? 1 : 0), navtex: navRows.length };
     const tabs = liveTabs('airsea', tabHave, live, asOpened);
     const tab = liveTabPick(tabs, asPicked, live, asOpened) ?? 'aircraft';
@@ -12864,9 +12896,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       title: chrome.title, exitLabel,
       camera: (live.layers.some((l) => shipLayerOf(l) != null || l === 'vor' || l === 'sondes' || l === 'ndb') ? 'track' : 'aircraft') as 'aircraft' | 'track',
       items: [...(vmLive && on('vor') ? vmTrk.items.map((it) => ({ ...it, key: `vor:${it.key}`, _rk: (it._rk ?? 0) + 1e12 })) : []),
-              ...(sdLive && on('sondes') ? sdTrk.items.map((it) => ({ ...it, key: `sd:${it.key}`, _rk: 1e12 })) : []), ...adsbItems, ...(aviationAny ? (av.items as TrackItem[]).filter((it) => !isLiveAc((it._adsb as { hex?: unknown } | undefined)?.hex)) : []), ...ship.items],
+              ...(sdLive && on('sondes') ? sdTrk.items.map((it) => ({ ...it, key: `sd:${it.key}`, _rk: 1e12 })) : []),
+              ...(vmMem && on('vor') ? storedVorItems(vmStored, nowStored) : []), ...(sdMem && on('sondes') ? storedSondeItems(sdStored, nowStored) : []),   // ★ maps2 remembered
+              ...adsbItems, ...(aviationAny ? (av.items as TrackItem[]).filter((it) => !isLiveAc((it._adsb as { hex?: unknown } | undefined)?.hex)) : []), ...ship.items],
       rows,
-      status: [adsbLiveHere ? adsbStatusLine : '', vmLive ? vmTrk.status : '', ndbLive ? (ndbReport ? `NDB ${ndbStatText(ndbReport)}` : 'NDB \u2014 taking the receiver to the beacon band\u2026') : '', sdLive ? sdTrk.status : '', aviationAny ? av.status : '', ship.status].filter(Boolean).join(' \u00b7 '),
+      status: [adsbLiveHere ? adsbStatusLine : '', vmLive ? vmTrk.status : '', vmMem && on('vor') ? storedStatus('vormap', vmStored.length) : '', sdMem && on('sondes') ? storedStatus('sondes', sdStored.length) : '', ndbLive ? (ndbReport ? `NDB ${ndbStatText(ndbReport)}` : 'NDB \u2014 taking the receiver to the beacon band\u2026') : '', sdLive ? sdTrk.status : '', aviationAny ? av.status : '', ship.status].filter(Boolean).join(' \u00b7 '),
       empty: tab === 'navaids' ? (ndbLive ? '' : vmTrk.empty) : tab === 'sondes' ? sdTrk.empty : tab === 'aircraft' ? AV_EMPTY : tab === 'messages' ? 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs \u2014 on any radio of this server.' : ship.empty,
       credit: tab === 'aircraft' && !!av.credit,
       toggles: liveChips(present, live).map((c) => ({ id: c.id, label: c.live ? `\u25CF ${c.label}` : c.label, words: c.words })),
@@ -12893,10 +12927,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (k.startsWith('m:')) { const m = asMsgs.current.find((x) => `m:${x.id}` === k); return m ? m.key : k; }
         return k;
       },
-      trail: (key: string) => (key.startsWith('a:') || key.startsWith('vor:') ? Promise.resolve([] as [number, number][]) : key.startsWith('sd:') ? sdTrk.trail(key.slice(3))
+      trail: (key: string) => (key.startsWith('a:') || key.startsWith('vor:') || key.startsWith('vos:') || key.startsWith('sds:') ? Promise.resolve([] as [number, number][]) : key.startsWith('sd:') ? sdTrk.trail(key.slice(3))
         : (ship.trail as (k: string) => Promise<[number, number][]>)(key)),
     };
-  }, [airSeaUp, airSeaMode, adsbLiveHere, vmTrk, sdTrk, ndbReport, ndbChip, adsbReport, adsbStatusLine, aisViewOpen, aisShipTrk, navTrk, avTrk, avLayers, shipLayers, avOn, avReport, avShared, asPicked, asOpened, asSort, asMsgKey, trkRx?.lat, trkRx?.lon, onlyModeHere, navMetRep, navReport]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [airSeaUp, airSeaMode, adsbLiveHere, vmTrk, sdTrk, sdStored, vmStored, sdOn, vmOn, ndbReport, ndbChip, adsbReport, adsbStatusLine, aisViewOpen, aisShipTrk, navTrk, avTrk, avLayers, shipLayers, avOn, avReport, avShared, asPicked, asOpened, asSort, asMsgKey, trkRx?.lat, trkRx?.lon, onlyModeHere, navMetRep, navReport]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ CLOSE MAP puts every opener's map away; EXIT AIS leaves the mode (the map goes with it). */
   const closeAirSea = useCallback(() => {
     if (adsbViewOpen && adsbOnRef.current && airSeaTrk?.exitLabel === 'EXIT ADS-B') { exitAdsb(); return; }   // ★ stage 6
