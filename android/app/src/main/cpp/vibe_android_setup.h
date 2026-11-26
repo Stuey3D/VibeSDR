@@ -805,7 +805,7 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             }
             if (const J* v = r->get("maxFps"); v && v->t == J::Num) p.set("maxFftRate", J::num(snapTo({ 5, 10, 20 }, v->n)));
         }
-        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 400);
+        if (on("modeBlockList")) str(r, "blockedModes", "blockedModes", 1200);   // ★ beta96 was 400: every switch off + "seen@N" passes 400 and a cut list loses its last ids
         if (on("dabRateBoost")) flag(r, "dabRateBoost", "dabRateBoost");
         if (on("adsb256")) { flag(r, "adsb256", "adsb256"); flag(r, "ism256", "ism256"); }
         if (on("dabScanLabels")) num(r, "dabScanLabels", "dabScanLabels", -1, 1);

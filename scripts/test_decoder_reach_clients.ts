@@ -81,20 +81,20 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
   ctx.setRD({ same: 'Off by default here' });
   ctx.R.blockedModes = '';           ok(off() === 'same', 'Region 1, nothing said: SAME off');
   ctx.R.blockedModes = '+same';      ok(off() === '', 'the owner ticked SAME: on (and "+same" is not an off)');
-  ctx.R.blockedModes = 'same,rtty';  ok(off() === 'rtty,same', 'the owner unticked SAME: off, their own list kept');
+  ctx.R.blockedModes = 'same,rtty,seen@96';  ok(off() === 'rtty,same', 'the owner unticked SAME: off, their own list kept');
   ctx.R.blockedModes = 'lora+all';   ok(off() === 'lora+all,same', 'a "+" option inside a token is kept');
   ctx.setRD({});
   ctx.R.blockedModes = '+same';      ok(off() === '', 'region unknown: nothing off by default');
-  {   // ★★ beta93 the NEW-MODE default (vibe_decoder_reach.h newModeOff): VOR MAP off on a list that made the radio single-purpose
+  {   // ★★ beta93 → ★★★ beta96 the NEW-MODE rule (generations; scripts/test_new_modes_clients.ts has the full set)
     const D = 'wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig';
     const adsbOnly = D + ',dab,ism,ndb,ais,avdata,sondes';
     ctx.R.blockedModes = adsbOnly;               ok(off().split(',').includes('vormap'), '★ an ADS-B-only list from before VOR MAP: VOR MAP off');
     ctx.R.blockedModes = adsbOnly + ',+vormap';  ok(!off().split(',').includes('vormap'), '…ticked on by the owner: on');
-    ctx.R.blockedModes = adsbOnly + ',adsb';     ok(!off().split(',').includes('vormap'), 'every other whole-radio mode off: VOR only, on purpose — on');
-    ctx.R.blockedModes = 'wfm,dab';              ok(!off().split(',').includes('vormap'), 'a demodulator still on: VOR MAP on');
+    ctx.R.blockedModes = adsbOnly + ',adsb';     ok(off().split(',').includes('vormap'), 'every whole-radio mode it names off: VOR MAP is newer than the list — off too');
+    ctx.R.blockedModes = 'wfm,dab,seen@96';      ok(!off().split(',').includes('vormap'), 'a list stamped by this build: VOR MAP is not new — on');
   }
   const change = page.slice(page.indexOf('const set = modeOwnerSet();\n      // ★ CHECKED means OFFERED'), page.indexOf('radio().blockedModes = [...set].join(",");\n      modeBlockSummary();\n      if (!el.dataset.on)'));
-  ok(/else if \(el\.checked\) \{ set\.delete\(id\); if \(REGION_DEFAULTS\[id\](?: \|\| NEW_MODE_DEFAULTS\[id\])?\) set\.add\("\+" \+ id\); \}/.test(change), 'ticking a region-default switch records "+id"');
+  ok(/else if \(el\.checked\) \{ set\.delete\(id\); if \(REGION_DEFAULTS\[id\](?: \|\| NEW_MODE_DEFAULTS\[id\]| \|\| modeIsNew\(id, set\))?\) set\.add\("\+" \+ id\); \}/.test(change), 'ticking a region-default switch records "+id"');
   ok(/else \{ set\.delete\("\+" \+ id\); set\.add\(id\); \}/.test(change), 'unticking records "id" (and drops "+id")');
   ok(/data-region-why=/.test(page), 'the reason is drawn beside the switch');
   const sm = read('src/screens/ServerModeScreen.tsx');

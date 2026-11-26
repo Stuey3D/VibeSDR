@@ -1109,6 +1109,12 @@ if [ -n "${VIBESERVER_BIN:-}" ]; then
   node scripts/test-setup-mode-tree.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 else notrun=$((notrun+1)); fi
+# ★★★ beta96 NEW MODES OFF + the locked radio's Modes card (docs/v12/NEW-MODES-OFF.md): a 7-radio config shaped like Paul's
+#     in headless MUTED Edge — the ADS-B tab shows its own ticks, NEW marks, All on / All off, the save's seen@.
+if [ -n "${VIBESERVER_BIN:-}" ]; then
+  node scripts/test-setup-paul-tabs.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else notrun=$((notrun+1)); fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
 if command -v xcrun >/dev/null 2>&1; then if bash scripts/test_recordBuffer_swift.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi; fi
 # ★★★ V12 ICOM, CLIENT SIDE (icomRadio.ts): hwinfo.radio + the status line as the server builds them, the hide list against the
@@ -2283,6 +2289,8 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 node scripts/test-web-decoder-reach.mjs; rc=$?   # ★ …and the web client's greyed keys (headless Edge, --mute-audio)
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 npx tsx scripts/test_decoder_reach_clients.ts; rc=$?   # ★ …and the clients' gating (the app's keys, the Setup page's real list functions)
+if [ $rc -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+npx tsx scripts/test_new_modes_clients.ts; rc=$?   # ★★★ beta96 new modes off: the page's and the app's rule agree, Paul's shape, satCapFrom
 if [ $rc -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The ship/station layer's generated copies (web client, app, /mapgl/vendor) match web/mapkit/tracklayer.js.
 if node scripts/gen-tracklayer-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

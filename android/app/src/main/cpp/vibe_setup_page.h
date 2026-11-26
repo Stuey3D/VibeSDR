@@ -2000,6 +2000,14 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           radio has no business showing WFM or the RDS decoder, and an amplified aerial that suits
           FM may be quite wrong for a DAB transmitter two miles away.
           <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
+        <!-- ★★★ beta96 NEW MODES (docs/v12/NEW-MODES-OFF.md): the one-line notice after an update added switches, and ALL ON /
+             ALL OFF for this radio — they change the ticks on screen only; nothing is saved until Save (a mis-tap undoes). -->
+        <div id="newModesNote" class="note hide" style="margin-top:10px"></div>
+        <div class="row" id="modeAllRow" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="ghost" id="modeAllOn">All on</button>
+          <button type="button" class="ghost" id="modeAllOff">All off</button>
+          <span class="hint" id="modeAllNote" style="margin:0" aria-live="polite"></span>
+        </div>
         <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
         <!-- ★★ V12 DAB ONLY (Stuart, 2026-11-17): every other mode switched off — say what that does for listeners.
              ★★ V12 2026-11-18: any whole-radio mode left alone (ADS-B, ISM, NDB, AIS, DATALINK, SONDES) — modeTreeGrey
@@ -2049,6 +2057,17 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div class="note" id="dabOwnNote"></div>
       </div>
         <div class="note" id="modeBlockNote"></div>
+        <!-- ★★★ beta96 the owner's answer for the NEXT update (vibe_decoder_reach.h newModesState): "newmodes@on|off" -->
+        <div id="newModesPolicy" style="margin-top:14px">
+          <div class="lbl">When an update adds new modes</div>
+          <div class="reach">
+            <label><input type="radio" name="newModesPol" id="newModesPolOn" value="on">
+              <span><b>Switch them on</b></span></label>
+            <label><input type="radio" name="newModesPol" id="newModesPolOff" value="off">
+              <span><b>Leave them off</b> until I tick them</span></label>
+          </div>
+          <div class="hint" id="newModesPolHint"></div>
+        </div>
       </div>
 
       <div class="card" id="radioHwCard">
@@ -3750,6 +3769,9 @@ const BLOCKABLE = [
    *  downlink (ORBCOMM too — since 2026-11-24 a regular satellite with its own decoder, docs/v12/ORBCOMM.md). This switch
    *  stops the server sending the labels. */
   { id: "satlabels", label: "Satellite labels on the waterfall (names only)" },
+  /* ★★★ beta96 SATELLITE MODE ITSELF (Paul's ADS-B-only radio drew SATELLITE): off = no SATELLITE button for listeners
+   *  (hwinfo's `doppler` is not sent) and a pick is refused. New in beta96, so on a restricted radio it starts OFF. */
+  { id: "sat", label: "SATELLITE mode (pick a satellite, Doppler followed)" },
   /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
    *  buttons were dead weight in its clients (Stuart, 2026-09-17). Under it: each spots mode (spotModes), then Band. */
@@ -3968,7 +3990,7 @@ function capsApply() {
   }
   // ★ Re-drawn only when the answer CHANGED what the list shows: a re-render drops the benchmark's notes beside the boxes
   //   (renderBench writes them in place), so the radio's own caps arriving with the same answer must leave it alone.
-  if (r.mode !== "locked" && capsSig() !== MODE_CAPS_DRAWN) { modeBlockRender(); modeBlockSummary(); }
+  if (capsSig() !== MODE_CAPS_DRAWN) { modeBlockRender(); modeBlockSummary(); }   // ★★★ beta96 a locked radio's too (renderBands)
 }
 /** What the modes list was last drawn from — the caps' modes and hints for the open tab ("" = no caps). */
 var MODE_CAPS_DRAWN = null;   // ★ var: read by modeBlockRender, which may run before this line is reached
@@ -4049,23 +4071,106 @@ function modeOwnerSet() {
  *  outside the Americas, DAB off by default in them. Only a DEFAULT: the owner's tick always wins — off is the id in the
  *  list as ever, ON against the default is "+id". Empty when the region is unknown (an older server, no position). */
 let REGION_DEFAULTS = {};
-/** ★★ beta93 THE NEW-MODE DEFAULTS — the server's rule (vibe_decoder_reach.h newModeOff): a whole-radio mode added after
- *  the owner switched every listening mode off starts OFF, so an only-mode radio (ADS-B only) stays one after an update.
- *  The owner's tick wins either way ("+vormap" on, "vormap" off). */
-const NEW_MODE_DEFAULTS = { vormap: "Off by default on this radio: it was set up with every listening mode switched off before VOR MAP existed" };
-const NEW_MODE_DEMODS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
-                         "drm", "freedv", "m17", "dvsig"];
-const NEW_MODE_WHOLE = ["dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes"];
+/* ★★★ beta96 NEW MODES (Stuart 11-26, docs/v12/NEW-MODES-OFF.md) — the server's rule, vibe_decoder_reach.h newModesState.
+ *  Each switch has the generation (release) it first appeared in; the owner's list carries "seen@N" (every switch up to
+ *  N has been shown to them — written by every save, newModesStamp) and their answer "newmodes@on" / "newmodes@off"
+ *  (absent = automatic). A switch newer than what they have seen is NEW, and OFF until they tick it ("+id") when the
+ *  radio is single-mode by their ticks (ALWAYS — the exit lock must hold), or they said "off", or (automatic) they had
+ *  blocked anything at all. No "seen@" (a list from before beta96): unrestricted = everything seen; restricted = seen up
+ *  to the newest switch the list names. ★ MODE_GENS is a COPY of the server's table (modeGens) — test-new-modes.cpp
+ *  holds the two equal, and fails on a switch in BLOCKABLE that has no generation. */
+const MODE_GEN_NOW = 96;
+const MODE_GEN_UNSTAMPED = 95;   // ★ the server's kUnstampedRestrictedSeen
+const MODE_GENS = {
+  wfm: 0, nfm: 0, am: 0, usb: 0, lsb: 0, cwu: 0, cwl: 0, dab: 0, rds: 0, rtty: 0, navtex: 0, wefax: 0, sstv: 0,
+  ft8: 0, time: 0, spots: 0, tone: 63, sam: 63, sau: 63, sal: 63, ecssu: 63, ecssl: 63, amst: 63, drm: 63,
+  spotsband: 63, ism: 63, lora: 63, cw: 63, psk: 63, dsc: 63, sitora: 63, same: 63, selcal: 63, mfsk: 63,
+  hell: 63, ndb: 63, jtty: 63, ais: 63, aisstore: 63, aprs: 63, adsb: 63, freedv: 80, rade: 80, m17: 80,
+  loraaprs: 80, meshcom: 80, fanet: 80, hfdl: 80, ncdxf: 80, balloon: 80, tones: 80, commb: 80, avdata: 80,
+  sondes: 80, dvsig: 87, varatag: 87, lrpt: 87, vor: 87, sarsat: 87, ale: 87, fctlm: 90, satlabels: 91,
+  orbcomm: 93, vormap: 93, sat: 96
+};
+/** The options' generations — evidence of when a list was written, never a NEW switch themselves. */
+const MODE_GEN_OPTIONS = { "lora+all": 63, "tones+digits": 80, "avdata+text": 80, "dvsig+ids": 87, "ale+amd": 87,
+                           "ft8+deep": 91, "ft8-deep": 91, "avdata+8m": 93 };
+const LISTEN_DEMODS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
+                       "drm", "freedv", "m17", "dvsig"];
+const WHOLE_MODES = ["dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap"];
+/** The state of a list `own` (a Set): { seen, stamped, restricted, single, policy (+1 / -1 / 0), off }. */
+function newModesState(own) {
+  const o = own || modeOwnerSet();
+  let seen = MODE_GEN_NOW, stamped = false, restricted = false, policy = 0, evidence = 0;
+  for (const t of o) {
+    if (t.startsWith("seen@")) { const n = parseInt(t.slice(5), 10) || 0; seen = Math.max(0, Math.min(MODE_GEN_NOW, n)); stamped = true; }
+    else if (t === "newmodes@on") policy = 1;
+    else if (t === "newmodes@off") policy = -1;
+    else {
+      const id = t[0] === "+" ? t.slice(1) : t;
+      const g = id in MODE_GENS ? MODE_GENS[id] : id in MODE_GEN_OPTIONS ? MODE_GEN_OPTIONS[id] : -1;
+      if (g < 0) continue;
+      evidence = Math.max(evidence, g);
+      if (t[0] !== "+" && id in MODE_GENS) restricted = true;
+    }
+  }
+  const singleAt = g => { const seenOff = id => !(id in MODE_GENS) || MODE_GENS[id] > g || o.has(id);
+                          return LISTEN_DEMODS.every(seenOff) && WHOLE_MODES.filter(w => !seenOff(w)).length <= 1; };
+  // ★★ no "seen@": a single-mode list is dated by its newest token; any other restricted list counts as having seen
+  //    MODE_GEN_UNSTAMPED (the server's kUnstampedRestrictedSeen) — "dab" alone must not switch off everything since 11.x
+  if (!stamped) seen = !restricted ? MODE_GEN_NOW : singleAt(evidence) ? evidence : Math.max(evidence, MODE_GEN_UNSTAMPED);
+  const single = singleAt(seen);
+  return { seen, stamped, restricted, single, policy, off: single || policy < 0 || (policy === 0 && restricted) };
+}
+/** Is `id` a NEW switch on this radio — newer than the owner has seen? */
+function modeIsNew(id, own) {
+  return id in MODE_GENS && MODE_GENS[id] > newModesState(own).seen;
+}
+/** True when NEW switch `id` is off on this radio by the rule (the owner has not ticked it either way). */
 function modeNewOff(id, own) {
   const o = own || modeOwnerSet();
-  return !!NEW_MODE_DEFAULTS[id] && !o.has(id) && !o.has("+" + id) && NEW_MODE_DEMODS.every(d => o.has(d))
-      && NEW_MODE_WHOLE.some(w => !o.has(w));   // ★ another whole-radio mode still on (every one off = VOR only, on purpose)
+  if (!modeIsNew(id, o) || o.has(id) || o.has("+" + id)) return false;
+  return newModesState(o).off;
+}
+/** The switches this update added for this radio (newest last). */
+function modeNewIds(own) {
+  const st = newModesState(own);
+  return Object.keys(MODE_GENS).filter(id => MODE_GENS[id] > st.seen);
+}
+/** ★ ON SAVE: the owner has now seen every switch. Each new one keeps EXACTLY the state it has (off → its id in the
+ *  list, on → not; a region default's "+id" kept), then "seen@<now>" — so the server enforces the same list after the
+ *  save as before it, and an update after this one is judged from here. `r` = a radio object (cfg.radios[i]). */
+function newModesStamp(r) {
+  const own = new Set(String(r.blockedModes || "").split(/[,;\s]+/).filter(Boolean).map(t => t.toLowerCase()));
+  const st = newModesState(own);
+  if (st.stamped && st.seen >= MODE_GEN_NOW) return false;
+  for (const id of Object.keys(MODE_GENS)) {
+    if (MODE_GENS[id] <= st.seen) continue;
+    const mine = own.has(id), plus = own.has("+" + id);
+    const off = mine || (!plus && st.off);
+    own.delete(id); own.delete("+" + id);
+    if (off) own.add(id); else if (plus && REGION_DEFAULTS[id]) own.add("+" + id);
+  }
+  for (const t of [...own]) if (t.startsWith("seen@")) own.delete(t);
+  own.add("seen@" + MODE_GEN_NOW);
+  r.blockedModes = [...own].join(",");
+  return true;
+}
+const NEW_MODE_WHY = "NEW (off until you tick it)";
+const NEW_MODE_WHY_ON = "NEW in this update";
+/** ★ The first time a radio's card is drawn, a list with no "seen@" gets the one derived from it — so ticking and
+ *  unticking while editing cannot move which switches count as new. Same enforcement (the server derives the same N). */
+function newModesFreeze(r) {
+  const own = new Set(String(r.blockedModes || "").split(/[,;\s]+/).filter(Boolean).map(t => t.toLowerCase()));
+  const st = newModesState(own);
+  if (st.stamped) return;
+  own.add("seen@" + st.seen);
+  r.blockedModes = [...own].join(",");
 }
 /** The words beside a switch with a default (region or new-mode), or "" — said whichever way the owner has set it. */
 function modeDefaultWhy(id, own) {
   const o = own || modeOwnerSet();
   if (REGION_DEFAULTS[id]) return REGION_DEFAULTS[id];
-  return NEW_MODE_DEFAULTS[id] && (o.has("+" + id) || modeNewOff(id, o)) ? NEW_MODE_DEFAULTS[id] : "";
+  if (!modeIsNew(id, o)) return "";
+  return modeNewOff(id, o) ? NEW_MODE_WHY : NEW_MODE_WHY_ON;   // ★★★ beta96 a switch this update added
 }
 /** True when `id` is off here only because of a default (the owner has said nothing either way). */
 function modeRegionOff(id, own) {
@@ -4074,11 +4179,18 @@ function modeRegionOff(id, own) {
 }
 /** The list as the server ENFORCES it — the owner's, plus each region default the owner has said nothing about, minus
  *  the "+id" words (they only mean "not off"). Every question "is X off?" reads this. */
-function modeBlockSet() {
-  const own = modeOwnerSet(), out = new Set();
-  for (const t of own) if (t[0] !== "+") out.add(t);
-  for (const id of [...Object.keys(REGION_DEFAULTS), ...Object.keys(NEW_MODE_DEFAULTS)]) if (modeRegionOff(id, own)) out.add(id);
+function modeBlockSet(ownIn) {
+  const own = ownIn || modeOwnerSet(), out = new Set();
+  for (const t of own) if (t[0] !== "+" && !t.startsWith("seen@") && !t.startsWith("newmodes@")) out.add(t);   // ★ beta96 the owner's words are not modes
+  for (const id of [...Object.keys(REGION_DEFAULTS), ...Object.keys(MODE_GENS)]) if (modeRegionOff(id, own)) out.add(id);
   return out;
+}
+/** ★★★ beta96 NEVER SAVE A RADIO WITH NO MODES: every listening demodulator and every whole-radio mode off in `csv`
+ *  (as enforced) — a server nobody can listen to. */
+function modeNoneLeft(csv) {
+  const own = new Set(String(csv || "").split(/[,;\s]+/).filter(Boolean).map(t => t.toLowerCase()));
+  const off = modeBlockSet(own);
+  return [...LISTEN_DEMODS, ...WHOLE_MODES].every(id => off.has(id));
 }
 
 /** ★★★ CAN THIS MACHINE DECODE AAC AT ALL? Set from /vibeserver.json's dabDecoder — see
@@ -4251,6 +4363,8 @@ function loraAllHint() {
 function modeBlockRender() {
   const host = $("modeBlockList");
   if (!host) return;
+  // ★★★ beta96 this radio's new switches judged from what its owner had seen when the card opened (newModesFreeze)
+  newModesFreeze(radio()); modeDrawn().add(modeRadioKey(radio(), curRadio));
   // ★ moved controls out first, so emptying the list cannot take them with it
   for (const id of ["dabScanRow", "dabOwnRow", "bandModeWrap"]) { const n = modeNodeEl(id); if (n && n.parentNode) n.parentNode.removeChild(n); }
   const off = modeBlockSet();
@@ -4336,7 +4450,7 @@ function modeBlockRender() {
         return;
       }
       if (el.dataset.on) { if (el.checked) set.add(id); else set.delete(id); }
-      else if (el.checked) { set.delete(id); if (REGION_DEFAULTS[id] || NEW_MODE_DEFAULTS[id]) set.add("+" + id); }
+      else if (el.checked) { set.delete(id); if (REGION_DEFAULTS[id] || modeIsNew(id, set)) set.add("+" + id); }
       else { set.delete("+" + id); set.add(id); }
       radio().blockedModes = [...set].join(",");
       modeBlockSummary();
@@ -4712,6 +4826,108 @@ function bandModeRender() {
   });
   modeTreeGrey();
 }
+/* ── ★★★ beta96 NEW MODES: the notice, the owner's answer, ALL ON / ALL OFF (docs/v12/NEW-MODES-OFF.md) ─────────────── */
+/** Radios whose Modes card has been drawn this visit (by serial, else index) — only they are stamped "seen@" on save:
+ *  a radio the owner never opened has not been shown its new switches. */
+var MODE_DRAWN_SET;   // ★ var + accessor: modeBlockRender may run before this line is reached
+function modeDrawn() { return MODE_DRAWN_SET || (MODE_DRAWN_SET = new Set()); }
+function modeRadioKey(r, i) { return String((r && r.serial) || "#" + i); }
+/** Called by collect() before every save: each drawn radio records that its owner has now seen every switch. */
+function newModesStampDrawn() {
+  radioList().forEach((r, i) => { if (modeDrawn().has(modeRadioKey(r, i))) newModesStamp(r); });
+}
+function newModesPaint() {
+  const r = radio(), own = modeOwnerSet(), st = newModesState(own);
+  const tree = modeTree(), name = id => (tree.find(m => m.id === id) || { label: id }).label;
+  const shown = id => { const m = tree.find(x => x.id === id); return !!m && modeCapShown(tree, m); };
+  const added = modeNewIds(own).filter(shown);
+  const n = $("newModesNote");
+  if (n) {
+    n.classList.toggle("hide", !added.length);
+    const offNow = added.filter(id => modeNewOff(id, own));
+    n.innerHTML = !added.length ? "" : "<b>This update added " + (added.length === 1 ? "a new switch" : added.length + " new switches")
+      + " to this radio:</b> " + esc(added.map(name).join(", ")) + ". "
+      + (offNow.length === added.length ? "They are off until you tick them (marked NEW below)."
+         : offNow.length ? "Those marked NEW below are off until you tick them."
+         : "They are on.")
+      + " Save to keep what you see.";
+  }
+  const pOn = $("newModesPolOn"), pOff = $("newModesPolOff"), h = $("newModesPolHint");
+  if (pOn && pOff) {
+    pOn.checked = !st.single && (st.policy > 0 || (st.policy === 0 && !st.restricted));
+    pOff.checked = !pOn.checked;
+    pOn.disabled = pOff.disabled = st.single;
+    if (h) h.textContent = st.single
+      ? "This radio offers one mode, so new modes always stay off — listeners cannot leave that mode. Tick a new one yourself to add it."
+      : st.policy ? "Your choice."
+      : "Automatic: " + (st.restricted ? "you have switched some modes off here, so new ones stay off until you tick them."
+                                        : "nothing is switched off here, so new ones come in on.");
+  }
+}
+function newModesPolicySet(v) {
+  const set = modeOwnerSet();
+  set.delete("newmodes@on"); set.delete("newmodes@off");
+  set.add("newmodes@" + v);
+  radio().blockedModes = [...set].join(",");
+  modeBlockRender(); modeBlockSummary();
+}
+/** The mode new listeners land in on this radio — what ALL OFF keeps on ("" = none it can name). */
+function modeLandingId() {
+  const r = radio();
+  if (r.landingAdsb) return "adsb";
+  const ch = r.landingDabChannel;
+  if (ch !== undefined && ch !== null && ch !== "" && Number(ch) >= 0) return "dab";
+  const d = String(($("demodMode") && $("demodMode").value) || r.demodMode || "").toLowerCase();
+  return d === "cw" ? "cwu" : d;
+}
+/** ALL ON / ALL OFF — the boxes on screen only (the radio object in this page); nothing is saved until Save.
+ *  ★ "+" options (message text, every channel, 8 MS/s, dig deeper) are never touched: several are legal opt-ins.
+ *  ★ ALL ON ticks what this radio draws (a hidden switch keeps its saved value); ALL OFF switches off every switch —
+ *    hidden ones too, so a radio left with one whole-radio mode IS single-mode and its exit lock holds — except the mode
+ *    new listeners land in. No landing mode it can name = refused, with why: a radio with no modes is never made here. */
+function modeAllSet(on) {
+  const note = $("modeAllNote");
+  const full = modeTree(), set = modeOwnerSet();
+  const plain = m => !m.on && !m.node;
+  if (on) {
+    for (const m of full.filter(m => plain(m) && modeCapShown(full, m))) {
+      set.delete(m.id);
+      if (REGION_DEFAULTS[m.id] || modeIsNew(m.id, set)) set.add("+" + m.id);
+    }
+    radio().blockedModes = [...set].join(",");
+    if (note) note.textContent = "Every mode ticked — not saved yet.";
+  } else {
+    const keep = modeLandingId();
+    if (!keep || !full.some(m => m.id === keep && plain(m))) {
+      if (note) note.textContent = "Not changed — a radio needs one mode left on. Set where new listeners start (above), then All off keeps that one.";
+      return;
+    }
+    for (const m of full.filter(plain)) {
+      if (m.id === keep) { set.delete(m.id); if (REGION_DEFAULTS[m.id] || modeIsNew(m.id, set)) set.add("+" + m.id); continue; }
+      set.delete("+" + m.id); set.add(m.id);
+    }
+    radio().blockedModes = [...set].join(",");
+    if (keep !== "dab") dabLandOnBlockedChange("dab", true);
+    if (note) note.textContent = "Everything off except " + ((full.find(m => m.id === keep) || {}).label || keep)
+      + ", where new listeners start — not saved yet.";
+  }
+  modeBlockRender(); modeBlockSummary();
+}
+if ($("modeAllOn")) $("modeAllOn").addEventListener("click", () => modeAllSet(true));
+if ($("modeAllOff")) $("modeAllOff").addEventListener("click", () => modeAllSet(false));
+for (const id of ["newModesPolOn", "newModesPolOff"])
+  if ($(id)) $(id).addEventListener("change", (e) => { if (e.target.checked) newModesPolicySet(e.target.value); });
+/** ★ Save refused when a drawn radio would have no modes at all (both save buttons ask). */
+function modesStop() {
+  const list = radioList();
+  for (let i = 0; i < list.length; i++) {
+    if (!modeDrawn().has(modeRadioKey(list[i], i)) || !modeNoneLeft(list[i].blockedModes)) continue;
+    $("saveErr").textContent = "Not saved — " + (list[i].label || "a radio") + " has every mode switched off, so nobody could listen. "
+      + "Tick at least one under “Modes and decoders”.";
+    return true;
+  }
+  return false;
+}
 function modeBlockSummary() {
   const el = $("modeBlockNote");
   if (!el) return;
@@ -4727,7 +4943,7 @@ function modeBlockSummary() {
     .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
   const own = modeOwnerSet();
   el.textContent = (off.length
-    ? `Switched off: ${off.map(id => name(id) + (modeNewOff(id, own) ? " (by default on this radio)" : modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
+    ? `Switched off: ${off.map(id => name(id) + (modeNewOff(id, own) ? " (NEW \u2014 off until you tick it)" : modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band skimmer: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "")
@@ -4738,6 +4954,7 @@ function modeBlockSummary() {
     + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")
     + (all.includes("ale+amd") ? " ALE message text is shown to you." : "");
   bandModeRender();
+  newModesPaint();   // ★ beta96
 }
 
 function bandChips(which) {
@@ -5303,8 +5520,13 @@ function renderBands() {
   const single = radio().mode !== "locked";
   // ★ Shared mode has a locked range, which IS the limit — two answers to one question.
   $("bandCard").classList.toggle("hide", !single);
-  if (!single) return;
+  /* ★★★ beta96 THE MODES CARD IS EVERY RADIO'S (Paul's Almere, 11-26: "when I went back in all modes were ticked again").
+   *  This render sat AFTER the return below since 2026-09-05, when the modes list was part of the single-mode band card.
+   *  The card has long been its own and is drawn for every radio — so on a LOCKED radio (his ADS-B one, locked at
+   *  1090 MHz) it was never redrawn and still showed the previous tab's boxes (an all-ticked radio), while the saved list
+   *  and the server were right. Drawn for every radio, before the locked-range return. */
   modeBlockRender(); modeBlockSummary();
+  if (!single) return;
   for (const w of ["allow", "block"]) {
     const sel = $(w + "Pick");
     sel.innerHTML = '<option value="">— pick a band —</option>'
@@ -9099,6 +9321,7 @@ function stashServer() {
 /** The machine: stated once, the same on every tab. */
 function collect() {
   stashRadio();
+  newModesStampDrawn();   // ★★★ beta96 the owner has seen every switch of each radio whose card they opened
   const locked = radio().mode === "locked";
   return {
     name: $("name").value.trim(),
@@ -9400,6 +9623,7 @@ function sdrRender() {
  *  radio still present keep their in-page edits; only what the action changed comes from the file. */
 async function sdrReloadRadios() {
   stashRadio(); stashServer();
+  const keepSerial = curRadio >= 0 ? radio().serial : null;
   const r = await fetch("/vibeserver/config?" + await authQuery(), {cache: "no-store"});
   if (!r.ok) return;
   const fresh = await r.json();
@@ -9410,7 +9634,8 @@ async function sdrReloadRadios() {
     l.enabled = fr.enabled; l.order = fr.order; l.usbPath = fr.usbPath;
     return l;
   });
-  curRadio = -1;
+  // ★★ beta96 stay on the radio being edited, BY SERIAL (an index would land on whichever radio now sits there)
+  curRadio = keepSerial ? radioList().findIndex(x => x.serial === keepSerial) : -1;
   renderTabs(); fill(); paintPanes();
 }
 
@@ -10652,6 +10877,7 @@ $("saveRadioBtn").onclick = async () => {
   if (!list.length) return;
   // ★ This posts the whole machine too (collect()), so the same address rule holds here.
   if (dirReachStops()) return;
+  if (modesStop()) return;   // ★★★ beta96 never a radio with no modes
   if (pskrStops()) return;
   // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
@@ -10791,6 +11017,7 @@ function dirReachStops() {
 $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
   if (dirReachStops()) return;
+  if (modesStop()) return;   // ★★★ beta96 never a radio with no modes
   if (pskrStops()) return;
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";

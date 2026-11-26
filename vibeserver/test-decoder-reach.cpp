@@ -31,23 +31,25 @@ int main() {
         ok(effectiveBlocked("", 0) == "", "region unknown, a fresh config: nothing off");
         ok(effectiveBlocked("", 3) == "same", "Region 3, a fresh config: SAME off");
         ok(effectiveBlocked("+same", 1) == "", "Region 1, the owner switched SAME ON: on, and the + token is not published");
-        ok(effectiveBlocked("same", 2) == "same,dab", "Region 2, the owner switched SAME OFF: off (and DAB's default)");
-        ok(effectiveBlocked("+dab,rtty", 2) == "rtty", "Region 2, the owner switched DAB ON: on; their own list kept");
-        ok(effectiveBlocked("dab", 1) == "dab,same", "Region 1, the owner switched DAB off: off — never overwritten");
-        ok(effectiveBlocked("lora+all,wefax", 1) == "lora+all,wefax,same", "a mid-token + (lora+all) is the owner's option, kept");
-        ok(effectiveBlocked("SAME", 1) == "same", "case-insensitive, no doubled entry");
+        ok(effectiveBlocked("same,seen@96", 2) == "same,dab", "Region 2, the owner switched SAME OFF: off (and DAB's default)");
+        ok(effectiveBlocked("+dab,rtty,seen@96", 2) == "rtty", "Region 2, the owner switched DAB ON: on; their own list kept");
+        ok(effectiveBlocked("dab,seen@96", 1) == "dab,same", "Region 1, the owner switched DAB off: off — never overwritten");
+        ok(effectiveBlocked("lora+all,wefax,seen@96", 1) == "lora+all,wefax,same", "a mid-token + (lora+all) is the owner's option, kept");
+        ok(effectiveBlocked("SAME,SEEN@96", 1) == "same", "case-insensitive, no doubled entry");
+        // ★ beta96: the lists above carry "seen@96" — without it a restricted list from before beta96 also turns its new switches off (test-new-modes.cpp)
 
-        {   // ★★ beta93 the NEW-MODE default: VOR MAP off where the owner's list blocks every demodulator (only-mode radios)
+        {   // ★★ beta93 → ★★★ beta96 the NEW-MODE rule (newModesState; test-new-modes.cpp has the full set). The list below
+            //    names dvsig (generation 87), so the 90+ switches are new on it and — the radio being single-mode — off.
             const std::string D = "wfm,nfm,am,sam,sau,sal,ecssu,ecssl,amst,usb,lsb,cwu,cwl,drm,freedv,m17,dvsig";
             const std::string adsbOnly = D + ",dab,ism,ndb,ais,avdata,sondes";
-            ok(effectiveBlocked(adsbOnly, 0) == adsbOnly + ",vormap", "★ an ADS-B-only list saved before VOR MAP: VOR MAP off, still ADS-B only");
-            ok(effectiveBlocked(adsbOnly + ",+vormap", 0) == adsbOnly, "…the owner ticked VOR MAP on: on, and the + token is not published");
-            ok(effectiveBlocked(adsbOnly + ",vormap", 0) == adsbOnly + ",vormap", "…the owner switched it off themselves: off once, not doubled");
-            ok(effectiveBlocked("wfm,nfm,dab", 0) == "wfm,nfm,dab", "a list that leaves a demodulator on: VOR MAP left alone");
-            ok(effectiveBlocked("", 0) == "", "a fresh config: VOR MAP on");
-            ok(effectiveBlocked(D, 1) == D + ",same,vormap", "every demodulator off, Region 1: SAME's default and VOR MAP's");
+            const std::string NEW = ",fctlm,satlabels,orbcomm,vormap,sat";
+            ok(effectiveBlocked(adsbOnly, 0) == adsbOnly + NEW, "★ an ADS-B-only list saved before VOR MAP: VOR MAP (and the 90+ switches) off, still ADS-B only");
+            ok(effectiveBlocked(adsbOnly + ",+vormap", 0) == adsbOnly + ",sat", "…the owner ticked VOR MAP on (beta93's word, so the list is from 93+: nothing newer is new): on, and the + token is not published");
+            ok(effectiveBlocked(adsbOnly + ",vormap", 0) == adsbOnly + ",vormap,sat", "…the owner switched it off themselves: off once, not doubled");
+            ok(effectiveBlocked("", 0) == "", "a fresh config: nothing off");
+            ok(effectiveBlocked(D, 1) == D + ",same,sat", "every demodulator off but every whole-radio mode on (not single-mode), Region 1: SAME's default and only this update's switch");
             const std::string vorOnly = adsbOnly + ",adsb";
-            ok(effectiveBlocked(vorOnly, 0) == vorOnly, "★ every other whole-radio mode off too: VOR only, on purpose — left on");
+            ok(effectiveBlocked(vorOnly, 0) == vorOnly + NEW, "★ every whole-radio mode it names off: VOR MAP is newer than the list, so off too");
         }
 
         ok(regionJson(0).empty(), "region unknown: no region JSON at all");

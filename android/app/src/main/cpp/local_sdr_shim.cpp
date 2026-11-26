@@ -2046,6 +2046,7 @@ static bool vsSondeReach(const vibers41::Band& b);   // …and runs fast enough 
 static bool vsSondeAnyBand();        // false = not offered at all (the HF+, an Icom, a radio short of 400 MHz)
 static bool vsSatReachFn(double lo, double hi);        // ★ V12 this radio receives [lo, hi] (and a locked window holds it)
 static bool vsSatAnyReach();                           // ★ false = no Doppler button at all (no dead controls)
+static bool vsSatModesAllowed();                       // ★★★ beta96 the owner's switches leave SATELLITE something to do
 static std::string vsSatWhyNot();                      // "" = a lock can be tried now
 static std::string vsSatReachWhy(double lo, double hi); // ★ V12 SATELLITE MODE: "" = reaches, else why (greyed in the list)
 static vibe::sat::SupplyInfo vsSatSupply(bool kickIfEmpty);   // ★ the orbit-data supply for sat_list (+ the on-open fetch)
@@ -12324,6 +12325,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         jsonNum(msg, "norad", nv); jsonNum(msg, "tx", tv);
         const bool doppler = msg.find("\"doppler\":false") == std::string::npos && msg.find("\"doppler\":0") == std::string::npos;
         vibe::sat::SatDef sd; vibe::sat::Transmitter tx;
+        if (!vsSatModesAllowed()) { satRefuse(sock, "pick", "The server owner has switched SATELLITE off on this receiver"); return; }   // ★★★ beta96
         if (!(nv > 0) || tv < 0 || tv != std::floor(tv) || !satEngine().txAt((long long)nv, (int)tv, sd, tx)) {
             satRefuse(sock, "pick", "That satellite or downlink is not in this server's list");
             return;
@@ -20769,14 +20771,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  still leave, and the server's own moves (sock null) still can. "" = no only mode. */
     std::string onlyModeNow() const {
         if (dabOnlyNow()) return "dab";
-        static const char* kDemods[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
-                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
-        for (const char* m : kDemods) if (!vsModeBlocked(m)) return {};
-        const char* left = nullptr;
-        for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" })
-            if (!vsModeBlocked(m)) { if (left) return {}; left = m; }
-        if (!left) return {};
-        const std::string k = left;
+        // ★ beta96 the list half is vibereach::onlyModeLeft (tested in test-new-modes.cpp with Paul's exact list)
+        const std::string k = vibereach::onlyModeLeft([](const char* m) { return vsModeBlocked(m); });
+        if (k.empty()) return {};
         if (k == "adsb")   return g_adsbMode.load(std::memory_order_relaxed) || vsAdsbWhyNot().empty()     ? k : std::string();
         if (k == "ism")    return g_ismMode.load(std::memory_order_relaxed)  || vsIsmWhyNot().empty()      ? k : std::string();
         if (k == "ndb")    return g_ndbMode.load(std::memory_order_relaxed)  || vsNdbWhyNot().empty()      ? k : std::string();
@@ -45429,8 +45426,8 @@ void LocalSdrShim::setBandRegion(int region, bool known) {
 
 std::string LocalSdrShim::regionDefaultsJson() {
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
-    const std::string j = vibereach::regionJson(g_vsRegionKnown);
-    return j.empty() ? std::string("{}") : "{" + j.substr(1) + "}";
+    const std::string j = vibereach::regionJson(g_vsRegionKnown) + vibereach::modeGensJson();   // ★★★ beta96 + the generations
+    return "{" + j.substr(1) + "}";
 }
 
 void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv) {
@@ -45827,7 +45824,9 @@ static std::string vsSatReachWhy(double lo, double hi) {
         return b;
     }
     const double lc = g_vsLockedCentre.load();
-    if (lc > 0.0 && g_vsMaxUsers.load() > 1) {
+    /* ★★★ beta96 ANY locked centre, not only one with more than one listener (Paul's ADS-B radio, locked at 1090 MHz with one
+     *  listener, was offered SATELLITE): a locked hardware centre never moves (retune returns early), whatever the count. */
+    if (lc > 0.0) {
         const double half = LocalSdrShim::instance().captureSpanHz() * 0.45;   // ★ clear of the anti-alias roll-off
         if (lo < lc - half || hi > lc + half) {
             std::snprintf(b, sizeof b, "Outside the range the owner has locked this receiver to (%.3f\xe2\x80\x93%.3f MHz)",
@@ -45871,6 +45870,12 @@ static std::string vsSatWhyNot() {
 }
 /** ★★ beta94 SATELLITE MODE FOR THE DIRECTORY (Stuart 11-25) — "sat" in the published `modes`; the rule, and why, is in
  *  vibe_sat_offer.h (reach · a location · an NFM / USB / LSB demodulator left on · "sat" not blocked). */
+/** ★★★ beta96 (Paul's ADS-B-only radio, 11-26: SATELLITE drawn on a radio locked to 1090 MHz with every mode off): the
+ *  owner's switches leave SATELLITE something to do — "sat" not blocked, and one of NFM / USB / LSB on (every downlink
+ *  lands in one of them; a single-mode radio has them all off). hwinfo's `doppler` and a pick both ask it. */
+static bool vsSatModesAllowed() {
+    return vibe::sat::offeredInModes(true, true, [](const char* m) { return vsModeBlocked(m); });
+}
 static bool vsSatOffered() {
     return vibe::sat::offeredInModes(vsSatAnyReach(), satEngine().haveObserver(),
                                      [](const char* m) { return vsModeBlocked(m); });
@@ -46511,7 +46516,7 @@ static std::string vsTunableJson() {
      *  model-only), advertised only where this radio receives at least one listed downlink (no dead controls: an Icom, a
      *  radio below 28 MHz, a locked window holding no downlink — no button at all). Supported but not ready (no orbit
      *  data yet, no location, NO TIME): still advertised, with `dopplerWhy` — the clients grey the button with it. */
-    if (vsSatAnyReach()) {
+    if (vsSatAnyReach() && vsSatModesAllowed()) {   // ★★★ beta96 never on a radio whose owner left SATELLITE nothing to do
         j += ",\"doppler\":1";
         const std::string why = vsSatWhyNot();
         if (!why.empty()) j += ",\"dopplerWhy\":\"" + dabEscape(why) + "\"";

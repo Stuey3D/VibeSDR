@@ -103,7 +103,7 @@ console.log('\nThe Icom tab, exactly');
   const d = drawn().sort().join(',');
   ok(d === 'ale,ale+amd,am,aprs,cw,cwl,cwu,dsc,ft8,ft8+deep,hell,hfdl,jtty,lsb,mfsk,navtex,nfm,psk,rtty,selcal,sitora,spots,sstv,time,tones,tones+digits,usb,wefax',   // ★ V12 beta91 ft8+deep: under spots, an audio decoder's option · ★ V12 ALE (+AMD) on an HF rig's USB audio · DTMF + 5-tone: the Icom's FM / AM audio
      `only the radio's own modes and the audio decoders: ${d}`);
-  ok(r.blockedModes === 'dab,wfm,rtty', '★ hiding is not clearing: the saved list is untouched');
+  ok(r.blockedModes.split(',').filter((t) => !/^seen@/.test(t)).join(',') === 'dab,wfm,rtty', '★ hiding is not clearing: the saved list is untouched (beta96: its seen@ fixed on drawing)');
   page.modeBlockSummary();
   const note = $el('modeBlockNote').textContent;
   ok(/RTTY/.test(note) && !/DAB|WFM/.test(note), `the summary names only what is drawn ("${note}")`);
