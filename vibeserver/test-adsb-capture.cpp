@@ -54,76 +54,120 @@ static void testMeter() {
 }
 
 static void testGuard() {
-    std::printf("── RateGuard (a radio that fell over at a boosted rate) ──\n");
-    vibe::RateFault f;
-    CHECK(!f.any() && f.say().empty(), "nothing recorded: nothing to say");
+    std::printf("── RateGuard (beta95: a radio that stopped at a boosted rate — the rules a–e) ──\n");
+    const long long T = 1764100000, H = 3600, DAY = 24 * H;
     CHECK(vibe::RateFault::rateText(2.048e6) == "2.048 MS/s" && vibe::RateFault::rateText(3.0e6) == "3 MS/s"
           && vibe::RateFault::rateText(2.4e6) == "2.4 MS/s", "rates in words");
-    f.kind = "crashed"; f.rate = 2.4e6; f.mode = "ADS-B"; f.at = 1761300000;
-    CHECK(f.say().find("SDR crashed at 2.4 MS/s during ADS-B") == 0, "crashed: %s", f.say().c_str());
-    f.kind = "stalled"; f.rate = 2.048e6; f.mode = "DAB";
-    CHECK(f.say().find("SDR stopped responding at 2.048 MS/s during DAB") == 0, "stalled: %s", f.say().c_str());
-    vibe::RateFault r; CHECK(r.parse(f.json()) && r.kind == "stalled" && r.rate == 2.048e6 && r.mode == "DAB" && r.at == 1761300000,
-                             "json round trip: %s", f.json().c_str());
-    CHECK(f.json().find("\"blocked\":true") != std::string::npos, "blocked in the json");
-    CHECK(!r.parse("nonsense") && !r.any(), "nonsense parses to nothing");
+    // rule (c): one rung down, never below the ADS-B floor from above it
+    CHECK(vibe::rateGuardRungBelow(2.56e6) == 2.4e6, "c: 2.56 → 2.4");
+    CHECK(vibe::rateGuardRungBelow(3.0e6) == 2.88e6, "c: 3.0 → 2.88");
+    CHECK(vibe::rateGuardRungBelow(2.4e6) == 2.048e6, "c: 2.4 → 2.048 (DAB still boosts)");
+    CHECK(vibe::rateGuardRungBelow(2.048e6) == 0, "c: 2.048 → no boost at all");
+    CHECK(vibe::rateGuardRungBelow(8.0e6) == 6.0e6, "c: 8 → 6");
 
     char dir[] = "/tmp/vibe-rateguard-XXXXXX";
     if (!mkdtemp(dir)) { CHECK(false, "mkdtemp"); return; }
     const std::string base = std::string(dir) + "/rate-guard-TEST";
-    {   // ★ a run that died at a boosted rate: the marker is there at the next start
-        vibe::RateGuard a; a.setBase(base);
-        a.mark(2.4e6, "ADS-B", 1761300200);
-        CHECK(a.markerPresent() && a.boosted(), "marker written before the boost");
-        a.settled(2.4e6);
-        CHECK(a.markerPresent(), "landing ON the boosted rate keeps it");
-        // (the process "dies" here)
+    auto wipe = [&] { std::remove((base + ".json").c_str()); std::remove((base + ".marker").c_str()); };
+    using B = vibe::RateGuard::Boot;
+    {   // ★ rule (a): an UPDATE — the marker was written by another build
+        wipe();
+        { vibe::RateGuard a; a.setBase(base, "12.0.0~beta94@old"); a.mark(2.56e6, "ADS-B", T); }   // the process "dies"
+        vibe::RateGuard b; b.setBase(base, "12.0.0~beta95@new");
+        std::string why;
+        CHECK(b.boot(T + 60, &why) == B::Explained && !why.empty(), "a: another build's marker is an update, not a crash");
+        CHECK(!b.markerPresent() && !b.fault(T + 60).any() && b.allows(2.56e6, T + 60), "a: nothing recorded, 2.56 allowed");
     }
-    {
-        vibe::RateGuard b; b.setBase(base);
-        CHECK(!b.blocked(), "nothing recorded before boot");
-        CHECK(b.boot(1761300999), "boot finds the marker");
-        CHECK(!b.markerPresent(), "and removes it");
-        const auto x = b.fault();
-        CHECK(x.kind == "crashed" && x.rate == 2.4e6 && x.mode == "ADS-B" && x.at == 1761300200 && b.blocked(),
-              "crashed at the marker's rate, mode and time: %s", b.json().c_str());
-        CHECK(!b.boot(1761301000), "boot runs once per process");
+    {   // ★ rule (a): a marker from before beta95 (no build) is an update too
+        wipe();
+        if (FILE* fp = std::fopen((base + ".marker").c_str(), "wb")) { std::fputs("entering 2560000 Hz for ADS-B at 1764100000\n", fp); std::fclose(fp); }
+        vibe::RateGuard b; b.setBase(base, "B1");
+        CHECK(b.boot(T + 60) == B::Explained && !b.fault(T + 60).any(), "a: a build-less (pre-beta95) marker is not counted");
     }
-    {   // persisted across another restart; Clear forgets it
-        vibe::RateGuard c; c.setBase(base);
-        CHECK(c.fault().kind == "crashed" && c.blocked(), "the crash survives a restart");
-        CHECK(!c.boot(1761301001), "no marker now — no new crash");
-        c.clear();
-        CHECK(!c.blocked(), "Clear forgets it");
-        c.recordStall(2.048e6, "DAB", 1761301100);
-        vibe::RateGuard c2; c2.setBase(base);
-        CHECK(c2.fault().kind == "stalled" && c2.fault().mode == "DAB", "a stall is persisted too");
-        c2.clear();
+    {   // ★ rule (a): a deliberate stop takes the marker up
+        wipe();
+        { vibe::RateGuard g; g.setBase(base, "B1"); g.mark(2.56e6, "ADS-B", T); g.unmark(); CHECK(!g.markerPresent(), "a: a clean stop takes the marker up"); }
+        vibe::RateGuard h; h.setBase(base, "B1"); CHECK(h.boot(T + 5) == B::None, "a: and the next start finds nothing");
     }
-    {   // the boost ends normally: back at the base rate, the marker comes up
-        vibe::RateGuard d; d.setBase(base);
-        d.mark(2.048e6, "DAB", 1761301300);
-        d.mark(2.4e6, "ADS-B", 1761301310);        // ★ DAB → ADS-B hand-over: one marker, the latest boost
-        d.settled(2.4e6);
+    {   // ★ rule (b): one death = noted, same rate allowed; a second within 24 h latches (c) one rung down
+        wipe();
+        { vibe::RateGuard a; a.setBase(base, "B1"); a.mark(2.56e6, "ADS-B", T); }
+        {
+            vibe::RateGuard b; b.setBase(base, "B1");
+            CHECK(b.boot(T + 30) == B::Noted, "b: the first death is noted");
+            const auto f = b.fault(T + 30);
+            CHECK(f.kind == "crashed" && f.noted == 1 && !f.latched && f.rate == 2.56e6 && f.mode == "ADS-B", "b: noted: %s", f.json().c_str());
+            CHECK(b.allows(2.56e6, T + 30), "b: the same rate is allowed again");
+            CHECK(f.say().find("noted once") != std::string::npos, "b: the line says it was noted: %s", f.say().c_str());
+            b.mark(2.56e6, "ADS-B", T + 10 * H);   // ten hours later it dies again
+        }
+        vibe::RateGuard c; c.setBase(base, "B1");
+        CHECK(c.boot(T + 10 * H + 30) == B::Latched, "b: the second death within 24 h latches");
+        const auto f = c.fault(T + 10 * H + 30);
+        CHECK(f.latched && f.ceiling == 2.4e6, "c: held at 2.4 (ADS-B floor): %s", f.json().c_str());
+        CHECK(!c.allows(2.56e6, T + 11 * H) && c.allows(2.4e6, T + 11 * H) && c.allows(2.048e6, T + 11 * H), "c: 2.56 refused, 2.4 allowed");
+        CHECK(f.say().find("(ADS-B still runs)") != std::string::npos && f.say().find("twice in 24 hours") != std::string::npos,
+              "e: the owner is told: %s", f.say().c_str());
+        CHECK(f.json().find("\"retryAt\":") != std::string::npos && f.json().find("\"blocked\":true") != std::string::npos, "e: retryAt + blocked in the json");
+    }
+    {   // the latch persists across a restart; (d) it lifts after 24 h for ONE retry; a death on the retry latches for good
+        vibe::RateGuard d; d.setBase(base, "B1");
+        const long long L = T + 10 * H + 30;
+        CHECK(d.latched(L + H) && !d.allows(2.56e6, L + H), "the latch survives a restart");
+        CHECK(d.allows(2.56e6, L + DAY + 1) && !d.latched(L + DAY + 1) && d.fault(L + DAY + 1).probation, "d: 24 h on, 2.56 is tried again");
+        CHECK(d.fault(L + DAY + 2).say().find("Trying 2.56 MS/s again") == 0, "d: and says so: %s", d.fault(L + DAY + 2).say().c_str());
+        CHECK(d.recordStall(2.56e6, "ADS-B", L + DAY + H), "d: a stop on the retry latches at once");
+        CHECK(!d.allows(2.56e6, L + 5 * DAY) && d.fault(L + 5 * DAY).retried, "d: …and stays (no second self-clear)");
+        CHECK(d.fault(L + 5 * DAY).say().find("until you clear this") != std::string::npos, "d: the line: %s", d.fault(L + 5 * DAY).say().c_str());
+        d.clear();   // (e) the owner clears it
+        CHECK(!d.latched(L + 5 * DAY) && d.allows(2.56e6, L + 5 * DAY) && !d.fault().any(), "e: Clear forgets everything");
+    }
+    {   // (d) a retry that runs 24 h clean is forgotten
+        wipe();
+        vibe::RateGuard e; e.setBase(base, "B1");
+        e.recordStall(2.56e6, "ISM", T); CHECK(!e.latched(T), "b: a first stall only notes");
+        CHECK(e.recordStall(2.56e6, "ISM", T + H), "b: a second stall latches");
+        CHECK(e.allows(2.56e6, T + H + DAY) , "d: probation");
+        CHECK(!e.fault(T + H + 2 * DAY + 5).any() && e.allows(2.56e6, T + H + 2 * DAY + 5), "d: 24 h clean on the retry: forgotten");
+    }
+    {   // (b) deaths more than 24 h apart, or at different rates, never latch
+        wipe();
+        vibe::RateGuard g; g.setBase(base, "B1");
+        CHECK(!g.recordStall(2.56e6, "ADS-B", T), "first");
+        CHECK(!g.recordStall(2.56e6, "ADS-B", T + DAY + 10), "b: 24 h later is a first again");
+        CHECK(g.fault(T + DAY + 10).noted == 1, "b: the old one aged out");
+        CHECK(!g.recordStall(2.048e6, "DAB", T + DAY + 20), "b: another rate counts on its own");
+        CHECK(g.fault(T + 3 * DAY).noted == 0 && !g.fault(T + 3 * DAY).any(), "b: notes age out after 24 h");
+    }
+    {   // (c) a death AT 2.4 caps at 2.048: ADS-B cannot boost, DAB can
+        wipe();
+        vibe::RateGuard g; g.setBase(base, "B1");
+        g.recordStall(2.4e6, "ADS-B", T); g.recordStall(2.4e6, "ADS-B", T + 60);
+        CHECK(!g.allows(2.4e6, T + 61) && g.allows(2.048e6, T + 61), "c: held at 2.048 after two stops at 2.4");
+        CHECK(g.fault(T + 61).say().find("ADS-B still runs") == std::string::npos, "c: no ADS-B promise below its floor");
+    }
+    {   // ★ a PRE-beta95 record (it latched on one stop and switched the owner's setting off) becomes one noted stop
+        wipe();
+        if (FILE* fp = std::fopen((base + ".json").c_str(), "wb")) {
+            std::fputs("{\"fault\":\"crashed\",\"at\":1764100000,\"rate\":2560000,\"mode\":\"ADS-B\",\"blocked\":true,\"say\":\"x\"}", fp); std::fclose(fp);
+        }
+        vibe::RateGuard g; g.setBase(base, "B1");
+        std::string m;
+        CHECK(g.takeLegacy(&m) && m == "ADS-B" && !g.takeLegacy(), "legacy: reported once, with its mode");
+        CHECK(!g.latched(T + 60) && g.allows(2.56e6, T + 60) && g.fault(T + 60).noted == 1, "legacy: one noted stop, nothing held");
+        vibe::RateGuard g2; g2.setBase(base, "B1");
+        CHECK(!g2.takeLegacy() && g2.fault(T + 60).noted == 1, "legacy: rewritten in the new form, not reported again");
+    }
+    {   // hand-over and settle (unchanged)
+        wipe();
+        vibe::RateGuard d; d.setBase(base, "B1");
+        d.mark(2.048e6, "DAB", T); d.mark(2.4e6, "ADS-B", T + 10); d.settled(2.4e6);
         CHECK(d.markerPresent(), "a hand-over keeps the marker");
         d.settled(1.024e6);
         CHECK(!d.markerPresent() && !d.boosted(), "back at the base rate: no marker, not boosted");
-        vibe::RateGuard e; e.setBase(base);
-        CHECK(!e.boot(1761301400) && !e.blocked(), "and the next start finds no crash");
     }
-    {   // a clean stop
-        vibe::RateGuard g; g.setBase(base);
-        g.mark(2.4e6, "ADS-B", 1); g.unmark();
-        CHECK(!g.markerPresent(), "a clean stop takes the marker up");
-    }
-    {   // a marker with no time still records a crash, at boot's time
-        if (FILE* fp = std::fopen((base + ".marker").c_str(), "wb")) { std::fputs("entering 2048000 Hz for DAB\n", fp); std::fclose(fp); }
-        vibe::RateGuard h; h.setBase(base);
-        CHECK(h.boot(1761309999) && h.fault().at == 1761309999 && h.fault().mode == "DAB", "a marker without a time: %s", h.json().c_str());
-        h.clear();
-    }
-    {   vibe::RateGuard m; m.mark(2.4e6, "ADS-B", 1); CHECK(!m.markerPresent() && !m.boot(2) && m.boosted(), "no base = memory only"); }
-    std::remove((base + ".json").c_str()); std::remove((base + ".marker").c_str()); rmdir(dir);
+    {   vibe::RateGuard m; m.mark(2.4e6, "ADS-B", 1); CHECK(!m.markerPresent() && m.boot(2) == B::None && m.boosted(), "no base = memory only"); }
+    wipe(); rmdir(dir);
 }
 
 static void testServiceReport() {

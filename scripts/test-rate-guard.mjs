@@ -2,13 +2,13 @@
 //
 // The real server against a fake rtl_tcp radio (vibeserver/fake-rtl-tcp.mjs), base rate 1.024 MS/s, the owner's
 // "change the sample rate when a mode needs it" switch ON:
-//   1. STALL (in-process): the fake stops sending at 2.4 MS/s (--stall-at). A listener picks ADS-B, ADS-B boosts the
-//      radio to 2.4, the samples stop — within ~3 s the watchdog must leave ADS-B, put the radio back at 1.024, record
-//      "stopped responding at 2.4 MS/s during ADS-B", switch the rate switch off, and IQ must flow again. The marker
-//      written before the boost must be gone (a clean recovery is not a crash).
-//   2. CRASH (whole process): a marker planted beside the config, as a run that died at a boost leaves it. The next
-//      start must record "SDR crashed at 2.4 MS/s during ADS-B", remove the marker, persist dabRateBoost off, and
-//      refuse to boost; Clear (POST ?clear=1) forgets it.
+//   1. STALL ×2 (in-process): the fake stops sending at 2.4 MS/s (--stall-at). ADS-B boosts to 2.4, the samples stop —
+//      the watchdog leaves ADS-B, the radio back at 1.024, IQ flows again; the FIRST is only noted (beta95) and the
+//      same rate is tried on the next ADS-B; the SECOND latches the boosts at 2.048 (one rung down). The owner's
+//      dabRateBoost in the config is NEVER written. Clear forgets it.
+//   2. CRASH (whole process): markers planted beside the config. Another build's = an update, not counted; this build's
+//      once = noted; twice = latched at 2.4 (the ADS-B floor); a pre-beta95 record that had persisted the switch off
+//      gives it back.
 // ★ SILENT: nothing is played. ~30 s.
 //   usage: VIBESERVER_BIN=… node scripts/test-rate-guard.mjs
 import net from 'node:net';
@@ -102,8 +102,8 @@ async function start(dir, extraRtl = []) {
 
 const mkdir = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-rateguard-')); for (const x of ['data', 'run']) fs.mkdirSync(path.join(d, x)); return d; };
 
-// ── 1. a stall at the boosted rate ──
-console.log('── STALL: the radio stops delivering at the rate ADS-B boosted it to ──');
+// ── 1. stalls at the boosted rate: the first is noted, the second (within 24 h) holds the boosts one rung down ──
+console.log('── STALL ×2: the radio stops delivering at the rate ADS-B boosted it to ──');
 {
   const dir = mkdir();
   const s = await start(dir, ['--stall-at', '2000000']);
@@ -113,58 +113,99 @@ console.log('── STALL: the radio stops delivering at the rate ADS-B boosted 
   const spec = ws(s.port, `/ws/user-spectrum?user_session_id=${SID}&mode=binary8&bins=256`);
   await sleep(1500);
   ok(spec.st.frames > 0, `spectrum flows at the base rate (${spec.st.frames} frames)`);
-  spec.send({ type: 'adsb', on: 1 });
-  await sleep(1500);
-  ok(fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'the marker is down while ADS-B has the radio at 2.4 MS/s');
-  let hw = null;
-  for (let i = 0; i < 40; i++) { await sleep(500); hw = await getJson(s.port, '/vibeserver/hardware'); if (hw?.rateGuard?.fault) break; }
-  ok(hw?.rateGuard?.fault === 'stalled' && hw.rateGuard.rate === 2400000 && hw.rateGuard.mode === 'ADS-B',
-     `recorded: ${JSON.stringify(hw?.rateGuard)}`);
-  ok(/stopped responding at 2\.4 MS\/s during ADS-B/.test(hw?.rateGuard?.say || ''), 'the sentence names the rate and the mode');
-  await sleep(2500);
+  const stallOnce = async (n) => {
+    spec.send({ type: 'adsb', on: 1 });
+    await sleep(1500);
+    ok(fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), `stall ${n}: the marker is down while ADS-B has the radio at 2.4 MS/s`);
+    let hw = null;
+    for (let i = 0; i < 40; i++) { await sleep(500); hw = await getJson(s.port, '/vibeserver/hardware'); if (hw?.rateGuard?.fault && (n === 1 || hw.rateGuard.latched)) break; }
+    await sleep(2500);
+    return hw;
+  };
+  let hw = await stallOnce(1);
+  ok(hw?.rateGuard?.fault === 'stalled' && hw.rateGuard.rate === 2400000 && hw.rateGuard.mode === 'ADS-B' && !hw.rateGuard.latched && hw.rateGuard.noted === 1,
+     `stall 1 NOTED, not latched: ${JSON.stringify(hw?.rateGuard)}`);
+  ok(/stopped responding at 2\.4 MS\/s during ADS-B.*noted once/.test(hw?.rateGuard?.say || ''), 'the sentence names the rate and the mode, and says noted');
   const before = spec.st.frames;
   await sleep(2000);
   ok(spec.st.frames > before, `IQ flows again after the recovery (${spec.st.frames - before} frames in 2 s)`);
   ok(spec.st.texts.some((t) => t.includes('"adsb_off"')), 'listeners were told ADS-B ended');
   ok(!fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'a recovered stall is not a crash: the marker is gone');
+  let cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  ok(cfg.radios?.[0]?.dabRateBoost === true, `the OWNER's rate switch is untouched (${cfg.radios?.[0]?.dabRateBoost})`);
+  ok(hw?.radios?.[0]?.dabBoost !== false && hw?.dabBoost !== false, 'hwinfo still reports the switch on');
+  // the same rate is tried again; it stalls again → latched at 2.048 (the rung below 2.4)
+  hw = await stallOnce(2);
+  ok(hw?.rateGuard?.latched === true && hw.rateGuard.ceiling === 2048000, `stall 2 within 24 h LATCHES one rung down: ${JSON.stringify(hw?.rateGuard)}`);
+  ok(/twice in 24 hours/.test(hw?.rateGuard?.say || ''), 'the line says twice in 24 hours');
   const log = s.log();
   if (process.env.SHOW_LOG) console.log(log.split('\n').filter((l) => /ADS-B|rate|IQ|watchdog|stall|tcp|silent/i.test(l)).slice(-40).join('\n'));
   ok(/\[rate\] .* at 2\.400 MS\/s during ADS-B/.test(log), 'the log says what happened');
-  ok(/sample rate[^\n]*1024000|rate 2\.400 -> 1\.024|1\.024/.test(log), 'back at the base rate');
-  const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-  ok(cfg.radios?.[0]?.dabRateBoost === false, `the rate switch was persisted OFF (${cfg.radios?.[0]?.dabRateBoost})`);
-  // asking for ADS-B again must not boost
+  cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  ok(cfg.radios?.[0]?.dabRateBoost === true, `latched, and the owner's switch is STILL untouched (${cfg.radios?.[0]?.dabRateBoost})`);
   spec.send({ type: 'adsb', on: 1 });
   await sleep(1500);
-  ok(!fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'ADS-B asked again: no boost while the fault stands');
+  ok(!fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'ADS-B asked again: no boost to 2.4 while it is held at 2.048');
+  const cleared = await getJson(s.port, '/vibeserver/rate-guard?clear=1', { method: 'POST' });
+  ok(cleared && cleared.fault === '' && cleared.latched === false, `Clear forgets it: ${JSON.stringify(cleared)}`);
   audio.close(); spec.close();
   await s.stop();
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// ── 2. a whole-process crash at the boosted rate ──
-console.log('── CRASH: a marker left by a run that died at 2.4 MS/s during ADS-B ──');
+// ── 2. whole-process crashes: an update is not one; one is noted; two latch; a pre-beta95 record gives the switch back ──
+console.log('── CRASH: markers left by a run that died at 2.56 MS/s during ADS-B ──');
 {
   const dir = mkdir();
-  fs.writeFileSync(path.join(dir, 'rate-guard-fake.marker'), 'entering 2400000 Hz for ADS-B at 1761300200\n');
-  const s = await start(dir);
-  const hw = await getJson(s.port, '/vibeserver/hardware');
-  ok(hw?.rateGuard?.fault === 'crashed' && hw.rateGuard.rate === 2400000 && hw.rateGuard.mode === 'ADS-B' && hw.rateGuard.at === 1761300200,
-     `recorded at the marker's time: ${JSON.stringify(hw?.rateGuard)}`);
-  ok(/^SDR crashed at 2\.4 MS\/s during ADS-B/.test(hw?.rateGuard?.say || ''), 'the red sentence');
-  ok(!fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'the marker is removed');
-  ok(/died while the radio was at 2\.4 MS\/s during ADS-B/.test(s.log()), 'the log says so');
-  const cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
-  ok(cfg.radios?.[0]?.dabRateBoost === false, `the rate switch persisted OFF (${cfg.radios?.[0]?.dabRateBoost})`);
-  if (process.env.SHOW_LOG) console.log(s.log().split('\n').filter((l) => /setting|save|rate switch|died/i.test(l)).join('\n'), JSON.stringify(cfg));
+  const marker = path.join(dir, 'rate-guard-fake.marker');
+  let s = await start(dir);
+  const build = (await getJson(s.port, '/vibeserver/rate-guard'))?.build || '';
+  ok(build.length > 4, `the server names its build (${build})`);
+  await s.stop();
+  ok(!fs.existsSync(marker), 'a clean stop leaves no marker');
+
+  // (a) another build's marker = an update
+  fs.writeFileSync(marker, 'entering 2560000 Hz for ADS-B at 1764100000 build 12.0.0~beta94@older\n');
+  s = await start(dir);
+  let hw = await getJson(s.port, '/vibeserver/hardware');
+  ok(hw?.rateGuard?.fault === '' && !fs.existsSync(marker), `an update is not a crash: ${JSON.stringify(hw?.rateGuard)}`);
+  ok(/not counted as a crash/.test(s.log()), 'the log says why');
+  await s.stop();
+
+  // (b) this build's marker = noted
+  fs.writeFileSync(marker, `entering 2560000 Hz for ADS-B at ${Math.floor(Date.now() / 1000) - 60} build ${build}\n`);
+  s = await start(dir);
+  hw = await getJson(s.port, '/vibeserver/hardware');
+  ok(hw?.rateGuard?.fault === 'crashed' && hw.rateGuard.noted === 1 && !hw.rateGuard.latched, `one crash is noted: ${JSON.stringify(hw?.rateGuard)}`);
+  ok(/^SDR crashed at 2\.56 MS\/s during ADS-B/.test(hw?.rateGuard?.say || ''), 'the sentence');
+  ok(/died while the radio was at 2\.56 MS\/s during ADS-B — noted once/.test(s.log()), 'the log says so');
+  await s.stop();
+
+  // (b)+(c) a second = latched at 2.4, the ADS-B floor
+  fs.writeFileSync(marker, `entering 2560000 Hz for ADS-B at ${Math.floor(Date.now() / 1000) - 30} build ${build}\n`);
+  s = await start(dir);
+  hw = await getJson(s.port, '/vibeserver/hardware');
+  ok(hw?.rateGuard?.latched === true && hw.rateGuard.ceiling === 2400000, `the second latches at 2.4: ${JSON.stringify(hw?.rateGuard)}`);
+  ok(/ADS-B still runs/.test(hw?.rateGuard?.say || ''), 'and says ADS-B still runs');
+  let cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  ok(cfg.radios?.[0]?.dabRateBoost === true, `the owner's switch is untouched (${cfg.radios?.[0]?.dabRateBoost})`);
   const cleared = await getJson(s.port, '/vibeserver/rate-guard?clear=1', { method: 'POST' });
   ok(cleared && cleared.fault === '' && cleared.blocked === false, `Clear forgets it: ${JSON.stringify(cleared)}`);
   await s.stop();
-  ok(!fs.existsSync(path.join(dir, 'rate-guard-fake.marker')), 'a clean stop leaves no marker');
-  const s2 = await start(dir);
-  const hw2 = await getJson(s2.port, '/vibeserver/hardware');
-  ok(hw2?.rateGuard?.fault === '', 'the next start finds nothing — a clean stop is not a crash');
-  await s2.stop();
+
+  // ★ a pre-beta95 record had persisted the switch OFF: given back
+  fs.writeFileSync(path.join(dir, 'rate-guard-fake.json'),
+    '{"fault":"crashed","at":1764100000,"rate":2560000,"mode":"ADS-B","blocked":true,"say":"old"}');
+  cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  cfg.radios[0].dabRateBoost = false;
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg));
+  s = await start(dir);
+  hw = await getJson(s.port, '/vibeserver/hardware');
+  await sleep(500);
+  cfg = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  ok(cfg.radios?.[0]?.dabRateBoost === true, `a pre-beta95 latch's OFF is given back (${cfg.radios?.[0]?.dabRateBoost})`);
+  ok(hw?.rateGuard && !hw.rateGuard.latched, `and the old record holds nothing back: ${JSON.stringify(hw?.rateGuard)}`);
+  await s.stop();
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

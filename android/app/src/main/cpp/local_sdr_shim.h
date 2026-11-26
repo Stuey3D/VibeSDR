@@ -157,6 +157,8 @@ public:
     static void setRateGuardBase(const std::string& base);
     /** {fault,at,rate,mode,blocked,say} — for the setup page, the app and the hardware endpoint. */
     static std::string rateGuardJson();
+    /** ★ beta95: after setRateGuardBase, a pre-beta95 record's give-back, ONCE: 0 none, 1 dabRateBoost on, 2 ism256 on. */
+    static int rateGuardGaveBack();
     static void rateGuardClear();
     /** ADS-B at 2.56 MS/s on an RTL: the owner's own switch (not tied to the rate switch); never the default. */
     static void setVibeServerAdsb256(bool on);

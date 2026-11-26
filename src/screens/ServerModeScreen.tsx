@@ -1330,18 +1330,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   The rate a mode takes is the receiver's decision, so the hint gives the figures. */}
               {/* ★★ GREYED ON THE AIRSPY HF+ (Stuart, 2026-10-10): it tops out at 912 kS/s and cannot
                   receive DAB or ADS-B at all, so the switch is shown off and does nothing, with the reason. */}
-              <OptRow C={C} F={F} active={!isAhf && dabRateBoost && !rateGuard?.blocked} disabled={isAhf || !!rateGuard?.blocked}
+              <OptRow C={C} F={F} active={!isAhf && dabRateBoost} disabled={isAhf}
                 label="Change the sample rate when a mode needs it"
                 hint={isAhf ? 'Not possible on the Airspy HF+ — it cannot reach 2.048 MS/s, so it cannot receive DAB or ADS-B.' : undefined}
                 onPress={() => {
                   const v = !dabRateBoost;
                   setDabRateBoost(v); AsyncStorage.setItem(K.dabRateBoost, v ? '1' : '0');
                 }} />
-              {/* ★★★ THE RADIO FELL OVER AT A RATE A MODE BOOSTED TO — in red, beside the switch it disables, with the
-                  owner's way back (rateGuard.ts; the setup page draws the same line). */}
+              {/* ★★★ THE RADIO FELL OVER AT A RATE A MODE BOOSTED TO — beside the switch (red while a rate is held back),
+                  with the owner's way back (rateGuard.ts; the setup page draws the same line). beta95: the switch keeps
+                  the owner's choice; the server only caps the boosts. */}
               {!!rateGuard?.fault && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <Text style={{ flex: 1, color: '#ff6b5e', fontFamily: F, fontSize: 12, lineHeight: 16 }}>{rateGuardLine(rateGuard)}</Text>
+                  <Text style={{ flex: 1, color: rateGuard.latched ? '#ff6b5e' : C.textDim, fontFamily: F, fontSize: 12, lineHeight: 16 }}>{rateGuardLine(rateGuard)}</Text>
                   <TouchableOpacity style={{ borderWidth: 1, borderColor: C.border, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 5 }}
                     onPress={async () => { const st = await rateGuardClear(); setRateGuard(st); }}>
                     <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Clear</Text>

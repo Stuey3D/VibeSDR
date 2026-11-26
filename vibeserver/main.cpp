@@ -2736,6 +2736,12 @@ int main(int argc, char** argv) {
         for (char c : g_myRadioSerial) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') tag += c;
         LocalSdrShim::setRateGuardBase(vsBenchDir() + "/rate-guard-" + (tag.empty() ? std::string("radio") : tag));
     }
+    {   // ★★ beta95: a pre-beta95 latch had written the owner's switch OFF into this config; it is given back (persisted
+        //    by setRateGuardBase) — and applied to the copy already read here, so this run has it too.
+        const int back = LocalSdrShim::rateGuardGaveBack();
+        if (back == 1) o.dabRateBoost = true;
+        if (back == 2) o.ism256 = true;
+    }
     LocalSdrShim::setVibeServerDabRateBoost(o.dabRateBoost);
     LocalSdrShim::setVibeServerAdsb256(o.adsb256);
     LocalSdrShim::setVibeServerIsm256(o.ism256);
