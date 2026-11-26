@@ -8,7 +8,7 @@
 //     no ID, no code. Nothing here could show one; nothing here tries.
 // ★ PURE: no React Native — node runs it.
 
-import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule,
+import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml,
          type MeshKnown, type MeshRoute } from '../utils/meshRoute';
 
 export interface IsmDevice {
@@ -570,7 +570,7 @@ export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null
   const t = NODE_TYPE_WORD[ismNodeType(d)];
   return `<div class="trkCard"><div style="white-space:normal;max-width:300px"><b>${escM(d.long || d.name)}</b>${d.short && d.short !== d.long ? ` (${escM(d.short)})` : ''}<br>`
     + `${escM(ismNetName(d.kind))} ${escM(t)} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
-    + lines.map(escM).join('<br>') + '</div></div>';
+    + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div></div>';
 }
 export const ISM_MAP_EMPTY = 'Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.';
 /** The pins: every row with a position. ★ `_lb` is plain text — the layer escapes it. */
@@ -680,7 +680,7 @@ export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | nul
   if (route) lines.push(...route.words);   // ★★ beta96 the route card
   return `<div class="trkCard"><div style="white-space:normal;max-width:300px"><b>${escM(d.name)}</b><br>${escM(ismNetName(d.kind))} ${escM(t)} · ${escM(galOrigin(d.origin))}<br>`
     + `first heard ${hhmm(d.first)} · last heard ${hhmm(d.last)} UTC · ${d.count} ${d.count === 1 ? 'time' : 'times'}<br>`
-    + lines.map(escM).join('<br>') + '</div></div>';
+    + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div></div>';
 }
 const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
 export function ismGalItems(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false, known?: readonly MeshKnown[]) {

@@ -197,14 +197,29 @@ try {
   const rowsMi = await ev(`${view}.querySelector('.rows').textContent`);
   ok(/\d mi/.test(rowsMi) && !/\d km/.test(rowsMi) && !/\bNM\b/.test(rowsMi), `…its NODES list in miles too (never NM): ${rowsMi.slice(0, 140)}`);
   const cam = `JSON.stringify((() => { const m = window.__vibeTrkMap, c = m.getCenter(); return { lat: +c.lat.toFixed(4), lng: +c.lng.toFixed(4), z: +m.getZoom().toFixed(2) }; })())`;
+  const inView = (pts) => `JSON.stringify((() => { const m = window.__vibeTrkMap, h = document.querySelector('.trkMapHost').getBoundingClientRect();
+    return ${JSON.stringify(pts)}.filter(p => { const q = m.latLngToContainerPoint(p); return !(q.x >= 0 && q.y >= 0 && q.x <= h.width && q.y <= h.height); }).length; })())`;
+  const routeBtn = `(document.querySelector('.vtl-card:not([hidden]) .vmrBtn') || null)`;
+  // ★★ (Stuart 11-26 refinement) a pick opens the card and ZOOMS IN — it never draws the route itself
+  const z0 = JSON.parse(await ev(cam)).z;
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Route Test/.test(x.textContent)); r && r.click(); })()`);
-  await sleep(2600);   // the fly-to, and four hops at 300 ms
+  await sleep(2000);
   const rcard = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
+  const zp = JSON.parse(await ev(cam));
+  ok(zp.z >= Math.max(z0, 10) && Math.abs(zp.lat - 51.95) < 0.02 && Math.abs(zp.lng + 0.75) < 0.02, `a NODES pick: zoomed in on the node (${z0} → ${zp.z})`);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && document.querySelectorAll('.vmr-ar').length === 0`), '…no route drawn by the pick');
+  ok(await ev(`!!${routeBtn} && ${routeBtn}.textContent === 'ROUTE' && ${routeBtn}.getAttribute('aria-pressed') === 'false'`), '…its card has a ROUTE key (this node\'s packet carried relays)');
   ok(/route: 4 hops, 2 placed, 1 ambiguous, 1 unknown/.test(rcard) && /1 · 9f · M0SWM AL3 7/.test(rcard) && /one of MeshCore Repeater, Kettering Hill|one of Kettering Hill, MeshCore Repeater/.test(rcard)
      && /unknown repeater 0x5e/.test(rcard) && /4 · c1 · Benson/.test(rcard), `the route card: ${rcard.slice(rcard.indexOf('route:'), rcard.indexOf('route:') + 160)}`);
   ok(/ mi [NESW]/.test(rcard), '…the card in miles');
+  // ROUTE: drawn hop by hop, and the view fits the WHOLE PATH (node, the placed hops M0SWM and Benson, the receiver)
+  await ev(`${routeBtn}.click()`);
+  await sleep(2600);
   const lit = JSON.parse(await ev(`JSON.stringify({ bd: document.querySelectorAll('.vmr-bd').length, ar: document.querySelectorAll('.vmr-ar').length, nums: [...document.querySelectorAll('.vmr-bd')].map(b => b.textContent).join(' ') })`));
-  ok(lit.bd === 4 && lit.ar === 6, `the route drawn hop by hop: ${lit.bd} badges (${lit.nums}), ${lit.ar} arrowheads (node→9f, 9f→each a3, each a3→c1 across the unknown, c1→receiver)`);
+  ok(lit.bd === 4 && lit.ar === 6, `ROUTE: drawn hop by hop: ${lit.bd} badges (${lit.nums}), ${lit.ar} arrowheads (node→9f, 9f→each a3, each a3→c1 across the unknown, c1→receiver)`);
+  const outside = Number(await ev(inView([[51.95, -0.75], [51.799, -0.3967], [51.6223, -1.1028], [52.3125, -0.875]])));
+  ok(outside === 0, `…and the view fits the whole path: node, placed hops and receiver all in view (${outside} outside, zoom ${JSON.parse(await ev(cam)).z})`);
+  ok(await ev(`${routeBtn}.textContent === 'HIDE ROUTE' && ${routeBtn}.getAttribute('aria-pressed') === 'true'`), '…the key says HIDE ROUTE');
   console.log('   screenshot', await shot('ismmap-route.png'));
   const c1 = await ev(cam);
   await ev(`window.__fakeAdd(${JSON.stringify(node('f12', 'meshcore', 'Far North Rptr', 'repeater', 'repeater', 53.9, -1.5, 6, 1))})`);   // a refresh with a node outside the view
@@ -216,12 +231,28 @@ try {
   await sleep(3500);
   const c3 = await ev(cam);
   ok(c3 !== c2 && !(await ev(`${view}.querySelector('.fit').classList.contains('paused')`)), `FIT re-frames: ${c3}`);
-  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Route Test/.test(x.textContent)); r && r.click(); })()`);
+  await ev(`${routeBtn}.click()`);
+  await sleep(500);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && ${routeBtn}.textContent === 'ROUTE'`), 'HIDE ROUTE: the route goes, the card stays');
+  await ev(`${routeBtn}.click()`);
+  await sleep(800);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length > 0`), 'ROUTE again: back');
+  // a node whose packets carried no relays: no ROUTE key at all (no dead control); choosing it clears the other's route
+  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Moulton Rptr/.test(x.textContent)); r && r.click(); })()`);
   await sleep(1500);
-  ok(await ev(`${view}.querySelector('.fit').classList.contains('paused')`), 'chosen again: held again');
+  ok(await ev(`/Moulton/.test((document.querySelector('.vtl-card:not([hidden])') || {}).textContent || '') && !${routeBtn}`), 'a node with no path: its card has no ROUTE key');
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0`), '…and choosing it cleared the other node\'s route');
+  ok(await ev(`${view}.querySelector('.fit').classList.contains('paused')`), 'chosen: the view held');
+  // a tap on a marker: its card AND a zoom in
+  await ev(`(() => { const m = window.__vibeTrkMap; m.setView([52.1, -0.8], 7); return true; })()`);
+  await sleep(1200);
+  await ev(`[...document.querySelectorAll('.vtl-mk')].find(m => /M0SWM AL3 7/.test(m.textContent))?.click()`);
+  await sleep(1800);
+  const zm = JSON.parse(await ev(cam));
+  ok(zm.z >= 10 && Math.abs(zm.lat - 51.799) < 0.03 && /M0SWM/.test(await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`)), `a marker tap: its card, zoomed in on it (zoom ${zm.z})`);
   await ev(`${view}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   await sleep(600);
-  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && document.querySelectorAll('.vmr-ar').length === 0`), 'the selection cleared: the route goes');
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && document.querySelectorAll('.vmr-ar').length === 0 && !document.querySelector('.vtl-card:not([hidden])')`), 'the card closed: no route');
   ok(!(await ev(`${view}.querySelector('.fit').classList.contains('paused')`)), '…and the auto fit resumes');
   await ev(`document.querySelector('#ismChips .ismUnits[data-u="speed"]').click()`);   // back to km/h
   ok(await until(`/ km/.test(${view}.querySelector('.st').textContent)`, 4000), 'MPH → KM/H: km again');

@@ -7,7 +7,7 @@
  * ★ The server's `line` is metric with PSI for tyres. A listener who picks mph or kPa/bar gets the line rebuilt here from
  *   the numeric fields (ismLine) — one rule, the same order as the server's readable(). */
 
-import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule,
+import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml,
          type MeshKnown, type MeshRoute } from '../../../src/utils/meshRoute';
 
 export interface IsmDevice {
@@ -792,7 +792,7 @@ export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null
   const t = NODE_TYPE_WORD[ismNodeType(d)];
   return `<div class="pop"><b>${escM(d.long || d.name)}</b>${d.short && d.short !== d.long ? ` (${escM(d.short)})` : ''}<br>`
     + `${escM(ismNetName(d.kind))} ${escM(t)} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
-    + lines.map(escM).join('<br>') + '</div>';
+    + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div>';
 }
 /** The map's list: nearest first when the receiver's position is known, else newest first. */
 export function ismMapRows(r: IsmReport, rx: { lat: number; lon: number } | null, miles = false): string {
@@ -895,7 +895,7 @@ export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | nul
   if (route) lines.push(...route.words);   // ★★ beta96 the route card
   return `<div class="pop"><b>${escM(d.name)}</b><br>${escM(ismNetName(d.kind))} ${escM(t)} · ${escM(galOrigin(d.origin))}<br>`
     + `first heard ${hhmm(d.first)} · last heard ${hhmm(d.last)} UTC · ${d.count} ${d.count === 1 ? 'time' : 'times'}<br>`
-    + lines.map(escM).join('<br>') + '</div>';
+    + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div>';
 }
 const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
 export function ismGalRows(nodes0: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false): string {

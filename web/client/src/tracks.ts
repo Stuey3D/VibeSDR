@@ -543,6 +543,8 @@ export interface TrackViewOpts {
   yieldGroups?: string[];
   aria?: (it: any) => string;
   onCard?: (key: string, el: HTMLElement) => void;
+  /** ★★ beta96 (Stuart 11-26) a tap on an icon ZOOMS IN to it as a row does (the ISM mesh maps) — not only its card */
+  zoomOnSelect?: boolean;
   /** ★★ V12 beta90 the SCALE BAR (every map has one — vibemapgl.js / vibemap.js): true = NM under the km (the marine
    *  and aviation maps). Default: NM for the 'marine' and 'aero' profiles, km alone otherwise. */
   nautical?: boolean;
@@ -866,6 +868,29 @@ export class TrackView {
   }
   /** ★★ beta96 is a route drawn now (the test's handle) */
   get routeShown(): boolean { return !!this.rtH; }
+  /* ★★ beta96 THE CARD's ROUTE BUTTON (meshRoute.ts meshRouteButtonHtml): `routeOf` gives a node's route; ROUTE draws it
+   *  (and fits the path), ROUTE again or the selection changing / clearing (the card closing) takes it away. The host
+   *  passes routeCard() as the view's onCard. */
+  private rtKey = '';
+  private routeOf: ((key: string) => unknown | null) | null = null;
+  setRouteSource(f: (key: string) => unknown | null) { this.routeOf = f; }
+  routeCard(_key: string, el: HTMLElement) {
+    const b = el.querySelector('.vmrBtn[data-rtk]') as HTMLButtonElement | null;
+    if (!b) return;
+    b.onclick = (e) => { e.stopPropagation(); this.routeToggle(b.dataset.rtk || ''); };
+    this.routeBtn();
+  }
+  routeToggle(k: string) {
+    if (!k || this.rtKey === k) { this.rtKey = ''; this.showRoute(null); }
+    else { const rt = this.routeOf?.(k) ?? null; this.rtKey = rt ? k : ''; this.showRoute(rt); }
+    this.routeBtn();
+  }
+  private routeBtn() {
+    for (const b of Array.from(this.root.querySelectorAll('.vmrBtn[data-rtk]')) as HTMLElement[]) {
+      const on = !!this.rtKey && b.dataset.rtk === this.rtKey;
+      b.setAttribute('aria-pressed', String(on)); b.textContent = on ? 'HIDE ROUTE' : 'ROUTE';
+    }
+  }
   /* ★★ beta96 A SELECTION HOLDS THE VIEW (Stuart's 11-26 recording, the ISM mesh map: a node picked from NODES was flown
    *  to, then the next refresh glided back out to all of England). mapAutoFit's rule, for every way a selection is made —
    *  a row, a link, a tap on the map (and so a mesh route shown): the auto fit PAUSES until FIT is pressed or the
@@ -885,6 +910,9 @@ export class TrackView {
   private markSel(k: string) {
     if (k && k !== this.sel) this.selPause(); else if (!k && this.sel) this.selResume();
     if (k !== this.sel) try { this.onSel?.(k); } catch (e) { console.error('[tracks] onSel', e); }
+    if (this.rtKey && k !== this.rtKey) { this.rtKey = ''; this.showRoute(null); this.routeBtn(); }   // ★★ beta96 the card closed / another chosen
+    // ★★ beta96 a tap zooms in too (the layer's own focus: the fly, the rings — select() on the same key does nothing more)
+    if (this.o.zoomOnSelect && k && k !== this.sel) setTimeout(() => { if (this.sel === k) try { this.layer?.focus(k); } catch { /* gone */ } }, 0);
     this.sel = k;
     for (const el of Array.from(this.rowsEl.querySelectorAll('.trkRow.sel'))) el.classList.remove('sel');
     const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
@@ -956,7 +984,7 @@ export class TrackView {
     this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
     this.acLayer = null; this.acMap = null; this.acAuto = null; this.acKeys.clear(); this.acHex.clear();
-    this.showRoute(null); this.rtMap = null; this.rtL = null;   // ★★ beta96 a route drawn goes with its map
+    this.showRoute(null); this.rtMap = null; this.rtL = null; this.rtKey = '';   // ★★ beta96 a route drawn goes with its map
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
     this.layer = null;
     try { this.vm?.destroy(); } catch (e) { console.error('[tracks] map destroy', e); }

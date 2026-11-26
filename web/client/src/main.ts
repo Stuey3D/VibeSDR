@@ -9889,9 +9889,10 @@ function ismMapOpen(key = '') {
                    return 'first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos(), mi, rt) : ismMapCard(d, myPos(), mi, rt); },
     ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
     onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
+    // ★★ beta96 a tap opens the card AND zooms in; the card's ROUTE draws the route and fits the path (meshRoute.ts)
+    zoomOnSelect: true, onCard: (k, el) => ismMapView?.routeCard(k, el),
   });
-  // ★★ beta96 THE ROUTE: a MeshCore node tapped lights the repeaters its packet came through (meshRoute.ts); another tap clears
-  ismMapView.onSel = (k) => { const d = ismMapDevs.find((x) => x.key === k); ismMapView?.showRoute(d ? ismRouteOf(d, ismKnown, myPos()) : null); };
+  ismMapView.setRouteSource((k) => { const d = ismMapDevs.find((x) => x.key === k); return d ? ismRouteOf(d, ismKnown, myPos()) : null; });
   // ★ a link to a node outside the chosen range widens it, so the node asked for is there
   if (key && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === key), ismMapRange).length) {
     ismMapRange = '24h';
@@ -10231,8 +10232,9 @@ async function ismGalMapOpen(it0: GalleryItem) {
     icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx, ismMilesPref(), ismRouteOf(d, known, rx)), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,
     onRange: (id) => { range = id; lsSet(ISM_RANGE_GAL_KEY, id); draw(); },
+    zoomOnSelect: true, onCard: (k, el) => ismGalView?.routeCard(k, el),   // ★★ beta96 a tap zooms in; the card's ROUTE
   });
-  { const v = ismGalView; v.onSel = (k) => { const d = shown.find((x) => x.key === k); v.showRoute(d ? ismRouteOf(d, known, rx) : null); }; }   // ★★ beta96 the route
+  ismGalView.setRouteSource((k) => { const d = shown.find((x) => x.key === k); return d ? ismRouteOf(d, known, rx) : null; });
   ismGalView.show(rx);
   draw();
   /* ★ LIVE: today's card is rewritten at most once a minute while ISM runs (a listener, or background decoding) — while

@@ -37,7 +37,7 @@ export function amKeep(ageSec: number, win: string): boolean {
 }
 
 /** The layers and the store's origin bits (vibe_station_store.h Origin). */
-import { meshName, meshKm, meshDist, meshPlausible, meshHopsForRule, meshRelays, meshRoute, MESH_ROUTE_JS, type MeshKnown, type MeshRoute } from './meshRoute';
+import { meshName, meshKm, meshDist, meshPlausible, meshHopsForRule, meshRelays, meshRoute, MESH_ROUTE_JS, MESH_ROUTE_BTN_STYLE, type MeshKnown, type MeshRoute } from './meshRoute';
 
 export type AmLayer = 'spots' | 'aprs' | 'mesh' | 'beacons';
 export const AM_SRC_BACKGROUND = 1;
@@ -263,7 +263,7 @@ export function amEmptyWords(tab: AmLayer): string {
 /* ★★ THE SAME RULES AS PAGE TEXT (both map pages are their own documents): the window, the layer drawing for MESH and
  *  BEACONS (each marker kept in AM_MK by its key, so a list row can open it), the list's rows. Plain ES5; no backticks, no backslashes. The page supplies L (Leaflet or the GPU adapter),
  *  esc() and RIM. scripts/test_amateur_map.ts runs amKeepJs against amKeep. */
-export const AMATEUR_JS = MESH_ROUTE_JS + `
+export const AMATEUR_JS = MESH_ROUTE_JS + (`
 function amWinSec(win){switch(String(win||'').toLowerCase()){case '2m':return 120;case '5m':return 300;case '15m':return 900;case '30m':return 1800;
   case '1h':return 3600;case '3h':return 10800;case '24h':return 86400;case '7d':return 691200;case '30d':return 2678400;default:return 0;}}
 function amKeep(ageSec,win){var w=amWinSec(win);return !w||(isFinite(ageSec)&&ageSec>=0&&ageSec<=w);}
@@ -271,28 +271,42 @@ function amAgo(s){s=Math.max(0,Math.round(s));return s<90?s+' s ago':s<5400?Math
 var AM_MESH_COL={MeshCore:'#ff9f43',Meshtastic:'#67ea94'};
 function amMeshCard(n){var rw='';if(n.rw&&n.rw.length)for(var i=0;i<n.rw.length&&i<70;i++)rw+='<br>'+esc(n.rw[i]);
   return '<div class="pop"><b>'+esc(n.name)+'</b><br>'+esc(n.net)+(n.what?' &middot; '+esc(n.what):'')+(n.dist?' &middot; '+esc(n.dist):'')+'<br>'
-  +(n.approx?'Position rounded to about 1 km<br>':'')+(n.live?'Heard now on ISM':'Remembered by this server')+' &middot; '+esc(amAgo(n.age))+rw+'</div>';}
-/* ★★ beta96 THE ROUTE (meshRoute.ts MESH_ROUTE_JS, carried beside this): a MeshCore node tapped lights the repeaters its
- *  packet came through, hop by hop; another tap (the same node, another, the empty map) clears it. The page calls
+  +(n.approx?'Position rounded to about 1 km<br>':'')+(n.live?'Heard now on ISM':'Remembered by this server')+' &middot; '+esc(amAgo(n.age))+rw
+  +(n.rt?'<div class="vmrRow"><button type="button" class="vmrBtn" data-amk="'+esc(n.key)+'" aria-pressed="'+(AM_RT_KEY===n.key)+'" style="'+AM_RT_BTN_STYLE+'">'+(AM_RT_KEY===n.key?'HIDE ROUTE':'ROUTE')+'</button></div>':'')+'</div>';}
+/* ★★ beta96 THE ROUTE (meshRoute.ts MESH_ROUTE_JS, carried beside this — Stuart 11-26): a tap on a mesh node opens its card
+ *  and zooms in to it; the card's ROUTE (only on a node whose packet carried relays) lights the repeaters it came through,
+ *  hop by hop, and fits the view to the whole path; ROUTE again, the card closing or a tap on the empty map clears it.
+ *  A node chosen HOLDS THE VIEW (the page's auto fit, digiFit, pauses until FIT, or the card closes). The page calls
  *  amRouteBind() once its map exists. amMeshExtra() cleans what React Native / the opener sent for it. */
-var AM_RT=null,AM_RT_KEY='',AM_RT_AT=0,AM_RT_HELD=false;
-/* a route shown HOLDS THE VIEW (the page's auto fit, digiFit, pauses until FIT or the route is cleared — Stuart 11-26) */
+var AM_RT=null,AM_RT_KEY='',AM_HELD=false,AM_SEL_AT=0,AM_NODES={};
+var AM_RT_BTN_STYLE='__AM_RT_BTN_STYLE__';
 function amFitOf(){try{return (typeof digiFit!=='undefined'&&digiFit&&digiFit.state)?digiFit:null;}catch(e){return null;}}
-function amRouteShow(n){var was=AM_RT_KEY,f=amFitOf();try{if(AM_RT)AM_RT.clear();}catch(e){}AM_RT=null;AM_RT_KEY='';
-  if(!n||!n.rt||was===n.key||typeof meshRouteDraw!=='function'){
-    if(AM_RT_HELD){AM_RT_HELD=false;try{var s0=f&&f.state();if(s0&&s0.on&&s0.paused)f.resume();}catch(e){}}return;}
-  try{AM_RT=meshRouteDraw(map,L,n.rt);AM_RT_KEY=n.key;AM_RT_AT=Date.now();var s1=f&&f.state();if(s1&&s1.on){if(!s1.paused)f.pause();AM_RT_HELD=true;}}catch(e){console.error('mesh route',e);}}
-function amRouteBind(){try{map.on('click',function(){if(Date.now()-AM_RT_AT>300&&AM_RT)amRouteShow(null);});}catch(e){}}
+function amHold(){var f=amFitOf();try{var s=f&&f.state();if(s&&s.on){if(!s.paused)f.pause();AM_HELD=true;}}catch(e){}}
+function amRelease(){if(!AM_HELD)return;AM_HELD=false;var f=amFitOf();try{var s=f&&f.state();if(s&&s.on&&s.paused)f.resume();}catch(e){}}
+function amRouteBtns(){var bs=document.querySelectorAll('.vmrBtn[data-amk]');for(var i=0;i<bs.length;i++){var on=!!AM_RT_KEY&&bs[i].getAttribute('data-amk')===AM_RT_KEY;
+  bs[i].setAttribute('aria-pressed',String(on));bs[i].textContent=on?'HIDE ROUTE':'ROUTE';}}
+function amRouteShow(n){var was=AM_RT_KEY;try{if(AM_RT)AM_RT.clear();}catch(e){}AM_RT=null;AM_RT_KEY='';
+  if(n&&n.rt&&was!==n.key&&typeof meshRouteDraw==='function'){try{AM_RT=meshRouteDraw(map,L,n.rt);AM_RT_KEY=n.key;amHold();}catch(e){console.error('mesh route',e);}}
+  amRouteBtns();
+  try{if(window.ReactNativeWebView&&was!==AM_RT_KEY)window.ReactNativeWebView.postMessage(JSON.stringify({t:'amRoute',key:AM_RT_KEY||null}));}catch(e){}}
+/* the app's list ROUTE key (a pad cannot reach the card's): toggles the chosen node's route */
+if(typeof window!=='undefined')window.__amRoute=function(k){var n=AM_NODES[String(k)];if(n){AM_SEL_AT=Date.now();amRouteShow(n);}};
+function amMeshPick(n){AM_SEL_AT=Date.now();if(AM_RT_KEY&&AM_RT_KEY!==n.key)amRouteShow(null);amHold();
+  try{map.flyTo([n.lat,n.lon],Math.max(map.getZoom(),9),{duration:0.8});}catch(e){}}
+function amCardClosed(){if(Date.now()-AM_SEL_AT<400)return;if(AM_RT)amRouteShow(null);amRelease();}
+function amRouteBind(){try{map.on('click',amCardClosed);}catch(e){}try{map.on('popupclose',amCardClosed);}catch(e){}
+  document.addEventListener('click',function(ev){var t=ev.target,b=t&&t.closest?t.closest('.vmrBtn[data-amk]'):null;if(!b)return;
+    ev.preventDefault();ev.stopPropagation();AM_SEL_AT=Date.now();var n=AM_NODES[b.getAttribute('data-amk')];if(n)amRouteShow(n);},true);}
 function amMeshExtra(x,o){o.dist=String(x.dist||'').slice(0,16);o.rt=x.rt&&typeof x.rt==='object'&&Array.isArray(x.rt.seg)?x.rt:null;
   o.rw=Array.isArray(x.rw)?x.rw.slice(0,70).map(function(w){return String(w).slice(0,300);}):[];return o;}
 function amBeaconCard(b){return '<div class="pop"><b>'+esc(b.call)+'</b> &middot; '+esc(b.where)+'<br>NCDXF / IARU beacon &middot; heard on '+esc(b.bands.join(', '))
   +'<br>Down to '+esc(['','100 W','10 W','1 W','0.1 W'][b.best]||'')+' &middot; '+esc(amAgo(b.age))+'</div>';}
 var AM_MK={};
 function amMkClear(pre){for(var k in AM_MK)if(k.indexOf(pre)===0)delete AM_MK[k];}
-function amDrawMesh(group,nodes,win,live){group.clearLayers();amMkClear('mesh:');var out=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];if(!amKeep(n.age,win))continue;out.push(n);
+function amDrawMesh(group,nodes,win,live){group.clearLayers();amMkClear('mesh:');AM_NODES={};var out=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];if(!amKeep(n.age,win))continue;out.push(n);
   AM_MK[n.key]=L.circleMarker([n.lat,n.lon],{radius:live?7:6,color:RIM,weight:1.2,fillColor:AM_MESH_COL[n.net]||'#67ea94',fillOpacity:n.live?0.95:0.55,label:'M',labelColor:'#000000'})
    .addTo(group).bindPopup(amMeshCard(n));
-  if(n.rt&&AM_MK[n.key].on)(function(n){AM_MK[n.key].on('click',function(){amRouteShow(n);});})(n);}
+  AM_NODES[n.key]=n;if(AM_MK[n.key].on)(function(n){AM_MK[n.key].on('click',function(){amMeshPick(n);});})(n);}
   if(AM_RT_KEY&&!out.some(function(x){return x.key===AM_RT_KEY;}))amRouteShow(null);return out;}
 function amDrawBeacons(group,list,win,live,me){group.clearLayers();amMkClear('bcn:');var out=[];for(var i=0;i<list.length;i++){var b=list[i];if(!amKeep(b.age,win))continue;out.push(b);
   if(me)L.polyline([[me.lat,me.lon],[b.lat,b.lon]],{color:'#d2a8ff',weight:1,opacity:0.45,dashArray:'3 5'}).addTo(group);
@@ -300,4 +314,4 @@ function amDrawBeacons(group,list,win,live,me){group.clearLayers();amMkClear('bc
    .addTo(group).bindPopup(amBeaconCard(b));}return out;}
 function amSrcWords(src){var w=[];if(src&1)w.push('background decoding');if(src&2)w.push('a listener’s decoder');if(src&4)w.push('a satellite pass');return w.length?'Heard by '+w.join(' and '):'';}
 function amRow(key,col,name,sub,right){return '<div class="amRow" role="button" tabindex="0" data-k="'+esc(key)+'"><i style="background:'+esc(col)+'"></i><span class="n"><b>'+esc(name)+'</b><small>'+esc(sub)+'</small></span><span class="r">'+esc(right)+'</span></div>';}
-`;
+`).replace('__AM_RT_BTN_STYLE__', MESH_ROUTE_BTN_STYLE);

@@ -112,6 +112,8 @@ export interface MeshSeg { t: number; a: LL; b: LL; dim: boolean; dash: boolean 
 export interface MeshMark { t: number; p: LL; i: number; dim: boolean }
 export interface MeshRoute {
   o: LL; rx: LL | null; hops: MeshHop[]; seg: MeshSeg[]; marks: MeshMark[]; ticks: number;
+  /** ★★ the points the view is fitted to when the route is shown (meshRouteFit) */
+  fit: LL[];
   placed: number; ambiguous: number; unknown: number; words: string[];
 }
 
@@ -166,8 +168,40 @@ export function meshRoute(node: { lat: number; lon: number; relays?: string[]; n
   const ticks = list.length + 1;
   const rxp: LL | null = rx ? [rx.lat, rx.lon] : null;
   if (rxp) join(ticks, rxp, false);
-  return { o, rx: rxp, hops, seg, marks, ticks, placed, ambiguous, unknown,
+  return { o, rx: rxp, hops, seg, marks, ticks, placed, ambiguous, unknown, fit: meshRouteFit(o, hops, rxp),
            words: [meshRouteHead(list.length, placed, ambiguous, unknown), ...words] };
+}
+
+/** ★★ (Stuart 11-26, the refinement) THE ROUTE IS A BUTTON ON THE CARD: a tap on a node opens its card and zooms to it;
+ *  ROUTE (only on a node whose packet carried relays — no dead control) draws the route and fits the whole path; ROUTE
+ *  again, or the card closing, clears it. The button's HTML (the card's host escapes the key) — one look on every map. */
+export const MESH_ROUTE_BTN_STYLE = 'margin-top:6px;font:700 11px/1 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.04em;padding:6px 10px;'
+  + 'border-radius:5px;border:1px solid #ffd34d;background:transparent;color:#ffd34d;cursor:pointer;min-height:28px';
+/** The button for a card: `keyAttr` is the attribute (data-rtk on the ISM maps, data-amk on the AMATEUR map), `keyEsc` the
+ *  node's key ALREADY escaped for an attribute. */
+export function meshRouteButtonHtml(keyAttr: 'data-rtk' | 'data-amk', keyEsc: string): string {
+  return `<div class="vmrRow"><button type="button" class="vmrBtn" ${keyAttr}="${keyEsc}" aria-pressed="false" style="${MESH_ROUTE_BTN_STYLE}">ROUTE</button></div>`;
+}
+
+/** ★★ (Stuart 11-26) A ROUTE SHOWN FITS THE VIEW TO THE WHOLE PATH: the node, every placed hop and this receiver.
+ *  Ambiguous candidates join only when they do not blow the view up — the box with them no more than twice as tall and
+ *  twice as wide as without (each side at least MESH_FIT_MIN_DEG, so a short path still has room); else the placed hops
+ *  alone. (A plain row pick with no route is not this: it centres on the node, as ever.) */
+export const MESH_FIT_MIN_DEG = 0.2;
+export function meshRouteFit(o: LL, hops: readonly MeshHop[], rx: LL | null): LL[] {
+  const base: LL[] = [o];
+  for (const h of hops) if (h.k === 'p') base.push(h.p);
+  if (rx) base.push(rx);
+  const cands: LL[] = [];
+  for (const h of hops) if (h.k === 'a') cands.push(...h.c);
+  if (!cands.length) return base;
+  const span = (pts: readonly LL[]) => {
+    let s = 90, n = -90, w = 180, e = -180;
+    for (const p of pts) { s = Math.min(s, p[0]); n = Math.max(n, p[0]); w = Math.min(w, p[1]); e = Math.max(e, p[1]); }
+    return [Math.max(MESH_FIT_MIN_DEG, n - s), Math.max(MESH_FIT_MIN_DEG, e - w)];
+  };
+  const a = span(base), b = span([...base, ...cands]);
+  return b[0] <= 2 * a[0] && b[1] <= 2 * a[1] ? [...base, ...cands] : base;
 }
 
 /* ★★ THE DRAWING, AS PAGE TEXT — one copy for every map that shows a route: the web's track view (tracks.ts runs it),
@@ -197,6 +231,11 @@ function meshRouteDraw(map,L,rt){
     add(L.marker(p,{icon:L.divIcon({className:'vmr-bd',html:html,iconSize:[18,16],iconAnchor:[9,24]}),interactive:false,keyboard:false}));}
   var segs=(rt&&rt.seg)||[],marks=(rt&&rt.marks)||[],n=Math.min(70,Math.max(1,Math.round(num(rt&&rt.ticks))));
   function tick(t){if(dead)return;var i;for(i=0;i<segs.length&&i<600;i++)if(segs[i].t===t)seg(segs[i]);for(i=0;i<marks.length&&i<400;i++)if(marks[i].t===t)badge(marks[i]);}
+  /* the view: the WHOLE PATH (rt.fit — meshRouteFit), a moment after the press so it follows (and replaces) the layer's
+   *  own fly to the node; one glide, then the person's */
+  var fit=[],fi;for(fi=0;fi<((rt&&rt.fit)||[]).length&&fi<200;fi++){var fp=ll(rt.fit[fi]);if(fp)fit.push(fp);}
+  if(fit.length>1&&map.flyToBounds&&L.latLngBounds)timers.push(setTimeout(function(){if(dead)return;
+    try{var pd={x:48,y:48};map.flyToBounds(L.latLngBounds(fit),{paddingTopLeft:pd,paddingBottomRight:pd,maxZoom:11,duration:reduce?0:0.8});}catch(e){console.error('mesh route fit',e);}},60));
   for(var t=1;t<=n;t++)(function(t){if(!STEP||t===1)tick(t);else timers.push(setTimeout(function(){tick(t);},(t-1)*STEP));})(t);
   return {clear:function(){dead=true;for(var q=0;q<timers.length;q++)clearTimeout(timers[q]);timers=[];
     for(var k=0;k<layers.length;k++){try{layers[k].remove();}catch(e){}}layers=[];}};

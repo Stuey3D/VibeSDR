@@ -198,6 +198,39 @@ eq('no receiver → no last line', meshRoute({ lat: 50, lon: -4, relays: ['a1'] 
   sb.window.matchMedia = () => ({ matches: true });
   sb.meshRouteDraw({}, L, JSON.parse(JSON.stringify(rt)));
   eq('reduced motion: drawn at once, no timers', [timers.length, added.filter((a) => a.kind === 'vmr-bd').length], [0, rt.marks.length]);
+  // ★★ THE VIEW FITS THE WHOLE PATH when the route is shown (Stuart 11-26): a map that can fly to bounds is asked to, once,
+  //    a moment after the press (so it follows the layer's own fly to the node), with the route's fit points
+  sb.window.matchMedia = () => ({ matches: false });
+  added.length = 0; timers.length = 0;
+  const flown: any[] = [];
+  const L2 = { ...L, latLngBounds: (pts: any) => ({ pts }) };
+  sb.meshRouteDraw({ flyToBounds: (b: any, o: any) => { flown.push({ b, o }); } }, L2, JSON.parse(JSON.stringify(rt)));
+  const fitT = timers.find((t) => t.at === 60);
+  ok('a fit is scheduled 60 ms after the press', !!fitT && flown.length === 0);
+  fitT?.fn();
+  eq('…to the route\'s fit points, padded, never past zoom 11', [flown.length, JSON.stringify(flown[0]?.b.pts) === JSON.stringify(rt.fit), flown[0]?.o.maxZoom, flown[0]?.o.paddingTopLeft], [1, true, 11, { x: 48, y: 48 }]);
+}
+// ── 5b. WHICH POINTS THE VIEW FITS ─────────────────────────────────────────────────────────────────────────────────────
+{
+  const has = (pts: Array<[number, number]>, p: [number, number]) => pts.some((q) => q[0] === p[0] && q[1] === p[1]);
+  ok('the fit holds the node, every placed hop and the receiver', has(rt.fit, rt.o) && rt.hops.every((h) => h.k !== 'p' || has(rt.fit, h.p)) && has(rt.fit, [RX.lat, RX.lon]));
+  ok('…and the ambiguous candidates here (they sit inside the path\'s box)', rt.hops.every((h) => h.k !== 'a' || h.c.every((c) => has(rt.fit, c))));
+  // a candidate far away would blow the view up: left out, the placed hops kept
+  const far2: MeshKnown[] = [{ id: 'a1000000', name: 'Near', lat: 52.0, lon: -1.0 }, { id: '77000001', name: 'Here', lat: 52.1, lon: -0.9 }, { id: '77000002', name: 'Shetland', lat: 60.2, lon: -1.2 }];
+  const r2 = meshRoute({ lat: 51.9, lon: -1.1, relays: ['a1', '77'] }, far2, RX)!;
+  ok('a far candidate (Shetland) is left out of the fit', !has(r2.fit, [60.2, -1.2]) && has(r2.fit, [52.0, -1.0]) && has(r2.fit, [RX.lat, RX.lon]) && has(r2.fit, [51.9, -1.1]));
+  ok('…but still drawn (dimmed) — only the view ignores it', r2.marks.some((m) => m.p[0] === 60.2 && m.dim));
+}
+// ── 5c. THE CARD's ROUTE BUTTON — only on a node with a path (no dead control) ────────────────────────────────────────
+{
+  const rtT1 = meshRoute({ lat: t1.lat!, lon: t1.lon!, relays: ['92'], node: '8d76bb29' }, app.ismRouteKnown([nise], RX), RX);
+  const withBtn = app.ismMapCard(t1, RX, false, rtT1), noBtn = app.ismMapCard(nise, RX, false, null);
+  ok('a node with a path: a ROUTE button keyed to it (app card)', /<button type="button" class="vmrBtn" data-rtk="c:8d76bb29" aria-pressed="false"[^>]*>ROUTE<\/button>/.test(withBtn));
+  ok('a node without one: no button', !/vmrBtn/.test(noBtn));
+  ok('the web card the same', /class="vmrBtn" data-rtk="c:8d76bb29"/.test(web.ismMapCard(t1 as unknown as web.IsmDevice, RX, false, rtT1)) && !/vmrBtn/.test(web.ismMapCard(nise as unknown as web.IsmDevice, RX)));
+  ok('the key is escaped in the attribute', /data-rtk="c:a&quot;b"/.test(app.ismMapCard({ ...t1, key: 'c:a"b' }, RX, false, rtT1)));
+}
+{
 }
 
 // ── 6. THE CARDS: ROUTES SECTION ROUND TRIP, ROUTE CARD ───────────────────────────────────────────────────────────────
@@ -255,11 +288,18 @@ eq('meshDist', [meshDist(16.09), meshDist(16.09, true), meshDist(5), meshDist(5,
   const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
   const am = readFileSync(new URL('../src/utils/amateurMap.ts', import.meta.url), 'utf8');
   ok('app ISM page: MESH_ROUTE_JS carried on the ism page', mo.includes("${kind === 'ism' ? MESH_ROUTE_JS : ''}"));
-  ok('app ISM page: a tap draws the route, another clears it (onSelect → trkRoute)', mo.includes("trkSelFit(k);if(KIND==='ism')trkRoute(k);"));
+  ok('app ISM page: a tap opens the card and ZOOMS IN (the layer\'s focus), and clears another node\'s route — it never draws one',
+     mo.includes("if(KIND==='ism'){if(trkRtKey&&String(k)!==trkRtKey)trkRoute(null);") && mo.includes("if(k!=null)setTimeout(function(){try{if(trkLayer)trkLayer.focus(String(k));}catch(e){}},0);}"));
+  ok('app ISM page: the card\'s ROUTE key toggles it', mo.includes("rb.addEventListener('click',function(ev){ev.stopPropagation();trkRoute(rb.getAttribute('data-rtk'));});"));
+  ok('app: the pad\'s ROUTE key in the list, only for a node with a route', /route=\{kind === 'ism' && trkSel && trk\.items\.some\(\(it\) => it\.key === trkSel && !!\(it as \{ _rt\?: unknown \}\)\._rt\)/.test(mo)
+     && readFileSync(new URL('../src/components/TrackLiveList.tsx', import.meta.url), 'utf8').includes("{open && !!p.route && ("));
+  ok('app AMATEUR: the pad\'s ROUTE key for a chosen mesh node with a route', mo.includes('route={amSel && amateur?.mesh.some((x) => x.key === amSel && !!x.rt)'));
   ok('app ISM page: each item\'s _rt kept by key', /trkRt\[String\(a\[r0\]\.key\)\]=a\[r0\]\._rt/.test(mo));
   ok('AMATEUR pages: MESH_ROUTE_JS rides with AMATEUR_JS', /export const AMATEUR_JS = MESH_ROUTE_JS \+/.test(am));
-  ok('AMATEUR pages: a mesh marker click draws its route; the empty map clears it', am.includes("AM_MK[n.key].on('click',function(){amRouteShow(n);})") && mo.includes('amRouteBind();'));
-  ok('AMATEUR: a route shown holds the auto fit (digiFit) until FIT or cleared', /if\(s1&&s1\.on\)\{if\(!s1\.paused\)f\.pause\(\);AM_RT_HELD=true;\}/.test(am) && /if\(s0&&s0\.on&&s0\.paused\)f\.resume\(\)/.test(am));
+  ok('AMATEUR pages: a mesh marker tap opens its card and zooms in (amMeshPick) — no route yet', am.includes("AM_MK[n.key].on('click',function(){amMeshPick(n);})") && mo.includes('amRouteBind();'));
+  ok('AMATEUR: the card\'s ROUTE only on a node with a path', am.includes("+(n.rt?'<div class=\"vmrRow\"><button type=\"button\" class=\"vmrBtn\" data-amk=\"'+esc(n.key)"));
+  ok('AMATEUR: a chosen node holds the auto fit; the card closing (or the empty map) clears the route and resumes it',
+     /function amCardClosed\(\)\{if\(Date\.now\(\)-AM_SEL_AT<400\)return;if\(AM_RT\)amRouteShow\(null\);amRelease\(\);\}/.test(am) && /map\.on\('popupclose',amCardClosed\)/.test(am));
   ok('app: the maps follow the ISM list\'s units', readFileSync(new URL('../src/components/IsmPanel.tsx', import.meta.url), 'utf8').includes('ismMilesSet(u.mph)'));
 }
 
