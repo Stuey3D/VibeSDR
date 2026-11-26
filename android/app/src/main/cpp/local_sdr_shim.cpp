@@ -7746,7 +7746,8 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
         if (communityLayerOk("hfdl", off)) keep |= 1u << vibeavshare::kHfdl;
         if (!keep) return r;
         keep |= 1u << vibeavshare::kAdsc;
-        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - kAircraftAgeSec * 1000), nowMs);
+        // ★ beta96: heard within the LONGER hold (a datalink position, 30 min); aircraftRows applies each source's own
+        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - std::max(kAircraftAgeSec, kAircraftDatalinkAgeSec) * 1000), nowMs);
         for (auto& w : rows) w.srcMask &= keep;
         rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return !(w.srcMask & 0x0F); }), rows.end());
         const std::string c = aircraftCompact(rows, nowMs);
