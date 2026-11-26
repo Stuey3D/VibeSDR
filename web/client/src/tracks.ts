@@ -667,6 +667,8 @@ export class TrackView {
   private autoFitCheck(_items?: any[]) { try { this.af?.poke(); } catch (e) { console.error('[tracks] auto fit', e); } }
   /** ★ The card again from its item (a fetched text arrived for it). */
   refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
+  /** ★ beta95 the padded view [s, w, n, e] (the sea areas drawn worldwide are those in it), null before the map is made. */
+  viewBox(): [number, number, number, number] | null { try { return this.layer?.viewBox?.() ?? null; } catch { return null; } }
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
     this.refit = false;

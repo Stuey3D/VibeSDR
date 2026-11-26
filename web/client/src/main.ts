@@ -51,7 +51,7 @@ import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, s
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
-import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
+import { seaCompose, seaAreasFor, seaAreasInView, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
 import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
          type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
@@ -10103,7 +10103,8 @@ function shipKeyHtml(present: ShipLayerId[]): string {
   if (present.includes('warnings')) h += NAV_HAZARDS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id])}<span>${escapeHtml(x.words)}</span></div>`).join('')
     + NAV_MARK_ROWS.map((x) => `<div class="kr">${navMarkRowSvg(x, 16)}<span>${escapeHtml(x.words)}</span></div>`).join('');   // ★ v10 the not-working marks, as the app's legend
   if (present.includes('weather')) h += windLegendRows().map(([g, w]) => `<div class="kr">${g}<span>${escapeHtml(w)}</span></div>`).join('');
-  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m)));
+  // ★ beta95 the attribution follows the areas in VIEW (they are drawn worldwide now), the near set before the map is made
+  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasInView((navView?.open ? navView : aisView)?.viewBox() ?? null, myPos() ?? navLast.st?.rx ?? null, navLast.m)));
   return h;
 }
 /** ★★ ONE COMPOSITION for both views: the items, the RECEIVED list (a section per layer shown) and the status line.
@@ -10183,7 +10184,7 @@ function navDraw() {
   if (!navView?.open) return;
   const c = shipCompose(shipFocus, false);
   shipSetChrome(navView, c.present);
-  navView.update(c.items, c.rows, c.status, c.items.length, c.rx);
+  navView.update(c.items, c.rows, c.status, c.items.filter((i: any) => !i._nofit).length, c.rx);   // ★ beta95 the count is what was heard, not the chart (the sea areas are worldwide)
   navView.note(c.building);
 }
 /** ★ The view options both shipping views share: items carry their own icon, label and card (_ic, _lb, _cd); AIS mode's

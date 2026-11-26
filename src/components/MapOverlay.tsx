@@ -85,7 +85,7 @@ import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type
 import { langName } from '../services/transcriber';
 import { NAV_HAZARDS, NAV_HAZARD_COLOURS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../services/navtexIcons';
 import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';   // ★ V12 2026-11-02 the SHIPPING MAP
-import { seaLegendRows } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
+import { seaLegendRows, seaAttributionAll } from '../services/seaAreas';   // ★ beta95 every source: the areas are drawn worldwide   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
@@ -186,6 +186,8 @@ interface MapOverlayProps {
           /** ★★ V12 2026-11-01 the NAVTEX map: its layer keys, a card's gallery text (fetched when it opens), and TRANSCRIBE's
            *  TRANSLATE TO for the gallery's own TRANSLATE in the card ('' = the phone's language). */
           toggles?: Array<{ id: string; label: string; words: string }>; toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;
+          /** ★ beta95 the map's padded view [s, w, n, e], rounded to 2° (the sea areas in view are sent — seaCompose's view) */
+          onView?: (box: [number, number, number, number]) => void;
           cardText?: (file: string) => Promise<{ ok: boolean; text: string }>; translateTo?: string;
           /** a line over the map (the warnings index being built) — '' = none */
           note?: string;
@@ -721,7 +723,7 @@ ${isSpots ? `
       <div class="lg-row"><span style="color:#ff6b5a">&#9645;</span><span>Gale or worse</span></div>
       <div class="lg-sec">SEA AREAS</div>
       ${seaLegendRows(true).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
-      <div class="lg-row"><span></span><span style="opacity:.7">Sea areas: Met Office definitions (coast: Natural Earth) · NOAA NWS marine zones · ECCC (Open Government Licence – Canada) · DWD, © GeoBasis-DE / BKG 2021</span></div>
+      <div class="lg-row"><span></span><span style="opacity:.7">${esc(seaAttributionAll())}</span></div>
       ` : isAdsb ? `
       <div class="lg-sec">ADS-B 1090</div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
@@ -1754,6 +1756,16 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
         onSelect:function(k){trkPost({t:'trkSel',key:k==null?null:String(k)});},
         firstFit:(KIND==='avdata'||!window.VibeAutoFit)?undefined:false   // ★ beta92 the shared auto fit frames it (trkFitMake)
       });
+      /* ★★ beta95 THE SEA AREAS WORLDWIDE: the shipping maps tell React Native where the view is (padded, rounded out to 2°),
+       *  which sends the areas in it — at most once per settled move. */
+      if((KIND==='navtex'||KIND==='ais')&&trkLayer.viewBox){
+        var vbLast='',vbT=0;
+        var vbSend=function(){var b=trkLayer&&trkLayer.viewBox();if(!b)return;
+          var r=[Math.floor(b[0]/2)*2,Math.floor(b[1]/2)*2,Math.ceil(b[2]/2)*2,Math.ceil(b[3]/2)*2],k=r.join(',');
+          if(k!==vbLast){vbLast=k;trkPost({t:'trkView',b:r});}};
+        map.on('moveend',function(){clearTimeout(vbT);vbT=setTimeout(vbSend,400);});
+        setTimeout(vbSend,600);
+      }
     }catch(e){console.error('track layer could not start',e);trkLayer=null;}
     return trkLayer;
   }
@@ -1786,7 +1798,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   window.__trkPush=function(json){
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
-      cnt.textContent=String(a.length);
+      var nH=0;for(var j=0;j<a.length;j++)if(!(a[j]&&a[j]._nofit))nH++;cnt.textContent=String(nH);   // ★ beta95 what was heard, not the chart
       var l=trkMake();if(!l)return;
       var ac=acMake();
       if(ac){var rest=[],planes=[];acHexKey={};acKeyHex={};
@@ -2757,6 +2769,11 @@ export default function MapOverlay(
             if (m && (m as any).t === 'trkSel') {
               const k = (m as any).key;
               setTrkSel(typeof k === 'string' && k.length <= 40 ? k : null);
+              return;
+            }
+            if (m && (m as any).t === 'trkView') {   // ★ beta95 the view moved: the sea areas in it (numbers only, checked)
+              const b = (m as any).b;
+              if (Array.isArray(b) && b.length === 4 && b.every((v: unknown) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= 1080)) trkRef.current?.onView?.(b as [number, number, number, number]);
               return;
             }
             if (m && (m as any).t === 'trkCard') { onTrkCard(String((m as any).f ?? '').slice(0, 80), String((m as any).title ?? '').slice(0, 80)); return; }

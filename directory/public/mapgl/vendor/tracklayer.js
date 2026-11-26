@@ -37,6 +37,8 @@
  *       onCard:  function (key, el) {}                // ★ the card was drawn (or redrawn): the host fills what it fetches
  *   ★ V12 2026-11-02 (the SEA AREAS): an item may carry, without any option —
  *       _mz: 5        its icon shows from this Leaflet zoom only (a sea area's name drops before its outline)
+ *       _vb: [s, w, n, e]  ★ beta95 drawn only while this box is in (or near) the view — the worldwide sea areas: ~900 of
+ *                     them, so only the ones on screen are markers and outlines; the layer redraws them as the map moves
  *       _y: true      its icon YIELDS like a yieldGroups item (hidden where it would cover a higher icon or a name)
  *       _nofit: true  it never widens the first view (fit) and never pulses on arrival — the chart, not something heard
  *     and a shape may be { kind: 'area', rings: [[[lat, lon], …], …], minZoom, weight, fillOpacity, sig } — several
@@ -377,13 +379,41 @@
       cont.setAttribute('data-vtl-shapes', String(shapes.size - nChart));
       cont.setAttribute('data-vtl-chart', String(nChart));
     }
+    /* ★★ beta95 IN VIEW ONLY (_vb — the sea areas worldwide, Stuart 11-25: "worldwide shipping areas are fantastic… only seen
+     *  the uk ones"). An item with a box is made only while the box meets the view padded by a quarter each way (the
+     *  selected one always stays); after a move the last list is gone through again, so areas come and go as you pan. */
+    var lastList = null, vbAny = false, vbTimer = 0;
+    function viewBox() {
+      try {
+        var b = map.getBounds(), s0 = b.getSouth(), n0 = b.getNorth(), w0 = b.getWest(), e0 = b.getEast();
+        if (!(isFinite(s0) && isFinite(n0) && isFinite(w0) && isFinite(e0))) return null;
+        var ph = (n0 - s0) * 0.25, pw = (e0 - w0) * 0.25;
+        return [s0 - ph, w0 - pw, n0 + ph, e0 + pw];
+      } catch (err) { return null; }
+    }
+    function boxInView(v, vb) {
+      if (!vb || !v || v.length !== 4) return true;
+      if (vb[0] > v[2] || vb[2] < v[0]) return false;
+      if (vb[3] - vb[1] >= 360) return true;
+      for (var sh = -360; sh <= 360; sh += 360) if (vb[1] + sh <= v[3] && vb[3] + sh >= v[1]) return true;   // ★ across ±180°
+      return false;
+    }
+    function vbSoon() {
+      if (!vbAny || destroyed) return;
+      if (vbTimer) clearTimeout(vbTimer);
+      vbTimer = setTimeout(function () { vbTimer = 0; if (!destroyed && lastList) update(lastList); }, 150);
+    }
+    map.on('moveend', vbSoon);
     function update(list) {
       if (destroyed) return;
       var seen = new Set();
+      lastList = list; vbAny = false;
+      var vb = viewBox();
       for (var i = 0; i < list.length; i++) {
         var it = list[i];
         if (!it || it.key == null || !(isFinite(it.lat) && isFinite(it.lon))) continue;
         var k = String(it.key);
+        if (it._vb) { vbAny = true; if (k !== sel && !boxInView(it._vb, vb)) continue; }   // ★ beta95 off screen: not made
         seen.add(k);
         var e = items.get(k);
         var ic = iconFor(it, k === sel);
@@ -544,10 +574,13 @@
       items.clear();
       if (trailLine) try { trailLine.remove(); } catch (err) { /* gone with the map */ }
       if (rxMk) try { rxMk.remove(); } catch (err) { /* gone with the map */ }
-      try { map.off('movestart', nogOn); map.off('zoomstart', nogOn); map.off('moveend', nogOff); map.off('zoomend', nogOff); map.off('zoomend', zoomed); map.off('moveend', declutterSoon); } catch (err) { /* gone */ }
+      try { map.off('movestart', nogOn); map.off('zoomstart', nogOn); map.off('moveend', nogOff); map.off('zoomend', nogOff); map.off('zoomend', zoomed); map.off('moveend', declutterSoon); map.off('moveend', vbSoon); } catch (err) { /* gone */ }
+      if (vbTimer) { clearTimeout(vbTimer); vbTimer = 0; }
+      lastList = null;
       if (card.parentNode) card.parentNode.removeChild(card);
     }
     return { update: update, select: function (k) { select(k == null ? null : String(k), false); }, focus: focus, fit: fit, points: points, receiver: function () { return rx; },
+             viewBox: viewBox,   // ★ beta95 [s, w, n, e] the padded view the _vb items are judged against (null = unknown)
              setReceiver: setReceiver, destroy: destroy, selected: function () { return sel; },
              refreshCard: function () { cardHtml = ''; renderCard(); }, cardEl: function () { return cardBody; } };
   }

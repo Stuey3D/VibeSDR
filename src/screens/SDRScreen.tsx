@@ -3127,6 +3127,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [shipFocus, setShipFocus] = useState<ShipFocus>('navtex');
   const [shipKey, setShipKey] = useState('');
   const [shipLayers, setShipLayers] = useState<ShipLayers>(shipLayersOf(null));
+  /* ★★ beta95 THE SEA AREAS WORLDWIDE: the map's padded view [s, w, n, e] (MapOverlay 'trkView', rounded to 2°) — the
+   *  areas in it are sent to the map, so panning to Japan draws JMA's. null until the map has reported one. */
+  const [shipView, setShipView] = useState<[number, number, number, number] | null>(null);
+  const onShipView = useCallback((b: [number, number, number, number]) => {
+    setShipView((cur) => (cur && cur.every((v, i) => v === b[i]) ? cur : b));
+  }, []);
   useEffect(() => {
     AsyncStorage.multiGet(['lsv_ship_map_layers', 'lsv_nav_map_layers']).then((kv) => setShipLayers(shipLayersOf(kv[0][1], kv[1][1]))).catch(() => {});
   }, []);
@@ -12455,7 +12461,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       areas: seaAreasFor(rx, navMetRep).length }, focus);
     const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
     // ★ the SEA AREAS (services/seaAreas.ts — the web's shipCompose draws the same): outlines + names; the tint is WEATHER's
-    const sea = on('areas') ? seaCompose(rx, navMetRep, on('weather'), 'app').items : [];
+    const sea = on('areas') ? seaCompose(rx, navMetRep, on('weather'), 'app', shipView).items : [];   // ★ beta95 the areas in view
     const extra = liveView && live ? vessels.filter((v) => !live.vessels.some((x) => x.mmsi === v.mmsi)) : vessels;
     return {
       present, on, now,
@@ -12495,7 +12501,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       trail: () => Promise.resolve([] as [number, number][]),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle,
+      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
       // ★ a card's gallery text, with the read auth (the gallery viewer's own fetch)
       cardText: async (f: string) => {
         try {
@@ -12505,7 +12511,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
       translateTo: txTarget,
     };
-  }, [navReport, navWarnRep, navMetRep, navRange, shipLayers, shipFocus, shipKey, shipStore, dscGal, dscCalls, aisReport, aisOn, trkRx?.lat, trkRx?.lon, connectBase, radioAuthSuffix, txTarget]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [navReport, navWarnRep, navMetRep, navRange, shipLayers, shipFocus, shipKey, shipStore, dscGal, dscCalls, aisReport, aisOn, trkRx?.lat, trkRx?.lon, connectBase, radioAuthSuffix, txTarget, shipView]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★ V12 2026-11-02 AIS mode's map IS the SHIPPING MAP: its live ships exactly as before (EXIT AIS), and — where this
    *  server has them — the stored ships it is not hearing now, DSC and the NAVTEX layers, with the time filter. */
   const aisShipTrk = useMemo(() => {
@@ -12522,11 +12528,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       status: [aisTrk.status, sc.status, navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : ''].filter(Boolean).join(' · '),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle,
+      toggles: sc.toggles, toggled: shipLayers as Record<string, boolean>, onToggle: sc.onToggle, onView: onShipView,
       trail: (key: string) => (key.startsWith('s:') ? Promise.resolve(shipStore?.pts.get(Number(key.slice(2))) ?? []) : aisTrk.trail(key)),
       cardText: navTrk.cardText, translateTo: txTarget,
     };
-  }, [aisTrk, navTrk, navReport, navWarnRep, navMetRep, navRange, shipLayers, shipStore, dscGal, dscCalls, trkRx?.lat, trkRx?.lon, txTarget]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [aisTrk, navTrk, navReport, navWarnRep, navMetRep, navRange, shipLayers, shipStore, dscGal, dscCalls, trkRx?.lat, trkRx?.lon, txTarget, shipView]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ Open the SHIPPING MAP with `focus` first, on `key` (a DSC call pressed). */
   const openShipMap = useCallback((focus: ShipFocus, key = '', fromGallery = false) => {
     setShipFocus(focus); setShipKey(key); navFromGallery.current = fromGallery; setNavMapOpen(true);
