@@ -302,6 +302,7 @@ import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
 import { IS_TV, IS_APPLE_TV } from '../utils/tv';
 import { shownMapOf } from '../utils/mapPage';
+import { meshSortParse, meshSortOffered, MESH_SORT_STORE, type MeshSort } from '../utils/meshRoute';   // ★★ beta96 the NODES list's order
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
          type AirDesig } from '../utils/airband';
 import VTSBar, { type VtsNotifData } from '../components/VTSBar';
@@ -3273,9 +3274,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [ismSess, setIsmSess] = useState(false);   // ★★★ beta96 THIS SESSION on the mesh map (this visit's own)
   const [ismSessSt, setIsmSessSt] = useState<{ mode: string; t0: number } | null>(null);
   const [ismGalRange, setIsmGalRange] = useState('all');
+  /* ★★ beta96 the NODES list's order (Stuart 11-26): NEAREST | LATEST, per viewer, remembered — the live map and the
+   *  gallery's (meshRoute.ts meshSortRows; the web's meshSort). Offered only while the receiver's position is known. */
+  const [meshSort, setMeshSort] = useState<MeshSort>('nearest');
+  const meshSortSet = useCallback((v: string) => { const m = meshSortParse(v); setMeshSort(m); AsyncStorage.setItem(MESH_SORT_STORE, m).catch(() => {}); }, []);
   useEffect(() => {
-    AsyncStorage.multiGet(['lsv_ism_map_range', 'lsv_ism_gal_range']).then((kv) => {
-      setIsmRange(ismRangeOf(kv[0][1], true)); setIsmGalRange(ismRangeOf(kv[1][1], false));
+    AsyncStorage.multiGet(['lsv_ism_map_range', 'lsv_ism_gal_range', MESH_SORT_STORE]).then((kv) => {
+      setIsmRange(ismRangeOf(kv[0][1], true)); setIsmGalRange(ismRangeOf(kv[1][1], false)); setMeshSort(meshSortParse(kv[2][1]));
     }).catch(() => {});
   }, []);
   // ★ LIVE in the gallery's map: today's card fetched again each minute while the map is open
@@ -12523,8 +12528,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const known = ismRouteKnown([...(ismReport?.devices ?? []), ...stored], trkRx);
     return {
       items: ismMapItems(r, trkRx, ismMiles, known).map((it) => { const n = storedBy.get(it.key); return n ? { ...it, _cd: ismGalCard(n, trkRx, ismMiles, ismRouteOf(n, known, trkRx)) } : it; }),
-      rows: ismMapRows(r, trkRx, ismMiles), status: [note, ismMapStatus(r, trkRx, ismMiles)].filter(Boolean).join(' \u00b7 '),
+      rows: ismMapRows(r, trkRx, ismMiles, meshSort), status: [note, ismMapStatus(r, trkRx, ismMiles)].filter(Boolean).join(' \u00b7 '),
       empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
+      sort: meshSortOffered(meshSort, trkRx), onSort: meshSortSet, sortWhat: 'nodes',   // ★★ beta96 NEAREST | LATEST
       ranges: withSession(ISM_LIVE_RANGES, true), range: isc.t0 ? SESSION_ID : range, rangeHint: `${ISM_RANGE_HINT_LIVE} THIS SESSION: ${SESSION_WORDS}.`,
       onRange: (id: string) => {
         if (id === SESSION_ID) { setIsmSess(true); return; }
@@ -12535,7 +12541,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       toggled: othersOk ? { [OTHER_RADIOS_CHIP]: mapOthers } : undefined,
       onToggle: (id: string, v: boolean) => { if (id === OTHER_RADIOS_CHIP) mapOthersSet(v); },
     };
-  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange, ismMiles, mapRadio, mapOthers, mapOthersSet, ismSess, ismSessSt]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismReport, ismStored, trkRx?.lat, trkRx?.lon, ismFocus, ismRange, ismMiles, mapRadio, mapOthers, mapOthersSet, ismSess, ismSessSt, meshSort, meshSortSet]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ beta96 the mesh map's THIS SESSION: (re)opened, or a new band = re-entry; closed = the pick forgotten */
   const ismMapUp = shownMap === 'ism' && !ismGal;
   useEffect(() => {
@@ -12688,11 +12694,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
     const known = ismRouteKnown(ismGal?.nodes ?? [], rx);   // ★★ beta96 every day's repeaters may place a route
-    return { items: ismGalItems(nodes, rx, ismMiles, known), rows: ismGalRows(nodes, rx, ismMiles), status: `${ismGalStatus(nodes, rx, ismMiles)}${ismGal ? ' · ' + ismGal.title.split(' · ').slice(2).join(' · ') : ''}`,
+    return { items: ismGalItems(nodes, rx, ismMiles, known), rows: ismGalRows(nodes, rx, ismMiles, meshSort), sort: meshSortOffered(meshSort, rx), onSort: meshSortSet, sortWhat: 'nodes', status: `${ismGalStatus(nodes, rx, ismMiles)}${ismGal ? ' · ' + ismGal.title.split(' · ').slice(2).join(' · ') : ''}`,
              empty: 'Nothing heard with a position in this time.', focus: '', trail: () => Promise.resolve([] as [number, number][]),
              ranges: ISM_RANGES, range: ismGalRange, rangeHint: ISM_RANGE_HINT_GAL,
              onRange: (id: string) => { setIsmGalRange(id); AsyncStorage.setItem('lsv_ism_gal_range', id).catch(() => {}); } };
-  }, [ismGal, trkRx?.lat, trkRx?.lon, ismGalRange, ismMiles]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ismGal, trkRx?.lat, trkRx?.lon, ismGalRange, ismMiles, meshSort, meshSortSet]);   // eslint-disable-line react-hooks/exhaustive-deps
   const navFetch = useCallback(async (range: string): Promise<NavReport | null> => {
     try {
       const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`,

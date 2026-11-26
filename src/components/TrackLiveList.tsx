@@ -71,9 +71,12 @@ export interface TrackLiveListProps {
    *  it on the map and fits the path, again hides it. The card's own ROUTE is in the map page, which a pad cannot reach. */
   route?: { name: string; on: boolean } | null;
   onRoute?: () => void;
-  /** ★★ beta96 the AIRCRAFT tab's sort, NEAREST | LATEST — null / absent = none */
+  /** ★★ beta96 the list's sort, NEAREST | LATEST (the AIRCRAFT tab; the mesh maps' NODES, Stuart 11-26) — null / absent = none
+   *  (another tab, or no receiver position: the mesh lists are then newest first with no key — never a dead NEAREST) */
   sort?: string | null;
   onSort?: (s: string) => void;
+  /** what the sort orders, for a screen reader — 'aircraft' when absent */
+  sortWhat?: string;
   /** ★★ beta96 MESSAGES filtered to one aircraft: the words ("Messages from RYR12K") and × ALL */
   filter?: string;
   onFilterClear?: () => void;
@@ -143,7 +146,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
             <View style={s.ranges} accessibilityRole="tablist">
               {tabs.map((t) => <RangeKey key={t.id} s={s} label={`${t.label} ${t.n}`} words={`${t.label}: ${t.n}`} on={p.tab === t.id} onPress={() => p.onTab?.(t.id)} />)}
               {!!p.sort && <View style={{ width: 8 }} />}
-              {!!p.sort && (['nearest', 'latest'] as const).map((x) => <RangeKey key={x} s={s} label={x.toUpperCase()} words={`Sort the aircraft ${x === 'nearest' ? 'nearest first' : 'most recently heard first'}`}
+              {!!p.sort && (['nearest', 'latest'] as const).map((x) => <RangeKey key={x} s={s} label={x.toUpperCase()} words={`Sort the ${p.sortWhat || 'aircraft'} ${x === 'nearest' ? 'nearest first' : 'most recently heard first'}`}
                                                                                    on={p.sort === x} onPress={() => p.onSort?.(x)} />)}
             </View>
           </NavRow>

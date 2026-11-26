@@ -160,5 +160,13 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
   // ★★ beta96 the MESH ROUTE key (the card's ROUTE lives in the map page, out of the pad's reach): a ToggleKey in its own NavRow
   ok(/\{open && !!p\.route && \(\s*<NavRow>\s*<View style=\{s\.ranges\}>\s*<ToggleKey /.test(tl) && /function ToggleKey[^]*?useNavButton\(onPress\)/.test(tl),
      'TrackLiveList: the mesh ROUTE key is a pad key (ISM and AMATEUR maps)');
+  // ★★ beta96 (Stuart 11-26) the NODES list's NEAREST | LATEST key: RangeKeys in the tabs' NavRow, handed through by MapOverlay,
+  //    given by the ISM live map and the gallery's map
+  const sd = readFileSync(path.join(root, 'src/screens/SDRScreen.tsx'), 'utf8');
+  ok(/\{open && \(tabs\.length > 0 \|\| !!p\.sort\) && \(\s*<NavRow>/.test(tl) && /!!p\.sort && \(\['nearest', 'latest'\] as const\)\.map\(\(x\) => <RangeKey /.test(tl),
+     'TrackLiveList: the sort key (NEAREST | LATEST) is a pad key in its own row');
+  ok(/sort=\{trk\.sort\} onSort=\{trk\.onSort\} sortWhat=\{trk\.sortWhat\}/.test(mo), 'MapOverlay: the list is handed the sort key');
+  ok((sd.match(/sort: meshSortOffered\(meshSort, (trkRx|rx)\), onSort: meshSortSet, sortWhat: 'nodes'/g) || []).length === 2,
+     'SDRScreen: the ISM live map and the gallery map both give the NODES sort key');
 }
 process.exit(fails ? 1 : 0);
