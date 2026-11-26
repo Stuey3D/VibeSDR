@@ -33,6 +33,7 @@
  *  repeats every character), so a minute of silence means the transmission has ended, not a gap in it — and it is
  *  short enough that a reader is not left looking at "receiving" long after the station has gone quiet. */
 import { navtexLabelOf, navtexResolve, navtexStartLostLabel, navtexStartLostResolve, type NavtexResolution } from './navtexStations.generated.ts';   // ★ .ts: Node runs this file directly (scripts/test_navtex.ts)
+import { addSlice, navtexQualityDetail, navtexQualityLine, navtexSnrLine, snrOfSlices, type NavtexSnr, type NavtexSplit, type SliceAcc } from './navtexQuality.ts';
 export const NAVTEX_END_LOST_MS = 75_000;
 /** Letters/digits an orphan fragment (no header seen) must hold before it is shown as a "[start lost]" message. */
 export const ORPHAN_MIN_ALNUM = 16;
@@ -76,10 +77,16 @@ export interface NavtexMessage {
   /** ★ The decoder's OWN per-message FEC count, when the server sends one (VibeServer op 0x07, 2026-10-05) — absent
    *  from an older server, UberSDR or OpenWebRX, which leave the '_'-derived figures above as the only measure. */
   fec?: NavtexFec;
+  /** ★★ beta96 (display only): the split by the two copies — clean (both agreed) / FEC / lost, + copies disagreed — from
+   *  the 21-byte op 0x07. Absent from an older server. */
+  split?: NavtexSplit;
+  /** ★★ beta96: the SNR timeline tied to the text (op 0x08 slices) — absent from an older server, UberSDR, OpenWebRX. */
+  snr?: NavtexSnr;
 }
 
-/** clean = the RX copy read, repaired = rebuilt from the DX copy or the soft tiers, lost = printed as '_'. */
-export interface NavtexFec { clean: number; repaired: number; lost: number }
+/** clean = the RX copy read, repaired = rebuilt from the DX copy or the soft tiers, lost = printed as '_'.
+ *  ★ beta96: + agreed (both copies valid and the same) and disagreed (both valid, different) from a newer server. */
+export interface NavtexFec { clean: number; repaired: number; lost: number; agreed?: number; disagreed?: number }
 
 /** ITU-R M.540 / IMO NAVTEX Manual subject indicators (B2), short enough for a decoder-box title. */
 const SUBJECTS: Record<string, string> = {
@@ -186,7 +193,10 @@ export function navtexFileText(m: NavtexMessage, place?: NavtexPlace | null): st
              + `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC`;
   const pct = navtexLostPct(m);
   const why = navtexStationWhy(m, place);
+  // ★ beta96: the FEC split and the SNR, each only when measured (the server's gallery file says the same)
+  const q = navtexQualityLine(m.split), qd = navtexQualityDetail(m.split), sn = navtexSnrLine(m.snr, true);
   const head = `NAVTEX · ${navtexTitle(m, place)}\nReceived ${when}${pct != null ? ` · ${pct}% of characters lost` : ''}`
+             + (q ? `\n${q} (${qd})` : '') + (sn ? `\n${sn}` : '')
              + (why.length ? `\nWhy: ${why.join('; ')}` : '');
   return `${head}\n\n${navtexBody(m)}\n`;
 }
@@ -297,12 +307,18 @@ export class NavtexAssembler {
   /** ★ The fades the message arriving has survived. */
   private gaps = 0;
   private gapMs = 0;
+  /** ★★ beta96: the SNR slices of `seg` (raw offsets where each ENDED), the part-made one, and the slice length. */
+  private sl: SliceAcc[] = [];
+  private pend = { sig: 0, noise: 0, at: 0, n: 0 };
+  private sliceSec = 1;
+  private clearSlices(): void { this.sl = []; this.pend = { sig: 0, noise: 0, at: 0, n: 0 }; this.sliceSec = 1; }
   /** Bumped on every visible change, so a UI can tell cheaply whether to redraw. */
   version = 0;
 
   reset(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
     this.scanFrom = 0; this.finished = []; this.liveCleared = false; this.locked = null; this.pendingCut = null; this.gaps = 0; this.gapMs = 0; this.version++;
+    this.clearSlices();
   }
 
   /** ★★ CLR, and a RETUNE (NickB, 2026-10-12: "changing from 518 to 490 when it's mid way through a message so it gets
@@ -314,6 +330,17 @@ export class NavtexAssembler {
   clearLive(): void {
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = 0; this.lastTextAt = 0;
     this.scanFrom = 0; this.liveCleared = this.finished.length > 0; this.locked = null; this.pendingCut = null; this.gaps = 0; this.gapMs = 0; this.version++;
+    this.clearSlices();
+  }
+
+  /** ★★ beta96: one SNR slice from the server's decoder (op 0x08: a second's signal and noise, dBFS). Kept while a
+   *  message — or text that may become one — is arriving, at the character count so far (the timeline is tied to the
+   *  text). Between messages there is nothing to tie it to: dropped. Returns true when the live message changed. */
+  slice(sigDb: number, noiseDb: number): boolean {
+    if (!this.inMsg && !this.seg) return false;
+    this.sliceSec = addSlice(this.sl, this.pend, this.sliceSec, sigDb, noiseDb, this.seg.length);
+    this.version++;
+    return true;
   }
 
   /** Feed decoded characters as they arrive. */
@@ -335,6 +362,7 @@ export class NavtexAssembler {
     if (!cur) return false;
     this.finish({ ...cur, endLost: true, done: true });
     this.seg = ''; this.inMsg = false; this.hdr = null; this.scanFrom = 0;
+    this.clearSlices();
     this.version++;
     return true;
   }
@@ -357,6 +385,7 @@ export class NavtexAssembler {
       // ★ A later loss after a blip moves the cut: the blip's text is the message's.
       if (this.inMsg || alnum(this.seg) >= ORPHAN_MIN_ALNUM) { if (!this.pendingCut || this.pendingCut.relocked) this.pendingCut = { at: this.seg.length, atMs: nowMs, relocked: false }; return false; }
       this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = nowMs; this.scanFrom = 0;
+      this.clearSlices();
       this.version++;
       return false;
     }
@@ -367,6 +396,9 @@ export class NavtexAssembler {
       if (lost >= LOCK_BLIP_MS) {
         const at = this.pendingCut.at;
         this.seg = this.seg.slice(0, at) + '\n' + navtexGapMarker(lost) + '\n';
+        // ★ beta96: the fade's slices (and the hunting garbage's) cover the gap marker — that line reads red
+        for (const x of this.sl) if (x.at > at) x.at = this.seg.length;
+        if (this.pend.at > at) this.pend.at = this.seg.length;
         this.gaps++; this.gapMs += lost;
         this.scanFrom = Math.min(this.scanFrom, at);
         this.pendingCut = { at, atMs: this.pendingCut.atMs, relocked: true };
@@ -385,9 +417,12 @@ export class NavtexAssembler {
     this.pendingCut = null;
     if (!cut) return false;
     const body = this.seg.slice(0, cut.at);
+    for (const x of this.sl) x.at = Math.min(x.at, body.length);   // ★ the lost stretch's slices end the message
+    this.pend.at = Math.min(this.pend.at, body.length);
     let closed = false;
     if (this.inMsg || alnum(body) >= ORPHAN_MIN_ALNUM) { this.finish(this.build(body, true, true)); closed = true; }
     this.seg = ''; this.inMsg = false; this.hdr = null; this.segStartedAt = nowMs; this.scanFrom = 0;
+    this.clearSlices();
     this.version++;
     return closed;
   }
@@ -415,6 +450,11 @@ export class NavtexAssembler {
     const m = this.finished[this.finished.length - 1];
     if (!m || !m.done || m.endLost || m.startLost || m.fec) return false;
     m.fec = { clean: c.clean, repaired: c.repaired, lost: c.lost };
+    // ★ beta96: the longer count splits it by the two copies (display only)
+    if (typeof c.agreed === 'number' && typeof c.disagreed === 'number') {
+      const kept = c.clean + c.repaired;
+      m.split = { clean: Math.min(c.agreed, kept), fec: kept - Math.min(c.agreed, kept), lost: c.lost, disagreed: c.disagreed };
+    }
     this.version++;
     return true;
   }
@@ -426,9 +466,13 @@ export class NavtexAssembler {
     if (this.finished.length > 2) this.finished.splice(0, this.finished.length - 2);
   }
 
-  private build(body: string, done: boolean, endLost: boolean): NavtexMessage {
+  private build(body: string, done: boolean, endLost: boolean, upto = Infinity): NavtexMessage {
     const text = cleanText(body);
     const { lost, chars } = countLoss(text);
+    // ★ beta96: the slices that ended within this body (all of them for the live message), and a part-made last one
+    const sv = this.pend.n ? [...this.sl, { sig: this.pend.sig / this.pend.n, noise: this.pend.noise / this.pend.n, at: this.pend.at }] : this.sl;
+    let n = 0; while (n < sv.length && sv[n].at <= upto) n++;
+    const snr = n ? snrOfSlices(sv.slice(0, n), body, text, this.sliceSec) : null;
     if (this.inMsg && this.hdr) {
       const id = this.hdr.id;
       const L = (c: string) => (c >= 'A' && c <= 'Z' ? c : null);
@@ -437,10 +481,11 @@ export class NavtexAssembler {
         serial: /^[0-9]{2}$/.test(id.slice(2)) ? id.slice(2) : null,
         text, startLost: false, endLost, done, startedAt: this.hdr.startedAt, lost, chars,
         ...(this.gaps ? { gaps: this.gaps, gapMs: this.gapMs } : {}),
+        ...(snr ? { snr } : {}),
       };
     }
     return { id: null, station: null, subject: null, serial: null, text, startLost: true, endLost, done,
-             startedAt: this.segStartedAt, lost, chars, ...(this.gaps ? { gaps: this.gaps, gapMs: this.gapMs } : {}) };
+             startedAt: this.segStartedAt, lost, chars, ...(this.gaps ? { gaps: this.gaps, gapMs: this.gapMs } : {}), ...(snr ? { snr } : {}) };
   }
 
   private cur: { v: number; m: NavtexMessage | null } = { v: -1, m: null };
@@ -472,16 +517,24 @@ export class NavtexAssembler {
       const cutAt = this.pendingCut && found.kind === 'hdr' ? this.pendingCut.at : -1;
       this.pendingCut = null;
       const before = this.seg.slice(0, cutAt >= 0 ? Math.min(cutAt, found.at) : found.at);
+      // ★ beta96: the slices that ended inside `before` are its (an NNNN's up to its last N); the rest move on
+      const sUpto = found.kind === 'end' ? found.end : before.length;
       if (found.kind === 'end') {
         // NNNN: the message (or a "[start lost]" fragment, if it holds real text) is complete.
-        if (this.inMsg || alnum(before) >= ORPHAN_MIN_ALNUM) this.finish(this.build(before, true, false));
+        if (this.inMsg || alnum(before) >= ORPHAN_MIN_ALNUM) this.finish(this.build(before, true, false, sUpto));
         this.inMsg = false; this.hdr = null;
       } else {
         // A new header: whatever was arriving ends here, its NNNN lost.
-        if (this.inMsg || alnum(before) >= ORPHAN_MIN_ALNUM) this.finish(this.build(before, true, true));
+        if (this.inMsg || alnum(before) >= ORPHAN_MIN_ALNUM) this.finish(this.build(before, true, true, sUpto));
         this.inMsg = true;
         this.hdr = { id: found.id, startedAt: nowMs };
         this.gaps = 0; this.gapMs = 0;
+      }
+      if (found.kind === 'end') this.clearSlices();   // between messages
+      else {
+        this.sl = this.sl.filter((x) => x.at > sUpto).map((x) => ({ ...x, at: Math.max(0, x.at - found!.end) }));
+        this.pend.at = Math.max(0, this.pend.at - found.end);
+        if (!this.sl.length && !this.pend.n) this.sliceSec = 1;
       }
       this.seg = this.seg.slice(found.end);
       this.segStartedAt = nowMs;
