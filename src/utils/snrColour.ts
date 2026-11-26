@@ -124,7 +124,7 @@ const signedDb = (v: number) => (v < 0 ? '−' + Math.abs(v) : String(v));
 export function snrText(mode: SnrMode, db: unknown): string {
   if (!num(db)) return '';
   const r = Math.round(db);
-  return `${r < 0 ? '−' : SNR_SCALES[mode].signed && r > 0 ? '+' : ''}${Math.abs(r)} dB`;
+  return `${r < 0 ? '−' : (SNR_SCALES[mode] as SnrScale).signed && r > 0 ? '+' : ''}${Math.abs(r)} dB`;
 }
 /** The chip's tooltip: "SNR 12 dB, 3 dB over this mode's threshold (amber) — <what>. Decodes from about 9 dB: red under 12,
  *  green from 15." */
