@@ -20,6 +20,7 @@
 
 #include "local_sdr_shim.h"
 #include "vibe_beast.h"   // ★★ V12 beta96 the flight-tracker settings are validated at the save
+#include "vibe_feeds.h"   // ★★ V12 beta96 server-level aircraft feed sources (validated at the save)
 #include "fd_passing.h"   // ★ vibe::fdListen — the hand-off socket is proved before a radio port goes local-only
 #include "directory.h"
 #include <functional>
@@ -235,6 +236,9 @@ struct Opts {
     /** ★★★ RTL-TCP SERVER MODE (--rtltcp-port N): the radio also served as a plain rtl_tcp server on N, LAN clients
      *  only — the same front door the Android app's RTL-TCP protocol uses (LocalSdrShim::startRtlTcpDoor). 0 = off. */
     int         rtlTcpPort = 0;
+    /** ★★ beta96 --beast-in host:port: run this process as an ADS-B-only receiver reading a Beast output (the former "Beast
+     *  feed radio", kept as a DIAGNOSTIC / TEST mode — owners add feeds at server level now: ServerConfig::aircraftFeeds). */
+    std::string beastIn;
     bool        useUsb  = true;          // default: drive the dongle directly
     int         radio   = 0;             // index into the FLAT list (dongles, then RSPs, then HF+)
     std::string radioSerial;             // ★ preferred: identity that does not move
@@ -620,6 +624,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--no-web")    o.web      = false;
         else if (a == "--rtltcp-port") o.rtlTcpPort = std::atoi(need(i));
         else if (a == "--admin-pass")     o.adminPass       = need(i);
+        else if (a == "--beast-in")       o.beastIn         = need(i);   // ★★ beta96 diagnostic: ADS-B-only from a Beast output
         else if (a == "--agc-lock")       o.agcLock         = 1;   // ★ the owner's AGC lock, from the command line (tests)
         else if (a == "--trusted-proxies") o.trustedProxies = need(i);
         else if (a == "--session-limit")  o.sessionLimitMin = std::atoi(need(i));
@@ -1048,6 +1053,11 @@ static int startIcomFrom(const Opts& o, const std::string& port, const std::stri
 /** ★★ V12 beta96 THE BEAST FEED RADIO this process is to be, or nullptr: the radio named (`--radio-serial`) when its
  *  entry's driver is "beast"; on a SIMPLE server (no front door, no radio named), the primary radio when it is one. */
 static const vsconfig::RadioConfig* beastRadioFor(const Opts& o, bool frontDoor, const vsconfig::ServerConfig& cfg) {
+    if (!o.beastIn.empty()) {   // ★★ beta96 the diagnostic / test mode (--beast-in): the config's radios are not consulted
+        static vsconfig::RadioConfig r;
+        r.serial = "beast-cli"; r.driver = "beast"; r.beastIn = o.beastIn; r.label = "Beast input"; r.enabled = r.configured = true;
+        return &r;
+    }
     if (frontDoor || !o.useUsb) return nullptr;
     if (o.radioGiven) {
         for (const auto& r : cfg.radios) if (r.serial == o.radioSerial && r.driver == "beast") return &r;
@@ -1247,7 +1257,21 @@ void applySpotReporting(const vsconfig::ServerConfig& c, const vsconfig::RadioCo
     vibe::LocalSdrShim::setDmrIdLookup(c.dmrIdLookup, spotHttpGet);
 }
 std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
-std::string g_feedLastApplied;   // ★★ V12 beta96: …and the adsbFeed (sharing ADS-B with flight trackers)
+std::string g_feedLastApplied;   // ★★ V12 beta96: …the server-level hub (adsbShare) + sources (aircraftFeeds) last applied
+/** ★★ V12 beta96 FEEDS ARE NOT RADIOS (docs/v12/ADSB-FEED.md): the server-level aircraft sources and flight-tracker hub
+ *  live in ONE process — the front door, or a Simple server's only process. A radio process behind the door sends its
+ *  own ADS-B replies to the door's loopback ingest instead. Live; an unchanged config is not re-applied. */
+static void applyAircraftFeeds(const vsconfig::ServerConfig& c, bool frontDoor) {
+    const bool owner = frontDoor || !vsconfig::needsFrontDoor(c);
+    if (!owner) { vibe::LocalSdrShim::setAdsbIngest(handoffDir()); return; }
+    const std::string k = c.aircraftFeeds + "\x01" + c.adsbShare + (frontDoor ? "D" : "S");
+    if (k == g_feedLastApplied) return;
+    g_feedLastApplied = k;
+    std::string e;
+    vibe::LocalSdrShim::setAircraftFeeds(c.aircraftFeeds, e, frontDoor);
+    std::string fe;
+    vibe::LocalSdrShim::setAdsbFeed(c.adsbShare, fe);
+}
 std::string g_dxLastApplied;   // ★★★ V12: …and the dxScan (the idle DX scanner)
 /** ★★★ V12: this radio's DX log file — one per radio, beside the gallery in the data dir. */
 static std::string dxLogFileFor(const std::string& serial) {
@@ -2535,6 +2559,15 @@ int main(int argc, char** argv) {
              *     mid-edit (the setup page saving while the launcher started the unit) it is a non-event; either way the
              *     answer is a plain sentence naming THIS serial, not an impersonation. The fallback stays for a person
              *     running `vibeserver` by hand with no radio named, and for `--radio <index>`. */
+            /* ★★ V12 beta96 FEEDS ARE NOT RADIOS: a b96-adsbfeed "Beast feed radio" (serial beast-N) that the config migration
+             *  turned into a server-level feed — a systemd vibeserver@beast-1 left enabled, say — has nothing to be. It says so
+             *  and leaves with 0: a decision, not a crash for systemd to restart. */
+            if (!mine && wantBySerialFlag && wantSerial.rfind("beast-", 0) == 0) {
+                std::printf("VibeServer: %s was an ADS-B feed radio; it is now a server-level aircraft feed (Setup \xe2\x86\x92 "
+                            "Server \xe2\x86\x92 Aircraft feeds) \xe2\x80\x94 nothing to start\n", wantSerial.c_str());
+                std::fflush(stdout);
+                std::_Exit(0);
+            }
             if (!mine && wantBySerialFlag) {
                 std::fprintf(stderr, "VibeServer: radio %s is not in %s (or is being changed there) — not starting it. "
                                      "Its settings come from the setup page.\n", wantSerial.c_str(), g_configPath.c_str());
@@ -3492,6 +3525,11 @@ int main(int argc, char** argv) {
                 vibe::beast::Config fc; std::string fe;
                 if (!vibe::beast::parseConfig(r.adsbFeed, fc, fe)) { err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + fe; return false; }
             }
+            // ★★ beta96 the server-level ones: refused in words, never half-applied
+            { vibe::beast::Config fc; std::string fe;
+              if (!vibe::beast::parseConfig(next.adsbShare, fc, fe)) { err = "Share ADS-B with flight trackers \xe2\x80\x94 " + fe; return false; } }
+            { std::vector<vibe::feeds::SourceCfg> fv; std::string fe;
+              if (!vibe::feeds::parseSources(next.aircraftFeeds, fv, fe)) { err = "Aircraft feeds \xe2\x80\x94 " + fe; return false; } }
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
@@ -3531,7 +3569,7 @@ int main(int argc, char** argv) {
                     // ★★ V12 background decoding, live — the tick picks it up within two seconds (validated above).
                     { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); g_bgLastApplied = r.bgDecode; }
                     { std::string de; LocalSdrShim::setDxScan(r.dxScan, de); g_dxLastApplied = r.dxScan; }   // ★★★ V12 DX scanner, live
-                    { std::string fe; LocalSdrShim::setAdsbFeed(r.adsbFeed, fe); g_feedLastApplied = r.adsbFeed; }   // ★★ beta96 flight trackers, live
+                    applyAircraftFeeds(next, g_amFrontDoor.load());   // ★★ beta96 server-level feeds + flight trackers, live
                     LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
                     LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
                     // ★ V12 the USRP's owner options, live: a new reference / correction / bandwidth with no restart.
@@ -3593,8 +3631,7 @@ int main(int argc, char** argv) {
                     g_bgLastApplied = next.radios[(size_t)pi].bgDecode;
                     std::string de; LocalSdrShim::setDxScan(next.radios[(size_t)pi].dxScan, de);
                     g_dxLastApplied = next.radios[(size_t)pi].dxScan;
-                    std::string fe; LocalSdrShim::setAdsbFeed(next.radios[(size_t)pi].adsbFeed, fe);   // ★★ beta96
-                    g_feedLastApplied = next.radios[(size_t)pi].adsbFeed;
+                    applyAircraftFeeds(next, g_amFrontDoor.load());   // ★★ beta96
                 }
             }
             if (next.configured) LocalSdrShim::setConfigured(true);
@@ -3752,7 +3789,10 @@ int main(int argc, char** argv) {
             /* ★★ V12 beta96 ADD AN "ADS-B BEAST FEED (from another receiver)" RADIO (Stuart 11-26): added by hand — nothing
              *  to detect. {"action":"addbeast","beastIn":"host:port","label":"…"} → a radio entry of its own, driver "beast",
              *  serial beast-N, served at once (the restart). Allowed on every platform: it is not hardware. */
-            if (action == "addbeast" || action == "beastaddr") {
+            /* ★★ beta96 FEEDS ARE NOT RADIOS (Stuart 11-26): "addbeast" from an older page or app now adds a SERVER-LEVEL
+             *  source (Beast, connect, ADS-B) — no radio entry, no restart. "beastaddr" (a feed radio's tab) is gone with the
+             *  radios. */
+            if (action == "addbeast") {
                 std::string h; int bp = 0;
                 std::string why;
                 if (!vibe::beast::parseHostPort(field("beastIn"), h, bp, why)) return fail(400, why);
@@ -3760,33 +3800,17 @@ int main(int argc, char** argv) {
                 if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
                 std::string label = field("label");
                 if (label.size() > 40) label.resize(40);
-                if (action == "beastaddr") {   // ★ a Beast feed radio's address changed on its tab
-                    vsconfig::RadioConfig* t = nullptr;
-                    for (auto& r : next.radios) if (r.serial == serial && r.driver == "beast") t = &r;
-                    if (!t) return fail(400, "no Beast feed radio with that serial");
-                    t->beastIn = vibe::beast::hostPortText(h, bp);
-                    if (!label.empty()) t->label = label;
-                } else {
-                    if (next.radios.size() >= 16) return fail(400, "too many radios");
-                    std::string ser;
-                    for (int n = 1; n < 100 && ser.empty(); ++n) {
-                        const std::string c = "beast-" + std::to_string(n);
-                        bool used = false; for (const auto& r : next.radios) if (r.serial == c) used = true;
-                        if (!used) ser = c;
-                    }
-                    vsconfig::RadioConfig r;
-                    r.serial = ser; r.driver = "beast"; r.enabled = true; r.configured = true;
-                    r.label = label.empty() ? "ADS-B from " + h : label;
-                    r.beastIn = vibe::beast::hostPortText(h, bp);
-                    { const int u = std::atoi(field("users").c_str()); r.users = u >= 1 && u <= 200 ? u : 10; }
-                    next.radios.push_back(r);
-                }
+                std::vector<vibe::feeds::SourceCfg> v;
+                if (!vibe::feeds::parseSources(next.aircraftFeeds, v, why)) return fail(400, why);
+                for (const auto& x : v) if (x.dir == "connect" && x.host == h && x.port == bp) return std::string("{\"ok\":true,\"restart\":false}");
+                if ((int)v.size() >= vibe::feeds::kMaxSources) return fail(400, "at most " + std::to_string(vibe::feeds::kMaxSources) + " aircraft feeds");
+                vibe::feeds::SourceCfg n; n.fmt = "beast"; n.dir = "connect"; n.host = h; n.port = bp; n.label = "adsb"; n.name = label;
+                v.push_back(n);
+                next.aircraftFeeds = vibe::feeds::sourcesJson(v);
                 if (!vsconfig::saveServer(g_configPath, next, err)) return fail(400, err);
                 g_serverConfig = next;
-                if (g_applyDirectory) g_applyDirectory(next, true);
-                g_restartNotBefore.store(nowMonoSecs() + 1.5);
-                g_restartRequested.store(true);
-                return std::string("{\"ok\":true,\"restart\":true}");
+                applyAircraftFeeds(next, g_amFrontDoor.load());
+                return std::string("{\"ok\":true,\"restart\":false}");
             }
 #if defined(__APPLE__)
             {   // ★ beta96 a Beast feed radio is not hardware the Mac app manages: pause, resume and remove it here like elsewhere
@@ -5716,8 +5740,8 @@ int main(int argc, char** argv) {
             }
             g_dxLastApplied = dj;
             // ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h) — this radio's, never the front door's
-            if (!frontDoorOnly && mine) { std::string fe; LocalSdrShim::setAdsbFeed(mine->adsbFeed, fe); }
-            g_feedLastApplied = mine ? mine->adsbFeed : std::string();
+            // ★★ beta96 …now SERVER-level (feeds are not radios): the door or a Simple server owns them; a radio behind the
+            //    door forwards its replies to the door. After the aircraft table's directory is known (below) — so later.
             if (g_handheldChild) {
                 /* ★★★ THE HANDHELD'S GALLERY IS THE CARD (§0.1): Gallery/<DECODER>/<UTC> - <kHz> kHz <MODE>.ext, temp +
                  *  rename, the index in the engine's own data directory. Its size is half the card (the owner's
@@ -5740,6 +5764,7 @@ int main(int argc, char** argv) {
             //    ADS-B, ACARS, VDL2 and HFDL into one file in the RUNTIME directory (a tmpfs here: /run/vibeserver), so the
             //    AVIATION MAP on any radio shows each aircraft once with every source that heard it — never the SD card.
             LocalSdrShim::setAircraftShareDir(handoffDir());
+            applyAircraftFeeds(g_serverConfig, frontDoorOnly);   // ★★ beta96 server-level aircraft feeds + flight-tracker hub
             LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
             LocalSdrShim::setGalleryRadioLabel(mine ? (mine->label.empty() ? mine->driver : mine->label) : std::string());
             /* ★★ V12 beta92 WHICH RADIO HEARD IT (vibe_log_radio.h, docs/v12/LOG-RADIO-FILTER.md): every log entry this
@@ -6320,12 +6345,7 @@ int main(int argc, char** argv) {
                                 LocalSdrShim::setDxScan(mine->dxScan, de);
                                 std::printf("VibeServer: DX scanner settings re-read from %s\n", g_configPath.c_str());
                             }
-                            if (mine && mine->adsbFeed != g_feedLastApplied) {   // ★★ V12 beta96 flight trackers, the same way
-                                g_feedLastApplied = mine->adsbFeed;
-                                std::string fe;
-                                LocalSdrShim::setAdsbFeed(mine->adsbFeed, fe);
-                                std::printf("VibeServer: ADS-B flight-tracker sharing re-read from %s\n", g_configPath.c_str());
-                            }
+                            applyAircraftFeeds(fresh, frontDoorOnly);   // ★★ V12 beta96 server-level feeds + flight trackers, the same way
                             if (mine && o.bgDecode.empty() && mine->bgDecode != g_bgLastApplied) {
                                 g_bgLastApplied = mine->bgDecode;
                                 std::string be;

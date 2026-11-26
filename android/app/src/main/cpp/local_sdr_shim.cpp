@@ -213,6 +213,31 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "vibe_dvsig.h"               // ★ V12 DV signalling: DMR / D-STAR / YSF / NXDN / dPMR identities, NEVER voice (docs/v12/DV-SIGNALLING.md)
 #include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
 #include "vibe_beast.h"             // ★★ V12 beta96: share ADS-B with flight trackers (Beast server + push feeds)
+#include "vibe_feeds.h"             // ★★ V12 beta96: server-level aircraft feed sources (Beast / BaseStation, connect / listen)
+static std::atomic<bool> g_feedsOwner{false};   // ★★ beta96 this process owns the server-level aircraft feeds (setAircraftFeeds)
+/** ★ The feeds for anyone (labels and states, no addresses) and the banner — this process's own, or the owner's file. */
+static void feedsPublic(std::string& feedsJson, std::string& warn) {
+    if (g_feedsOwner.load()) {
+        auto& fs = vibe::feeds::FeedSet::shared();
+        if (fs.size()) { feedsJson = fs.publicJson(); warn = fs.banner(); }
+        return;
+    }
+    static std::mutex m; static double at = -1; static std::string cj, cw;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(m);
+    if (now - at >= 2.0) {   // ★ one small read per 2 s per process, whoever asks
+        at = now; cj.clear(); cw.clear();
+        const std::string s = vibe::feeds::readStatusFile(vibeavshare::table().dir(), vibeavshare::wallMs() / 1000);
+        vibe::antswitch::Json j;
+        if (!s.empty() && vibe::antswitch::parseJson(s, j)) {
+            if (const auto* f = j.get("feeds")) { const size_t a = s.find("\"feeds\":"); if (a != std::string::npos && f->kind == vibe::antswitch::Json::Arr) {
+                // the array text as written (between "feeds": and ,"warn")
+                const size_t b = s.find(",\"warn\":", a); if (b != std::string::npos) cj = s.substr(a + 8, b - a - 8); } }
+            cw = j.str("warn");
+        }
+    }
+    feedsJson = cj; warn = cw;
+}
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_lrpt_burn.h"         // ★ V12 METEOR LRPT: a picture with its map outline burnt in (?outline=1)
@@ -28501,6 +28526,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 || path0.rfind("/vibeserver/gallery", 0) == 0
                 // ★★ V12 beta94 the COMMUNITY MAP — the machine's shared tables and gallery, like the two above
                 || path0.rfind("/vibeserver/community", 0) == 0
+                // ★★ V12 beta96 the SHARED AIRCRAFT TABLE is the machine's (every radio + the server-level feeds the door owns)
+                || path0.rfind("/vibeserver/aircraft.json", 0) == 0
                 // ★ The shortwave schedule is a MACHINE-wide file (/var/lib/vibeserver/eibi.csv),
                 //   shared by every radio process, and the setup page that asks for it is served
                 //   by this door. Refusing it here made the page report "could not reach the
@@ -30199,8 +30226,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  "available" (the radio could run ADS-B; a row only there). Answered by the RADIO (/r/<serial>/…). Admin-gated:
              *  it names the readers' addresses and the owner's destinations. */
             if (what == "adsbfeed") {
-                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
-                reply(200, "OK", LocalSdrShim::adsbFeedStatusJson());
+                // ★★ beta96 the hub and the feed sources are SERVER-level: the front door (or a Simple server) answers
+                if (decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                std::string j = LocalSdrShim::adsbFeedStatusJson();
+                j.pop_back();
+                j += ",\"sources\":" + LocalSdrShim::aircraftFeedsStatusJson() + ",\"owner\":" + (g_feedsOwner.load() ? "true" : "false") + "}";
+                reply(200, "OK", j);
                 return;
             }
             if (what == "adsbrange") {
@@ -31238,6 +31269,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     //    operator, logo, country (vibe_aircraft_info.h: a cache read here; the lookups on its own
                     //    decoder-priority thread, never this one)
                     vibeavinfo::extraFn());
+            }
+            /* ★★ V12 beta96 the server-level aircraft feeds (vibe_feeds.h): which sources this server has, their state
+             *  (labels and counts — never an address) and the banner the AIR & SEA map shows when one is down: "feeds":[…],
+             *  "feedWarn":"ADS-B source lost — reconnecting… · HFDL still live". */
+            {
+                std::string fj, fw;
+                feedsPublic(fj, fw);
+                if (!fj.empty() && fj != "[]" && !body.empty() && body.back() == '}') {
+                    body.pop_back();
+                    body += ",\"feeds\":" + fj;
+                    if (!fw.empty()) body += ",\"feedWarn\":\"" + vibe::beast::jsonEsc(fw) + "\"";
+                    body += '}';
+                }
             }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n"
                           "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: "
@@ -45478,6 +45522,48 @@ void LocalSdrShim::setCommunityDoorRadios(const std::vector<std::string>& blocke
     }
     { std::lock_guard<std::mutex> lk(g_communitySecsMtx()); g_communitySecs.clear(); }   // ★ the layers changed: rebuild
     LOGI("community map: the front door answers for %zu radio%s", v.size(), v.size() == 1 ? "" : "s");
+}
+/* ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (vibe_feeds.h). See the header. */
+bool LocalSdrShim::setAircraftFeeds(const std::string& json, std::string& err, bool ingest) {
+    std::vector<vibe::feeds::SourceCfg> v;
+    if (!vibe::feeds::parseSources(json, v, err)) { LOGI("[aircraft feeds] %s \xe2\x80\x94 not applied", err.c_str()); return false; }
+    auto& fs = vibe::feeds::FeedSet::shared();
+    static std::once_flag once;
+    std::call_once(once, [&fs] {
+        fs.setLog([](const std::string& l) { LOGI("%s", l.c_str()); });
+        fs.setHub(&vibe::beast::Hub::shared());
+    });
+    fs.setDir(vibeavshare::table().dir());
+    fs.setReceiver(g_bgLat.load(), g_bgLon.load());
+    fs.setIngest(ingest);
+    g_feedsOwner.store(true);
+    fs.configure(v);
+    LOGI("[aircraft feeds] %zu source%s%s", v.size(), v.size() == 1 ? "" : "s", ingest ? " + the radios' own ADS-B over loopback" : "");
+    return true;
+}
+void LocalSdrShim::setAdsbIngest(const std::string& dir) {
+    static std::atomic<bool> started{false};
+    if (started.exchange(true)) return;
+    std::thread([dir] {
+        int was = -1;
+        for (;;) {
+            const int p = vibe::feeds::readIngestPort(dir);
+            if (p != was) {
+                was = p;
+                vibe::beast::Config c;
+                if (p > 0) { c.push = true; c.feeds.push_back({"127.0.0.1", p, true, "", false}); }
+                vibe::beast::Timing t; t.reduceSec = 0; t.backoffMin = 2; t.backoffMax = 30; t.activeGrace = 10;   // ★ everything, quickly back
+                std::string e; LocalSdrShim::setAdsbFeed(vibe::beast::toJson(c), e);   // ★ hooks the decoder's sink once
+                vibe::beast::Hub::shared().setTiming(t);
+                LOGI("[ADS-B] this radio's replies %s", p > 0 ? ("go to the front door's flight-tracker hub (127.0.0.1:" + std::to_string(p) + ")").c_str() : "are not forwarded (no hub on this server)");
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+        }
+    }).detach();
+}
+std::string LocalSdrShim::aircraftFeedsStatusJson() {
+    if (g_feedsOwner.load()) return vibe::feeds::FeedSet::shared().statusJson();
+    return "[]";
 }
 void LocalSdrShim::setAircraftShareDir(const std::string& dir) {
     vibeavshare::table().setDir(dir);

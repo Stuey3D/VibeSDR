@@ -661,8 +661,10 @@ private:
                     pendingFR_ = std::vector<uint8_t>();
                     chunkFRMsgs = pendingFRMsgs_; pendingFRMsgs_ = 0;
                 }
-                active = active_.load(std::memory_order_relaxed) || pendingFMsgs_ || chunkF;
-                if (chunkF) lastActive_ = now;   // ★ a feed source keeps the push links up like a running ADS-B decoder
+                // ★ beta96 frames arriving ARE ADS-B running somewhere — a feed source, or a radio's replies over the front
+                //   door's loopback ingest — so they keep the push links up like a running decoder (with the grace)
+                if (chunk || chunkF) lastActive_ = now;
+                active = active_.load(std::memory_order_relaxed);
                 lastActive = lastActive_;
                 inHosts = inputHosts_;
             }

@@ -203,10 +203,10 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-adsbd-'));
 for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 const port = await freePort(), ADMIN = 'adsb-delta-test';
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, adminPass: ADMIN, port,
-  radios: [{ serial: 'beast-1', driver: 'beast', label: 'Synthetic sky', beastIn: `127.0.0.1:${fport}`, enabled: true, configured: true, users: 250 }] }));
+  radios: [] }));   // ★ beta96 feeds are not radios: the ADS-B-only process is the diagnostic --beast-in mode
 const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logf = path.join(dir, 'server.log');
-const srv = spawn('nice', ['-n', '10', BIN, '--port', String(port), '--admin-pass', ADMIN], { env, stdio: ['ignore', fs.openSync(logf, 'w'), fs.openSync(logf, 'a')] });
+const srv = spawn('nice', ['-n', '10', BIN, '--port', String(port), '--admin-pass', ADMIN, '--beast-in', `127.0.0.1:${fport}`, '--users', '250'], { env, stdio: ['ignore', fs.openSync(logf, 'w'), fs.openSync(logf, 'a')] });
 const kids: Ws[] = [];
 const results: string[] = [];
 try {

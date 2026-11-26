@@ -526,20 +526,33 @@ public:
         { std::lock_guard<std::mutex> lk(m_); ingest = ingest_; }
         if (ingest) { SourceCfg in; in.fmt = "beast"; in.dir = "listen"; in.port = 0; in.label = "adsb"; in.internal = true; in.name = "this server's radios"; want.push_back(in); }
         std::string k; for (const auto& c : want) k += key(c) + ";";
+        bool keyStale;
         {
             std::lock_guard<std::mutex> lk(m_);
             if (k == key_) return true;
+            keyStale = key_ == "\x01";   // ★ setAllow (a test) changed every listener's rule: start them all again
             key_ = k;
         }
-        stopSources();
+        // ★ a source whose settings did not change keeps running (its connection, its aircraft) — only the changed go
+        std::vector<std::unique_ptr<Source>> old;
+        { std::lock_guard<std::mutex> lk(m_); old = std::move(src_); }
         std::vector<std::unique_ptr<Source>> made;
         beast::Hub* hub; std::function<void(const std::string&)> log; double la, lo;
         { std::lock_guard<std::mutex> lk(m_); hub = hub_; log = log_; la = rxLat_; lo = rxLon_; }
         std::function<bool(const std::string&)> allow; { std::lock_guard<std::mutex> lk(m_); allow = allow_; }
-        for (const auto& c : want) {
-            made.emplace_back(new Source(c, hub, log));
-            if (allow && !c.internal) made.back()->listener().setAllow(allow);
-            made.back()->start(la, lo);
+        const bool keep = !keyStale;
+        std::vector<std::unique_ptr<Source>> slot(want.size());
+        for (size_t i = 0; i < want.size(); ++i)
+            if (keep) for (auto& o : old) if (o && key(o->cfg()) == key(want[i])) { slot[i] = std::move(o); break; }
+        for (auto& o : old) if (o) o->stop();   // ★ the ones going close first: a listener's port is free for its successor
+        old.clear();
+        for (size_t i = 0; i < want.size(); ++i) {
+            if (!slot[i]) {
+                slot[i].reset(new Source(want[i], hub, log));
+                if (allow && !want[i].internal) slot[i]->listener().setAllow(allow);
+                slot[i]->start(la, lo);
+            }
+            made.push_back(std::move(slot[i]));
         }
         {
             std::lock_guard<std::mutex> lk(m_);
@@ -622,11 +635,6 @@ private:
         std::string o = "[";
         for (auto& s : src_) { if (s->cfg().internal) continue; if (o.size() > 1) o += ','; o += s->statusJson(owner); }
         return o + "]";
-    }
-    void stopSources() {
-        std::vector<std::unique_ptr<Source>> old;
-        { std::lock_guard<std::mutex> lk(m_); old = std::move(src_); }
-        for (auto& s : old) s->stop();
     }
     void startHousekeeping() {
         std::lock_guard<std::mutex> lk(m_);

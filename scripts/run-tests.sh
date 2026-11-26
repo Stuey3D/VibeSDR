@@ -1695,10 +1695,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★★ beta96 THE ADS-B BEAST FEED RADIO (docs/v12/ADSB-FEED.md): a server whose only radio reads a synthetic dump1090 (no SDR),
-#    one beside a fake RTL, add/remove through sdr-change, the outage banner and its logs. Local sockets only. ~60 s.
-printf '\n\033[1m── ADS-B Beast feed radio (end to end) ──\033[0m\n'
-VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-beast-feed.mjs; rc=$?
+# ★★ beta96 SERVER-LEVEL AIRCRAFT FEEDS (docs/v12/ADSB-FEED.md): a synthetic dump1090 (Beast) + dumphfdl (SBS, connecting in)
+#    on a full server beside a fake RTL: the feed-radio migration, one row per aircraft with both sources, the feeds in
+#    aircraft.json, the banner, the hub forwarding byte-faithfully (never HFDL), the loop guard. Local sockets only. ~40 s.
+printf '\n\033[1m── server-level aircraft feeds (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-aircraft-feeds.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta96 THE ADS-B DELTA PROTOCOL through the real server + its MEASUREMENT: an older client and a delta client side by
 #    side on a synthetic 150-aircraft Beast sky (KB/s per message type), the resync, 100 delta listeners' CPU. ~4 min.
