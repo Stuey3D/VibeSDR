@@ -354,40 +354,120 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          which does all things server related ... anything not specifically radio hardware related").
          ★ The shortwave schedule lives here too: it is ONE download shared by every radio. -->
     <div id="serverPane">
-      <!-- ★★ beta88: AN ANDROID PHONE'S SERVER ONLY (androidPrune shows them; .androidOnly is never drawn elsewhere).
-           What only the phone can change, read-only (androidDeviceCard), and the phone's own three server settings. -->
-      <div class="card androidOnly" id="androidDevCard"></div>
-      <div class="card androidOnly" id="androidSrvCard">
-        <h2>This phone's server</h2>
-        <label><input type="checkbox" id="androidWebServer"> <span class="lbl">Serve the web client</span>
-          <div class="hint">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>
-        <label><input type="checkbox" id="androidCompress"> <span class="lbl">Compress the spectrum and audio for the app</span>
-          <div class="hint">On is right for nearly everyone; off sends far more data.</div></label>
-        <label><span class="lbl">Mode</span>
-          <select id="androidAdvanced">
-            <option value="0">Simple &mdash; plug in and share</option>
-            <option value="1">Advanced &mdash; shared, managed, public</option>
-          </select>
-          <div class="hint" id="androidAdvancedHint"></div></label>
+      <!-- ★★★ b96-bgsplit THE SERVER TAB ORDER (Stuart 11-26): radio order · benchmark + processor · (admin password / PIN:
+           set at first setup, no second control here) · networking and location (Wi-Fi, network, location, port, reverse
+           proxy, the directory, SSH) · sharing (community map, PSK Reporter, ADS-B feeders) · audio · (frame rate: per radio,
+           on each radio's tab since 2026-10-11) · shortwave schedule (EiBi); then this phone's / Windows' own cards and the
+           landing-screen message. scripts/test-setup-order.mjs pins it. -->
+
+      <!-- ★★ ONE SHARING SWITCH (Stuart, 2026-10-16). The Portable had its own "Share with the world" card here —
+           "Enable the tunnel" was the same switch as "List this server publicly", without the name. It went;
+           its "after a restart" option moved under that switch for every server (Advertise on VibeSDR.net). -->
+
+      <!-- ★★★ WHAT THIS BOX CAN CARRY, AT THE TOP (Stuart, 2026-09-19). Every setting below is a promise about
+           work this machine will have to do, and until it has been measured nobody — owner or us — knows which
+           of those promises it can keep. On VibeServer Lite this runs ITSELF at first setup and switches red
+           features off; everywhere else it is a button, because a full-sized box is assumed to cope.
+           ★★ It is NOT free to run: the radio goes off the air for a few minutes and the server restarts
+              afterwards, so the page says so before the owner presses it rather than after. -->
+      <!-- ★★ RADIO ORDER — display only. The tabs above, the landing page, the public directory and
+           the VibeSDR app list the radios in this order; no radio's port changes with it. -->
+      <div class="card" id="orderCard" style="display:none">
+      <h2>Radio order</h2>
+      <p class="why">The order your radios are listed in — on this page, on the landing page, in the public
+         directory and in the VibeSDR app. Press and hold a radio, then drag it into place (or select it and use
+         the arrow keys). Moving a radio here never changes its port.</p>
+      <div id="orderList" role="list"></div>
+      <div class="hint" id="orderMsg"></div>
       </div>
-      <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
-           Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
-           signed in (one permission prompt to turn on, one to turn off); "starts when you sign in" = the owner's own
-           sign-in list, no prompt. ON by default at the first "Save and start". -->
-      <div class="card hide" id="winAutoCard">
-        <h2>Start with Windows</h2>
-        <label style="display:flex;align-items:center;gap:10px;margin:0">
-          <input type="checkbox" id="winAutoOn" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Start VibeServer when Windows starts</span>
-        </label>
-        <p class="why" id="winAutoWhat" style="margin:10px 0 0"></p>
-        <div class="hint" id="winAutoHint"></div>
-        <p style="margin:8px 0 0" id="winAutoAlt" class="hide">
-          <button type="button" class="ghost" id="winAutoSignin" style="padding:6px 12px;font-size:13px">Start when I sign in instead</button>
-          <button type="button" class="ghost" id="winAutoBoot" style="padding:6px 12px;font-size:13px">Start at boot instead</button>
-        </p>
-        <div class="hint" id="winAutoMsg"></div>
+
+      <div class="card" id="benchCard">
+      <h2>What this box can carry</h2>
+      <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
+         can actually keep up with. Every decoder is timed on a test signal it decodes. The radio is off the air
+         while it runs (a few minutes; the result says how long) and the server comes back by itself when it
+         finishes.</p>
+      <div class="row">
+        <button id="benchRun" type="button">Run quick benchmark</button>
+        <span class="note" id="benchWhen"></span>
       </div>
+      <!-- ★★★ V12 THE WIDE BENCHMARK (Stuart, 2026-11-18) — shown only where a configured radio can do wide rates (a USRP,
+           HackRF, SDRplay RSP or Airspy R2 / Mini: the server's vsWideOffer). The capture rows at 8 MS/s and up to the rate
+           the owner picks from THAT radio's own list (their verdict is the USRP's rate gate), DAB's cutting at that rate,
+           the three locked-range profiles at it, then the USB bus test. A radio picker only with several.
+           ★★★ 2026-11-19 (Stuart: "quick benchmark I would say should be based on RTL's") the quick run measures no rate
+           above an RTL's — everything wider is here. -->
+      <div id="benchWideWrap" class="hide" style="margin-top:10px">
+        <div class="row">
+          <button id="benchWideRun" type="button">Run wide benchmark</button>
+          <select id="benchWideRadio" class="hide" aria-label="Radio"></select>
+          <select id="benchWideRate" aria-label="Sample rate"></select>
+        </div>
+        <div class="note">High sample rate SDR detected. As well as the quick benchmark, run the wide benchmark at the
+          sample rate you intend to use. The quick benchmark measures what an RTL-SDR would ask of this machine (up to
+          2.4&nbsp;MS/s); every rate above that is measured here, and a USRP is offered its faster rates once this has
+          shown the machine keeps up.</div>
+      </div>
+      <div class="note" id="benchMsg"></div>
+      <!-- ★★ THE BAR. Two minutes of nothing looks like a hang (Stuart, 2026-09-20: "us humans need to see
+           things working"), and it names the test it is on, not just a percentage.
+           ★ These three ids are what benchBar() writes to — it returns quietly when they are missing, which is
+             how the first cut shipped with the script running and no bar on the page at all. -->
+      <div id="benchBarWrap" class="hide" style="margin-top:10px">
+        <div style="height:10px;border-radius:5px;background:#241a10;overflow:hidden;border:1px solid var(--line)">
+          <div id="benchBar" style="height:100%;width:0%;background:var(--amber);transition:width .4s ease"></div>
+        </div>
+        <div class="note" id="benchStep" style="margin-top:5px"></div>
+      </div>
+      <!-- ★★★ V12 THE THREE LOCKED-RANGE PROFILES, in Stuart's shape ("CPU/RAM:" then a line each) — the quick run's, then
+           each wide run's (benchProfileLines / benchWideLines). -->
+      <div class="note hide" id="benchProfiles" style="margin-top:10px"></div>
+      <div class="note hide" id="benchWideResult" style="margin-top:10px"></div>
+      <table id="benchTable" class="hide" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
+        <tbody id="benchRows"></tbody>
+      </table>
+      <div class="note hide" id="benchAdvice"></div>
+      </div>
+
+      <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK
+           can carry, and there is one uplink however many radios are plugged in — asking per radio
+           invited three answers to a question that has one, and three ways to get it wrong
+           (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
+<!-- ★ The waterfall rate moved to each radio's own tab (Stuart, 2026-10-11) — see "Waterfall rate" there. -->
+
+    <!-- ★★★ THE "Power saving" CARD IS GONE WITH THE FEATURE IT GOVERNED. It forced the client's
+         30-second idle slowdown on, and that slowdown has been removed: it inferred "nobody is
+         looking" from "nobody is touching", which on a waterfall is backwards — watching a band
+         fill in is the one thing you do without touching anything (Stuart, 2026-09-24).
+         ★★ The benchmark had already taken the ground from under it: 5, 10 and 20 fps are close
+            enough in CPU that the saving was small even when it worked.
+         ★ The owner's real lever is untouched and is the one that matters on small hardware — the
+           FRAME RATE setting, which caps the whole machine (a Pi Zero is happier at 5). -->
+
+      <div class="card">
+      <h2>Processor</h2>
+      <p class="why">How hard this machine is allowed to run.</p>
+      <label><span class="lbl">CPU governor</span>
+        <select id="cpuGovernor">
+          <option value="performance">Full speed — recommended for a receiver</option>
+          <option value="ondemand">On demand — saves a little power</option>
+          <option value="schedutil">Schedutil — runs coolest, for a portable or battery host</option>
+          <option value="powersave">Processor's own scaling — runs cooler, for a battery host</option>
+          <option value="default">Leave the system setting alone</option>
+        </select>
+        <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
+          VibeServer spreads its work across every core, so they all look half-idle and the Pi
+          clocks itself <em>down</em> — measured at 1.9&nbsp;GHz instead of 2.4, cool and
+          un-throttled, while the audio broke up. Full speed costs a couple of watts.
+          <br><b>Choose full speed for a shared receiver</b>, where several people are each being
+          given their own tuner. <b>On demand suits a battery or solar host</b> serving one
+          listener from a dongle — far less work, and the watts matter more than the headroom.
+          <b>Schedutil</b> follows the work most closely and runs the coolest: a Pi 3A+ served WFM
+          stereo with Advanced RDS cleanly at 0.9&nbsp;GHz under it, where on demand sat at 1.2.
+          <br>On an Intel or AMD PC the processor usually manages its own speed, so the choice there is
+          <b>full speed</b> or <b>the processor's own scaling</b>. Only what this machine offers is listed.</div></label>
+      <div class="hint" id="govNow"></div>
+    </div>
       <!-- ★★★ THE POCKET BOX'S WI-FI (2026-10-10) — drawn ONLY on the pocket image (the server says so
            at /vibeserver/pocket/hello); every other install never sees it. FIRST on the Server tab,
            because on a pocket box it is the one question that decides whether the owner can find the
@@ -516,95 +596,6 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <div class="wifiDone hide" id="wifiDone"></div>
       </div>
       </div>
-
-      <!-- ★★★ ENABLE SSH (Stuart, 2026-10-25, 11.0.11) — a Portable only, OFF by default. The card ships with sshd off
-           because its first network is an OPEN hotspot. The owner switches it on here with a password THEY type; the box
-           sets it for its "vibe" login and keeps only the system's hash on the settings partition, so it survives a
-           restart. Not offered while the open setup hotspot is up (anyone on it could try the password). -->
-      <div class="card hide" id="sshCard">
-      <h2>SSH</h2>
-      <p class="why" id="sshText" style="white-space:pre-line"></p>
-      <div id="sshOnForm" class="hide">
-        <label>SSH password for the <b>vibe</b> login
-          <input type="password" id="sshPass" autocomplete="new-password" maxlength="128"></label>
-        <label>The same again
-          <input type="password" id="sshPass2" autocomplete="new-password" maxlength="128"></label>
-        <p class="note" style="margin:6px 0 10px">At least 8 characters. Choose one you do not use anywhere else — it also
-           unlocks <code>sudo</code> on this box. It is not kept anywhere you could read it back, so remember it.</p>
-        <button type="button" id="sshOnBtn">Turn SSH on</button>
-      </div>
-      <button type="button" class="ghost hide" id="sshOffBtn">Turn SSH off</button>
-      <span class="note" id="sshMsg" style="margin-left:10px"></span>
-      </div>
-
-      <!-- ★★ ONE SHARING SWITCH (Stuart, 2026-10-16). The Portable had its own "Share with the world" card here —
-           "Enable the tunnel" was the same switch as "List this server publicly", without the name. It went;
-           its "after a restart" option moved under that switch for every server (Advertise on VibeSDR.net). -->
-
-      <!-- ★★★ WHAT THIS BOX CAN CARRY, AT THE TOP (Stuart, 2026-09-19). Every setting below is a promise about
-           work this machine will have to do, and until it has been measured nobody — owner or us — knows which
-           of those promises it can keep. On VibeServer Lite this runs ITSELF at first setup and switches red
-           features off; everywhere else it is a button, because a full-sized box is assumed to cope.
-           ★★ It is NOT free to run: the radio goes off the air for a few minutes and the server restarts
-              afterwards, so the page says so before the owner presses it rather than after. -->
-      <!-- ★★ RADIO ORDER — display only. The tabs above, the landing page, the public directory and
-           the VibeSDR app list the radios in this order; no radio's port changes with it. -->
-      <div class="card" id="orderCard" style="display:none">
-      <h2>Radio order</h2>
-      <p class="why">The order your radios are listed in — on this page, on the landing page, in the public
-         directory and in the VibeSDR app. Press and hold a radio, then drag it into place (or select it and use
-         the arrow keys). Moving a radio here never changes its port.</p>
-      <div id="orderList" role="list"></div>
-      <div class="hint" id="orderMsg"></div>
-      </div>
-
-      <div class="card" id="benchCard">
-      <h2>What this box can carry</h2>
-      <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
-         can actually keep up with. Every decoder is timed on a test signal it decodes. The radio is off the air
-         while it runs (a few minutes; the result says how long) and the server comes back by itself when it
-         finishes.</p>
-      <div class="row">
-        <button id="benchRun" type="button">Run quick benchmark</button>
-        <span class="note" id="benchWhen"></span>
-      </div>
-      <!-- ★★★ V12 THE WIDE BENCHMARK (Stuart, 2026-11-18) — shown only where a configured radio can do wide rates (a USRP,
-           HackRF, SDRplay RSP or Airspy R2 / Mini: the server's vsWideOffer). The capture rows at 8 MS/s and up to the rate
-           the owner picks from THAT radio's own list (their verdict is the USRP's rate gate), DAB's cutting at that rate,
-           the three locked-range profiles at it, then the USB bus test. A radio picker only with several.
-           ★★★ 2026-11-19 (Stuart: "quick benchmark I would say should be based on RTL's") the quick run measures no rate
-           above an RTL's — everything wider is here. -->
-      <div id="benchWideWrap" class="hide" style="margin-top:10px">
-        <div class="row">
-          <button id="benchWideRun" type="button">Run wide benchmark</button>
-          <select id="benchWideRadio" class="hide" aria-label="Radio"></select>
-          <select id="benchWideRate" aria-label="Sample rate"></select>
-        </div>
-        <div class="note">High sample rate SDR detected. As well as the quick benchmark, run the wide benchmark at the
-          sample rate you intend to use. The quick benchmark measures what an RTL-SDR would ask of this machine (up to
-          2.4&nbsp;MS/s); every rate above that is measured here, and a USRP is offered its faster rates once this has
-          shown the machine keeps up.</div>
-      </div>
-      <div class="note" id="benchMsg"></div>
-      <!-- ★★ THE BAR. Two minutes of nothing looks like a hang (Stuart, 2026-09-20: "us humans need to see
-           things working"), and it names the test it is on, not just a percentage.
-           ★ These three ids are what benchBar() writes to — it returns quietly when they are missing, which is
-             how the first cut shipped with the script running and no bar on the page at all. -->
-      <div id="benchBarWrap" class="hide" style="margin-top:10px">
-        <div style="height:10px;border-radius:5px;background:#241a10;overflow:hidden;border:1px solid var(--line)">
-          <div id="benchBar" style="height:100%;width:0%;background:var(--amber);transition:width .4s ease"></div>
-        </div>
-        <div class="note" id="benchStep" style="margin-top:5px"></div>
-      </div>
-      <!-- ★★★ V12 THE THREE LOCKED-RANGE PROFILES, in Stuart's shape ("CPU/RAM:" then a line each) — the quick run's, then
-           each wide run's (benchProfileLines / benchWideLines). -->
-      <div class="note hide" id="benchProfiles" style="margin-top:10px"></div>
-      <div class="note hide" id="benchWideResult" style="margin-top:10px"></div>
-      <table id="benchTable" class="hide" style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px">
-        <tbody id="benchRows"></tbody>
-      </table>
-      <div class="note hide" id="benchAdvice"></div>
-      </div>
       <div class="card">
       <h2>On your network</h2>
       <p class="why">How people find this server once it is running.</p>
@@ -680,6 +671,105 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          it can see (BeaconDB) and names the place from OpenStreetMap, so it needs Wi-Fi and an internet
          connection; without them it keeps the last place it found, or shows the home location. Only the
          place is kept.</div>
+    </div>
+
+      <div class="card">
+        <h2>Network port</h2>
+        <p class="why">The one port this machine listens on. Leave it alone unless something else
+          already uses it, or your router needs a particular one.</p>
+        <label><span class="lbl">Port</span>
+          <input type="number" id="srvPort" min="1024" max="65535" placeholder="48000">
+          <div class="hint" id="srvPortHint">This is the only port you need to open on a router or
+            firewall.</div></label>
+      </div>
+
+      <div class="card">
+      <h2>Behind a reverse proxy</h2>
+      <p class="why">Only fill this in if something sits in front of VibeServer.</p>
+      <label><span class="lbl">Trusted proxy addresses</span>
+        <input id="trustedProxies" placeholder="e.g. 127.0.0.1, 10.0.0.0/8">
+        <div class="hint">If you run VibeServer behind nginx, Caddy or a tunnel, every listener
+          arrives from the <em>proxy</em>, so they all share one address: a single ban blocks
+          everybody, every visitor shows the same country, and one wrong admin password can lock
+          out the world. Naming the proxy here lets the server read the real address from the
+          <code>X-Forwarded-For</code> header instead.
+          <br><b>Leave it empty unless you have a proxy.</b> That header is just text the client
+          sends, so a server that believed it from anyone would let a stranger claim any address
+          they liked and walk straight through the ban list. Nothing is read from it until you
+          name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
+
+      <!-- ★★★ "CONNECTIONS", NOT "RADIOS". The rule is one radio per address, but the phone's
+           server has exactly ONE radio, so "several radios" described nothing an Android owner
+           could do — and even on a multi-radio machine what an owner is really deciding is how
+           many CONNECTIONS one address may hold (Stuart, 2026-08-22). The wire field and the
+           behaviour are unchanged; this is what it is called. -->
+      <!-- ★★★ A NUMBER, NOT A SWITCH. "One" and "as many as you like" were the only two answers a
+           boolean could give, and neither suits a comparison site: a V4 and a V4L on the same
+           aerial exist so a visitor can hear one against the other, which needs TWO — while still
+           not letting one address take every radio (Stuart, 2026-08-26). -->
+      <label><span class="lbl">Connections from one browser</span>
+        <select id="maxRadiosPerIp">
+          <option value="1">1 — refuse a second connection (recommended)</option>
+          <option value="2">2 — allow a pair, for comparing two radios</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="0">No limit — one browser may hold every radio</option>
+        </select>
+        <div class="hint">How many connections one <em>browser</em> may hold at the same time — radios on
+          this machine, or tabs on one radio (on a locked range, each tab is another VFO). Beyond the
+          number you set, the next connection is refused and told which radio it is already on. Counted
+          per browser, not per address, so a household or a mobile network sharing one address still
+          gets in (the phone apps are still counted by address until they send a browser id). It exists because a single visitor took <em>both</em> radios of a public
+          receiver at once by opening a tab on each.
+          <br><b>2 is the setting for a comparison site</b> — two radios on one aerial, so a visitor
+          can hear one against the other in two tabs, and still cannot occupy the rest.
+          <br>A household no longer needs it raised for the web client: two people on one broadband
+          line are two browsers. The phone apps still count by address for now.
+          <br><b>No limit is reasonable on a private server and unwise on a public one</b> —
+          one person could occupy every radio you own.
+          <br>★ Two legitimate reasons to allow it. An <b>Apple Watch shares its paired iPhone's
+          address</b>, so the pair count as one listener even though they are two devices. And
+          <b>behind a proxy you have not named above</b>, every listener arrives as the proxy — so
+          the rule would refuse everyone after the first. Naming the proxy is the better fix.</div></label>
+      <!-- ★★★ DECODERS AT ONCE (B6, 2026-09-30). On a locked range every listener now runs their OWN
+           decoder on their OWN frequency, so it is the machine's CPU — across every radio on it —
+           that limits them. The benchmark times each decoder here and fills this in at first setup. -->
+      <label><span class="lbl">Decoders at once</span>
+        <input type="number" id="decoderMax" min="0" max="64" placeholder="automatic">
+        <div class="hint">How many decoders &mdash; RTTY, NAVTEX, WEFAX, SSTV, time signals, FT8 &mdash; this
+          machine runs at the same time, across all its radios. On a locked range each listener
+          decodes their own frequency; on a shared dial everyone shares one decoder, which counts
+          once. The next one past the limit is refused and the listener is told why. The benchmark
+          above measures each decoder on this machine and sets this for you; blank uses a cautious
+          figure for this hardware.</div></label>
+      <!-- ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS (docs/v12/RTTY-SKIMMER.md §3). The benchmark fills it in at first setup. -->
+      <label><span class="lbl">RTTY skimmer: signals set up at once</span>
+        <input type="number" id="rttySkimWorkers" min="0" max="8" placeholder="automatic">
+        <div class="hint">The RTTY skimmer lists every RTTY signal it hears straight away, then works out each one's
+          speed, shift and polarity in turn. This is how many it works out at the same time &mdash; one on a Raspberry
+          Pi 2 or a handheld, two on a Pi 4 or 5, four on a PC or Mac. The benchmark above sets it for you; blank uses
+          the figure for this hardware.</div></label>
+      <!-- ★★ V12 THE GALLERY (2026-10-22): what the decoders heard — background decoding's, and a listener's own.
+           MACHINE-level: one folder every radio writes into. The owner sets its size beside the space left on the
+           disk (Stuart: "showing the REMAINING disk/SD space beside it"); when it is full the OLDEST items go. ★ 2026-11-01:
+           the space is THE limit — no item count ("we want the limit to be the assigned space"). -->
+      <label><span class="lbl">Gallery size</span>
+        <span style="display:flex;gap:10px;align-items:center">
+          <input type="number" id="galleryMb" min="0" max="100000" step="10" style="max-width:120px"> <span>MB</span>
+          <span class="hint" id="galleryDisk" style="margin:0"></span></span>
+        <div class="hint">NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through
+          (the <b>GALLERY</b> button in the decoders menu). The gallery keeps <b>everything</b> until this space is
+          full, then removes the <b>oldest</b> items first, so the newest night is always there. There is no limit on
+          the number of items, only on the space (which counts the gallery's own index too). <b>0</b> keeps nothing.
+          On an SD card, a modest figure saves the card: 100 MB holds about 50,000 NAVTEX messages.</div></label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="galleryPublic" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Everyone may see the gallery</span></label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="gallerySaveLive" style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Keep listeners' decodes in the gallery too</span></label>
+      <div class="hint">Off: only background decoding is kept. Each item says whether it was decoded in the background
+        or by a listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.</div>
     </div>
 
       <div class="card">
@@ -795,126 +885,25 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <div class="hint" id="dirStatus"></div>
       </div>
 
-      <div class="card">
-        <h2>Message on the landing screen</h2>
-        <p class="why">Something you want every visitor to read before they connect &mdash; house
-          rules, a note about how this server behaves, or a link if people can help pay for it.
-          This one <b>stays up</b>: it is not the temporary notice you post when you are working
-          on the server.</p>
-        <label><span class="lbl">Message</span>
-          <textarea id="landingMessage" rows="3" maxlength="500"
-            placeholder="e.g. The waterfall slows to 5 fps when nobody is listening. That is normal — turn it off in the menu."></textarea></label>
-        <div class="hint"><code>**bold**</code> and <code>*italic*</code> are allowed &mdash; nothing else.
-          No HTML; a link goes in the box below.</div>
-        <div class="row">
-          <label><span class="lbl">Link (optional)</span>
-            <input type="url" id="landingLinkUrl" placeholder="https://…"></label>
-          <label><span class="lbl">Link text</span>
-            <input type="text" id="landingLinkLabel" maxlength="60" placeholder="e.g. Support this server"></label>
-        </div>
-        <div class="hint" id="landingLinkHint">Only <code>http://</code> and <code>https://</code>
-          links are accepted &mdash; anything else is dropped when you save.</div>
-        <p class="why">Shown to strangers on the landing screen, so nothing private here.</p>
+      <!-- ★★★ ENABLE SSH (Stuart, 2026-10-25, 11.0.11) — a Portable only, OFF by default. The card ships with sshd off
+           because its first network is an OPEN hotspot. The owner switches it on here with a password THEY type; the box
+           sets it for its "vibe" login and keeps only the system's hash on the settings partition, so it survives a
+           restart. Not offered while the open setup hotspot is up (anyone on it could try the password). -->
+      <div class="card hide" id="sshCard">
+      <h2>SSH</h2>
+      <p class="why" id="sshText" style="white-space:pre-line"></p>
+      <div id="sshOnForm" class="hide">
+        <label>SSH password for the <b>vibe</b> login
+          <input type="password" id="sshPass" autocomplete="new-password" maxlength="128"></label>
+        <label>The same again
+          <input type="password" id="sshPass2" autocomplete="new-password" maxlength="128"></label>
+        <p class="note" style="margin:6px 0 10px">At least 8 characters. Choose one you do not use anywhere else — it also
+           unlocks <code>sudo</code> on this box. It is not kept anywhere you could read it back, so remember it.</p>
+        <button type="button" id="sshOnBtn">Turn SSH on</button>
       </div>
-
-      <div class="card">
-        <h2>Network port</h2>
-        <p class="why">The one port this machine listens on. Leave it alone unless something else
-          already uses it, or your router needs a particular one.</p>
-        <label><span class="lbl">Port</span>
-          <input type="number" id="srvPort" min="1024" max="65535" placeholder="48000">
-          <div class="hint" id="srvPortHint">This is the only port you need to open on a router or
-            firewall.</div></label>
+      <button type="button" class="ghost hide" id="sshOffBtn">Turn SSH off</button>
+      <span class="note" id="sshMsg" style="margin-left:10px"></span>
       </div>
-
-      <div class="card">
-      <h2>Behind a reverse proxy</h2>
-      <p class="why">Only fill this in if something sits in front of VibeServer.</p>
-      <label><span class="lbl">Trusted proxy addresses</span>
-        <input id="trustedProxies" placeholder="e.g. 127.0.0.1, 10.0.0.0/8">
-        <div class="hint">If you run VibeServer behind nginx, Caddy or a tunnel, every listener
-          arrives from the <em>proxy</em>, so they all share one address: a single ban blocks
-          everybody, every visitor shows the same country, and one wrong admin password can lock
-          out the world. Naming the proxy here lets the server read the real address from the
-          <code>X-Forwarded-For</code> header instead.
-          <br><b>Leave it empty unless you have a proxy.</b> That header is just text the client
-          sends, so a server that believed it from anyone would let a stranger claim any address
-          they liked and walk straight through the ban list. Nothing is read from it until you
-          name the proxy you trust. Addresses or ranges, separated by commas.</div></label>
-
-      <!-- ★★★ "CONNECTIONS", NOT "RADIOS". The rule is one radio per address, but the phone's
-           server has exactly ONE radio, so "several radios" described nothing an Android owner
-           could do — and even on a multi-radio machine what an owner is really deciding is how
-           many CONNECTIONS one address may hold (Stuart, 2026-08-22). The wire field and the
-           behaviour are unchanged; this is what it is called. -->
-      <!-- ★★★ A NUMBER, NOT A SWITCH. "One" and "as many as you like" were the only two answers a
-           boolean could give, and neither suits a comparison site: a V4 and a V4L on the same
-           aerial exist so a visitor can hear one against the other, which needs TWO — while still
-           not letting one address take every radio (Stuart, 2026-08-26). -->
-      <label><span class="lbl">Connections from one browser</span>
-        <select id="maxRadiosPerIp">
-          <option value="1">1 — refuse a second connection (recommended)</option>
-          <option value="2">2 — allow a pair, for comparing two radios</option>
-          <option value="3">3</option>
-          <option value="4">4</option>
-          <option value="0">No limit — one browser may hold every radio</option>
-        </select>
-        <div class="hint">How many connections one <em>browser</em> may hold at the same time — radios on
-          this machine, or tabs on one radio (on a locked range, each tab is another VFO). Beyond the
-          number you set, the next connection is refused and told which radio it is already on. Counted
-          per browser, not per address, so a household or a mobile network sharing one address still
-          gets in (the phone apps are still counted by address until they send a browser id). It exists because a single visitor took <em>both</em> radios of a public
-          receiver at once by opening a tab on each.
-          <br><b>2 is the setting for a comparison site</b> — two radios on one aerial, so a visitor
-          can hear one against the other in two tabs, and still cannot occupy the rest.
-          <br>A household no longer needs it raised for the web client: two people on one broadband
-          line are two browsers. The phone apps still count by address for now.
-          <br><b>No limit is reasonable on a private server and unwise on a public one</b> —
-          one person could occupy every radio you own.
-          <br>★ Two legitimate reasons to allow it. An <b>Apple Watch shares its paired iPhone's
-          address</b>, so the pair count as one listener even though they are two devices. And
-          <b>behind a proxy you have not named above</b>, every listener arrives as the proxy — so
-          the rule would refuse everyone after the first. Naming the proxy is the better fix.</div></label>
-      <!-- ★★★ DECODERS AT ONCE (B6, 2026-09-30). On a locked range every listener now runs their OWN
-           decoder on their OWN frequency, so it is the machine's CPU — across every radio on it —
-           that limits them. The benchmark times each decoder here and fills this in at first setup. -->
-      <label><span class="lbl">Decoders at once</span>
-        <input type="number" id="decoderMax" min="0" max="64" placeholder="automatic">
-        <div class="hint">How many decoders &mdash; RTTY, NAVTEX, WEFAX, SSTV, time signals, FT8 &mdash; this
-          machine runs at the same time, across all its radios. On a locked range each listener
-          decodes their own frequency; on a shared dial everyone shares one decoder, which counts
-          once. The next one past the limit is refused and the listener is told why. The benchmark
-          above measures each decoder on this machine and sets this for you; blank uses a cautious
-          figure for this hardware.</div></label>
-      <!-- ★★ V12 THE RTTY SKIMMER'S SEARCH WORKERS (docs/v12/RTTY-SKIMMER.md §3). The benchmark fills it in at first setup. -->
-      <label><span class="lbl">RTTY skimmer: signals set up at once</span>
-        <input type="number" id="rttySkimWorkers" min="0" max="8" placeholder="automatic">
-        <div class="hint">The RTTY skimmer lists every RTTY signal it hears straight away, then works out each one's
-          speed, shift and polarity in turn. This is how many it works out at the same time &mdash; one on a Raspberry
-          Pi 2 or a handheld, two on a Pi 4 or 5, four on a PC or Mac. The benchmark above sets it for you; blank uses
-          the figure for this hardware.</div></label>
-      <!-- ★★ V12 THE GALLERY (2026-10-22): what the decoders heard — background decoding's, and a listener's own.
-           MACHINE-level: one folder every radio writes into. The owner sets its size beside the space left on the
-           disk (Stuart: "showing the REMAINING disk/SD space beside it"); when it is full the OLDEST items go. ★ 2026-11-01:
-           the space is THE limit — no item count ("we want the limit to be the assigned space"). -->
-      <label><span class="lbl">Gallery size</span>
-        <span style="display:flex;gap:10px;align-items:center">
-          <input type="number" id="galleryMb" min="0" max="100000" step="10" style="max-width:120px"> <span>MB</span>
-          <span class="hint" id="galleryDisk" style="margin:0"></span></span>
-        <div class="hint">NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through
-          (the <b>GALLERY</b> button in the decoders menu). The gallery keeps <b>everything</b> until this space is
-          full, then removes the <b>oldest</b> items first, so the newest night is always there. There is no limit on
-          the number of items, only on the space (which counts the gallery's own index too). <b>0</b> keeps nothing.
-          On an SD card, a modest figure saves the card: 100 MB holds about 50,000 NAVTEX messages.</div></label>
-      <label style="display:flex;gap:8px;align-items:center">
-        <input type="checkbox" id="galleryPublic" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Everyone may see the gallery</span></label>
-      <label style="display:flex;gap:8px;align-items:center">
-        <input type="checkbox" id="gallerySaveLive" style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Keep listeners' decodes in the gallery too</span></label>
-      <div class="hint">Off: only background decoding is kept. Each item says whether it was decoded in the background
-        or by a listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.</div>
-    </div>
 
       <!-- ★★ V12 beta94 THE VibeSDR COMMUNITY MAP (docs/v12/COMMUNITY-MAP.md, vibe_community.h). MACHINE-level, OFF by
            default — the owner's choice. Beside the gallery because it is the same question: where what the decoders hear goes. -->
@@ -996,6 +985,14 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           box always works. A talker alias, when the radio sends one, still comes first. RadioID.net asks that a public
           service using its data has its approval: leave this off on a public server until that is given.</div>
     </div>
+      <!-- ★★★ b96-bgsplit SHARING: ADS-B FEEDERS (Stuart 11-26). The flight-tracker setting is PER RADIO and stays on each
+           radio's tab ("Share ADS-B with flight trackers"); this is a summary row per radio with a jump to it — never a second
+           copy of the controls. Drawn by feedersRender (hidden when no radio could share ADS-B). -->
+      <div class="card hide" id="feedersCard">
+        <h2>Sharing ADS-B with flight trackers</h2>
+        <p class="why">Each radio that can decode ADS-B has its own setting, on its own tab. Where each one stands:</p>
+        <div id="feedersList"></div>
+      </div>
 
       <div class="card">
         <h2>Audio</h2>
@@ -1012,46 +1009,6 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           usage terms. Your own network, and direct connections to a port you forward yourself,
           follow this setting.</div></label>
       </div>
-
-      <!-- ★★★ ONE CHOICE FOR THE MACHINE. Opus or uncompressed is about what this server's UPLINK
-           can carry, and there is one uplink however many radios are plugged in — asking per radio
-           invited three answers to a question that has one, and three ways to get it wrong
-           (Stuart, 2026-08-08: "only one selection Opus applies to all radios"). -->
-<!-- ★ The waterfall rate moved to each radio's own tab (Stuart, 2026-10-11) — see "Waterfall rate" there. -->
-
-    <!-- ★★★ THE "Power saving" CARD IS GONE WITH THE FEATURE IT GOVERNED. It forced the client's
-         30-second idle slowdown on, and that slowdown has been removed: it inferred "nobody is
-         looking" from "nobody is touching", which on a waterfall is backwards — watching a band
-         fill in is the one thing you do without touching anything (Stuart, 2026-09-24).
-         ★★ The benchmark had already taken the ground from under it: 5, 10 and 20 fps are close
-            enough in CPU that the saving was small even when it worked.
-         ★ The owner's real lever is untouched and is the one that matters on small hardware — the
-           FRAME RATE setting, which caps the whole machine (a Pi Zero is happier at 5). -->
-
-      <div class="card">
-      <h2>Processor</h2>
-      <p class="why">How hard this machine is allowed to run.</p>
-      <label><span class="lbl">CPU governor</span>
-        <select id="cpuGovernor">
-          <option value="performance">Full speed — recommended for a receiver</option>
-          <option value="ondemand">On demand — saves a little power</option>
-          <option value="schedutil">Schedutil — runs coolest, for a portable or battery host</option>
-          <option value="powersave">Processor's own scaling — runs cooler, for a battery host</option>
-          <option value="default">Leave the system setting alone</option>
-        </select>
-        <div class="hint">A Raspberry Pi normally decides its speed from how busy each core looks.
-          VibeServer spreads its work across every core, so they all look half-idle and the Pi
-          clocks itself <em>down</em> — measured at 1.9&nbsp;GHz instead of 2.4, cool and
-          un-throttled, while the audio broke up. Full speed costs a couple of watts.
-          <br><b>Choose full speed for a shared receiver</b>, where several people are each being
-          given their own tuner. <b>On demand suits a battery or solar host</b> serving one
-          listener from a dongle — far less work, and the watts matter more than the headroom.
-          <b>Schedutil</b> follows the work most closely and runs the coolest: a Pi 3A+ served WFM
-          stereo with Advanced RDS cleanly at 0.9&nbsp;GHz under it, where on demand sat at 1.2.
-          <br>On an Intel or AMD PC the processor usually manages its own speed, so the choice there is
-          <b>full speed</b> or <b>the processor's own scaling</b>. Only what this machine offers is listed.</div></label>
-      <div class="hint" id="govNow"></div>
-    </div>
 
       <!-- ★★★ ONE DOWNLOAD FOR THE WHOLE MACHINE. The schedule is a single file every radio
            process reads, so it belongs to the server and not to whichever radio tab happened to be
@@ -1082,6 +1039,62 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             every VibeServer (CelesTrak asks that its data is fetched once and shared, not by every receiver).</div>
         </div>
       </div>
+      <!-- ★★ beta88: AN ANDROID PHONE'S SERVER ONLY (androidPrune shows them; .androidOnly is never drawn elsewhere).
+           What only the phone can change, read-only (androidDeviceCard), and the phone's own three server settings. -->
+      <div class="card androidOnly" id="androidDevCard"></div>
+      <div class="card androidOnly" id="androidSrvCard">
+        <h2>This phone's server</h2>
+        <label><input type="checkbox" id="androidWebServer"> <span class="lbl">Serve the web client</span>
+          <div class="hint">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>
+        <label><input type="checkbox" id="androidCompress"> <span class="lbl">Compress the spectrum and audio for the app</span>
+          <div class="hint">On is right for nearly everyone; off sends far more data.</div></label>
+        <label><span class="lbl">Mode</span>
+          <select id="androidAdvanced">
+            <option value="0">Simple &mdash; plug in and share</option>
+            <option value="1">Advanced &mdash; shared, managed, public</option>
+          </select>
+          <div class="hint" id="androidAdvancedHint"></div></label>
+      </div>
+      <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
+           Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
+           signed in (one permission prompt to turn on, one to turn off); "starts when you sign in" = the owner's own
+           sign-in list, no prompt. ON by default at the first "Save and start". -->
+      <div class="card hide" id="winAutoCard">
+        <h2>Start with Windows</h2>
+        <label style="display:flex;align-items:center;gap:10px;margin:0">
+          <input type="checkbox" id="winAutoOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Start VibeServer when Windows starts</span>
+        </label>
+        <p class="why" id="winAutoWhat" style="margin:10px 0 0"></p>
+        <div class="hint" id="winAutoHint"></div>
+        <p style="margin:8px 0 0" id="winAutoAlt" class="hide">
+          <button type="button" class="ghost" id="winAutoSignin" style="padding:6px 12px;font-size:13px">Start when I sign in instead</button>
+          <button type="button" class="ghost" id="winAutoBoot" style="padding:6px 12px;font-size:13px">Start at boot instead</button>
+        </p>
+        <div class="hint" id="winAutoMsg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Message on the landing screen</h2>
+        <p class="why">Something you want every visitor to read before they connect &mdash; house
+          rules, a note about how this server behaves, or a link if people can help pay for it.
+          This one <b>stays up</b>: it is not the temporary notice you post when you are working
+          on the server.</p>
+        <label><span class="lbl">Message</span>
+          <textarea id="landingMessage" rows="3" maxlength="500"
+            placeholder="e.g. The waterfall slows to 5 fps when nobody is listening. That is normal — turn it off in the menu."></textarea></label>
+        <div class="hint"><code>**bold**</code> and <code>*italic*</code> are allowed &mdash; nothing else.
+          No HTML; a link goes in the box below.</div>
+        <div class="row">
+          <label><span class="lbl">Link (optional)</span>
+            <input type="url" id="landingLinkUrl" placeholder="https://…"></label>
+          <label><span class="lbl">Link text</span>
+            <input type="text" id="landingLinkLabel" maxlength="60" placeholder="e.g. Support this server"></label>
+        </div>
+        <div class="hint" id="landingLinkHint">Only <code>http://</code> and <code>https://</code>
+          links are accepted &mdash; anything else is dropped when you save.</div>
+        <p class="why">Shown to strangers on the landing screen, so nothing private here.</p>
+      </div>
     </div>
 
     <!-- ★★★ MODE FIRST, BECAUSE IT DECIDES THE REST. "How will it be used?" changes which of the
@@ -1089,22 +1102,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
          single-user one has neither and gets the allow/block lists instead. Asking it last, as
          this page used to, means answering questions that the next answer makes irrelevant. -->
     <div id="radioPane">
-      <!-- ★★ V12 beta96 A BEAST FEED RADIO'S OWN CARD — its address and its status. Only on such a radio's tab; every SDR card
-           is hidden there (beastTabApply — AGENTS.md: no dead controls). -->
-      <div class="card hide" id="beastCard">
-        <h2>ADS-B Beast feed</h2>
-        <p class="why">This radio is another receiver&rsquo;s ADS-B: listeners get the aircraft map and list, nothing to tune.</p>
-        <label><span class="lbl">Address of its Beast output</span>
-          <input type="text" id="beastAddr" maxlength="120" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px"></label>
-        <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
-          <button type="button" class="ghost" id="beastAddrSave">Change the address</button>
-          <span class="hint" id="beastAddrMsg" style="margin:0"></span></div>
-        <div class="hint" id="beastStatus" style="color:var(--amber)"></div>
-        <div style="margin-top:8px"><button type="button" class="ghost" id="beastRemove">REMOVE this feed</button></div>
-        <div class="hint">If it says nothing is listening: on that machine dump1090-fa (or readsb) must be running with its
-          Beast output on port 30005, and reachable from here (the same network, no firewall in the way). To stop using
-          it, pause or remove this radio above.</div>
-      </div>
+      <!-- ★★★ b96-bgsplit THE PER-RADIO ORDER (Stuart 11-26): name · operating mode · listeners · antenna · sample rate, gain, notches, direct sampling and this radio's hardware · bands · gain limits · modes · raw IQ · where new listeners land · background decoding; then the PIN, flight trackers, FM defaults and the time limit. scripts/test-setup-order.mjs pins it. -->
       <!-- ★★★ THE RADIO'S NAME — what listeners see on the waterfall, in the radio list and in the
            directory. Display only: nothing is written to the device. It was always stored (the
            `label` in config.json) but could only be changed by editing that file by hand, which is
@@ -1122,7 +1120,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <!-- ★★ V12 (2026-11-05) hidden where the radio cannot do either (an Icom: one audio channel — no window to pin,
            no VFOs of their own): capsApply(), from vibe_radio_caps.h. -->
       <div class="card" id="usageCard">
-      <h2>How will it be used?</h2>
+      <h2>Operating mode</h2>
       <p class="why">This decides what listeners are allowed to change.</p>
       <div class="modes">
         <!-- ★★★ TWO MODES, RENAMED SO THEY SAY WHAT ACTUALLY DIFFERS: whether the radio's centre
@@ -1145,8 +1143,59 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
                 Best for a busy public receiver on one band.</span>
         </div>
 
+        <!-- ★★★ b96-bgsplit SINGLE USE (Stuart 11-26: "Operating mode: unlocked / locked / single use"). The config words do
+             not change: `mode` stays "single" (= UNLOCKED, one dial) or "locked"; SINGLE USE is RadioConfig::singleMode (the
+             beta96 single-mode radio), with the tuning it keeps (unlocked or locked) chosen beneath it. -->
+        <div class="mode" id="modeSingleUse" tabindex="0">
+          <b>Single use &mdash; one mode only</b>
+          <span>The radio does one thing &mdash; ADS-B, AIS, VDL2, a DAB station, SATELLITES &hellip; Listeners land in it and
+                cannot leave it; every other mode is off for them.</span>
+        </div>
       </div>
+        <!-- ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26): an EXPLICIT choice, not inferred from the ticks (which broke when new
+             modes arrived). The server enforces it over the ticks (vsEnforcedBlocked), which stay as they were underneath, so
+             General gives them back. The list is what THIS radio can do (the server's hwinfo; no dead entries). -->
+        <div id="radioUseWrap" class="hide" style="margin-top:12px">
+          <!-- ★ the two radios stay (the page's own logic reads them); the three tiles above drive them -->
+          <input type="radio" name="radioUseKind" id="radioUseGeneral" value="general" hidden>
+          <input type="radio" name="radioUseKind" id="radioUseSingle" value="single" hidden>
+          <label><span class="lbl">The one mode</span> <select id="singlePick"></select></label>
+          <label style="margin-top:8px"><span class="lbl">Tuning</span>
+            <select id="singleWindow"><option value="single">Unlocked &mdash; one dial</option><option value="locked">Locked centre (the range below)</option></select></label>
+          <div class="hint">Use this to lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected decoder is available. The modes ticked under <b>Modes and decoders</b> stay as they were underneath, so Unlocked or Locked gives them back.</div>
+          <div class="hint" id="singleNote"></div>
+        </div>
     </div>
+
+      <div id="lockedOnly" class="hide">
+      <div class="card" id="rangeCard">
+        <h2>Range</h2>
+        <p class="why">The window everyone listens inside. The radio stays here; listeners pan and
+           zoom within it.</p>
+        <div class="row">
+          <label><span class="lbl">Centre frequency (kHz)</span>
+            <input type="number" id="lockFreq" step="1"></label>
+          <!-- moved out of the locked-only block: every radio has a sample rate -->
+        </div>
+        <div class="hint" id="coverage"></div>
+
+      </div>
+    </div><!-- /lockedOnly -->
+      <!-- ★ EVERY MODE, not locked only (2026-09-18): the zoom FFT engages in single-user and shared-VFO
+           modes too, and hiding the switch here left those radios blocky at depth. -->
+        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+          <input type="checkbox" id="zoomSpectrum" checked
+                 style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Keep the spectrum sharp when zoomed in</span></label>
+        <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
+          already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
+          what makes a shared receiver worth zooming into.</div>
+        <!-- ★ Stuart, 2026-10-24: off the locked range, each deeper zoom is recomputed on the spot and he saw the
+             pause — the option stays, the owner is told. Not in locked range, where the window's full detail is
+             already being computed for everyone. Shown by setMode(). -->
+        <div class="hint" id="zoomSpectrumSlow">On a slower machine there may be a slight delay when zooming in
+          at the higher zoom levels, while the detail is recalculated.</div>
+
       <!-- ★★★ HOW MANY PEOPLE — AND IT BELONGS TO BOTH MODES. This card lived inside the
            locked-only block, so on an UNLOCKED radio the box was hidden and the count was stuck
            at one. That is the single control the shared dial depends on: the FM-DX arrangement
@@ -1181,140 +1230,6 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              people are on it. -->
         <div class="note" id="usersNote"></div>
         <div class="note" id="bwNote"></div>
-      </div>
-
-      <div id="lockedOnly" class="hide">
-      <div class="card" id="rangeCard">
-        <h2>Range</h2>
-        <p class="why">The window everyone listens inside. The radio stays here; listeners pan and
-           zoom within it.</p>
-        <div class="row">
-          <label><span class="lbl">Centre frequency (kHz)</span>
-            <input type="number" id="lockFreq" step="1"></label>
-          <!-- moved out of the locked-only block: every radio has a sample rate -->
-        </div>
-        <div class="hint" id="coverage"></div>
-
-      </div>
-    </div><!-- /lockedOnly -->
-      <!-- ★ EVERY MODE, not locked only (2026-09-18): the zoom FFT engages in single-user and shared-VFO
-           modes too, and hiding the switch here left those radios blocky at depth. -->
-        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
-          <input type="checkbox" id="zoomSpectrum" checked
-                 style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Keep the spectrum sharp when zoomed in</span></label>
-        <div class="hint">Recomputes real detail as listeners zoom, instead of magnifying what is
-          already on screen. Without it a close-in view goes blocky. Costs a little CPU and is
-          what makes a shared receiver worth zooming into.</div>
-        <!-- ★ Stuart, 2026-10-24: off the locked range, each deeper zoom is recomputed on the spot and he saw the
-             pause — the option stays, the owner is told. Not in locked range, where the window's full detail is
-             already being computed for everyone. Shown by setMode(). -->
-        <div class="hint" id="zoomSpectrumSlow">On a slower machine there may be a slight delay when zooming in
-          at the higher zoom levels, while the detail is recalculated.</div>
-
-
-      <!-- ★★★ OUTSIDE #lockedOnly, AND THAT IS THE WHOLE FIX. This card sat INSIDE it, so the
-           entire Radio section — the RF and DAB notches, and everything added to them — was
-           hidden on any receiver whose RF centre is not locked. The Pi's RSP is locked and showed
-           them; the x86 box's RSP is "shared VFO, unlocked RF centre" and never did (Stuart,
-           2026-09-11, the FIRST thing reported that evening: "the Server wasnt giving me the
-           options for the RF/DAB notches on the RSP1A setup page").
-           ★★ It is wrong on the merits as well as by accident. A notch is an ANALOGUE filter ahead
-           of the tuner: it protects the front end from a transmitter nowhere near what you are
-           listening to, which has nothing whatever to do with whether the dial is locked. Only
-           the RANGE card above it is genuinely locked-only, because a range is what a locked
-           receiver HAS.
-           ★ I chased this for an evening — a driver gate, a dead radio, a lost `configured` flag —
-           and it was markup nesting the entire time. The gate in renderHw() was innocent. -->
-      <!-- ★★★ AN ICOM TRANSCEIVER — RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md). Shown only when this tab's radio
-           is an Icom (icomRender); every IQ card that means nothing on it (the window, gain, rate, bias-T)
-           is hidden instead — AGENTS.md: never a control whose every use is a no-op. -->
-      <div class="card hide" id="icomCard">
-        <h2>Icom transceiver</h2>
-        <p class="why">VibeServer <b>listens through</b> your Icom and never transmits. It tunes the radio over
-           CI-V, shows the radio&rsquo;s own scope as the waterfall and streams the radio&rsquo;s receive audio.</p>
-        <div class="hint" id="icomModel"></div>
-        <div id="icomPreflight" style="margin:10px 0 14px"></div>
-        <label><span class="lbl">CI-V baud rate</span>
-          <select id="icomBaud">
-            <option value="115200">115200 (recommended)</option><option value="57600">57600</option>
-            <option value="38400">38400</option><option value="19200">19200</option>
-            <option value="9600">9600</option><option value="4800">4800</option></select>
-          <div class="hint">Must match the radio: <b>MENU &gt; SET &gt; Connectors &gt; CI-V &gt; CI-V USB Baud Rate</b>
-            (or set the radio to Auto). The scope shares this serial line with everything else, so the speed IS the
-            waterfall&rsquo;s speed: 115200 gives about 19 lines a second, 19200 only about 3. Also set
-            <b>CI-V USB Port</b> to &ldquo;Unlink from [REMOTE]&rdquo;.</div></label>
-        <label><span class="lbl">CI-V address</span>
-          <input id="icomCiv" maxlength="2" placeholder="Empty = the radio's own (94 on an IC-7300)">
-          <div class="hint">Two hex digits. Only change it if you changed <b>CI-V Address</b> on the radio.</div></label>
-        <label><span class="lbl">Scope speed</span>
-          <select id="icomScopeSpeed"><option value="0">Fast</option><option value="1">Mid</option><option value="2">Slow</option></select>
-          <div class="hint">The radio&rsquo;s own sweep speed. Slow sweeps are smoother and leave more of the serial line for tuning.</div></label>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input type="checkbox" id="icomTuneLock" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Only I may tune this radio</span></label>
-        <div class="hint" id="icomLockHint">Off (the default): the radio follows this server&rsquo;s ordinary dial rules,
-          like any other radio &mdash; a single listener tunes it; on a shared server everyone shares the dial, with
-          <b>Ask before tuning</b> if you have it on. On: listeners hear whatever you are on and cannot retune your radio
-          mid-QSO; you tune from the radio or from VibeSDR signed in as admin. <b>This only protects the radio once an
-          admin password is set</b> &mdash; without one, anyone can sign in as admin.</div>
-        <div class="hint" style="margin-top:12px">ATT, preamp, AGC, RF gain, NB, NR and ANF follow the same rules as any
-          radio&rsquo;s gain: listeners may change them on a personal receiver; on a locked (shared) receiver only you
-          can; and your <b>AGC lock</b> or a <b>fixed gain</b> on a band keeps ATT, preamp and RF gain yours.</div>
-        <!-- ★★ POWER (2026-11-04, Saber: other software switches his IC-7300 on, so VibeServer often starts while it is
-             off). VibeServer waits quietly for a switched-off radio whatever this says; this only decides whether it may
-             SEND the power-on. Manual: IC-7300 Full Manual §19, command 18 01, footnote *3 (the FE preamble). -->
-        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input type="checkbox" id="icomPowerOn" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Power on the radio over CI-V</span></label>
-        <div class="hint">When somebody connects and the radio is not answering, VibeServer sends the IC-7300&rsquo;s CI-V
-          <b>Power ON</b> command (18 01, after the run of FE bytes the manual asks for) &mdash; they see &ldquo;Switching
-          the radio on&rdquo; for about a minute &mdash; then checks USB SEND, USB Keying and VOX as always. With nobody
-          connected it sends nothing. It only works while the radio still has its 13.8 V supply and the USB cable
-          connected, with <b>CI-V USB Baud Rate</b> set to the same fixed speed as here (a radio that is off cannot detect
-          &ldquo;Auto&rdquo;). With this ticked a switched-off radio is still offered to listeners; unticked, it is shown
-          greyed out (&ldquo;Switched off&rdquo;) until you switch it on, and VibeServer never sends a power command by
-          itself.</div>
-        <!-- ★★ AUTOMATIC POWER-OFF (Stuart, 2026-11-05: "Automatically Power off radio when not in use [x]  How long after
-             last user leaves [5 minutes]"). Only with power-on ticked — otherwise nothing could switch it back on for the
-             next listener — so it is drawn greyed with that reason when power-on is unticked. -->
-        <div id="icomAutoOffRow" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
-          <label style="display:flex;gap:8px;align-items:center;margin:0">
-            <input type="checkbox" id="icomAutoOff" style="width:16px;height:16px;accent-color:var(--amber)">
-            <span>Automatically power off the radio when not in use</span></label>
-          <label style="display:flex;gap:8px;align-items:center;margin:0"><span>How long after the last user leaves</span>
-            <select id="icomOffDelayMin">
-              <option value="0">Instant</option><option value="1">1 min</option><option value="5">5 min</option>
-              <option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option>
-              <option value="60">60 min</option></select></label></div>
-        <div class="hint" id="icomAutoOffHint">Switches the radio off (CI-V 18 00) once nobody has been connected for this
-          long, so a radio is not switched on and off by listeners coming and going; somebody connecting in the wait
-          cancels it, and the next listener switches it back on. Never while anybody is connected, or while Background
-          Decoding, the DX scanner or ADS-B keeps the radio busy.</div>
-        <div class="hint" id="icomPowerMsg"></div>
-        <label><span class="lbl">Receive audio</span>
-          <input id="icomAudio" placeholder="auto">
-          <div class="hint"><b>auto</b> finds the radio&rsquo;s own USB audio next to its CI-V port. <b>none</b> serves the
-            waterfall and dial only. On Linux, a sound server (PulseAudio/PipeWire) holding the radio&rsquo;s audio stops
-            VibeServer opening it. On a Mac, allow VibeServer under Privacy &amp; Security &gt; Microphone.</div></label>
-        <label><span class="lbl">Port</span>
-          <input id="icomPort" placeholder="usb">
-          <div class="hint"><b>usb</b> = the radio&rsquo;s USB port, found by its own name. VibeServer drives the radio&rsquo;s
-            USB chip directly and <b>never raises its DTR or RTS lines</b>, which some menu settings use to transmit.</div></label>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input type="checkbox" id="icomTtyOk" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Allow a serial device (/dev/&hellip;) as the port</span></label>
-        <p class="why" style="color:var(--warn)">Opening a serial device raises its DTR and RTS lines for an instant. If the
-           radio&rsquo;s <b>USB SEND</b> or <b>USB Keying</b> is set to DTR or RTS, that keys the transmitter. Only tick this
-           if those are OFF &mdash; VibeServer checks them every time it connects and refuses to start if they are not.</p>
-        <p class="why"><b>Only one program can hold the radio&rsquo;s USB port.</b> Close wfview, wfweb, WSJT-X&rsquo;s rig
-           control and any logger that talks to the radio, or VibeServer cannot reach it.</p>
-      </div>
-      <div class="card" id="radioStartCard">
-        <h2>Radio</h2>
-        <p class="why">How this radio starts, and where its gain is set. Gain itself lives in the
-           client, behind the admin password, where you can see the waterfall while you move it.</p>
-        <div id="hw"></div>
       </div>
       <div class="card">
         <h2>Antenna</h2>
@@ -1427,775 +1342,125 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             socket is in use, greyed, with the reason.</div>
         </div>
       </div>
-      <!-- ★★★ A PIN THAT OPENS ONE RADIO, NOT THE MACHINE. A club with one receiver pointed at a
-           band its members are licensed for, or a radio on loan, wants a door of its own: the
-           server PIN cannot express that, because it is one answer for every radio on the box.
-           ★★ THE TWO ARE NOT ALTERNATIVES — either key opens this radio. So an owner who already
-           has a server PIN does not lose it by setting one here, and a member who only holds this
-           radio's PIN cannot walk into the others. Saying that plainly matters: the obvious
-           reading of a second PIN box is that it REPLACES the first, and an owner acting on that
-           reading would think they had locked the machine when they had not.
-           ★ EMPTY IS A REAL, AND THE DEFAULT, ANSWER — "this radio follows the server setting",
-           which is exactly what every radio does today. That is why the box is blank rather than
-           pre-filled with anything, and why clearing it is a deliberate tick rather than an
-           empty save (see collectRadio: an empty box means "leave it alone", never "remove it"). -->
-      <!-- ★★★ AND IT IS NOT DRAWN AT ALL ON A ONE-RADIO MACHINE. "This radio only" and "every
-           radio on this machine" describe the same door when there is one radio, so the page
-           would be asking an owner to choose between two identical locks — Stuart, 2026-09-23:
-           "they only host single radios, so a pin to connect then a pin for the radio seems
-           redundant". The app and Lite are always that shape; a Linux box with one radio is too,
-           and the card comes back by itself the moment a second radio is configured. The server
-           PIN remains the answer there, and the directory still takes it before anyone connects.
-           ★ Same rule as AGENTS.md's "a control that only works in one scenario should not be
-             there": a redundant control is not free, it is a question with no right answer. -->
-      <div class="card" id="radioPinCard">
-        <h2>PIN for this radio</h2>
-        <p class="why">A PIN here opens <b>this radio only</b>. The server PIN &mdash; the one set
-           at first setup (at the terminal, or on a pocket box when its admin password was chosen) &mdash; opens <b>every</b>
-           radio on this machine, and still does: either key works here. Leave this empty and the
-           radio simply follows the server setting.</p>
-        <label><span class="lbl">PIN for this radio</span>
-          <!-- ★★★ DIGITS ONLY. It is a PIN, not a password, and the whole estate has to agree:
-               the listener's PIN box is inputmode="numeric", so on a phone it shows a KEYPAD.
-               An owner who typed letters here would hand their listeners a keyboard that cannot
-               enter them — fine on the desktop where it was set, impossible on the phone where it
-               is used (Stuart, 2026-09-23: "numbers only, simpler and is a PIN not a password").
-               ★ inputmode for the keypad, pattern for the browser's own check, and the save path
-                 strips anything else — validate at both ends, as this project keeps relearning. -->
-          <input type="password" id="radioPin" autocomplete="new-password" maxlength="16"
-                 inputmode="numeric" pattern="[0-9]*"
-                 placeholder="Digits only — empty follows the server setting">
-          <div class="hint" id="radioPinState"></div></label>
-        <label id="radioPinClearWrap" style="display:none;align-items:center;gap:10px;margin-top:16px">
-          <input type="checkbox" id="radioPinClear">
-          <span>Remove the PIN from this radio</span></label>
-      </div>
-      <div class="card" id="startCard">
-        <h2>Where new listeners start</h2>
-        <p class="why">What someone sees the moment they connect.</p>
-        <!-- ★★★ A DAB STATION AS THE LANDING (Stuart, 2026-09-28, in his words: "just above the entry
-             for frequency and demod selector have a use DAB station as landing station? tap yes and
-             then a block selector pops up and you choose a block … then next to that a quick station
-             scan and then a selection box for the station"). Drawn ONLY for a radio that can do DAB —
-             an Airspy HF+ never sees it (AGENTS.md: no control that cannot act). When DAB is blocked
-             on the radio the toggle is not offered, and the note below says why the landing went. -->
-        <!-- ★★★ V12: ADS-B AS THE LANDING (Stuart, 2026-10-24: "can we set ADSB as a landing page for an SDR and when it
-             is set that way have a tick box to keep it running when nobody is connected that way a new connection
-             instantly sees a list of planes and a full map"). Drawn only where ADS-B can run on this radio (adsbLandOffer
-             — AGENTS.md); where only a setting stands in the way, #adsbLandNote says which. The keep-running tick box
-             lives only beneath the choice, and is OFF unless ticked. One landing at a time: choosing it hides the DAB one. -->
-        <!-- ★★★ beta96 THE LANDING MAP AND ITS KEEP-RUNNING MODES (Stuart 11-26 on the Sony: "I thought I'd be able to set
-             VDL2 as the Sony's background mode"; memory map_landing_toggles.md). One map — Aviation & Maritime — and the mode it
-             opens in, ticked from the SERVER's own list for this radio (hwinfo mapModes): a mode this radio can never do is not
-             drawn (AGENTS.md); one it cannot do now is greyed with the server's reason. At an ordinary rate ONE mode at a time
-             (the rest greyed, with the rate); ACARS + VDL2 together only where the capture holds both (~6.1 MS/s). Picking
-             VDL2 is the whole setup: the centre and every channel come from the mode. beta95's ADS-B landing / keep-running
-             migrated into this unchanged (vibe_keep_store.h). The old ADS-B controls below stay in the page, hidden — their
-             rules (adsbLandOffer) still decide the ADS-B row. -->
-        <div id="mapLandWrap" class="hide">
-          <label style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" id="mapLandOn">
-            <span>Start new listeners on a <b>map</b>?</span></label>
-          <div id="mapLandBox" class="hide" style="margin-top:10px">
-            <!-- ★★ beta96 (Stuart 11-26): the AMATEUR map's ISM too — 868 MHz all day for MeshCore repeaters, the band from ISM's own plan -->
-            <label><span class="lbl">Map</span>
-              <select id="mapLandWhich"><option value="avmar">Aviation &amp; Maritime</option><option value="amateur">Amateur</option></select></label>
-            <div class="hint">Tick the mode the map opens in. The radio is set up from the mode itself &mdash; VDL2 is every
-              25&nbsp;kHz channel from 136.700 to 136.975&nbsp;MHz, ISM is the band you pick from its own plan &mdash; so there are
-              no frequencies to type. EXIT takes a listener to the frequency below.</div>
-            <div class="hint" id="mapRateNote" style="margin-top:8px"></div>
-            <div id="mapModeList" style="margin-top:6px"></div>
-            <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
-              <input type="checkbox" id="mapKeep">
-              <span id="mapKeepLbl">Keep it running when nobody is connected</span></label>
-            <div class="hint" id="mapKeepNote"></div>
-          </div>
-        </div>
-        <div class="hint" id="mapLandNote"></div>
-        <div id="adsbLegacy" style="display:none">
-        <div id="adsbLandWrap" class="hide">
-          <label style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" id="adsbLandOn">
-            <span>Use ADS-B (the aircraft map) as the landing page?</span></label>
-          <div id="adsbLandBox" class="hide" style="margin-top:10px">
-            <div class="hint">A new listener goes straight to the full-screen map of aircraft, with the list beside it.
-              EXIT ADS-B takes them to the frequency below. Where several people share one dial it keeps whatever it
-              was left on, but after the server restarts the first listener always starts here.</div>
-            <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
-              <input type="checkbox" id="adsbKeep">
-              <span>Keep ADS-B running when nobody is connected</span></label>
-            <div class="hint" id="adsbKeepNote">A new listener sees every aircraft at once, instead of a map that fills
-              over the next minute. <b>It costs CPU all the time</b> (about 13&nbsp;% of a Pi&nbsp;3 core) and this radio
-              never idles: it is not parked or handed to another program, and its Background Decoding does not run.
-              Unattended satellite passes still run: a pass takes the radio, ADS-B pauses for it (about 10&ndash;15 min)
-              and resumes after.</div>
-          </div>
-        </div>
-        <div class="hint" id="adsbLandNote"></div>
-        </div><!-- /adsbLegacy -->
-        <div id="dabLandWrap" class="hide">
-          <label style="display:flex;align-items:center;gap:10px">
-            <input type="checkbox" id="dabLandOn">
-            <span>Use a DAB station as the landing station?</span></label>
-          <div id="dabLandBox" class="hide" style="margin-top:10px">
-            <div class="row" style="align-items:flex-end">
-              <label><span class="lbl">Block</span>
-                <select id="dabLandBlock"></select></label>
-              <button type="button" class="ghost" id="dabLandScan" style="flex:0 0 auto">Quick station scan</button>
-            </div>
-            <div class="hint" id="dabLandScanMsg"></div>
-            <label style="margin-top:10px"><span class="lbl">Station</span>
-              <select id="dabLandStation"></select></label>
-            <div class="hint">A new listener is put straight onto this station. DAB takes a few
-              seconds to lock onto a multiplex, so they hear it shortly after they arrive. Where
-              several people share one dial it keeps whatever it was left on, but after the server
-              restarts the first listener always starts here.</div>
-          </div>
-        </div>
-        <div class="hint" id="dabLandNote"></div>
-        <!-- ★★ V12 2026-11-04 THE DAB BAND SCAN MOVED to SERVER ADMIN (Stuart: "remove the DAB scan from the Setup and
-             leave it only in the admin page" — here it ran only on an idle radio and failed "radio not running"; the
-             admin page's DAB SCAN runs on the live radio). AGENTS.md: the old home says where the control went. -->
-        <div class="hint" style="margin-top:12px">To find the DAB multiplexes this aerial hears, open the receiver, sign in as
-          admin and use <b>SERVER ADMIN &rarr; What this receiver has learned &rarr; DAB SCAN</b> &mdash; it adds every station
-          found to this server&rsquo;s bookmarks.</div>
-        <div class="hint" id="plainLandHead" style="display:none;margin-top:10px">If the DAB station
-          cannot be opened &mdash; the radio busy on something that stops it reaching DAB &mdash;
-          listeners start here instead:</div>
-        <div class="hint" id="adsbPlainHead" style="display:none;margin-top:10px">EXIT ADS-B goes here, and
-          listeners start here whenever ADS-B cannot be opened:</div>
-        <div class="hint" id="mapPlainHead" style="display:none;margin-top:10px">EXIT goes here, and listeners start here
-          whenever the map's mode cannot be opened:</div>
-        <div class="row" id="plainLandRow">
-          <label><span class="lbl">Frequency (kHz)</span>
-            <input type="number" id="landingFreq" step="0.1"></label>
-          <label><span class="lbl">Mode</span>
-            <select id="demodMode">
-              <option value="am">AM</option><option value="lsb">LSB</option>
-              <option value="usb">USB</option><option value="nfm">NFM</option>
-              <option value="wfm">WFM</option><option value="cw">CW</option>
-            </select></label>
-        </div>
-      </div>
-      <!-- ★★★ BROADCAST FM DEFAULTS, AND REMEMBER vs RETURN (Stuart, 2026-11-03: "can the Broadcast FM options be able to
-           be set by the owner in the setup and have an option so that the server either remembers what the last user
-           set or defaults back to the server set defaults"). Per radio; the rules are vibe_fm_defaults.h and the server
-           enforces them — listeners still change these for themselves in the audio menu's BROADCAST FM row. Not drawn
-           for an Icom (it demodulates in the radio) or where WFM is blocked: a control with nothing to act on is worse
-           than none (AGENTS.md). -->
-      <!-- ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (Stuart 2026-11-26: "like we did for PSKReporter"; docs/v12/ADSB-FEED.md,
-           vibe_beast.h). Its OWN card, per radio, OFF by default. Drawn only where this radio could run ADS-B (afRender reads
-           adsbLandOffer's `hw` — an HF+ or an Icom never sees it, AGENTS.md). Stored as RadioConfig::adsbFeed (one JSON blob). -->
-      <div class="card hide" id="adsbFeedCard">
-        <h2>Share ADS-B with flight trackers</h2>
-        <p class="why">Send the aircraft this radio hears to flight-tracking sites, or let a feeder program on your network read
-          them (FlightAware's PiAware, for one).</p>
-        <div class="hint" id="afKeepNote">Only while ADS-B is running on this radio. To feed all day, use ADS-B as the landing
-          page above and tick <b>Keep ADS-B running when nobody is connected</b>.</div>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
-          <input type="checkbox" id="afServe" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span><b>Serve a Beast feed</b> for feeder programs on your network</span></label>
-        <div id="afServeBox" class="hide" style="margin-left:24px">
-          <label><span class="lbl">Port</span>
-            <input type="number" id="afPort" min="1024" max="65535" step="1" style="max-width:120px">
-            <div class="hint">30005 is the usual Beast port. Give each ADS-B radio on this machine its own.</div></label>
-          <label style="display:flex;gap:8px;align-items:center">
-            <input type="checkbox" id="afOpen">
-            <span>Allow any address, not only this network</span></label>
-          <div class="hint" id="afOpenWarn">Off: only this machine and your local network can connect. On: anyone who can
-            reach this machine's port can read it &mdash; only for a feeder elsewhere that you run yourself.</div>
-          <div class="hint"><b>FlightAware:</b> install PiAware from FlightAware's own instructions, then point it here:
-            <code>sudo piaware-config receiver-type other</code>, <code>sudo piaware-config receiver-host <span id="afHost">this-server</span></code>,
-            <code>sudo piaware-config receiver-port <span id="afPortEcho">30005</span></code>, <code>sudo systemctl restart piaware</code>,
-            then claim the feeder on flightaware.com. Step by step: <i>Feed FlightAware from a VibeServer</i> in the VibeServer guide.
-            Sites with their own feed program (ADS-B Exchange's, for its MLAT and stats page) can read this port the same way.</div>
-        </div>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
-          <input type="checkbox" id="afPush" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span><b>Send to flight-tracking sites</b></span></label>
-        <div id="afPushBox" class="hide" style="margin-left:24px">
-          <div id="afRows"></div>
-          <button type="button" class="ghost" id="afAdd" style="margin-top:6px">Add another site (host and port)</button>
-          <div class="hint">Each site gets a stream with repeats thinned to two a second per aircraft and message kind, as
-            their own feed programs send. A <b>station UUID</b> identifies your feed to the site (the ones that use one make
-            it yours on their stats pages). VibeServer makes one for you where the site's own program would; for
-            map.flights paste the one from your station page there. <b>ADS-B Exchange:</b> your aircraft reach their map
-            this way, but their MLAT and their feeder stats page need their own feed program (it can read the Beast port
-            above instead).</div>
-        </div>
-        <div class="hint" id="afStatus" style="color:var(--amber)"></div>
-        <div class="hint">What is sent: the replies aircraft broadcast (identity, position, altitude, speed, squawk and the
-          rest) as this radio decoded them, with the signal level and a timestamp from the radio's own sample clock.
-          <b>Nothing about your listeners.</b> VibeServer never sends this receiver's position: a site knows where you are
-          only if you enter it in your account there. <b>MLAT (multilateration) is not supported</b> &mdash; the timestamps
-          are not precise enough for it, so leave a site's MLAT setting off.</div>
-      </div>
-      <div class="card" id="fmDefCard">
-        <h2>Broadcast FM defaults</h2>
-        <p class="why">What a listener starts with in the BROADCAST FM row of the audio menu. They can still change any
-          of these for themselves.</p>
-        <label><span class="lbl">FM de-emphasis</span>
-          <select id="fmDeemph">
-            <option value="-1">By region (50&nbsp;&micro;s, or 75&nbsp;&micro;s in the Americas)</option>
-            <option value="50">50&nbsp;&micro;s</option>
-            <option value="75">75&nbsp;&micro;s</option>
-            <option value="0">Off</option>
-          </select></label>
-        <div class="hint" id="fmDeemphHint"></div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px">
-          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmStereo"> <span>ST &mdash; stereo</span></label>
-          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmNr"> <span>NR &mdash; weak-signal noise treatment</span></label>
-          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmIms"> <span>IMS &mdash; multipath suppression</span></label>
-          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmCeq"> <span>CEQ &mdash; channel equaliser</span></label>
-          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmAutoBw"> <span>AUTO BW &mdash; automatic bandwidth</span></label>
-          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmNb"> <span>NB &mdash; noise blanker</span></label>
-        </div>
-        <div class="hint">Out of the box everything is on except NR, which only helps a weak, hissy station.
-          AUTO BW applies where listeners share one dial; on a locked range each listener's channel has its own width.</div>
-        <div style="margin-top:12px">
-          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="fmPolicy" id="fmReturn">
-            <span>Return to these defaults for each new listener</span></label>
-          <label style="display:flex;align-items:center;gap:10px;margin-top:6px"><input type="radio" name="fmPolicy" id="fmRemember">
-            <span>Remember the last listener&rsquo;s settings</span></label>
-        </div>
-        <div class="hint" id="fmPolicyHint"></div>
-      </div>
-      <div class="card">
-      <h2>Time limit</h2>
-      <p class="why">How long one listener may keep this radio.</p>
-      <label><span class="lbl">Minutes (0 = no limit)</span>
-        <input type="number" id="sessionLimit" min="0">
-        <div class="hint">When the limit is reached the listener is warned, then disconnected, and
-          the next person in the queue gets their turn. <b>On a single-user radio this is the only
-          thing that keeps one listener from holding the hardware all day</b> — there is one tuner
-          and whoever has it has all of it. On a shared radio it matters far less: everyone already
-          has their own VFO, so a long session costs nobody else anything.
-          <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
-      <label style="margin-top:12px"><span class="lbl">What the limit means</span>
-        <select id="sessionLimitMode">
-          <option value="hard">Hard — disconnect at the limit, always</option>
-          <option value="soft">Soft — keep the radio until somebody else wants it</option>
-        </select>
-        <div class="hint"><b>Hard</b> is what a time limit has always done here: at the limit the
-          listener is disconnected whether or not anybody is waiting.
-          <br><b>Soft</b> turns the limit into a <em>guarantee</em> instead of a deadline. Nobody
-          can take the radio from a listener inside their time — that is the promise — and
-          afterwards they simply keep listening until somebody else arrives, at which point they
-          get a few seconds' notice and the slot passes on. On a radio with several slots it is the
-          person who has been connected <em>longest</em> who moves.
-          <br>Worth knowing: while a listener is over their time the radio advertises itself as
-          <b>free</b>, so a visitor is never put off by an "in use" sign when the rule is on their
-          side. Your admin page still shows exactly who is connected and for how long.</div></label>
-      <label style="margin-top:12px" id="idleKickRow"><span class="lbl">Disconnect a listener who has gone away</span>
-        <input type="number" id="idleKick" min="0" step="5" placeholder="0">
-        <div class="hint">Minutes with <b>no interaction at all</b> &mdash; no tuning, no mode
-          change, nothing. <b>0 turns it off, and off is the default.</b>
-          <br>It <em>asks</em> before it acts: the listener gets a &ldquo;still listening?&rdquo;
-          prompt with a countdown, and anything they do answers it. That matters because somebody
-          sitting on one frequency for an hour touches nothing and is the best kind of listener
-          &mdash; from here they look exactly like a tab somebody forgot.
-          <br>Watching a decoder counts as using the radio: a weather-fax image takes ten minutes
-          to draw and RTTY runs for hours, so a decode in progress is never interrupted.
-          <br><b>15 minutes is the shortest it will accept</b> &mdash; enough to hear a block of
-          music before the ad break. Only offered on a radio with several slots: a one-at-a-time
-          receiver has nobody to reclaim it for.</div></label>
-      <!-- ★★★ RAW IQ OUT. A listener may take the channel they are tuned to as an rtl_tcp stream
-           for a decoder the browser cannot run. Never on a shared dial (the server refuses it):
-           an rtl_tcp client's tune would move everybody (Stuart, 2026-09-09). -->
-      <!-- ★★★ RAW IQ OUT, SHAPED BY THE RADIO'S MODE (Stuart, 2026-09-15: "what use is it being
-           able to set 3 raw IQ streams when only one user is allowed on the radio at a time").
-           One listener: a tick and a LAN rate. Locked window: how many streams, out of the
-           listener slots. Shared dial: not offered, and it says why. The server enforces all of
-           it — see iqFullRateOffered() and the shared-dial refusal in the shim. -->
-      <label style="margin-top:12px" id="rawIqRow"><span class="lbl">Raw IQ out</span>
-        <span id="rawIqSingle" class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
-          <label class="row" style="gap:8px;align-items:center;flex:0 0 auto">
-            <input type="checkbox" id="rawIqOn" style="width:16px;height:16px;accent-color:var(--amber)">
-            <span>Offer it</span></label>
-          <span class="row" id="rawIqLanRow" style="gap:6px;align-items:center;flex:0 0 auto">
-            <span class="lbl" style="margin:0">Local network up to</span>
-            <select id="rawIqLan" style="max-width:14em"></select></span>
-          <span class="note" id="rawIqLanFixed" style="margin:0">250 kHz on the local network, 48 kHz through the tunnel</span>
-        </span>
-        <span id="rawIqLocked" class="row" style="gap:6px;align-items:center;flex-wrap:wrap;display:none">
-          <select id="rawIqStreams" style="max-width:14em"></select>
-          <span class="note" style="margin:0">250 kHz each on the local network, 48 kHz through the tunnel</span>
-        </span>
-        <label class="row" id="rawIqLocalRow" style="gap:8px;align-items:center;margin-top:6px">
-          <input type="checkbox" id="rawIqLocalOnly" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Local network only &mdash; not through the tunnel</span></label>
-        <div class="hint">Lets a listener take the channel they are tuned to as an
-          <b>rtl_tcp</b> stream, for a decoder that does not run in a browser: DSD, a DMR/P25
-          decoder, a data mode, a trunking app. <b>Through the tunnel it is always 48 kHz</b>
-          (paired by a six-character code in the VibeIQ bridge) &mdash; that rate is what stays
-          reliable end to end. On your own network the ceiling is yours: 250 kHz suits any machine
-          and any Wi-Fi; the radio's full span is for a trunking app on a wired Pi 4 or better
-          &mdash; the choices are this radio's own rates, and the full span is offered only while
-          the capture rate is within the one you pick. 2.4 MHz is about 40 Mb/s, which Wi-Fi will
-          not carry cleanly; a wired Pi 4 or better manages it. The port only
-          opens while somebody has it on and closes with their session, and a stream being read
-          counts as using the radio.
-          <br><b id="rawIqShared" class="hide">Not available on a shared dial: with one VFO for
-          everybody an rtl_tcp client's tune would move every listener. Set Listeners to 1, or lock
-          the centre, to offer it.</b></div></label>
-      <label style="margin-top:12px" id="nbWideRow"><span class="lbl">Impulse noise blanker</span>
-        <select id="nbWide">
-          <option value="0">Off</option>
-          <option value="1">Auto (below 30 MHz)</option>
-          <option value="2">On</option>
-        </select>
-        <div class="hint">Blanks impulse noise &mdash; distant lightning, power-line hash, ignition,
-          switch-mode supplies &mdash; on the <b>whole capture</b>, before the waterfall and before
-          any listener's channel, so everybody benefits at once. Impulses are microseconds long and
-          wideband, which is why this works far better here than after a channel filter has smeared
-          them. On a clean signal it blanks nothing. <b>Auto</b> engages it only when the radio is
-          below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each
-          listener also has their own blanker on their own channel, in the audio menu.</div></label>
-      <!-- ★★ V12 VFO A/B — the owner's switch. On by default: one VFO B costs about one more listener.
-           ★ Raw IQ, the impulse blanker and this row are hidden on a radio with no IQ capture (an Icom): capsApply(). -->
-      <div id="vfoBRow">
-      <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
-        <input type="checkbox" id="vfoB" checked style="width:16px;height:16px;accent-color:var(--amber)">
-        <span>Let listeners use VFO A/B (two frequencies at once)</span></label>
-      <div class="hint">A listener can turn on a second VFO in the tuning menu and hear both at once &mdash; the lower
-        frequency in the left ear, the higher in the right &mdash; each with its own mode and squelch, anywhere
-        inside this radio&rsquo;s window (it never moves the radio). Each VFO&nbsp;B costs about as much as one more
-        listener, and on a radio with a listener limit it takes a listener&rsquo;s place until a new listener arrives.</div>
-      <!-- ★★ Stuart, 2026-11-07: per-VFO recording sends each VFO's own audio as well as the mix — say what it costs -->
-      <div class="hint" style="color:var(--amber)"><b>Bandwidth:</b> a listener who records both VFOs at once is sent
-        two extra stereo audio streams of up to 96&nbsp;kbit/s each, on top of the one they are listening to &mdash;
-        for as long as VFO A/B is on if they keep the record buffer on. If this
-        server&rsquo;s upload is limited, switch VFO A/B off.</div>
-      </div>
-      <!-- (the separate "streams at once" cap moved INTO the raw IQ row above; it only ever
-           meant something on a locked window) -->
-    </div>
-      <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
-           range IS the limit, so offering these there would be two answers to one question
-           (Stuart, 2026-08-08: "blocked bands wont be needed in shared mode as the locked nature
-           of it is the block/allow").
-           ★★ ALLOW says what is reachable; BLOCK carves holes out of it. Leaving ALLOW empty means
-           the whole radio, so somebody who only wants to keep listeners off the airband does not
-           have to enumerate everything else first. -->
-      <!-- ★★★ WHAT A LISTENER MAY DO TO THE FRONT END.
-           A CEILING, NOT A LOCK: the gain control stays the listener's to move, it simply cannot
-           go past what the owner allows on that band. The admin gate already takes gain away
-           entirely on a shared receiver, and that is a different thing — an owner capping FM wants
-           the front end protected and the listener left alone, not to field gain requests all
-           evening (Stuart, 2026-08-12).
-           ★★ EVERY FIELD IS IN THIS RADIO'S OWN UNITS, because the three radios do not share a
-              gain model — and each is shown only on the radios that HAVE the control, per the rule
-              in AGENTS.md: a control whose every use is a no-op reads as a broken feature. -->
-      <div class="card hide" id="gainCard">
-        <h2>Gain limits</h2>
-        <!-- ★★ V12 ONE HOME FOR AN SDRplay's GAIN (Stuart, 2026-11-17: "the gain locks for the SDRPlay need to be with the
-             radio controls as right now there are multiple stages in the setup menu where the gain is setup"). For an
-             SDRplay, placeGainRows() moves #gainRows (this card's whole body, every id and handler intact) under the
-             radio's own AGC rows in "This radio's hardware", and hides this card; any other radio keeps it here. -->
-        <div id="gainRows">
-        <p class="why">Optional. Leave everything empty and listeners have the full range, which is
-           what a receiver does today.</p>
-
-
-        <label class="hide" id="gainRestRow"><span class="lbl">Starting gain, and where it returns
-             when everybody has left</span>
-          <div class="row" style="gap:8px;align-items:center">
-            <input type="range" id="gainRestSlider" class="hide" style="flex:1 1 200px">
-            <input type="text" id="gainRest" placeholder="e.g. 19.7 dB — empty to leave it alone"
-                   style="flex:1 1 160px">
-          </div>
-          <div class="note">Where the radio sits before anyone connects, and where it goes back to
-             when the last listener leaves &mdash; a listener who turns the gain up should not leave it
-             up for the next person. Applied once they have all gone rather than the moment one
-             disconnects, so a page reload does not undo somebody's setting.
-             <br><span id="gainRestAgcNote" class="hide">With automatic RF gain on this is the STARTING gain:
-             the loop begins here and is then free to move in either direction, and it returns here
-             rather than being switched off when the receiver empties.</span></div></label>
-        <!-- ★★★ ONE SLIDER, TWO JOBS, SAID PLAINLY: a starting point, or THE gain. Locked, the
-             figure above is fixed for every band, listeners get no gain controls, and VibeAGC
-             below is greyed — an AGC cannot run on a gain that may not move (Stuart, 2026-09-15:
-             "either a starting point or a locked gain"). Stored as the existing all-bands lock
-             (gainLimits "all:<raw>" + gainLocks "all:1"), so the server needs nothing new. -->
-        <label class="row" id="gainRestLockRow" style="gap:8px;align-items:center;margin-top:6px;display:none">
-          <input type="checkbox" id="gainRestLock" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Lock this gain?</span></label>
-        <div class="note" id="gainRestLockNote" style="display:none"><b>Gain locked.</b> This is THE gain,
-          on every band, for every listener &mdash; nobody can move it. VibeAGC is unavailable while
-          the gain is locked. Untick it and VibeAGC works as normal.</div>
-
-        <!-- ★★★ THE NAME IS DOING REAL WORK HERE. Everything written online says the RTL-SDR's
-             automatic gain is broken — and it is, which is why VibeServer has never used it. A
-             control simply labelled "AGC" would be read as THAT one and switched straight past,
-             so it says whose AGC it is (Stuart, 2026-08-21: "we dont want users to ignore it as
-             they think it is a setting that is broken because of what is online"). -->
-        <label class="hide" id="rtlAgcRow"><!-- ★★ HTML DOES NOT PROCESS \uXXXX — ENTITIES DO. These two lines are markup, not JavaScript,
-                 so the escapes were served to the reader verbatim: "VibeAGC \u2014 VibeSDR\u2019s own
-                 AGC" (Stuart, 2026-08-23, with the screenshot). The same escapes further down this
-                 file are inside JS string literals, where they are correct and must be left alone —
-                 which is exactly why this was easy to miss. Sister to the JSX trap in
-                 memory/android_server_gui_parity: the language decides whether an escape is text. -->
-            <span class="lbl">VibeAGC &mdash; VibeSDR&rsquo;s own AGC for RTL-SDR</span>
-          <select id="rtlAgc">
-            <option value="0">Off — the gain stays where it is set</option>
-            <option value="1">On — the receiver manages its own gain</option>
-          </select>
-          <div class="note" id="rtlAgcLockedNote" style="display:none;color:var(--warn)">
-            <b>VibeAGC unavailable</b> &mdash; the gain is locked above.</div>
-          <div class="note"><b>This is not the dongle's built-in AGC.</b> That one is unreliable
-            across tuners and known broken on the RTL-SDR Blog v4, and this server never uses it.
-            VibeSDR's own loop measures how close the signal is to overloading the converter and
-            moves the tuner a step at a time, the way an SDRplay does in hardware.
-            <br>The <b>starting gain</b> at the bottom of this card is where the loop begins; from
-            there it may use the tuner's whole range in either direction. Leave it off and the gain
-            stays exactly where you set it.</div></label>
-        <!-- ★★ beta88: THE PHONE'S "Keep the tuner's IF filter selective" (ServerModeScreen tunerBwAuto) — a phone's page only. -->
-        <label class="androidOnly" id="androidTunerBwRow" style="margin-top:10px">
-          <input type="checkbox" id="androidTunerBw">
-          <span class="lbl">Keep the tuner&rsquo;s IF filter selective</span>
-          <div class="note">About 60&nbsp;% of the sample rate, so neighbouring transmitters stay out of the mixer. Off lets
-            the whole capture reach it &mdash; only for a full-rate raw IQ recording.</div></label>
-        <!-- ★★ THE TUNER'S IF FILTER, beside VibeAGC because they are the pair an owner sets once
-             and expects to STAY set. Stuart had to re-enable both on every connect (2026-08-25) —
-             the AGC because a client re-asserted its stored value, this one because it had no
-             config field at all and lived only in the running process. -->
-        <label class="hide" id="gainAgcLockRow" class="row">
-          <input type="checkbox" id="gainAgcLock">
-          <span class="lbl">Lock VibeAGC on</span>
-          <div class="note">Listeners may not switch to manual. On an RTL-SDR this fixes VibeSDR's
-             own AGC on, so one listener cannot set a gain that everybody else then listens through;
-             on an Airspy HF+ it is the whole protection available, since it has no variable gain to
-             limit.</div></label>
-
-
-        <!-- ★★★ THE AGC's TARGET, AND WHO OWNS IT. The RSP's AGC drives towards a level, and
-             where that level sits decides how hard the front end is run — so on a shared receiver
-             it is an operator setting, not a listener one. -30 dBFS is SDRplay's OWN working point
-             (the API default of -60 is a different, far gentler thing), so that is home.
-             ★ RSP only: nothing else here has a settable AGC target. -->
-        <label class="hide" id="agcSetRow"><span class="lbl">IF AGC target</span>
-          <div class="row" style="gap:8px">
-            <input type="range" id="agcSet" min="-72" max="-10" step="1" style="flex:1 1 200px">
-            <span class="dim" id="agcSetVal" style="flex:0 0 6em;text-align:right"></span>
-          </div>
-          <div class="note">Where the AGC aims. A higher (less negative) figure asks for a louder
-            output and so applies MORE gain, which on a strong band is how a front end is overloaded;
-            a lower one runs quieter with more headroom. <b>&minus;30 dBFS is the default</b> and
-            suits most aerials.
-            <br>DAB takes this lower while it runs &mdash; see the DAB override below &mdash; and
-            gives it back on the way out.</div></label>
-        <label class="hide" id="agcSetLockRow" class="row">
-          <input type="checkbox" id="agcSetLock">
-          <span class="lbl">Lock the AGC target</span>
-          <div class="note">Listeners see it but cannot move it. Worth setting on a shared
-            receiver: the target decides how hard everyone's front end is driven, so one listener
-            winding it up is a change everybody else hears.</div></label>
-
-        <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
-          <!-- ★★★ ONE BAND'S ENTRY, DRAWN AS ONE THING. The IF ceiling and the HackRF split are
-               stored PER BAND, but they were laid out on their own lines BELOW the Add button —
-               outside the row they belong to — and so read as a single setting for the whole radio
-               (Stuart, 2026-08-28: "that IF gain limit looks like it is one gain limit and not per
-               band"). The data was right and the layout said otherwise, which is the worse of the
-               two: nothing on screen contradicted it.
-               ★★ So everything that goes into ONE entry now sits inside one bordered block with
-               Add at the BOTTOM of it. The button being last is what makes the block read as a
-               form you fill in and then submit, rather than a row followed by some other controls. -->
-          <div style="border-left:3px solid var(--amber);padding:10px 0 10px 12px;margin:10px 0">
-            <div class="dim" style="font-size:12px;margin-bottom:8px">
-              Everything here applies to the ONE band you pick. Add it, then pick another band to
-              set a different ceiling &mdash; each row below is its own band.
-            </div>
-            <div class="row" style="gap:8px">
-              <select id="gainPick" style="flex:1 1 200px"></select>
-              <!-- ★★★ AIRSPY R2 / MINI ONLY: THE GAIN MODE, THEN THE POSITION ON IT. Stuart,
-                   2026-09-28: "a dropdown to choose the gain mode and the slider after that to
-                   then limit or lock". The band is held on this curve and the slider beside it is
-                   a position 0-21 on it; Free mode and the manual stages are closed in that band.
-                   Stored in its own per-band list (gainCurves), like the lock and the split. -->
-              <select id="gainCurve" class="hide" style="flex:0 1 150px" aria-label="Gain mode">
-                <option value="0">Linearity</option>
-                <option value="1">Sensitivity</option>
-              </select>
-              <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
-              <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
-            </div>
-          <!-- ★★ THE SDRPLAY'S SECOND STAGE. The RF position above is the right primary control —
-               it is ahead of the mixer, so it decides whether the front end overloads at all, and
-               capping it leaves the IF AGC its full range to work in. That reasoning assumes
-               working hardware: on a damaged RSP1 clone the gain stages misbehave and the owner
-               needs the IF too (TGCFabian, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
-               because there the loop owns this control and a ceiling would be a figure nothing
-               reads. -->
-            <!-- ★★★ THE NAME AND THE UNITS THE LISTENER'S OWN CONTROL USES. This asked for a "max
-                 IF position" — a gain position, to match the RF ceiling beside it — and TGCFabian, who
-                 owns the RSP this exists for, reported that it should read as GAIN REDUCTION "as
-                 per the control in the client". He is right: the listener's slider says IF GAIN
-                 REDUCTION in dB and the wire field carries a reduction, so an owner's figure in
-                 any other unit describes the same stage in a way nobody can compare.
-                 ★★ 20 to 59 dB, WHICH IS THE RANGE THE RADIO ACTUALLY HAS — the slider was 0-39,
-                 the span of the old position scale, so it could not express the ends of the
-                 control it was limiting ("the slider isnt giving the full range").
-                 ★ A BIGGER NUMBER IS A TIGHTER LIMIT here, the opposite of every other figure on
-                 this page, because more reduction is less gain. That is exactly why it is labelled
-                 as a reduction and not dressed up as a ceiling. -->
-            <div class="row hide" id="gainIfRow" style="gap:8px;margin-top:6px">
-              <span class="dim" style="flex:0 0 auto">Least IF gain reduction</span>
-              <input type="range" id="gainIfSlider" min="20" max="59" style="flex:1 1 160px">
-              <input type="text" id="gainIfMax" placeholder="e.g. 25 dB (optional)" style="flex:1 1 140px">
-              <span class="dim" id="gainIfVal" style="flex:0 0 auto"></span>
-            </div>
-          <!-- ★★★ A TOTAL IS ENOUGH TO LIMIT WITH AND NOT ENOUGH TO SET WITH. LNA + VGA = 30 dB
-               describes a whole family of radios: all of it in the LNA is a different receiver from
-               all of it in the VGA. So a LOCKED HackRF band needs a second figure — where between
-               the two stages that total sits. Only shown when the lock is on: as a limiter the
-               listener still chooses the split for themselves, which is today's behaviour and
-               stands. -->
-            <div class="row hide" id="gainSplitRow" style="gap:8px;margin-top:6px">
-              <span class="dim" style="flex:0 0 auto">Split for this band</span>
-              <input type="range" id="gainSplitSlider" min="0" max="100" step="5" value="50" style="flex:1 1 200px">
-              <span class="dim" id="gainSplitVal" style="flex:0 0 auto">50% LNA / 50% VGA</span>
-            </div>
-            <!-- ★★★ THE LOCK IS PER BAND, and it belongs in the entry rather than over the card.
-                 As one switch for the whole radio it could not express the thing an owner actually
-                 wants: Stuart, 2026-08-28 — "I can lock the gain on FM but allow it to be unlocked
-                 but limited for HF." Ticked here it applies to THIS band; pick "All bands" and it
-                 is the whole radio, because "all bands" was always just another band. -->
-            <!-- ★★★ THE TUNER'S IF FILTER, PER BAND, AND IT BELONGS WITH THE GAIN CEILINGS.
-                 Stuart, 2026-09-27: "put it with the per band ceilings, so for me now I would
-                 select FM broadcast band, leave the gain untouched but from a dropdown set 1.2MHz
-                 IF filter."
-                 ★★ SET LEVELS, NOT A TYPED FIGURE. The R820T2 quantises to its own coarse steps
-                 — asking for 2048 kHz gives 2800, and 1228 gives 1400 — so a free-text box promises
-                 a precision the hardware has not got, and the padlock would show a number the
-                 owner never typed. These are the SAME widths the listener's menu offers, so what
-                 is set is what is seen.
-                 ★★ AND THE LOCK BELOW GOVERNS BOTH. Stuart: "that way the button to lock the gain
-                 can lock the gain and the filter; without it the filter can still move like the
-                 gain, with auto filter width and auto gain." Unlocked, this is a CEILING and
-                 zooming still narrows under it; locked, it is the width, fixed.
-                 ★ The gain may be left untouched — a band carrying only an IF width is a rule. -->
-            <div class="row" id="gainIfBwRow" style="gap:8px;margin-top:6px">
-              <span class="dim" style="flex:0 0 auto">IF filter for this band</span>
-              <select id="gainIfBw" style="flex:1 1 180px">
-                <option value="">&mdash; automatic &mdash;</option>
-                <!-- ★ 99999 = "as wide as the capture". The clamp to captureWide upstream
-                     turns it into the real figure, so this cannot ask for more filter than
-                     there is signal. It is how "All bands: wide" replaces the global switch
-                     this section took the place of. -->
-                <option value="99999">Wide &mdash; the whole capture</option>
-                <!-- ★★★ THE TUNER'S ACTUAL RUNGS, NOT ROUND NUMBERS. The filter ladder in
-                     applyAutoIf is 350 / 500 / 700 / 1000 / 1400 / 2000 / 2800 kHz, and this list
-                     offered 1.5, 1.2, 800, 600, 450 — none of which exist. Choosing 1.2 landed on
-                     1400 and the readout said so, which reads as the setting being ignored:
-                     Stuart, 2026-09-27, "I did choose 1.2MHz band limit and its showing 1.4MHz."
-                     ★★ A menu that offers a value the hardware cannot produce is a menu that lies.
-                     What is chosen here is now exactly what the chip reports back. -->
-                <option value="2800">2.8 MHz</option>
-                <option value="2000">2.0 MHz</option>
-                <option value="1400">1.4 MHz</option>
-                <option value="1000">1.0 MHz</option>
-                <option value="700">700 kHz</option>
-                <option value="500">500 kHz</option>
-                <option value="350">350 kHz &mdash; narrowest</option>
-              </select>
-            </div>
-            <div class="note"><b>Left alone, the filter is as wide as the sample rate needs.</b>
-              Nothing is narrowed, and the spectrum has no roll-off at its edges.
-              <br>Narrowing is for an aerial that needs it. A long wire hands the tuner the whole
-              FM band at once and the front end manufactures its own interference from it, which a
-              narrower IF filter keeps out: measured on an RTL-SDR Blog V4 on a long wire, at
-              UNCHANGED gain, that was worth <b>19&nbsp;dB of signal-to-noise</b> &mdash; a band
-              with clean gaps between stations instead of one filled in. An amplified loop on the
-              same software and the same build needs none of it, which is why this is a choice and
-              not a default.
-              <br>Set a width and this band never widens past it; zooming in still narrows below
-              it. With <b>Lock this band</b> ticked it is the width, fixed, and listeners get no IF
-              control at all. <b>All bands</b> applies it everywhere.
-              <br>DAB, full-rate raw IQ and ADS&#8209;B take the full width regardless &mdash; they
-              need the whole capture.</div>
-            <!-- ★ AIRSPY R2 / MINI: LIMIT or LOCK, in those words, instead of the tick below —
-                 the two states are the whole choice here, so both are named. -->
-            <div class="row hide" id="gainAspLockRow" style="gap:8px;margin-top:10px">
-              <select id="gainAspLock" style="flex:1 1 260px" aria-label="Limit or lock">
-                <option value="0">Limit &mdash; listeners may go up to this position</option>
-                <option value="1">Lock &mdash; the gain sits at this position</option>
-              </select>
-            </div>
-            <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
-              <input type="checkbox" id="gainLock">
-              <span>Lock this band &mdash; the ceiling above is the SETTING, not a limit</span>
-            </label>
-            <div class="row" style="gap:8px;margin-top:10px">
-              <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add this band</button>
-            </div>
-          </div>
-          <div id="gainList" class="bandList"></div>
-          <div class="note"><b>Locked or limited, band by band.</b> A band you lock reads
-             <b>RF&nbsp;7 &middot; IF&nbsp;25 &#128274;</b> &mdash; the gain sits exactly there and
-             listeners get no gain controls at all. A band you do not lock reads
-             <b>up to RF&nbsp;7 &middot; IF&nbsp;20</b> &mdash; they keep the controls and simply
-             cannot go past it. Lock <b>All bands</b> and the whole radio is fixed.
-             <span id="gainLockRspNote" class="hide"><br><b>On an SDRplay, locking an RF figure alone fixes the RF
-             gain only</b>: the AGC no longer moves the LNA there, and listeners keep the IF &mdash; on AGC or by
-             hand. Give the band an IF figure too and the IF is fixed as well. Lock an RF figure on <b>All bands</b>
-             to fix the RF everywhere and leave every listener the IF.</span>
-             <span id="gainLimitAgcNote" style="display:none"><br><b>With VibeAGC on</b>, the loop obeys these
-             ceilings: tuning into a capped band brings the gain down to the ceiling, and the AGC
-             cannot raise it past that figure however quiet the band is.</span>
-             <br>Cap the bands that overload and leave the rest open &mdash; a strong local FM
-             transmitter is the usual reason, while HF wants everything the radio has. Tuning into
-             a capped band brings the gain down automatically.
-             <br><b>On a HackRF this is the TOTAL of the two gain stages</b> (LNA + VGA): both sit
-             after the mixer, so it is the sum that drives the converter. With a ceiling set, each
-             slider stops at whatever the other one leaves &mdash; lower one to raise the other. The
-             RF amp is not counted here because it is owner-only in its own right.
-             <span id="gainAspNote" class="hide"><br><b>On an Airspy R2 / Mini a band rule is a gain
-             mode and a position on it.</b> In that band listeners get only that mode's slider
-             &mdash; up to your position with Limit, fixed at it with Lock &mdash; and no Free mode,
-             manual LNA / mixer / VGA or AGCs. It holds for a signed-in admin too: change it here.
-             Bands without a rule keep every control.</span></div></label>
-        </div><!-- #gainRows -->
+      <!-- ★★ V12 beta96 A BEAST FEED RADIO'S OWN CARD — its address and its status. Only on such a radio's tab; every SDR card
+           is hidden there (beastTabApply — AGENTS.md: no dead controls). -->
+      <div class="card hide" id="beastCard">
+        <h2>ADS-B Beast feed</h2>
+        <p class="why">This radio is another receiver&rsquo;s ADS-B: listeners get the aircraft map and list, nothing to tune.</p>
+        <label><span class="lbl">Address of its Beast output</span>
+          <input type="text" id="beastAddr" maxlength="120" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px"></label>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+          <button type="button" class="ghost" id="beastAddrSave">Change the address</button>
+          <span class="hint" id="beastAddrMsg" style="margin:0"></span></div>
+        <div class="hint" id="beastStatus" style="color:var(--amber)"></div>
+        <div style="margin-top:8px"><button type="button" class="ghost" id="beastRemove">REMOVE this feed</button></div>
+        <div class="hint">If it says nothing is listening: on that machine dump1090-fa (or readsb) must be running with its
+          Beast output on port 30005, and reachable from here (the same network, no firewall in the way). To stop using
+          it, pause or remove this radio above.</div>
       </div>
 
-      <div class="card hide" id="bandCard">
-        <h2>Where listeners may tune</h2>
-        <p class="why">Leave both empty and this radio tunes anywhere it can hear.</p>
-
-        <label><span class="lbl">Allowed — only these, if you list any</span>
-          <div class="row" style="gap:8px">
-            <select id="allowPick" style="flex:1 1 200px"></select>
-            <!-- ★★★ TWO BOXES, BECAUSE A RANGE IS TWO NUMBERS. One field holding
-                 "87.5MHz - 108MHz" asks the owner to know that the separator is a hyphen, that
-                 both halves take a unit, and whether a space is allowed — none of which is on
-                 screen, and none of which they are told until the server refuses the whole
-                 string. A pair with "to" between them cannot be typed wrong that way. The string
-                 SAVED is unchanged, so nothing downstream knows this moved. -->
-            <input type="text" id="allowLo" placeholder="from, e.g. 87.5MHz" style="flex:1 1 120px">
-            <span class="lbl" style="flex:0 0 auto;align-self:center">to</span>
-            <input type="text" id="allowHi" placeholder="to, e.g. 108MHz" style="flex:1 1 120px">
-            <button type="button" class="ghost" id="allowAdd" style="flex:0 0 auto">Add</button>
-          </div>
-          <div id="allowList" class="bandList"></div></label>
-
-        <label style="margin-top:14px"><span class="lbl">Blocked — never these</span>
-          <div class="row" style="gap:8px">
-            <select id="blockPick" style="flex:1 1 200px"></select>
-            <!-- ★★★ TWO BOXES, BECAUSE A RANGE IS TWO NUMBERS. One field holding
-                 "108MHz - 137MHz" asks the owner to know that the separator is a hyphen, that
-                 both halves take a unit, and whether a space is allowed — none of which is on
-                 screen, and none of which they are told until the server refuses the whole
-                 string. A pair with "to" between them cannot be typed wrong that way. The string
-                 SAVED is unchanged, so nothing downstream knows this moved. -->
-            <input type="text" id="blockLo" placeholder="from, e.g. 108MHz" style="flex:1 1 120px">
-            <span class="lbl" style="flex:0 0 auto;align-self:center">to</span>
-            <input type="text" id="blockHi" placeholder="to, e.g. 137MHz" style="flex:1 1 120px">
-            <button type="button" class="ghost" id="blockAdd" style="flex:0 0 auto">Add</button>
-          </div>
-          <div id="blockList" class="bandList"></div></label>
-
-        <div class="note" id="bandNote"></div>
-        <div class="row" id="bandCopyRow" style="gap:8px;margin-top:6px">
-          <select id="bandCopyFrom" style="flex:1 1 200px"></select>
-          <button type="button" class="ghost" id="bandCopy" style="flex:0 0 auto">Copy these lists</button>
-        </div>
-        <div class="hint">A listener who tunes to the edge of an allowed band stops there and is
-          told why; tuning the same way again jumps to the next allowed band. That is exactly how
-          this receiver already handles a gap the hardware cannot cover, so it is one behaviour to
-          learn rather than two.
-          <br><b>The server enforces this as well as the page</b>, so it holds for any client, not
-          just this one.</div>
+      <!-- ★★★ OUTSIDE #lockedOnly, AND THAT IS THE WHOLE FIX. This card sat INSIDE it, so the
+           entire Radio section — the RF and DAB notches, and everything added to them — was
+           hidden on any receiver whose RF centre is not locked. The Pi's RSP is locked and showed
+           them; the x86 box's RSP is "shared VFO, unlocked RF centre" and never did (Stuart,
+           2026-09-11, the FIRST thing reported that evening: "the Server wasnt giving me the
+           options for the RF/DAB notches on the RSP1A setup page").
+           ★★ It is wrong on the merits as well as by accident. A notch is an ANALOGUE filter ahead
+           of the tuner: it protects the front end from a transmitter nowhere near what you are
+           listening to, which has nothing whatever to do with whether the dial is locked. Only
+           the RANGE card above it is genuinely locked-only, because a range is what a locked
+           receiver HAS.
+           ★ I chased this for an evening — a driver gate, a dead radio, a lost `configured` flag —
+           and it was markup nesting the entire time. The gate in renderHw() was innocent. -->
+      <!-- ★★★ AN ICOM TRANSCEIVER — RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md). Shown only when this tab's radio
+           is an Icom (icomRender); every IQ card that means nothing on it (the window, gain, rate, bias-T)
+           is hidden instead — AGENTS.md: never a control whose every use is a no-op. -->
+      <div class="card hide" id="icomCard">
+        <h2>Icom transceiver</h2>
+        <p class="why">VibeServer <b>listens through</b> your Icom and never transmits. It tunes the radio over
+           CI-V, shows the radio&rsquo;s own scope as the waterfall and streams the radio&rsquo;s receive audio.</p>
+        <div class="hint" id="icomModel"></div>
+        <div id="icomPreflight" style="margin:10px 0 14px"></div>
+        <label><span class="lbl">CI-V baud rate</span>
+          <select id="icomBaud">
+            <option value="115200">115200 (recommended)</option><option value="57600">57600</option>
+            <option value="38400">38400</option><option value="19200">19200</option>
+            <option value="9600">9600</option><option value="4800">4800</option></select>
+          <div class="hint">Must match the radio: <b>MENU &gt; SET &gt; Connectors &gt; CI-V &gt; CI-V USB Baud Rate</b>
+            (or set the radio to Auto). The scope shares this serial line with everything else, so the speed IS the
+            waterfall&rsquo;s speed: 115200 gives about 19 lines a second, 19200 only about 3. Also set
+            <b>CI-V USB Port</b> to &ldquo;Unlink from [REMOTE]&rdquo;.</div></label>
+        <label><span class="lbl">CI-V address</span>
+          <input id="icomCiv" maxlength="2" placeholder="Empty = the radio's own (94 on an IC-7300)">
+          <div class="hint">Two hex digits. Only change it if you changed <b>CI-V Address</b> on the radio.</div></label>
+        <label><span class="lbl">Scope speed</span>
+          <select id="icomScopeSpeed"><option value="0">Fast</option><option value="1">Mid</option><option value="2">Slow</option></select>
+          <div class="hint">The radio&rsquo;s own sweep speed. Slow sweeps are smoother and leave more of the serial line for tuning.</div></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input type="checkbox" id="icomTuneLock" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Only I may tune this radio</span></label>
+        <div class="hint" id="icomLockHint">Off (the default): the radio follows this server&rsquo;s ordinary dial rules,
+          like any other radio &mdash; a single listener tunes it; on a shared server everyone shares the dial, with
+          <b>Ask before tuning</b> if you have it on. On: listeners hear whatever you are on and cannot retune your radio
+          mid-QSO; you tune from the radio or from VibeSDR signed in as admin. <b>This only protects the radio once an
+          admin password is set</b> &mdash; without one, anyone can sign in as admin.</div>
+        <div class="hint" style="margin-top:12px">ATT, preamp, AGC, RF gain, NB, NR and ANF follow the same rules as any
+          radio&rsquo;s gain: listeners may change them on a personal receiver; on a locked (shared) receiver only you
+          can; and your <b>AGC lock</b> or a <b>fixed gain</b> on a band keeps ATT, preamp and RF gain yours.</div>
+        <!-- ★★ POWER (2026-11-04, Saber: other software switches his IC-7300 on, so VibeServer often starts while it is
+             off). VibeServer waits quietly for a switched-off radio whatever this says; this only decides whether it may
+             SEND the power-on. Manual: IC-7300 Full Manual §19, command 18 01, footnote *3 (the FE preamble). -->
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input type="checkbox" id="icomPowerOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Power on the radio over CI-V</span></label>
+        <div class="hint">When somebody connects and the radio is not answering, VibeServer sends the IC-7300&rsquo;s CI-V
+          <b>Power ON</b> command (18 01, after the run of FE bytes the manual asks for) &mdash; they see &ldquo;Switching
+          the radio on&rdquo; for about a minute &mdash; then checks USB SEND, USB Keying and VOX as always. With nobody
+          connected it sends nothing. It only works while the radio still has its 13.8 V supply and the USB cable
+          connected, with <b>CI-V USB Baud Rate</b> set to the same fixed speed as here (a radio that is off cannot detect
+          &ldquo;Auto&rdquo;). With this ticked a switched-off radio is still offered to listeners; unticked, it is shown
+          greyed out (&ldquo;Switched off&rdquo;) until you switch it on, and VibeServer never sends a power command by
+          itself.</div>
+        <!-- ★★ AUTOMATIC POWER-OFF (Stuart, 2026-11-05: "Automatically Power off radio when not in use [x]  How long after
+             last user leaves [5 minutes]"). Only with power-on ticked — otherwise nothing could switch it back on for the
+             next listener — so it is drawn greyed with that reason when power-on is unticked. -->
+        <div id="icomAutoOffRow" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">
+          <label style="display:flex;gap:8px;align-items:center;margin:0">
+            <input type="checkbox" id="icomAutoOff" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Automatically power off the radio when not in use</span></label>
+          <label style="display:flex;gap:8px;align-items:center;margin:0"><span>How long after the last user leaves</span>
+            <select id="icomOffDelayMin">
+              <option value="0">Instant</option><option value="1">1 min</option><option value="5">5 min</option>
+              <option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option>
+              <option value="60">60 min</option></select></label></div>
+        <div class="hint" id="icomAutoOffHint">Switches the radio off (CI-V 18 00) once nobody has been connected for this
+          long, so a radio is not switched on and off by listeners coming and going; somebody connecting in the wait
+          cancels it, and the next listener switches it back on. Never while anybody is connected, or while Background
+          Decoding, the DX scanner or ADS-B keeps the radio busy.</div>
+        <div class="hint" id="icomPowerMsg"></div>
+        <label><span class="lbl">Receive audio</span>
+          <input id="icomAudio" placeholder="auto">
+          <div class="hint"><b>auto</b> finds the radio&rsquo;s own USB audio next to its CI-V port. <b>none</b> serves the
+            waterfall and dial only. On Linux, a sound server (PulseAudio/PipeWire) holding the radio&rsquo;s audio stops
+            VibeServer opening it. On a Mac, allow VibeServer under Privacy &amp; Security &gt; Microphone.</div></label>
+        <label><span class="lbl">Port</span>
+          <input id="icomPort" placeholder="usb">
+          <div class="hint"><b>usb</b> = the radio&rsquo;s USB port, found by its own name. VibeServer drives the radio&rsquo;s
+            USB chip directly and <b>never raises its DTR or RTS lines</b>, which some menu settings use to transmit.</div></label>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <input type="checkbox" id="icomTtyOk" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Allow a serial device (/dev/&hellip;) as the port</span></label>
+        <p class="why" style="color:var(--warn)">Opening a serial device raises its DTR and RTS lines for an instant. If the
+           radio&rsquo;s <b>USB SEND</b> or <b>USB Keying</b> is set to DTR or RTS, that keys the transmitter. Only tick this
+           if those are OFF &mdash; VibeServer checks them every time it connects and refuses to start if they are not.</p>
+        <p class="why"><b>Only one program can hold the radio&rsquo;s USB port.</b> Close wfview, wfweb, WSJT-X&rsquo;s rig
+           control and any logger that talks to the radio, or VibeServer cannot reach it.</p>
       </div>
-
-      <div class="card" id="modeCard">
-        <h2>Modes and decoders</h2>
-        <div class="hint">Switch off anything this receiver cannot usefully do. A mode that is off
-          is never OFFERED — it does not appear in any client's menu at all — rather than being
-          shown and then refused, because a control whose every use fails reads as a broken
-          receiver instead of somebody's decision.
-          <br>Bands say WHERE this aerial is useful; this says WHAT it is useful for. An HF-only
-          radio has no business showing WFM or the RDS decoder, and an amplified aerial that suits
-          FM may be quite wrong for a DAB transmitter two miles away.
-          <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
-        <!-- ★★★ beta96 NEW MODES (docs/v12/NEW-MODES-OFF.md): the one-line notice after an update added switches, and ALL ON /
-             ALL OFF for this radio — they change the ticks on screen only; nothing is saved until Save (a mis-tap undoes). -->
-        <!-- ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26): an EXPLICIT choice, not inferred from the ticks (which broke when new
-             modes arrived). The server enforces it over the ticks (vsEnforcedBlocked), which stay as they were underneath, so
-             General gives them back. The list is what THIS radio can do (the server's hwinfo; no dead entries). -->
-        <div id="radioUseWrap" style="margin-top:12px">
-          <span class="lbl">Radio use</span>
-          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="radioUseKind" id="radioUseGeneral" value="general">
-            <span>General: listeners choose from the modes ticked below</span></label>
-          <label style="display:flex;align-items:center;gap:10px;margin-top:6px"><input type="radio" name="radioUseKind" id="radioUseSingle" value="single">
-            <span>Single mode:</span> <select id="singlePick"></select></label>
-          <div class="hint">Use this to lock the radio to a single mode such as ADS-B / AIS / VDL2. Only the selected decoder is available.</div>
-          <div class="hint" id="singleNote"></div>
-        </div>
-        <div id="newModesNote" class="note hide" style="margin-top:10px"></div>
-        <div class="row" id="modeAllRow" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
-          <button type="button" class="ghost" id="modeAllOn">All on</button>
-          <button type="button" class="ghost" id="modeAllOff">All off</button>
-          <span class="hint" id="modeAllNote" style="margin:0" aria-live="polite"></span>
-        </div>
-        <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
-        <!-- ★★ V12 DAB ONLY (Stuart, 2026-11-17): every other mode switched off — say what that does for listeners.
-             ★★ V12 2026-11-18: any whole-radio mode left alone (ADS-B, ISM, NDB, AIS, DATALINK, SONDES) — modeTreeGrey
-             writes that mode's name in; DAB's words are the ones below. -->
-        <div id="dabOnlyModesNote" class="note hide" style="margin-top:10px"><b>DAB only: listeners land in DAB and cannot
-          leave it.</b> There is no EXIT DAB for them; you can still leave it when signed in as admin.</div>
-        <!-- ★★ V12 BAND GOVERNOR (decoders/digi_governor.h): the owner's word per mode in "Digital spots: Band". -->
-        <div id="bandModeWrap" class="hide" style="margin-top:12px">
-          <div class="hint"><b>Band skimmer, mode by mode.</b> The band skimmer reads every mode on a band at once. To keep that
-            affordable it decodes a mode only while its window has something in it, drops depth (extra passes) before it
-            drops a mode, and when the CPU is short it drops the least-used modes first (FT8, FT4, WSPR, JS8, FT2, JTTY,
-            PSK, newer modes last). <b>Auto</b> lets it decide. <b>Always</b> decodes the mode every period, even when its
-            window looks empty and even over budget. <b>Off</b> never runs it in Band. Listeners see each mode's state in
-            the spots box.</div>
-          <div id="bandModeList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"></div>
-        </div>
-      <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — DRAWN UNDER DAB in the modes list (2026-10-31: a
-           decoder's options sit under its own switch; modeBlockRender moves it there). SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
-           the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
-           (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
-           listening to. The playing station always has its own live text either way. -->
-      <div id="dabScanRow" class="hide">
-      <label class="row" style="gap:8px;margin-top:2px">
-        <span class="lbl" style="min-width:0">DAB: radio text for every station</span>
-        <select id="dabScanLabels">
-          <option value="-1">This machine's default</option>
-          <option value="1">On — scan the whole multiplex</option>
-          <option value="0">Off — only the station playing</option>
-        </select></label>
-      <div class="note">On, the receiver decodes a few extra stations in turn so the station list shows
-         what every station is playing. It costs processor time; the default is off on a small 32-bit
-         machine and on everywhere else. The station you are listening to always shows its own text.</div>
-      </div>
-      <!-- ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md) — drawn under DAB (modeBlockRender moves it there). Stuart's
-           rule: the benchmark measures N stations at once; N >= the listener limit = on, else off; the owner chooses. -->
-      <div id="dabOwnRow">
-      <label class="row" style="gap:8px;margin-top:2px">
-        <span class="lbl" style="min-width:0">DAB: each listener their own station</span>
-        <select id="dabOwnStation">
-          <option value="-1">As the benchmark says</option>
-          <option value="1">On</option>
-          <option value="0">Off</option>
-        </select></label>
-      <div class="note">On, every listener on a shared dial can pick their own station inside the multiplex, and the rest
-         keep theirs. Listeners on the same station share one decode. The multiplex itself stays shared. Off, a pick changes
-         the station for everyone, as before.</div>
-      <div class="note" id="dabOwnNote"></div>
-      </div>
-        <div class="note" id="modeBlockNote"></div>
-        <!-- ★★★ beta96 the owner's answer for the NEXT update (vibe_decoder_reach.h newModesState): "newmodes@on|off" -->
-        <div id="newModesPolicy" style="margin-top:14px">
-          <div class="lbl">When an update adds new modes</div>
-          <div class="reach">
-            <label><input type="radio" name="newModesPol" id="newModesPolOn" value="on">
-              <span><b>Switch them on</b></span></label>
-            <label><input type="radio" name="newModesPol" id="newModesPolOff" value="off">
-              <span><b>Leave them off</b> until I tick them</span></label>
-          </div>
-          <div class="hint" id="newModesPolHint"></div>
-        </div>
+      <div class="card" id="radioStartCard">
+        <h2>Radio</h2>
+        <p class="why">How this radio starts, and where its gain is set. Gain itself lives in the
+           client, behind the admin password, where you can see the waterfall while you move it.</p>
+        <div id="hw"></div>
       </div>
 
       <div class="card" id="radioHwCard">
@@ -2488,6 +1753,612 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             to wait for it to come back, and cannot if the other program has taken it. A short
             wait absorbs somebody reloading their browser.</div></label>
       </div>
+      <!-- ★ BACKGROUND DECODING moved to its own card, last on this tab (b96-bgsplit, Stuart's order: 11). -->
+      <!-- ★ UNATTENDED SATELLITE PASSES and the DX SCANNER moved to Background decoding (b96-bgsplit, Stuart's order: 11). -->
+      <div id="hwPpb" class="hide">
+        <label><span class="lbl">Calibration (ppb)</span>
+          <input type="number" id="ppb" step="1" placeholder="0"></label>
+        <p class="why">The Airspy HF+ is calibrated in parts per BILLION. 0 unless you have measured it.</p>
+      </div>
+    </div>
+
+      <div class="card hide" id="bandCard">
+        <h2>Where listeners may tune</h2>
+        <p class="why">Leave both empty and this radio tunes anywhere it can hear.</p>
+
+        <label><span class="lbl">Allowed — only these, if you list any</span>
+          <div class="row" style="gap:8px">
+            <select id="allowPick" style="flex:1 1 200px"></select>
+            <!-- ★★★ TWO BOXES, BECAUSE A RANGE IS TWO NUMBERS. One field holding
+                 "87.5MHz - 108MHz" asks the owner to know that the separator is a hyphen, that
+                 both halves take a unit, and whether a space is allowed — none of which is on
+                 screen, and none of which they are told until the server refuses the whole
+                 string. A pair with "to" between them cannot be typed wrong that way. The string
+                 SAVED is unchanged, so nothing downstream knows this moved. -->
+            <input type="text" id="allowLo" placeholder="from, e.g. 87.5MHz" style="flex:1 1 120px">
+            <span class="lbl" style="flex:0 0 auto;align-self:center">to</span>
+            <input type="text" id="allowHi" placeholder="to, e.g. 108MHz" style="flex:1 1 120px">
+            <button type="button" class="ghost" id="allowAdd" style="flex:0 0 auto">Add</button>
+          </div>
+          <div id="allowList" class="bandList"></div></label>
+
+        <label style="margin-top:14px"><span class="lbl">Blocked — never these</span>
+          <div class="row" style="gap:8px">
+            <select id="blockPick" style="flex:1 1 200px"></select>
+            <!-- ★★★ TWO BOXES, BECAUSE A RANGE IS TWO NUMBERS. One field holding
+                 "108MHz - 137MHz" asks the owner to know that the separator is a hyphen, that
+                 both halves take a unit, and whether a space is allowed — none of which is on
+                 screen, and none of which they are told until the server refuses the whole
+                 string. A pair with "to" between them cannot be typed wrong that way. The string
+                 SAVED is unchanged, so nothing downstream knows this moved. -->
+            <input type="text" id="blockLo" placeholder="from, e.g. 108MHz" style="flex:1 1 120px">
+            <span class="lbl" style="flex:0 0 auto;align-self:center">to</span>
+            <input type="text" id="blockHi" placeholder="to, e.g. 137MHz" style="flex:1 1 120px">
+            <button type="button" class="ghost" id="blockAdd" style="flex:0 0 auto">Add</button>
+          </div>
+          <div id="blockList" class="bandList"></div></label>
+
+        <div class="note" id="bandNote"></div>
+        <div class="row" id="bandCopyRow" style="gap:8px;margin-top:6px">
+          <select id="bandCopyFrom" style="flex:1 1 200px"></select>
+          <button type="button" class="ghost" id="bandCopy" style="flex:0 0 auto">Copy these lists</button>
+        </div>
+        <div class="hint">A listener who tunes to the edge of an allowed band stops there and is
+          told why; tuning the same way again jumps to the next allowed band. That is exactly how
+          this receiver already handles a gap the hardware cannot cover, so it is one behaviour to
+          learn rather than two.
+          <br><b>The server enforces this as well as the page</b>, so it holds for any client, not
+          just this one.</div>
+      </div>
+      <!-- ★★★ WHERE LISTENERS MAY TUNE THIS RADIO. Single-user only: in shared mode the locked
+           range IS the limit, so offering these there would be two answers to one question
+           (Stuart, 2026-08-08: "blocked bands wont be needed in shared mode as the locked nature
+           of it is the block/allow").
+           ★★ ALLOW says what is reachable; BLOCK carves holes out of it. Leaving ALLOW empty means
+           the whole radio, so somebody who only wants to keep listeners off the airband does not
+           have to enumerate everything else first. -->
+      <!-- ★★★ WHAT A LISTENER MAY DO TO THE FRONT END.
+           A CEILING, NOT A LOCK: the gain control stays the listener's to move, it simply cannot
+           go past what the owner allows on that band. The admin gate already takes gain away
+           entirely on a shared receiver, and that is a different thing — an owner capping FM wants
+           the front end protected and the listener left alone, not to field gain requests all
+           evening (Stuart, 2026-08-12).
+           ★★ EVERY FIELD IS IN THIS RADIO'S OWN UNITS, because the three radios do not share a
+              gain model — and each is shown only on the radios that HAVE the control, per the rule
+              in AGENTS.md: a control whose every use is a no-op reads as a broken feature. -->
+      <div class="card hide" id="gainCard">
+        <h2>Gain limits</h2>
+        <!-- ★★ V12 ONE HOME FOR AN SDRplay's GAIN (Stuart, 2026-11-17: "the gain locks for the SDRPlay need to be with the
+             radio controls as right now there are multiple stages in the setup menu where the gain is setup"). For an
+             SDRplay, placeGainRows() moves #gainRows (this card's whole body, every id and handler intact) under the
+             radio's own AGC rows in "This radio's hardware", and hides this card; any other radio keeps it here. -->
+        <div id="gainRows">
+        <p class="why">Optional. Leave everything empty and listeners have the full range, which is
+           what a receiver does today.</p>
+
+
+        <label class="hide" id="gainRestRow"><span class="lbl">Starting gain, and where it returns
+             when everybody has left</span>
+          <div class="row" style="gap:8px;align-items:center">
+            <input type="range" id="gainRestSlider" class="hide" style="flex:1 1 200px">
+            <input type="text" id="gainRest" placeholder="e.g. 19.7 dB — empty to leave it alone"
+                   style="flex:1 1 160px">
+          </div>
+          <div class="note">Where the radio sits before anyone connects, and where it goes back to
+             when the last listener leaves &mdash; a listener who turns the gain up should not leave it
+             up for the next person. Applied once they have all gone rather than the moment one
+             disconnects, so a page reload does not undo somebody's setting.
+             <br><span id="gainRestAgcNote" class="hide">With automatic RF gain on this is the STARTING gain:
+             the loop begins here and is then free to move in either direction, and it returns here
+             rather than being switched off when the receiver empties.</span></div></label>
+        <!-- ★★★ ONE SLIDER, TWO JOBS, SAID PLAINLY: a starting point, or THE gain. Locked, the
+             figure above is fixed for every band, listeners get no gain controls, and VibeAGC
+             below is greyed — an AGC cannot run on a gain that may not move (Stuart, 2026-09-15:
+             "either a starting point or a locked gain"). Stored as the existing all-bands lock
+             (gainLimits "all:<raw>" + gainLocks "all:1"), so the server needs nothing new. -->
+        <label class="row" id="gainRestLockRow" style="gap:8px;align-items:center;margin-top:6px;display:none">
+          <input type="checkbox" id="gainRestLock" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Lock this gain?</span></label>
+        <div class="note" id="gainRestLockNote" style="display:none"><b>Gain locked.</b> This is THE gain,
+          on every band, for every listener &mdash; nobody can move it. VibeAGC is unavailable while
+          the gain is locked. Untick it and VibeAGC works as normal.</div>
+
+        <!-- ★★★ THE NAME IS DOING REAL WORK HERE. Everything written online says the RTL-SDR's
+             automatic gain is broken — and it is, which is why VibeServer has never used it. A
+             control simply labelled "AGC" would be read as THAT one and switched straight past,
+             so it says whose AGC it is (Stuart, 2026-08-21: "we dont want users to ignore it as
+             they think it is a setting that is broken because of what is online"). -->
+        <label class="hide" id="rtlAgcRow"><!-- ★★ HTML DOES NOT PROCESS \uXXXX — ENTITIES DO. These two lines are markup, not JavaScript,
+                 so the escapes were served to the reader verbatim: "VibeAGC \u2014 VibeSDR\u2019s own
+                 AGC" (Stuart, 2026-08-23, with the screenshot). The same escapes further down this
+                 file are inside JS string literals, where they are correct and must be left alone —
+                 which is exactly why this was easy to miss. Sister to the JSX trap in
+                 memory/android_server_gui_parity: the language decides whether an escape is text. -->
+            <span class="lbl">VibeAGC &mdash; VibeSDR&rsquo;s own AGC for RTL-SDR</span>
+          <select id="rtlAgc">
+            <option value="0">Off — the gain stays where it is set</option>
+            <option value="1">On — the receiver manages its own gain</option>
+          </select>
+          <div class="note" id="rtlAgcLockedNote" style="display:none;color:var(--warn)">
+            <b>VibeAGC unavailable</b> &mdash; the gain is locked above.</div>
+          <div class="note"><b>This is not the dongle's built-in AGC.</b> That one is unreliable
+            across tuners and known broken on the RTL-SDR Blog v4, and this server never uses it.
+            VibeSDR's own loop measures how close the signal is to overloading the converter and
+            moves the tuner a step at a time, the way an SDRplay does in hardware.
+            <br>The <b>starting gain</b> at the bottom of this card is where the loop begins; from
+            there it may use the tuner's whole range in either direction. Leave it off and the gain
+            stays exactly where you set it.</div></label>
+        <!-- ★★ beta88: THE PHONE'S "Keep the tuner's IF filter selective" (ServerModeScreen tunerBwAuto) — a phone's page only. -->
+        <label class="androidOnly" id="androidTunerBwRow" style="margin-top:10px">
+          <input type="checkbox" id="androidTunerBw">
+          <span class="lbl">Keep the tuner&rsquo;s IF filter selective</span>
+          <div class="note">About 60&nbsp;% of the sample rate, so neighbouring transmitters stay out of the mixer. Off lets
+            the whole capture reach it &mdash; only for a full-rate raw IQ recording.</div></label>
+        <!-- ★★ THE TUNER'S IF FILTER, beside VibeAGC because they are the pair an owner sets once
+             and expects to STAY set. Stuart had to re-enable both on every connect (2026-08-25) —
+             the AGC because a client re-asserted its stored value, this one because it had no
+             config field at all and lived only in the running process. -->
+        <label class="hide" id="gainAgcLockRow" class="row">
+          <input type="checkbox" id="gainAgcLock">
+          <span class="lbl">Lock VibeAGC on</span>
+          <div class="note">Listeners may not switch to manual. On an RTL-SDR this fixes VibeSDR's
+             own AGC on, so one listener cannot set a gain that everybody else then listens through;
+             on an Airspy HF+ it is the whole protection available, since it has no variable gain to
+             limit.</div></label>
+
+
+        <!-- ★★★ THE AGC's TARGET, AND WHO OWNS IT. The RSP's AGC drives towards a level, and
+             where that level sits decides how hard the front end is run — so on a shared receiver
+             it is an operator setting, not a listener one. -30 dBFS is SDRplay's OWN working point
+             (the API default of -60 is a different, far gentler thing), so that is home.
+             ★ RSP only: nothing else here has a settable AGC target. -->
+        <label class="hide" id="agcSetRow"><span class="lbl">IF AGC target</span>
+          <div class="row" style="gap:8px">
+            <input type="range" id="agcSet" min="-72" max="-10" step="1" style="flex:1 1 200px">
+            <span class="dim" id="agcSetVal" style="flex:0 0 6em;text-align:right"></span>
+          </div>
+          <div class="note">Where the AGC aims. A higher (less negative) figure asks for a louder
+            output and so applies MORE gain, which on a strong band is how a front end is overloaded;
+            a lower one runs quieter with more headroom. <b>&minus;30 dBFS is the default</b> and
+            suits most aerials.
+            <br>DAB takes this lower while it runs &mdash; see the DAB override below &mdash; and
+            gives it back on the way out.</div></label>
+        <label class="hide" id="agcSetLockRow" class="row">
+          <input type="checkbox" id="agcSetLock">
+          <span class="lbl">Lock the AGC target</span>
+          <div class="note">Listeners see it but cannot move it. Worth setting on a shared
+            receiver: the target decides how hard everyone's front end is driven, so one listener
+            winding it up is a change everybody else hears.</div></label>
+
+        <label class="hide" id="gainLimitRow"><span class="lbl">Per-band ceilings</span>
+          <!-- ★★★ ONE BAND'S ENTRY, DRAWN AS ONE THING. The IF ceiling and the HackRF split are
+               stored PER BAND, but they were laid out on their own lines BELOW the Add button —
+               outside the row they belong to — and so read as a single setting for the whole radio
+               (Stuart, 2026-08-28: "that IF gain limit looks like it is one gain limit and not per
+               band"). The data was right and the layout said otherwise, which is the worse of the
+               two: nothing on screen contradicted it.
+               ★★ So everything that goes into ONE entry now sits inside one bordered block with
+               Add at the BOTTOM of it. The button being last is what makes the block read as a
+               form you fill in and then submit, rather than a row followed by some other controls. -->
+          <div style="border-left:3px solid var(--amber);padding:10px 0 10px 12px;margin:10px 0">
+            <div class="dim" style="font-size:12px;margin-bottom:8px">
+              Everything here applies to the ONE band you pick. Add it, then pick another band to
+              set a different ceiling &mdash; each row below is its own band.
+            </div>
+            <div class="row" style="gap:8px">
+              <select id="gainPick" style="flex:1 1 200px"></select>
+              <!-- ★★★ AIRSPY R2 / MINI ONLY: THE GAIN MODE, THEN THE POSITION ON IT. Stuart,
+                   2026-09-28: "a dropdown to choose the gain mode and the slider after that to
+                   then limit or lock". The band is held on this curve and the slider beside it is
+                   a position 0-21 on it; Free mode and the manual stages are closed in that band.
+                   Stored in its own per-band list (gainCurves), like the lock and the split. -->
+              <select id="gainCurve" class="hide" style="flex:0 1 150px" aria-label="Gain mode">
+                <option value="0">Linearity</option>
+                <option value="1">Sensitivity</option>
+              </select>
+              <input type="range" id="gainMaxSlider" class="hide" style="flex:1 1 160px">
+              <input type="text" id="gainMax" placeholder="max, e.g. 25 dB" style="flex:1 1 120px">
+            </div>
+          <!-- ★★ THE SDRPLAY'S SECOND STAGE. The RF position above is the right primary control —
+               it is ahead of the mixer, so it decides whether the front end overloads at all, and
+               capping it leaves the IF AGC its full range to work in. That reasoning assumes
+               working hardware: on a damaged RSP1 clone the gain stages misbehave and the owner
+               needs the IF too (TGCFabian, via Stuart, 2026-08-28). Hidden while the AGC is locked on,
+               because there the loop owns this control and a ceiling would be a figure nothing
+               reads. -->
+            <!-- ★★★ THE NAME AND THE UNITS THE LISTENER'S OWN CONTROL USES. This asked for a "max
+                 IF position" — a gain position, to match the RF ceiling beside it — and TGCFabian, who
+                 owns the RSP this exists for, reported that it should read as GAIN REDUCTION "as
+                 per the control in the client". He is right: the listener's slider says IF GAIN
+                 REDUCTION in dB and the wire field carries a reduction, so an owner's figure in
+                 any other unit describes the same stage in a way nobody can compare.
+                 ★★ 20 to 59 dB, WHICH IS THE RANGE THE RADIO ACTUALLY HAS — the slider was 0-39,
+                 the span of the old position scale, so it could not express the ends of the
+                 control it was limiting ("the slider isnt giving the full range").
+                 ★ A BIGGER NUMBER IS A TIGHTER LIMIT here, the opposite of every other figure on
+                 this page, because more reduction is less gain. That is exactly why it is labelled
+                 as a reduction and not dressed up as a ceiling. -->
+            <div class="row hide" id="gainIfRow" style="gap:8px;margin-top:6px">
+              <span class="dim" style="flex:0 0 auto">Least IF gain reduction</span>
+              <input type="range" id="gainIfSlider" min="20" max="59" style="flex:1 1 160px">
+              <input type="text" id="gainIfMax" placeholder="e.g. 25 dB (optional)" style="flex:1 1 140px">
+              <span class="dim" id="gainIfVal" style="flex:0 0 auto"></span>
+            </div>
+          <!-- ★★★ A TOTAL IS ENOUGH TO LIMIT WITH AND NOT ENOUGH TO SET WITH. LNA + VGA = 30 dB
+               describes a whole family of radios: all of it in the LNA is a different receiver from
+               all of it in the VGA. So a LOCKED HackRF band needs a second figure — where between
+               the two stages that total sits. Only shown when the lock is on: as a limiter the
+               listener still chooses the split for themselves, which is today's behaviour and
+               stands. -->
+            <div class="row hide" id="gainSplitRow" style="gap:8px;margin-top:6px">
+              <span class="dim" style="flex:0 0 auto">Split for this band</span>
+              <input type="range" id="gainSplitSlider" min="0" max="100" step="5" value="50" style="flex:1 1 200px">
+              <span class="dim" id="gainSplitVal" style="flex:0 0 auto">50% LNA / 50% VGA</span>
+            </div>
+            <!-- ★★★ THE LOCK IS PER BAND, and it belongs in the entry rather than over the card.
+                 As one switch for the whole radio it could not express the thing an owner actually
+                 wants: Stuart, 2026-08-28 — "I can lock the gain on FM but allow it to be unlocked
+                 but limited for HF." Ticked here it applies to THIS band; pick "All bands" and it
+                 is the whole radio, because "all bands" was always just another band. -->
+            <!-- ★★★ THE TUNER'S IF FILTER, PER BAND, AND IT BELONGS WITH THE GAIN CEILINGS.
+                 Stuart, 2026-09-27: "put it with the per band ceilings, so for me now I would
+                 select FM broadcast band, leave the gain untouched but from a dropdown set 1.2MHz
+                 IF filter."
+                 ★★ SET LEVELS, NOT A TYPED FIGURE. The R820T2 quantises to its own coarse steps
+                 — asking for 2048 kHz gives 2800, and 1228 gives 1400 — so a free-text box promises
+                 a precision the hardware has not got, and the padlock would show a number the
+                 owner never typed. These are the SAME widths the listener's menu offers, so what
+                 is set is what is seen.
+                 ★★ AND THE LOCK BELOW GOVERNS BOTH. Stuart: "that way the button to lock the gain
+                 can lock the gain and the filter; without it the filter can still move like the
+                 gain, with auto filter width and auto gain." Unlocked, this is a CEILING and
+                 zooming still narrows under it; locked, it is the width, fixed.
+                 ★ The gain may be left untouched — a band carrying only an IF width is a rule. -->
+            <div class="row" id="gainIfBwRow" style="gap:8px;margin-top:6px">
+              <span class="dim" style="flex:0 0 auto">IF filter for this band</span>
+              <select id="gainIfBw" style="flex:1 1 180px">
+                <option value="">&mdash; automatic &mdash;</option>
+                <!-- ★ 99999 = "as wide as the capture". The clamp to captureWide upstream
+                     turns it into the real figure, so this cannot ask for more filter than
+                     there is signal. It is how "All bands: wide" replaces the global switch
+                     this section took the place of. -->
+                <option value="99999">Wide &mdash; the whole capture</option>
+                <!-- ★★★ THE TUNER'S ACTUAL RUNGS, NOT ROUND NUMBERS. The filter ladder in
+                     applyAutoIf is 350 / 500 / 700 / 1000 / 1400 / 2000 / 2800 kHz, and this list
+                     offered 1.5, 1.2, 800, 600, 450 — none of which exist. Choosing 1.2 landed on
+                     1400 and the readout said so, which reads as the setting being ignored:
+                     Stuart, 2026-09-27, "I did choose 1.2MHz band limit and its showing 1.4MHz."
+                     ★★ A menu that offers a value the hardware cannot produce is a menu that lies.
+                     What is chosen here is now exactly what the chip reports back. -->
+                <option value="2800">2.8 MHz</option>
+                <option value="2000">2.0 MHz</option>
+                <option value="1400">1.4 MHz</option>
+                <option value="1000">1.0 MHz</option>
+                <option value="700">700 kHz</option>
+                <option value="500">500 kHz</option>
+                <option value="350">350 kHz &mdash; narrowest</option>
+              </select>
+            </div>
+            <div class="note"><b>Left alone, the filter is as wide as the sample rate needs.</b>
+              Nothing is narrowed, and the spectrum has no roll-off at its edges.
+              <br>Narrowing is for an aerial that needs it. A long wire hands the tuner the whole
+              FM band at once and the front end manufactures its own interference from it, which a
+              narrower IF filter keeps out: measured on an RTL-SDR Blog V4 on a long wire, at
+              UNCHANGED gain, that was worth <b>19&nbsp;dB of signal-to-noise</b> &mdash; a band
+              with clean gaps between stations instead of one filled in. An amplified loop on the
+              same software and the same build needs none of it, which is why this is a choice and
+              not a default.
+              <br>Set a width and this band never widens past it; zooming in still narrows below
+              it. With <b>Lock this band</b> ticked it is the width, fixed, and listeners get no IF
+              control at all. <b>All bands</b> applies it everywhere.
+              <br>DAB, full-rate raw IQ and ADS&#8209;B take the full width regardless &mdash; they
+              need the whole capture.</div>
+            <!-- ★ AIRSPY R2 / MINI: LIMIT or LOCK, in those words, instead of the tick below —
+                 the two states are the whole choice here, so both are named. -->
+            <div class="row hide" id="gainAspLockRow" style="gap:8px;margin-top:10px">
+              <select id="gainAspLock" style="flex:1 1 260px" aria-label="Limit or lock">
+                <option value="0">Limit &mdash; listeners may go up to this position</option>
+                <option value="1">Lock &mdash; the gain sits at this position</option>
+              </select>
+            </div>
+            <label class="row hide" id="gainLockRow" style="gap:8px;margin-top:10px">
+              <input type="checkbox" id="gainLock">
+              <span>Lock this band &mdash; the ceiling above is the SETTING, not a limit</span>
+            </label>
+            <div class="row" style="gap:8px;margin-top:10px">
+              <button type="button" class="ghost" id="gainAdd" style="flex:0 0 auto">Add this band</button>
+            </div>
+          </div>
+          <div id="gainList" class="bandList"></div>
+          <div class="note"><b>Locked or limited, band by band.</b> A band you lock reads
+             <b>RF&nbsp;7 &middot; IF&nbsp;25 &#128274;</b> &mdash; the gain sits exactly there and
+             listeners get no gain controls at all. A band you do not lock reads
+             <b>up to RF&nbsp;7 &middot; IF&nbsp;20</b> &mdash; they keep the controls and simply
+             cannot go past it. Lock <b>All bands</b> and the whole radio is fixed.
+             <span id="gainLockRspNote" class="hide"><br><b>On an SDRplay, locking an RF figure alone fixes the RF
+             gain only</b>: the AGC no longer moves the LNA there, and listeners keep the IF &mdash; on AGC or by
+             hand. Give the band an IF figure too and the IF is fixed as well. Lock an RF figure on <b>All bands</b>
+             to fix the RF everywhere and leave every listener the IF.</span>
+             <span id="gainLimitAgcNote" style="display:none"><br><b>With VibeAGC on</b>, the loop obeys these
+             ceilings: tuning into a capped band brings the gain down to the ceiling, and the AGC
+             cannot raise it past that figure however quiet the band is.</span>
+             <br>Cap the bands that overload and leave the rest open &mdash; a strong local FM
+             transmitter is the usual reason, while HF wants everything the radio has. Tuning into
+             a capped band brings the gain down automatically.
+             <br><b>On a HackRF this is the TOTAL of the two gain stages</b> (LNA + VGA): both sit
+             after the mixer, so it is the sum that drives the converter. With a ceiling set, each
+             slider stops at whatever the other one leaves &mdash; lower one to raise the other. The
+             RF amp is not counted here because it is owner-only in its own right.
+             <span id="gainAspNote" class="hide"><br><b>On an Airspy R2 / Mini a band rule is a gain
+             mode and a position on it.</b> In that band listeners get only that mode's slider
+             &mdash; up to your position with Limit, fixed at it with Lock &mdash; and no Free mode,
+             manual LNA / mixer / VGA or AGCs. It holds for a signed-in admin too: change it here.
+             Bands without a rule keep every control.</span></div></label>
+        </div><!-- #gainRows -->
+      </div>
+
+      <div class="card" id="modeCard">
+        <h2>Modes and decoders</h2>
+        <div class="hint">Switch off anything this receiver cannot usefully do. A mode that is off
+          is never OFFERED — it does not appear in any client's menu at all — rather than being
+          shown and then refused, because a control whose every use fails reads as a broken
+          receiver instead of somebody's decision.
+          <br>Bands say WHERE this aerial is useful; this says WHAT it is useful for. An HF-only
+          radio has no business showing WFM or the RDS decoder, and an amplified aerial that suits
+          FM may be quite wrong for a DAB transmitter two miles away.
+          <br><b>The server enforces this as well as the page</b>, so it holds for every client.</div>
+        <!-- ★★★ beta96 NEW MODES (docs/v12/NEW-MODES-OFF.md): the one-line notice after an update added switches, and ALL ON /
+             ALL OFF for this radio — they change the ticks on screen only; nothing is saved until Save (a mis-tap undoes). -->
+        <!-- ★★★ b96-bgsplit (Stuart 11-26, the per-radio order): RADIO USE moved to OPERATING MODE at the top of this tab
+             (Unlocked / Locked / Single use). The ticks below are greyed while a single mode decides. -->
+        <div id="newModesNote" class="note hide" style="margin-top:10px"></div>
+        <div class="row" id="modeAllRow" style="gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+          <button type="button" class="ghost" id="modeAllOn">All on</button>
+          <button type="button" class="ghost" id="modeAllOff">All off</button>
+          <span class="hint" id="modeAllNote" style="margin:0" aria-live="polite"></span>
+        </div>
+        <div id="modeBlockList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:10px"></div>
+        <!-- ★★ V12 DAB ONLY (Stuart, 2026-11-17): every other mode switched off — say what that does for listeners.
+             ★★ V12 2026-11-18: any whole-radio mode left alone (ADS-B, ISM, NDB, AIS, DATALINK, SONDES) — modeTreeGrey
+             writes that mode's name in; DAB's words are the ones below. -->
+        <div id="dabOnlyModesNote" class="note hide" style="margin-top:10px"><b>DAB only: listeners land in DAB and cannot
+          leave it.</b> There is no EXIT DAB for them; you can still leave it when signed in as admin.</div>
+        <!-- ★★ V12 BAND GOVERNOR (decoders/digi_governor.h): the owner's word per mode in "Digital spots: Band". -->
+        <div id="bandModeWrap" class="hide" style="margin-top:12px">
+          <div class="hint"><b>Band skimmer, mode by mode.</b> The band skimmer reads every mode on a band at once. To keep that
+            affordable it decodes a mode only while its window has something in it, drops depth (extra passes) before it
+            drops a mode, and when the CPU is short it drops the least-used modes first (FT8, FT4, WSPR, JS8, FT2, JTTY,
+            PSK, newer modes last). <b>Auto</b> lets it decide. <b>Always</b> decodes the mode every period, even when its
+            window looks empty and even over budget. <b>Off</b> never runs it in Band. Listeners see each mode's state in
+            the spots box.</div>
+          <div id="bandModeList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"></div>
+        </div>
+      <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — DRAWN UNDER DAB in the modes list (2026-10-31: a
+           decoder's options sit under its own switch; modeBlockRender moves it there). SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
+           the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
+           (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
+           listening to. The playing station always has its own live text either way. -->
+      <div id="dabScanRow" class="hide">
+      <label class="row" style="gap:8px;margin-top:2px">
+        <span class="lbl" style="min-width:0">DAB: radio text for every station</span>
+        <select id="dabScanLabels">
+          <option value="-1">This machine's default</option>
+          <option value="1">On — scan the whole multiplex</option>
+          <option value="0">Off — only the station playing</option>
+        </select></label>
+      <div class="note">On, the receiver decodes a few extra stations in turn so the station list shows
+         what every station is playing. It costs processor time; the default is off on a small 32-bit
+         machine and on everywhere else. The station you are listening to always shows its own text.</div>
+      </div>
+      <!-- ★★ V12 DAB OWN STATION (docs/v12/DAB-OWN-STATION.md) — drawn under DAB (modeBlockRender moves it there). Stuart's
+           rule: the benchmark measures N stations at once; N >= the listener limit = on, else off; the owner chooses. -->
+      <div id="dabOwnRow">
+      <label class="row" style="gap:8px;margin-top:2px">
+        <span class="lbl" style="min-width:0">DAB: each listener their own station</span>
+        <select id="dabOwnStation">
+          <option value="-1">As the benchmark says</option>
+          <option value="1">On</option>
+          <option value="0">Off</option>
+        </select></label>
+      <div class="note">On, every listener on a shared dial can pick their own station inside the multiplex, and the rest
+         keep theirs. Listeners on the same station share one decode. The multiplex itself stays shared. Off, a pick changes
+         the station for everyone, as before.</div>
+      <div class="note" id="dabOwnNote"></div>
+      </div>
+        <div class="note" id="modeBlockNote"></div>
+        <!-- ★★★ beta96 the owner's answer for the NEXT update (vibe_decoder_reach.h newModesState): "newmodes@on|off" -->
+        <div id="newModesPolicy" style="margin-top:14px">
+          <div class="lbl">When an update adds new modes</div>
+          <div class="reach">
+            <label><input type="radio" name="newModesPol" id="newModesPolOn" value="on">
+              <span><b>Switch them on</b></span></label>
+            <label><input type="radio" name="newModesPol" id="newModesPolOff" value="off">
+              <span><b>Leave them off</b> until I tick them</span></label>
+          </div>
+          <div class="hint" id="newModesPolHint"></div>
+        </div>
+      </div>
+      <!-- ★★★ b96-bgsplit RAW IQ — its own card (Stuart 11-26, the per-radio order: 9). Moved whole from the Time limit card;
+           hidden where the radio has no IQ (capsApply hides #rawIqRow; rawIqCardSync hides the card with it). -->
+      <div class="card" id="rawIqCard">
+        <h2>Raw IQ</h2>
+      <!-- ★★★ RAW IQ OUT. A listener may take the channel they are tuned to as an rtl_tcp stream
+           for a decoder the browser cannot run. Never on a shared dial (the server refuses it):
+           an rtl_tcp client's tune would move everybody (Stuart, 2026-09-09). -->
+      <!-- ★★★ RAW IQ OUT, SHAPED BY THE RADIO'S MODE (Stuart, 2026-09-15: "what use is it being
+           able to set 3 raw IQ streams when only one user is allowed on the radio at a time").
+           One listener: a tick and a LAN rate. Locked window: how many streams, out of the
+           listener slots. Shared dial: not offered, and it says why. The server enforces all of
+           it — see iqFullRateOffered() and the shared-dial refusal in the shim. -->
+      <label style="margin-top:12px" id="rawIqRow"><span class="lbl">Raw IQ out</span>
+        <span id="rawIqSingle" class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="row" style="gap:8px;align-items:center;flex:0 0 auto">
+            <input type="checkbox" id="rawIqOn" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Offer it</span></label>
+          <span class="row" id="rawIqLanRow" style="gap:6px;align-items:center;flex:0 0 auto">
+            <span class="lbl" style="margin:0">Local network up to</span>
+            <select id="rawIqLan" style="max-width:14em"></select></span>
+          <span class="note" id="rawIqLanFixed" style="margin:0">250 kHz on the local network, 48 kHz through the tunnel</span>
+        </span>
+        <span id="rawIqLocked" class="row" style="gap:6px;align-items:center;flex-wrap:wrap;display:none">
+          <select id="rawIqStreams" style="max-width:14em"></select>
+          <span class="note" style="margin:0">250 kHz each on the local network, 48 kHz through the tunnel</span>
+        </span>
+        <label class="row" id="rawIqLocalRow" style="gap:8px;align-items:center;margin-top:6px">
+          <input type="checkbox" id="rawIqLocalOnly" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Local network only &mdash; not through the tunnel</span></label>
+        <div class="hint">Lets a listener take the channel they are tuned to as an
+          <b>rtl_tcp</b> stream, for a decoder that does not run in a browser: DSD, a DMR/P25
+          decoder, a data mode, a trunking app. <b>Through the tunnel it is always 48 kHz</b>
+          (paired by a six-character code in the VibeIQ bridge) &mdash; that rate is what stays
+          reliable end to end. On your own network the ceiling is yours: 250 kHz suits any machine
+          and any Wi-Fi; the radio's full span is for a trunking app on a wired Pi 4 or better
+          &mdash; the choices are this radio's own rates, and the full span is offered only while
+          the capture rate is within the one you pick. 2.4 MHz is about 40 Mb/s, which Wi-Fi will
+          not carry cleanly; a wired Pi 4 or better manages it. The port only
+          opens while somebody has it on and closes with their session, and a stream being read
+          counts as using the radio.
+          <br><b id="rawIqShared" class="hide">Not available on a shared dial: with one VFO for
+          everybody an rtl_tcp client's tune would move every listener. Set Listeners to 1, or lock
+          the centre, to offer it.</b></div></label>
+      </div>
+      <div class="card" id="startCard">
+        <h2>Where new listeners land</h2>
+        <p class="why">What someone sees the moment they connect. (What the radio does while nobody is connected is
+           <b>Background decoding</b>, below &mdash; a separate choice.)</p>
+        <!-- ★★★ b96-bgsplit ONE CHOICE OF THREE (Stuart 11-26): on a frequency, a DAB station, or a MAP starting on a decoder.
+             The radios drive the existing switches (mapLandOn / dabLandOn), which stay the page's own state. -->
+        <div id="landKindRow" style="margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="landKind" id="landKindPlain" value="plain">
+            <span>On a frequency and mode</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px" id="landKindDabLbl"><input type="radio" name="landKind" id="landKindDab" value="dab">
+            <span>On a DAB station</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px" id="landKindMapLbl"><input type="radio" name="landKind" id="landKindMap" value="map">
+            <span>On a map, starting on a decoder</span></label>
+        </div>
+        <!-- ★★★ A DAB STATION AS THE LANDING (Stuart, 2026-09-28, in his words: "just above the entry
+             for frequency and demod selector have a use DAB station as landing station? tap yes and
+             then a block selector pops up and you choose a block … then next to that a quick station
+             scan and then a selection box for the station"). Drawn ONLY for a radio that can do DAB —
+             an Airspy HF+ never sees it (AGENTS.md: no control that cannot act). When DAB is blocked
+             on the radio the toggle is not offered, and the note below says why the landing went. -->
+        <!-- ★★★ V12: ADS-B AS THE LANDING (Stuart, 2026-10-24: "can we set ADSB as a landing page for an SDR and when it
+             is set that way have a tick box to keep it running when nobody is connected that way a new connection
+             instantly sees a list of planes and a full map"). Drawn only where ADS-B can run on this radio (adsbLandOffer
+             — AGENTS.md); where only a setting stands in the way, #adsbLandNote says which. The keep-running tick box
+             lives only beneath the choice, and is OFF unless ticked. One landing at a time: choosing it hides the DAB one. -->
+        <!-- ★★★ beta96 THE LANDING MAP AND ITS KEEP-RUNNING MODES (Stuart 11-26 on the Sony: "I thought I'd be able to set
+             VDL2 as the Sony's background mode"; memory map_landing_toggles.md). One map — Aviation & Maritime — and the mode it
+             opens in, ticked from the SERVER's own list for this radio (hwinfo mapModes): a mode this radio can never do is not
+             drawn (AGENTS.md); one it cannot do now is greyed with the server's reason. At an ordinary rate ONE mode at a time
+             (the rest greyed, with the rate); ACARS + VDL2 together only where the capture holds both (~6.1 MS/s). Picking
+             VDL2 is the whole setup: the centre and every channel come from the mode. beta95's ADS-B landing / keep-running
+             migrated into this unchanged (vibe_keep_store.h). The old ADS-B controls below stay in the page, hidden — their
+             rules (adsbLandOffer) still decide the ADS-B row. -->
+        <div id="mapLandWrap" class="hide">
+          <label style="display:none;align-items:center;gap:10px">
+            <input type="checkbox" id="mapLandOn">
+            <span>Start new listeners on a <b>map</b>?</span></label>
+          <div id="mapLandBox" class="hide" style="margin-top:10px">
+            <!-- ★★ beta96 (Stuart 11-26): the AMATEUR map's ISM too — 868 MHz all day for MeshCore repeaters, the band from ISM's own plan -->
+            <label><span class="lbl">Map</span>
+              <select id="mapLandWhich"><option value="avmar">Aviation &amp; Maritime</option><option value="amateur">Amateur</option></select></label>
+            <div class="hint">Tick the decoder the map starts on. The radio is set up from the mode itself &mdash; VDL2 is every
+              25&nbsp;kHz channel from 136.700 to 136.975&nbsp;MHz, ISM is the band you pick from its own plan &mdash; so there are
+              no frequencies to type. EXIT takes a listener to the frequency below.</div>
+            <div class="hint" id="mapRateNote" style="margin-top:8px"></div>
+            <div id="mapModeList" style="margin-top:6px"></div>
+            <!-- ★ b96-bgsplit "keep it running" is now BACKGROUND DECODING → a whole-radio mode (the card below) -->
+            <div class="hint" id="mapBgNote"></div>
+          </div>
+        </div>
+        <div class="hint" id="mapLandNote"></div>
+        <div id="adsbLegacy" style="display:none">
+        <div id="adsbLandWrap" class="hide">
+          <label style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="adsbLandOn">
+            <span>Use ADS-B (the aircraft map) as the landing page?</span></label>
+          <div id="adsbLandBox" class="hide" style="margin-top:10px">
+            <div class="hint">A new listener goes straight to the full-screen map of aircraft, with the list beside it.
+              EXIT ADS-B takes them to the frequency below. Where several people share one dial it keeps whatever it
+              was left on, but after the server restarts the first listener always starts here.</div>
+            <label style="display:flex;align-items:center;gap:10px;margin-top:10px">
+              <input type="checkbox" id="adsbKeep">
+              <span>Keep ADS-B running when nobody is connected</span></label>
+            <div class="hint" id="adsbKeepNote">A new listener sees every aircraft at once, instead of a map that fills
+              over the next minute. <b>It costs CPU all the time</b> (about 13&nbsp;% of a Pi&nbsp;3 core) and this radio
+              never idles: it is not parked or handed to another program, and its Background Decoding does not run.
+              Unattended satellite passes still run: a pass takes the radio, ADS-B pauses for it (about 10&ndash;15 min)
+              and resumes after.</div>
+          </div>
+        </div>
+        <div class="hint" id="adsbLandNote"></div>
+        </div><!-- /adsbLegacy -->
+        <div id="dabLandWrap" class="hide">
+          <label style="display:none;align-items:center;gap:10px">
+            <input type="checkbox" id="dabLandOn">
+            <span>Use a DAB station as the landing station?</span></label>
+          <div id="dabLandBox" class="hide" style="margin-top:10px">
+            <div class="row" style="align-items:flex-end">
+              <label><span class="lbl">Block</span>
+                <select id="dabLandBlock"></select></label>
+              <button type="button" class="ghost" id="dabLandScan" style="flex:0 0 auto">Quick station scan</button>
+            </div>
+            <div class="hint" id="dabLandScanMsg"></div>
+            <label style="margin-top:10px"><span class="lbl">Station</span>
+              <select id="dabLandStation"></select></label>
+            <div class="hint">A new listener is put straight onto this station. DAB takes a few
+              seconds to lock onto a multiplex, so they hear it shortly after they arrive. Where
+              several people share one dial it keeps whatever it was left on, but after the server
+              restarts the first listener always starts here.</div>
+          </div>
+        </div>
+        <div class="hint" id="dabLandNote"></div>
+        <!-- ★★ V12 2026-11-04 THE DAB BAND SCAN MOVED to SERVER ADMIN (Stuart: "remove the DAB scan from the Setup and
+             leave it only in the admin page" — here it ran only on an idle radio and failed "radio not running"; the
+             admin page's DAB SCAN runs on the live radio). AGENTS.md: the old home says where the control went. -->
+        <div class="hint" style="margin-top:12px">To find the DAB multiplexes this aerial hears, open the receiver, sign in as
+          admin and use <b>SERVER ADMIN &rarr; What this receiver has learned &rarr; DAB SCAN</b> &mdash; it adds every station
+          found to this server&rsquo;s bookmarks.</div>
+        <div class="hint" id="plainLandHead" style="display:none;margin-top:10px">If the DAB station
+          cannot be opened &mdash; the radio busy on something that stops it reaching DAB &mdash;
+          listeners start here instead:</div>
+        <div class="hint" id="adsbPlainHead" style="display:none;margin-top:10px">EXIT ADS-B goes here, and
+          listeners start here whenever ADS-B cannot be opened:</div>
+        <div class="hint" id="mapPlainHead" style="display:none;margin-top:10px">EXIT goes here, and listeners start here
+          whenever the map's mode cannot be opened:</div>
+        <div class="row" id="plainLandRow">
+          <label><span class="lbl">Frequency (kHz)</span>
+            <input type="number" id="landingFreq" step="0.1"></label>
+          <label><span class="lbl">Mode</span>
+            <select id="demodMode">
+              <option value="am">AM</option><option value="lsb">LSB</option>
+              <option value="usb">USB</option><option value="nfm">NFM</option>
+              <option value="wfm">WFM</option><option value="cw">CW</option>
+            </select></label>
+        </div>
+      </div>
+      <!-- ★★★ b96-bgsplit BACKGROUND DECODING — what this radio does when NOBODY is connected, a choice of its own, SEPARATE from
+           where new listeners land (Stuart 11-26: "Listen-Amateur uses FM radio as his landing zone, so if he enabled background
+           AIS that would break that"). MANUAL = the centre + VFO profiles as ever (#hwBg, moved here whole); or ONE WHOLE-RADIO
+           MODE (AIS, AIS + DSC, ADS-B, VDL2 / ACARS, the VOR map, ISM on any band of its plan), gated by the rate exactly as the
+           landing's modes (the server's hwinfo mapModes — greyed with the reason, never dead). Stored as RadioConfig::bgMode. -->
+      <div class="card" id="bgCard">
+        <h2>Background decoding</h2>
+        <p class="why">What this radio does when nobody is connected. When the first listener arrives it pauses and they land
+           where <b>Where new listeners land</b> (above) says; when the last one leaves it carries on.</p>
+        <div id="bgKindRow">
+          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="bgKind" id="bgKindManual" value="manual">
+            <span><b>Manual</b> &mdash; an RF centre with your choice of VFOs and decoders</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px" id="bgKindWholeLbl"><input type="radio" name="bgKind" id="bgKindWhole" value="whole">
+            <span><b>A whole-radio mode</b> &mdash; AIS, ADS-B, VDL2, the VOR map, ISM &hellip; the radio set up from the mode itself</span></label>
+        </div>
+        <div id="bgWholeBox" class="hide" style="margin-top:10px">
+          <div class="hint" id="bgRateNote"></div>
+          <div id="bgModeList" style="margin-top:6px"></div>
+          <div class="hint" id="bgWholeNote" style="margin-top:8px"></div>
+          <div class="hint" id="bgSatNote" style="margin-top:6px"></div>
+        </div>
       <!-- ★★★ V12 BACKGROUND DECODING (Stuart, 2026-10-22, for NickB's NAVTEX the night Storm Austen came in). Beside the
            power save and the hand-off, because it is the same question — what this radio does when nobody is
            listening. The wording of the first line is Stuart's. A listener arriving stops it at once and gets the radio
@@ -2632,11 +2503,204 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <!-- ★ The benchmark sets the default, it never hides: below green the scanner is still allowed, with this line. -->
         <p class="why hide" id="dxBenchNote" style="border-left:3px solid var(--amber);padding-left:8px"></p>
       </div>
-      <div id="hwPpb" class="hide">
-        <label><span class="lbl">Calibration (ppb)</span>
-          <input type="number" id="ppb" step="1" placeholder="0"></label>
-        <p class="why">The Airspy HF+ is calibrated in parts per BILLION. 0 unless you have measured it.</p>
       </div>
+      <!-- ★★★ A PIN THAT OPENS ONE RADIO, NOT THE MACHINE. A club with one receiver pointed at a
+           band its members are licensed for, or a radio on loan, wants a door of its own: the
+           server PIN cannot express that, because it is one answer for every radio on the box.
+           ★★ THE TWO ARE NOT ALTERNATIVES — either key opens this radio. So an owner who already
+           has a server PIN does not lose it by setting one here, and a member who only holds this
+           radio's PIN cannot walk into the others. Saying that plainly matters: the obvious
+           reading of a second PIN box is that it REPLACES the first, and an owner acting on that
+           reading would think they had locked the machine when they had not.
+           ★ EMPTY IS A REAL, AND THE DEFAULT, ANSWER — "this radio follows the server setting",
+           which is exactly what every radio does today. That is why the box is blank rather than
+           pre-filled with anything, and why clearing it is a deliberate tick rather than an
+           empty save (see collectRadio: an empty box means "leave it alone", never "remove it"). -->
+      <!-- ★★★ AND IT IS NOT DRAWN AT ALL ON A ONE-RADIO MACHINE. "This radio only" and "every
+           radio on this machine" describe the same door when there is one radio, so the page
+           would be asking an owner to choose between two identical locks — Stuart, 2026-09-23:
+           "they only host single radios, so a pin to connect then a pin for the radio seems
+           redundant". The app and Lite are always that shape; a Linux box with one radio is too,
+           and the card comes back by itself the moment a second radio is configured. The server
+           PIN remains the answer there, and the directory still takes it before anyone connects.
+           ★ Same rule as AGENTS.md's "a control that only works in one scenario should not be
+             there": a redundant control is not free, it is a question with no right answer. -->
+      <div class="card" id="radioPinCard">
+        <h2>PIN for this radio</h2>
+        <p class="why">A PIN here opens <b>this radio only</b>. The server PIN &mdash; the one set
+           at first setup (at the terminal, or on a pocket box when its admin password was chosen) &mdash; opens <b>every</b>
+           radio on this machine, and still does: either key works here. Leave this empty and the
+           radio simply follows the server setting.</p>
+        <label><span class="lbl">PIN for this radio</span>
+          <!-- ★★★ DIGITS ONLY. It is a PIN, not a password, and the whole estate has to agree:
+               the listener's PIN box is inputmode="numeric", so on a phone it shows a KEYPAD.
+               An owner who typed letters here would hand their listeners a keyboard that cannot
+               enter them — fine on the desktop where it was set, impossible on the phone where it
+               is used (Stuart, 2026-09-23: "numbers only, simpler and is a PIN not a password").
+               ★ inputmode for the keypad, pattern for the browser's own check, and the save path
+                 strips anything else — validate at both ends, as this project keeps relearning. -->
+          <input type="password" id="radioPin" autocomplete="new-password" maxlength="16"
+                 inputmode="numeric" pattern="[0-9]*"
+                 placeholder="Digits only — empty follows the server setting">
+          <div class="hint" id="radioPinState"></div></label>
+        <label id="radioPinClearWrap" style="display:none;align-items:center;gap:10px;margin-top:16px">
+          <input type="checkbox" id="radioPinClear">
+          <span>Remove the PIN from this radio</span></label>
+      </div>
+      <!-- ★★★ BROADCAST FM DEFAULTS, AND REMEMBER vs RETURN (Stuart, 2026-11-03: "can the Broadcast FM options be able to
+           be set by the owner in the setup and have an option so that the server either remembers what the last user
+           set or defaults back to the server set defaults"). Per radio; the rules are vibe_fm_defaults.h and the server
+           enforces them — listeners still change these for themselves in the audio menu's BROADCAST FM row. Not drawn
+           for an Icom (it demodulates in the radio) or where WFM is blocked: a control with nothing to act on is worse
+           than none (AGENTS.md). -->
+      <!-- ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (Stuart 2026-11-26: "like we did for PSKReporter"; docs/v12/ADSB-FEED.md,
+           vibe_beast.h). Its OWN card, per radio, OFF by default. Drawn only where this radio could run ADS-B (afRender reads
+           adsbLandOffer's `hw` — an HF+ or an Icom never sees it, AGENTS.md). Stored as RadioConfig::adsbFeed (one JSON blob). -->
+      <div class="card hide" id="adsbFeedCard">
+        <h2>Share ADS-B with flight trackers</h2>
+        <p class="why">Send the aircraft this radio hears to flight-tracking sites, or let a feeder program on your network read
+          them (FlightAware's PiAware, for one).</p>
+        <div class="hint" id="afKeepNote">Only while ADS-B is running on this radio. To feed all day, use ADS-B as the landing
+          page above and tick <b>Keep ADS-B running when nobody is connected</b>.</div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input type="checkbox" id="afServe" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Serve a Beast feed</b> for feeder programs on your network</span></label>
+        <div id="afServeBox" class="hide" style="margin-left:24px">
+          <label><span class="lbl">Port</span>
+            <input type="number" id="afPort" min="1024" max="65535" step="1" style="max-width:120px">
+            <div class="hint">30005 is the usual Beast port. Give each ADS-B radio on this machine its own.</div></label>
+          <label style="display:flex;gap:8px;align-items:center">
+            <input type="checkbox" id="afOpen">
+            <span>Allow any address, not only this network</span></label>
+          <div class="hint" id="afOpenWarn">Off: only this machine and your local network can connect. On: anyone who can
+            reach this machine's port can read it &mdash; only for a feeder elsewhere that you run yourself.</div>
+          <div class="hint"><b>FlightAware:</b> install PiAware from FlightAware's own instructions, then point it here:
+            <code>sudo piaware-config receiver-type other</code>, <code>sudo piaware-config receiver-host <span id="afHost">this-server</span></code>,
+            <code>sudo piaware-config receiver-port <span id="afPortEcho">30005</span></code>, <code>sudo systemctl restart piaware</code>,
+            then claim the feeder on flightaware.com. Step by step: <i>Feed FlightAware from a VibeServer</i> in the VibeServer guide.
+            Sites with their own feed program (ADS-B Exchange's, for its MLAT and stats page) can read this port the same way.</div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input type="checkbox" id="afPush" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Send to flight-tracking sites</b></span></label>
+        <div id="afPushBox" class="hide" style="margin-left:24px">
+          <div id="afRows"></div>
+          <button type="button" class="ghost" id="afAdd" style="margin-top:6px">Add another site (host and port)</button>
+          <div class="hint">Each site gets a stream with repeats thinned to two a second per aircraft and message kind, as
+            their own feed programs send. A <b>station UUID</b> identifies your feed to the site (the ones that use one make
+            it yours on their stats pages). VibeServer makes one for you where the site's own program would; for
+            map.flights paste the one from your station page there. <b>ADS-B Exchange:</b> your aircraft reach their map
+            this way, but their MLAT and their feeder stats page need their own feed program (it can read the Beast port
+            above instead).</div>
+        </div>
+        <div class="hint" id="afStatus" style="color:var(--amber)"></div>
+        <div class="hint">What is sent: the replies aircraft broadcast (identity, position, altitude, speed, squawk and the
+          rest) as this radio decoded them, with the signal level and a timestamp from the radio's own sample clock.
+          <b>Nothing about your listeners.</b> VibeServer never sends this receiver's position: a site knows where you are
+          only if you enter it in your account there. <b>MLAT (multilateration) is not supported</b> &mdash; the timestamps
+          are not precise enough for it, so leave a site's MLAT setting off.</div>
+      </div>
+      <div class="card" id="fmDefCard">
+        <h2>Broadcast FM defaults</h2>
+        <p class="why">What a listener starts with in the BROADCAST FM row of the audio menu. They can still change any
+          of these for themselves.</p>
+        <label><span class="lbl">FM de-emphasis</span>
+          <select id="fmDeemph">
+            <option value="-1">By region (50&nbsp;&micro;s, or 75&nbsp;&micro;s in the Americas)</option>
+            <option value="50">50&nbsp;&micro;s</option>
+            <option value="75">75&nbsp;&micro;s</option>
+            <option value="0">Off</option>
+          </select></label>
+        <div class="hint" id="fmDeemphHint"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px">
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmStereo"> <span>ST &mdash; stereo</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmNr"> <span>NR &mdash; weak-signal noise treatment</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmIms"> <span>IMS &mdash; multipath suppression</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmCeq"> <span>CEQ &mdash; channel equaliser</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmAutoBw"> <span>AUTO BW &mdash; automatic bandwidth</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmNb"> <span>NB &mdash; noise blanker</span></label>
+        </div>
+        <div class="hint">Out of the box everything is on except NR, which only helps a weak, hissy station.
+          AUTO BW applies where listeners share one dial; on a locked range each listener's channel has its own width.</div>
+        <div style="margin-top:12px">
+          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="fmPolicy" id="fmReturn">
+            <span>Return to these defaults for each new listener</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px"><input type="radio" name="fmPolicy" id="fmRemember">
+            <span>Remember the last listener&rsquo;s settings</span></label>
+        </div>
+        <div class="hint" id="fmPolicyHint"></div>
+      </div>
+      <div class="card">
+      <h2>Time limit</h2>
+      <p class="why">How long one listener may keep this radio.</p>
+      <label><span class="lbl">Minutes (0 = no limit)</span>
+        <input type="number" id="sessionLimit" min="0">
+        <div class="hint">When the limit is reached the listener is warned, then disconnected, and
+          the next person in the queue gets their turn. <b>On a single-user radio this is the only
+          thing that keeps one listener from holding the hardware all day</b> — there is one tuner
+          and whoever has it has all of it. On a shared radio it matters far less: everyone already
+          has their own VFO, so a long session costs nobody else anything.
+          <br>The owner is exempt, and so is anything connecting from this machine.</div></label>
+      <label style="margin-top:12px"><span class="lbl">What the limit means</span>
+        <select id="sessionLimitMode">
+          <option value="hard">Hard — disconnect at the limit, always</option>
+          <option value="soft">Soft — keep the radio until somebody else wants it</option>
+        </select>
+        <div class="hint"><b>Hard</b> is what a time limit has always done here: at the limit the
+          listener is disconnected whether or not anybody is waiting.
+          <br><b>Soft</b> turns the limit into a <em>guarantee</em> instead of a deadline. Nobody
+          can take the radio from a listener inside their time — that is the promise — and
+          afterwards they simply keep listening until somebody else arrives, at which point they
+          get a few seconds' notice and the slot passes on. On a radio with several slots it is the
+          person who has been connected <em>longest</em> who moves.
+          <br>Worth knowing: while a listener is over their time the radio advertises itself as
+          <b>free</b>, so a visitor is never put off by an "in use" sign when the rule is on their
+          side. Your admin page still shows exactly who is connected and for how long.</div></label>
+      <label style="margin-top:12px" id="idleKickRow"><span class="lbl">Disconnect a listener who has gone away</span>
+        <input type="number" id="idleKick" min="0" step="5" placeholder="0">
+        <div class="hint">Minutes with <b>no interaction at all</b> &mdash; no tuning, no mode
+          change, nothing. <b>0 turns it off, and off is the default.</b>
+          <br>It <em>asks</em> before it acts: the listener gets a &ldquo;still listening?&rdquo;
+          prompt with a countdown, and anything they do answers it. That matters because somebody
+          sitting on one frequency for an hour touches nothing and is the best kind of listener
+          &mdash; from here they look exactly like a tab somebody forgot.
+          <br>Watching a decoder counts as using the radio: a weather-fax image takes ten minutes
+          to draw and RTTY runs for hours, so a decode in progress is never interrupted.
+          <br><b>15 minutes is the shortest it will accept</b> &mdash; enough to hear a block of
+          music before the ad break. Only offered on a radio with several slots: a one-at-a-time
+          receiver has nobody to reclaim it for.</div></label>
+      <!-- ★ RAW IQ moved to its own card (b96-bgsplit, Stuart's per-radio order: section 9). -->
+      <label style="margin-top:12px" id="nbWideRow"><span class="lbl">Impulse noise blanker</span>
+        <select id="nbWide">
+          <option value="0">Off</option>
+          <option value="1">Auto (below 30 MHz)</option>
+          <option value="2">On</option>
+        </select>
+        <div class="hint">Blanks impulse noise &mdash; distant lightning, power-line hash, ignition,
+          switch-mode supplies &mdash; on the <b>whole capture</b>, before the waterfall and before
+          any listener's channel, so everybody benefits at once. Impulses are microseconds long and
+          wideband, which is why this works far better here than after a channel filter has smeared
+          them. On a clean signal it blanks nothing. <b>Auto</b> engages it only when the radio is
+          below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each
+          listener also has their own blanker on their own channel, in the audio menu.</div></label>
+      <!-- ★★ V12 VFO A/B — the owner's switch. On by default: one VFO B costs about one more listener.
+           ★ Raw IQ, the impulse blanker and this row are hidden on a radio with no IQ capture (an Icom): capsApply(). -->
+      <div id="vfoBRow">
+      <label style="display:flex;align-items:center;gap:10px;margin-top:14px">
+        <input type="checkbox" id="vfoB" checked style="width:16px;height:16px;accent-color:var(--amber)">
+        <span>Let listeners use VFO A/B (two frequencies at once)</span></label>
+      <div class="hint">A listener can turn on a second VFO in the tuning menu and hear both at once &mdash; the lower
+        frequency in the left ear, the higher in the right &mdash; each with its own mode and squelch, anywhere
+        inside this radio&rsquo;s window (it never moves the radio). Each VFO&nbsp;B costs about as much as one more
+        listener, and on a radio with a listener limit it takes a listener&rsquo;s place until a new listener arrives.</div>
+      <!-- ★★ Stuart, 2026-11-07: per-VFO recording sends each VFO's own audio as well as the mix — say what it costs -->
+      <div class="hint" style="color:var(--amber)"><b>Bandwidth:</b> a listener who records both VFOs at once is sent
+        two extra stereo audio streams of up to 96&nbsp;kbit/s each, on top of the one they are listening to &mdash;
+        for as long as VFO A/B is on if they keep the record buffer on. If this
+        server&rsquo;s upload is limited, switch VFO A/B off.</div>
+      </div>
+      <!-- (the separate "streams at once" cap moved INTO the raw IQ row above; it only ever
+           meant something on a locked window) -->
     </div>
     </div>
 
@@ -3679,9 +3743,12 @@ function layoutLockedRadio(locked) {
   if (locked) {
     // Order: centre (already in Range) → span → start freq/mode → gain → Bias-T.
     if (rate) range.appendChild(rate);
-    range.parentNode.insertBefore(start, range.nextSibling);
-    if (rest) start.appendChild(rest);
-    if (bias) start.appendChild(bias);
+    /* ★★★ b96-bgsplit (Stuart 11-26, the per-radio order): WHERE NEW LISTENERS LAND stays in its own place (section 10) on
+     *  every radio — it was moved up beside the range here (2026-08-21) and never moved back when the radio was unlocked.
+     *  The starting gain and the Bias-T still come up into the range card, so a locked radio's top is still centre, span,
+     *  gain, Bias-T. */
+    if (rest) range.appendChild(rest);
+    if (bias) range.appendChild(bias);
   } else {
     // ★ Home again: the hardware card owns the span and the Bias-T, and the gain card the resting
     //   gain, whenever the receiver is not a pinned window.
@@ -3703,8 +3770,7 @@ function layoutLockedRadio(locked) {
 
 function setMode(locked) {
   radio().mode = locked ? "locked" : "single";   // ★ the OPEN tab, not the machine
-  $("modeLocked").classList.toggle("sel", locked);
-  $("modeSingle").classList.toggle("sel", !locked);
+  opModeSync();   // ★★★ b96-bgsplit the three tiles (Unlocked / Locked / Single use)
   if (typeof renderBands === "function") renderBands();
   $("lockedOnly").classList.toggle("hide", !locked);
   $("zoomSpectrumSlow").classList.toggle("hide", locked);
@@ -4121,6 +4187,7 @@ function capsApply() {
   show("usageCard", capSet("usage"));
   if (!capSet("usage")) show("lockedOnly", false);
   show("rawIqRow", capSet("rawIq"));
+  if ($("rawIqCard")) show("rawIqCard", capSet("rawIq"));   // ★ b96-bgsplit its own card now
   show("nbWideRow", capSet("nbWide"));
   show("vfoBRow", capSet("vfoB"));
   if ($("fmDefCard")) show("fmDefCard", capSet("fmDefaults") && String(r.driver || "") !== "icom" && !modeBlockSet().has("wfm"));
@@ -4548,6 +4615,23 @@ function singleFromTicks(r) {
   if (w === "ism") { const b = (typeof bgIsmBands === "function" ? bgIsmBands() : [])[0]; return "ism:" + (b ? b.id : "868"); }
   return w;
 }
+/** ★★★ b96-bgsplit OPERATING MODE (Stuart 11-26): one choice of three tiles over two unchanged fields — `mode` ("single" =
+ *  UNLOCKED one dial, "locked") and `singleMode` (SINGLE USE = a token; Unlocked / Locked = "general"). A single-use radio keeps
+ *  its tuning arrangement, chosen under the tile (#singleWindow) — the DAB-only B210 is single use AND a locked range. */
+function opModeSync() {
+  const r = radio();
+  const single = !!(r.singleMode && r.singleMode !== "general");
+  const locked = r.mode === "locked";
+  $("modeSingleUse").classList.toggle("sel", single);
+  $("modeLocked").classList.toggle("sel", !single && locked);
+  $("modeSingle").classList.toggle("sel", !single && !locked);
+  if ($("radioUseWrap")) $("radioUseWrap").classList.toggle("hide", !single);
+  if ($("singleWindow")) $("singleWindow").value = locked ? "locked" : "single";
+}
+function opModeLeaveSingle() {
+  const g = $("radioUseGeneral");
+  if (g && !g.checked) { g.checked = true; $("radioUseSingle").checked = false; g.dispatchEvent(new Event("change")); }
+}
 function singleRender() {
   const wrap = $("radioUseWrap"); if (!wrap) return;
   const r = radio();
@@ -4555,7 +4639,7 @@ function singleRender() {
   const single = r.singleMode && r.singleMode !== "general" ? r.singleMode : "";
   const opts = singleOptions(r);
   if (single && !opts.some(o => o.tok === single)) opts.unshift({ tok: single, label: singleWords(single), why: "this radio cannot run it now" });
-  wrap.classList.toggle("hide", !opts.length && !single);
+  if ($("modeSingleUse")) $("modeSingleUse").style.display = !opts.length && !single ? "none" : "";   // ★ nothing it could be single in
   $("radioUseGeneral").checked = !single; $("radioUseSingle").checked = !!single;
   const sel = $("singlePick");
   sel.innerHTML = opts.map(o => `<option value="${esc(o.tok)}"${o.why ? " disabled" : ""}>${esc(o.label)}${o.why ? " — " + esc(o.why) : ""}</option>`).join("");
@@ -4571,6 +4655,7 @@ function singleRender() {
   const list = $("modeBlockList"), allRow = $("modeAllRow");
   if (list) { list.style.opacity = single ? ".4" : ""; list.style.pointerEvents = single ? "none" : ""; }
   if (allRow) allRow.style.display = single ? "none" : "";
+  opModeSync();
 }
 function singleKeepable(t) { return !!t && t !== "general" && t !== "sat" && KEEP_MODES.some(m => m.id === keepBase(t)) && (keepBase(t) !== "ism" || t.includes(":")); }
 function modeBlockRender() {
@@ -4873,7 +4958,7 @@ const KEEP_MODES = [
   // ★★★ beta96 THE MARITIME COMBINATION: AIS + DSC channel 70 from one wide capture — one choice, drawn only where the capture
   //     holds it (the server's mapModes "hw"; minRate follows a rate being edited)
   { id: "aisdsc", name: "AIS + DSC (channel 70)", group: "maritime", block: "ais" },
-  { id: "ism",   name: "ISM",           group: "ism",      block: "ism", map: "amateur" },
+  { id: "ism",   name: "ISM (choose a band)", group: "ism", block: "ism", map: "amateur" },   // ★★ b96-bgsplit ANY band of ISM's plan (worldwide)
 ];
 const KEEP_GROUP_WORDS = { aviation: "AVIATION", maritime: "MARITIME", ism: "ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)" };
 function keepMapOf(m) { return m.map || "avmar"; }
@@ -4898,13 +4983,14 @@ function keepIsCombo(ids) { return ids.length === 2 && ids.includes("acars") && 
 function keepRateWords(hz) { let s = (hz / 1e6).toFixed(3); s = s.replace(/0+$/, "").replace(/\.$/, ""); return s + " MS/s"; }
 /** vibekeep::gate. avail: [{id, hw, why, pct}]; returns [{id, name, group, drawn, enabled, on, why, pct}]. */
 function keepGate(avail, comboOk, comboWhy, rateHz, chosenIn, comboMin, map) {
-  map = map || "avmar";
+  if (map === undefined || map === null) map = "avmar";   // ★ b96-bgsplit "" = every map's modes (the Background decoding card)
+  const inMap = m => !map || keepMapOf(m) === map;
   const av = id => avail.find(a => a.id === id);
-  let toks = keepParse(chosenIn.join(",")).filter(t => { const m = KEEP_MODES.find(x => x.id === keepBase(t)); const a = av(keepBase(t)); return m && keepMapOf(m) === map && a && a.hw && !a.why; });
+  let toks = keepParse(chosenIn.join(",")).filter(t => { const m = KEEP_MODES.find(x => x.id === keepBase(t)); const a = av(keepBase(t)); return m && inMap(m) && a && a.hw && !a.why; });
   let chosen = toks.map(keepBase);
   if (chosen.length > 1 && !(keepIsCombo(chosen) && comboOk)) { chosen = chosen.slice(0, 1); toks = toks.slice(0, 1); }
   const name = id => (KEEP_MODES.find(m => m.id === id) || {}).name || id;
-  return KEEP_MODES.filter(m => keepMapOf(m) === map).map(m => {
+  return KEEP_MODES.filter(inMap).map(m => {
     const o = { id: m.id, tok: toks.find(t => keepBase(t) === m.id) || m.id, name: m.name, group: m.group, drawn: true, enabled: true, on: false, why: "", pct: -1 };
     const a = av(m.id);
     if (!a || !a.hw) { o.drawn = false; o.enabled = false; return o; }
@@ -4959,12 +5045,12 @@ function keepFacts(r) {
 }
 /** The words for the satellites beside a kept mode (the server's satKeepWarn, said before it is saved). */
 function keepTokName(t) {
-  if (keepBase(t) === "ism") { const b = t.slice(4); const x = (typeof bgIsmBands === "function" ? bgIsmBands() : []).find(y => y.id === b); return "ISM " + (x ? x.label : b + " MHz"); }
+  if (keepBase(t) === "ism") { const b = t.slice(4); const x = keepIsmPlan().find(y => y.id === b); return "ISM " + (x ? x.name : b + " MHz"); }
   return (KEEP_MODES.find(m => m.id === t) || {}).name || t;
 }
 function keepSatWords(r) {
-  const ids = keepParse(r.landingModes);
-  if (!r.landingMap || !r.mapKeep || !ids.length) return "";
+  const ids = keepParse(r.bgMode);   // ★ b96-bgsplit the BACKGROUND whole-radio mode is what a pass pauses
+  if (!ids.length) return "";
   const name = keepIsCombo(ids) ? "ACARS + VDL2" : keepTokName(ids[0]);
   if (ids.length === 1 && ids[0] === "vdl2")
     return "VDL2 is kept running on this radio: a Meteor or NOAA pass SHARES its 137 MHz capture — VDL2 keeps decoding through the "
@@ -5005,19 +5091,14 @@ function mapLandRender() {
         + (o.why ? `<br><span class="hint" style="display:inline">${esc(o.why)}</span>` : "") + `</span></label>`;
       // ★★ ISM: the band from ISM's own plan, the ones THIS radio reaches (hwinfo ismHwBands — bgIsmBands); LoRa coverage follows
       //    ISM's own "every channel" setting (Modes offered to listeners), not this card
-      if (o.id === "ism" && o.on) {
-        const bands = typeof bgIsmBands === "function" ? bgIsmBands() : [];
-        const cur = o.tok.includes(":") ? o.tok.slice(4) : "";
-        html += `<label style="margin:4px 0 0 28px"><span class="lbl">Band</span><select data-keepband="ism">`
-          + bands.map(b => `<option value="${esc(b.id)}"${b.id === cur ? " selected" : ""}>${esc(b.label)}</option>`).join("") + `</select></label>`;
-      }
+      if (o.id === "ism" && o.on) html += keepIsmSelect(o.tok);
     }
     list.innerHTML = html;
     for (const sel of list.querySelectorAll("select[data-keepband]")) sel.addEventListener("change", () => { keepSetModes(["ism:" + sel.value]); dabLandRender(); });
     for (const cb of list.querySelectorAll("input[data-keep]")) cb.addEventListener("change", () => {
       const cur = keepParse(radio().landingModes);
       let id = cb.dataset.keep;
-      if (id === "ism") { const bs = typeof bgIsmBands === "function" ? bgIsmBands() : []; const b = bs.find(x => x.id === "868") || bs.find(x => x.id === "433") || bs[0]; id = "ism:" + (b ? b.id : "868"); }
+      if (id === "ism") id = "ism:" + keepIsmDefault();
       const next = cb.checked ? [...cur, id] : cur.filter(x => keepBase(x) !== keepBase(id));
       keepSetModes(next);
       dabLandRender();
@@ -5027,21 +5108,14 @@ function mapLandRender() {
       ? (F.comboOk ? `${keepRateWords(F.rate)} detected: one mode at a time, or ACARS & VDL2 together (this capture holds both).`
                    : `${keepRateWords(F.rate)} detected: you can choose one of these modes.`) : "";
   } else { list.innerHTML = ""; $("mapRateNote").textContent = ""; }
-  // keep-running: only beneath the choice, never ticked by default
-  const keep = on && chosen.length > 0 && !!r.mapKeep;
-  $("mapKeep").checked = keep;
-  $("mapKeep").disabled = !chosen.length;
+  // ★★★ b96-bgsplit "keep it running" is BACKGROUND DECODING now (its own card): say how the two meet
   const nm = keepIsCombo(chosen) ? "ACARS + VDL2" : chosen.length ? keepTokName(chosen[0]) : "";
-  $("mapKeepLbl").textContent = nm ? `Keep ${nm} running when nobody is connected` : "Keep it running when nobody is connected";
-  const cost = keepCostWords(keepIsCombo(chosen) ? F.comboPct : (offers.find(o => o.on) || {}).pct);
-  $("mapKeepNote").innerHTML = !nm ? "Tick a mode above first." :
-    `A new listener sees a populated map at once, instead of one that fills over the next minutes. <b>It costs CPU all the time</b>`
-    + (cost ? ` (${esc(cost)}; the benchmark sets nothing here — it is your choice)` : "")
-    + " and this radio never idles: it is not parked or handed to another program, and its Background Decoding does not run. "
-    + (chosen.length === 1 && chosen[0] === "vdl2"
-        ? "Unattended satellite passes share VDL2's 137 MHz capture: VDL2 keeps decoding through a Meteor or NOAA pass, and with "
-          + "ORBCOMM ticked the sky plot keeps building beside it."
-        : "Unattended satellite passes still run: a pass takes the radio, the mode pauses for it (about 10–15 min) and resumes after.");
+  const bgIds = keepParse(r.bgMode);
+  const bgNm = keepIsCombo(bgIds) ? "ACARS + VDL2" : bgIds.length ? keepTokName(bgIds[0]) : "";
+  $("mapBgNote").innerHTML = !nm ? "" : bgNm && bgIds.join(",") === chosen.join(",")
+    ? `${esc(nm)} is also this radio's <b>Background decoding</b>, so a new listener finds the map already populated.`
+    : bgNm ? `While nobody is connected this radio runs <b>${esc(bgNm)}</b> (Background decoding, below); the first listener pauses it and lands here in ${esc(nm)}. What ${esc(bgNm)} stored stays on the map.`
+    : `To have the map populated before anybody arrives, choose ${esc(nm)} under <b>Background decoding</b>, below.`;
   // ★ a stored landing the radio cannot run now: say so (the plain landing applies)
   const stored = keepParse(r.landingModes);
   const lost = on && stored.length && !chosen.length;
@@ -5049,15 +5123,7 @@ function mapLandRender() {
     + `current settings, so listeners start on ${plainLandingWords()} until it can.` : "";
   $("mapPlainHead").style.display = on ? "" : "none";
   if ($("adsbPlainHead")) $("adsbPlainHead").style.display = "none";
-  // ★★ the kept mode owns the idle radio: the Background Decoding and release cards say so, in its name
-  const kn = keep ? nm : "";
-  for (const [id, words] of [["bgKeepNote", `${kn} is kept running on this radio when nobody is connected (Where new listeners start), so these profiles do not run. Untick it there to decode in the background instead.`],
-                             ["releaseKeepNote", `${kn} is kept running on this radio when nobody is connected, so it is never let go while that is ticked.`]]) {
-    if (!$(id)) continue;
-    $(id).textContent = words; $(id).classList.toggle("hide", !kn);
-  }
-  for (const id of ["bgAdsbNote", "releaseAdsbNote"]) if ($(id)) $(id).classList.add("hide");   // ★ the general note says it
-  if ($("bgProfiles")) $("bgProfiles").style.opacity = kn ? ".45" : "";
+  bgWholeRender();   // ★★★ b96-bgsplit the Background decoding card follows the same facts
   return on && chosen.length > 0;
 }
 /** Write a choice onto the radio — normalised by the gate, the ADS-B pair mirrored (vibekeep::migrate's rule). */
@@ -5075,17 +5141,138 @@ function keepSetModes(ids) {
   r.landingModes = keep.join(",");
   keepMirror(r);
 }
+/** vibekeep::migrate's mirrors: mapKeep = background is the landing map's mode; the ADS-B pair from the landing + background. */
 function keepMirror(r) {
   const ids = keepParse(r.landingModes);
-  const known = r.landingMap === "avmar" || r.landingMap === "amateur";
-  if (!known || !ids.length) { r.mapKeep = known ? !!r.mapKeep : false; }
-  r.landingAdsb = r.landingMap === "avmar" && ids.length === 1 && ids[0] === "adsb";
-  r.adsbKeepRunning = r.landingAdsb && !!r.mapKeep;
+  const known = (r.landingMap === "avmar" || r.landingMap === "amateur") && ids.length > 0;
+  const bg = keepBgNormal(r.bgMode);
+  r.bgMode = bg;
+  r.mapKeep = known && !!bg && bg === ids.join(",");
+  r.landingAdsb = known && r.landingMap === "avmar" && ids.length === 1 && ids[0] === "adsb";
+  r.adsbKeepRunning = r.landingAdsb && bg === "adsb";
 }
-/** A radio loaded from an older server (no landingMap): beta95's ADS-B pair becomes the map + ADS-B (vibekeep::migrate). */
+/** The background set as stored (vibekeep::bgNormalise): known tokens of any map, one mode or ACARS + VDL2. */
+function keepBgNormal(csv) { let ids = keepParse(csv); if (ids.length > 1 && !keepIsCombo(ids)) ids = ids.slice(0, 1); return ids.join(","); }
+/** A radio loaded from an older server: beta95's ADS-B pair becomes the map + ADS-B; b96-keeprun's mapKeep becomes the
+ *  BACKGROUND (vibekeep::migrate) — a radio with no bgMode at all gets it derived once. */
 function keepMigrate(r) {
-  if (!r || r.landingMap) return;
-  if (r.landingAdsb) { r.landingMap = "avmar"; r.landingModes = "adsb"; r.mapKeep = !!r.adsbKeepRunning; }
+  if (!r) return;
+  if (!r.landingMap && r.landingAdsb) { r.landingMap = "avmar"; r.landingModes = "adsb"; r.mapKeep = !!r.adsbKeepRunning; }
+  if (r.bgMode === undefined || r.bgMode === null) r.bgMode = r.mapKeep && r.landingMap ? keepBgNormal(r.landingModes) : "";
+}
+/** ★★ ISM IS WORLDWIDE (Stuart 11-26): ISM's own plan for THIS radio from the server (hwinfo ismPlan: the region's own bands
+ *  first, then every other band it reaches) — else the page's older list (an older server, an offline radio). */
+function keepIsmPlan() {
+  if (HW && !HW.offline && Array.isArray(HW.ismPlan) && HW.ismPlan.length) return HW.ismPlan.map(b => ({ id: String(b.id), name: String(b.name || b.id), region: String(b.region || ""), own: !!b.own }));
+  return (typeof bgIsmBands === "function" ? bgIsmBands() : []).map(b => ({ id: b.id, name: b.label, region: "", own: false }));
+}
+function keepIsmDefault() { const p = keepIsmPlan(); const b = p.find(x => x.own) || p[0]; return b ? b.id : "433"; }
+function keepIsmSelect(tok, attr) {
+  const plan = keepIsmPlan(), cur = String(tok || "").includes(":") ? String(tok).slice(4) : "";
+  const opt = b => `<option value="${esc(b.id)}"${b.id === cur ? " selected" : ""}>${esc(b.name)}${b.region ? " \u2014 " + esc(b.region) : ""}</option>`;
+  const own = plan.filter(b => b.own), rest = plan.filter(b => !b.own);
+  const where = HW && HW.ismRegion ? ` (${esc(HW.ismRegion)})` : "";
+  const body = own.length ? `<optgroup label="Your region${where}">${own.map(opt).join("")}</optgroup><optgroup label="Other regions">${rest.map(opt).join("")}</optgroup>` : plan.map(opt).join("");
+  return `<label style="margin:4px 0 0 28px"><span class="lbl">Band</span><select ${attr || 'data-keepband="ism"'}>${body}</select></label>`;
+}
+/* ── ★★★ b96-bgsplit THE BACKGROUND DECODING CARD (Stuart 11-26): Manual (the profiles, #hwBg) or ONE whole-radio mode of any
+ *  map, gated exactly as the landing's (keepGate with map "" — the server's mapModes facts, the form's rate on top). ── */
+function bgWholeRender() {
+  const card = $("bgCard"); if (!card) return;
+  const r = radio();
+  keepMigrate(r);
+  const F = keepFacts(r);
+  const offers = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, keepParse(r.bgMode), F.comboMin, "");
+  const anyWhole = offers.some(o => o.drawn);
+  const manualOk = $("hwBg") && !$("hwBg").classList.contains("hide");
+  card.classList.toggle("hide", !anyWhole && !manualOk);
+  const single = r.singleMode && r.singleMode !== "general" ? r.singleMode : "";
+  const whole = !!r.bgMode;
+  $("bgKindWholeLbl").style.display = anyWhole ? "flex" : "none";
+  $("bgKindManual").checked = !whole; $("bgKindWhole").checked = whole;
+  $("bgWholeBox").classList.toggle("hide", !whole);
+  if ($("hwBg")) $("hwBg").style.display = whole ? "none" : "";
+  const list = $("bgModeList");
+  let html = "", group = "";
+  if (whole) for (const o of offers) {
+    if (!o.drawn) continue;
+    if (o.group !== group) { group = o.group; html += `<div class="lbl" style="margin-top:8px">${esc(KEEP_GROUP_WORDS[group] || group)}</div>`; }
+    const cost = keepCostWords(o.pct);
+    html += `<label style="display:flex;align-items:flex-start;gap:10px;margin-top:4px;${o.enabled ? "" : "opacity:.5"}">`
+      + `<input type="checkbox" data-bgmode="${o.id}"${o.on ? " checked" : ""}${o.enabled ? "" : " disabled"}>`
+      + `<span>${esc(o.name)}${cost ? ` <span class="hint" style="display:inline">\u00b7 ${esc(cost)}</span>` : ""}`
+      + (o.why ? `<br><span class="hint" style="display:inline">${esc(o.why)}</span>` : "") + `</span></label>`;
+    if (o.id === "ism" && o.on) html += keepIsmSelect(o.tok, 'data-bgband="ism"');
+  }
+  list.innerHTML = html;
+  for (const sel of list.querySelectorAll("select[data-bgband]")) sel.addEventListener("change", () => { bgSetWhole(["ism:" + sel.value]); });
+  for (const cb of list.querySelectorAll("input[data-bgmode]")) cb.addEventListener("change", () => {
+    const cur = keepParse(radio().bgMode);
+    let id = cb.dataset.bgmode;
+    if (id === "ism") id = "ism:" + keepIsmDefault();
+    bgSetWhole(cb.checked ? [...cur, id] : cur.filter(x => keepBase(x) !== keepBase(id)));
+  });
+  $("bgRateNote").textContent = whole && F.rate > 0
+    ? (F.comboOk ? `${keepRateWords(F.rate)} detected: one mode at a time, or ACARS & VDL2 together (this capture holds both).`
+                 : `${keepRateWords(F.rate)} detected: you can choose one of these modes.`) : "";
+  const chosen = offers.filter(o => o.on).map(o => o.tok);
+  const nm = keepIsCombo(chosen) ? "ACARS + VDL2" : chosen.length ? keepTokName(chosen[0]) : "";
+  const cost = keepCostWords(keepIsCombo(chosen) ? F.comboPct : (offers.find(o => o.on) || {}).pct);
+  const stored = keepParse(r.bgMode);
+  const land = keepParse(r.landingModes).join(",");
+  const landOnMap = (r.landingMap === "avmar" || r.landingMap === "amateur") && !!land;
+  $("bgWholeNote").innerHTML = !whole ? "" : single ? `This radio is <b>single use</b> (Operating mode): ${esc(singleWords(single))} runs instead, whatever is chosen here.`
+    : !nm ? (stored.length ? `This radio cannot run ${esc(stored.map(keepTokName).join(" + "))} with its current settings, so it idles as it would with nothing chosen until it can.` : "Tick the mode the radio runs with nobody connected.")
+    : `<b>It costs CPU all the time</b>` + (cost ? ` (${esc(cost)}; the benchmark sets nothing here \u2014 it is your choice)` : "")
+      + " and this radio never idles: it is not parked or handed to another program, and the manual profiles do not run. "
+      + (landOnMap && land === chosen.join(",") ? `New listeners land on the map in ${esc(nm)} too, so they join it already populated.`
+         : `When the first listener arrives ${esc(nm)} pauses and they land where <b>Where new listeners land</b> says; what it stored (ships, aircraft, the day's logs) stays, and it carries on when the last one leaves.`);
+  $("bgSatNote").textContent = whole && nm ? keepSatWords({ bgMode: chosen.join(",") }) : "";
+  // ★ the release card says the background mode holds the radio (its old note, in the background's words)
+  if ($("releaseKeepNote")) { $("releaseKeepNote").textContent = nm ? `${nm} runs on this radio when nobody is connected (Background decoding), so it is never let go while that is chosen.` : ""; $("releaseKeepNote").classList.toggle("hide", !nm); }
+  for (const id of ["bgAdsbNote", "releaseAdsbNote", "bgKeepNote"]) if ($(id)) $(id).classList.add("hide");
+}
+function bgSetWhole(ids) {
+  const r = radio();
+  const F = keepFacts(r);
+  const last = ids[ids.length - 1];
+  const ordered = last ? [last, ...ids.filter(x => x !== last)] : ids;
+  let keep = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, ordered, F.comboMin, "").filter(o => o.on).map(o => o.tok);
+  if (!keep.length && ids.length) keep = keepParse(ids.join(",")).slice(0, 1);   // ★ kept as chosen; the note says it cannot run now
+  r.bgMode = keep.join(",");
+  keepMirror(r);
+  dabLandRender(); if (typeof spRender === "function") spRender();
+}
+function bgKindInit() {
+  for (const id of ["bgKindManual", "bgKindWhole"]) if ($(id)) $(id).addEventListener("change", () => {
+    const r = radio();
+    if ($("bgKindManual").checked) r.bgMode = "";
+    else if (!r.bgMode) {   // ★ the first mode the radio can run now, else the landing map's own
+      const F = keepFacts(r);
+      const o = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, [], F.comboMin, "").find(x => x.drawn && x.enabled);
+      const land = keepParse(r.landingModes);
+      r.bgMode = land.length ? land.join(",") : o ? (o.id === "ism" ? "ism:" + keepIsmDefault() : o.id) : "";
+    }
+    keepMirror(r);
+    dabLandRender(); if (typeof spRender === "function") spRender();
+  });
+}
+/* ── ★★★ b96-bgsplit WHERE NEW LISTENERS LAND: one choice of three, driving the switches the page already has ── */
+function landKindRender() {
+  if (!$("landKindRow")) return;
+  const r = radio();
+  const mapOn = $("mapLandOn") && $("mapLandOn").checked, dabOn = $("dabLandOn") && $("dabLandOn").checked;
+  $("landKindMap").checked = !!mapOn; $("landKindDab").checked = !mapOn && !!dabOn; $("landKindPlain").checked = !mapOn && !dabOn;
+  $("landKindMapLbl").style.display = $("mapLandWrap") && !$("mapLandWrap").classList.contains("hide") ? "flex" : "none";
+  $("landKindDabLbl").style.display = $("dabLandWrap") && (!$("dabLandWrap").classList.contains("hide") || dabOn) || (Number(r.landingDabChannel) >= 0) ? "flex" : "none";
+  $("dabLandWrap").style.display = mapOn ? "none" : "";
+}
+function landKindInit() {
+  if (!$("landKindRow")) return;
+  const set = (id, v) => { const e = $(id); if (e && e.checked !== v) { e.checked = v; e.dispatchEvent(new Event("change")); } };
+  $("landKindPlain").addEventListener("change", () => { if ($("landKindPlain").checked) { set("mapLandOn", false); set("dabLandOn", false); } });
+  $("landKindDab").addEventListener("change", () => { if ($("landKindDab").checked) { set("mapLandOn", false); dabLandRender(); set("dabLandOn", true); } });
+  $("landKindMap").addEventListener("change", () => { if ($("landKindMap").checked) set("mapLandOn", true); });
 }
 function dabLandRender() {
   if (typeof afRender === "function" && $("adsbFeedCard") && afRadio) afRender();   // ★ beta96 the same offer gates the card
@@ -5107,6 +5294,7 @@ function dabLandRender() {
   $("plainLandHead").style.display = on ? "" : "none";
   $("plainLandRow").style.opacity = on ? ".55" : "";
   const note = $("dabLandNote");
+  landKindRender();   // ★★★ b96-bgsplit
   if (adsbOn) { note.textContent = ""; $("plainLandRow").style.opacity = ""; $("plainLandHead").style.display = "none"; return; }
   if (!offer && Number(r.landingDabChannel) >= 0 && !blocked)
     note.textContent = "This radio cannot reach DAB with its current settings, so its DAB landing "
@@ -5235,16 +5423,16 @@ function dabLandInit() {
   $("mapLandOn").addEventListener("change", () => {
     const r = radio();
     if ($("mapLandOn").checked) { r.landingMap = ($("mapLandWhich") && $("mapLandWhich").value) || "avmar"; r.landingDabChannel = -1; r.landingDabSid = 0; r.landingDabService = ""; }
-    else { r.landingMap = ""; r.landingModes = ""; r.mapKeep = false; }
+    else { r.landingMap = ""; r.landingModes = ""; }
     keepMirror(r);
     dabLandRender(); if (typeof spRender === "function") spRender();
   });
   // ★★ the map itself: its modes are its own, so a change starts the choice afresh
   if ($("mapLandWhich")) $("mapLandWhich").addEventListener("change", () => {
-    const r = radio(); r.landingMap = $("mapLandWhich").value; r.landingModes = ""; r.mapKeep = false; keepMirror(r);
+    const r = radio(); r.landingMap = $("mapLandWhich").value; r.landingModes = ""; keepMirror(r);
     dabLandRender(); if (typeof spRender === "function") spRender();
   });
-  $("mapKeep").addEventListener("change", () => { const r = radio(); r.mapKeep = $("mapKeep").checked; keepMirror(r); dabLandRender(); if (typeof spRender === "function") spRender(); });
+  bgKindInit(); landKindInit();   // ★★★ b96-bgsplit the two choices
   // ★ The offer follows the rate and the rate switch as they change, not only on the next tab switch.
   for (const id of ["rate", "dabRateBoost"]) if ($(id)) $(id).addEventListener("change", dabLandRender);
   // ★ The sentence names the fallback, so it follows the fallback when the owner edits it.
@@ -7448,7 +7636,30 @@ function swWire() {
   $("swSearch").addEventListener("click", () => { void swSearch(); });
 }
 
+/** ★★★ b96-bgsplit SHARING: ADS-B FEEDERS on the server tab — one summary row per radio that has (or could have) the setting,
+ *  with a jump to that radio's own card. The setting stays on the radio's tab; nothing here edits it. */
+function feedersRender() {
+  const card = $("feedersCard"), host = $("feedersList"); if (!card || !host) return;
+  const rows = [];
+  radioList().forEach((r, i) => {
+    const drv = String(r.driver || "");
+    if (drv === "icom" || drv === "airspyhf") return;   // ★ never ADS-B (the card is not drawn on those tabs either)
+    let c = {}; try { c = r.adsbFeed ? JSON.parse(r.adsbFeed) : {}; } catch (e) { c = {}; }
+    const feeds = Array.isArray(c.feeds) ? c.feeds.filter(f => f && f.on !== false).length : 0;
+    const what = [c.serve ? `serving Beast on port ${c.port || 30005}${c.open ? " (open to the network)" : ""}` : "", c.push && feeds ? `feeding ${feeds} flight tracker${feeds === 1 ? "" : "s"}` : ""].filter(Boolean).join(" \u00b7 ");
+    rows.push(`<div class="row" style="gap:10px;align-items:center;margin-top:6px"><span style="flex:1"><b>${esc(r.label || r.serial || "Radio " + (i + 1))}</b> \u2014 ${esc(what || "not shared")}</span>`
+      + `<button type="button" class="ghost" data-feedjump="${i}" style="flex:0 0 auto">Open its setting</button></div>`);
+  });
+  card.classList.toggle("hide", !rows.length);
+  host.innerHTML = rows.join("");
+  for (const b of host.querySelectorAll("button[data-feedjump]")) b.addEventListener("click", () => {
+    const t = document.querySelector(`#radioTabs [data-i="${b.dataset.feedjump}"]`);
+    if (t) t.click();
+    setTimeout(() => { const c2 = $("adsbFeedCard"); if (c2) c2.scrollIntoView({ block: "start" }); }, 50);
+  });
+}
 function renderTabs() {
+  try { feedersRender(); } catch (e) { /* a summary never stops the tabs */ }
   const list = radioList();
   const tabs = $("radioTabs"), hint = $("radioTabHint"), wrap = $("radioTabsWrap");
   // ★★ THE CHOOSER IS ALWAYS SHOWN NOW, even with one radio: there is a SERVER tab to reach, and
@@ -9832,11 +10043,12 @@ function collectRadio() {
     landingFreq: Math.round(parseFloat($("landingFreq").value || "0") * 1e3),
     // ★★ V12 — edited straight onto the radio (adsbLandShow); keep-running never without the landing.
     landingAdsb: !!radio().landingAdsb,
-    adsbKeepRunning: !!radio().landingAdsb && !!radio().adsbKeepRunning,
+    adsbKeepRunning: !!radio().landingAdsb && !!radio().adsbKeepRunning,   // ★ b96-bgsplit a mirror (keepMirror)
     // ★★★ beta96 the landing map — edited straight onto the radio (mapLandRender / keepSetModes), the ADS-B pair mirrored
     landingMap: radio().landingMap === "avmar" || radio().landingMap === "amateur" ? radio().landingMap : "",
     landingModes: radio().landingMap === "avmar" || radio().landingMap === "amateur" ? String(radio().landingModes || "") : "",
     mapKeep: (radio().landingMap === "avmar" || radio().landingMap === "amateur") && !!radio().mapKeep,
+    bgMode: keepBgNormal(radio().bgMode),   // ★★★ b96-bgsplit the Background decoding choice ("" = manual)
     ...fmDefCollect(),   // ★ the Broadcast FM defaults card
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
@@ -11601,8 +11813,15 @@ if (TICKET) signIn(true);
 $("pass").addEventListener("keydown", e => { if (e.key === "Enter") $("signinBtn").click(); });
 
 dabLandInit();
-$("modeSingle").onclick = () => setMode(false);
-$("modeLocked").onclick = () => setMode(true);
+$("modeSingle").onclick = () => { opModeLeaveSingle(); setMode(false); };
+$("modeLocked").onclick = () => { opModeLeaveSingle(); setMode(true); };
+// ★★★ b96-bgsplit SINGLE USE: the tile drives the beta96 Radio use radios (their handler picks the first runnable mode)
+$("modeSingleUse").onclick = () => {
+  const s = $("radioUseSingle");
+  if (s && !s.checked) { s.checked = true; $("radioUseGeneral").checked = false; s.dispatchEvent(new Event("change")); }
+  opModeSync();
+};
+if ($("singleWindow")) $("singleWindow").addEventListener("change", () => setMode($("singleWindow").value === "locked"));
 $("name").addEventListener("input", addr);
 $("mdns").addEventListener("change", addr);
 for (const id of ["lockFreq","rate"]) $(id).addEventListener("input", coverage);
