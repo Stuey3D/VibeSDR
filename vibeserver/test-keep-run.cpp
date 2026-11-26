@@ -176,6 +176,32 @@ int main() {
         CHECK(r2.ok, "2.048 MS/s: VDL2 + Meteor 137.9 fit (%s)", r2.why.c_str());
     }
 
+    std::printf("── §5b the pass scheduler holds kept VDL2 (vibe_sat_pass_sched.h In.hold)\n");
+    {
+        using namespace vibe::satsched;
+        auto meteor = [](double hz) { Region r; r.lo = hz - 81.2e3; r.hi = hz + 81.2e3; return r; };
+        In in; in.meteorOn = true; in.orbcommOn = true; in.orbcommUp = true; in.passUp = true; in.passName = "METEOR-M2 4 LRPT";
+        in.passRegion = meteor(137.9e6); in.usableHz = 2.4e6 * vibe::kBandFlatFrac;
+        in.hold.push_back(vdl2Region()); in.holdName = "VDL2";
+        Out o = decide(in);
+        CHECK(o.runPass && o.runOrbcomm && o.both && o.placeCentre, "2.4 MS/s: pass + VDL2 + ORBCOMM together (%s)", o.state.c_str());
+        const double half = in.usableHz / 2;
+        CHECK(o.centreHz - half <= vdl2Region().lo && o.centreHz + half >= in.passRegion.hi, "…the placed centre holds VDL2 and the pass");
+        CHECK(o.state.find("VDL2") != std::string::npos, "…the admin line names VDL2");
+        // ORBCOMM switched off: the pass + VDL2, still placed
+        In i2 = in; i2.orbcommOn = false;
+        o = decide(i2);
+        CHECK(o.runPass && !o.runOrbcomm && o.placeCentre, "no ORBCOMM: pass + VDL2 placed (%s)", o.state.c_str());
+        // a narrow capture (1.4 MS/s usable ~1.1 MHz): pass + VDL2 fit (1.37 MHz?) — no: ORBCOMM gives way first, the pass runs
+        In i3 = in; i3.usableHz = 1.2e6;
+        o = decide(i3);
+        CHECK(o.runPass && !o.runOrbcomm && !o.orbcommWhyNot.empty(), "narrow: the pass runs, ORBCOMM paused (%s)", o.state.c_str());
+        // no hold: beta94 exactly
+        In i4 = in; i4.hold.clear();
+        o = decide(i4);
+        CHECK(o.runPass && o.runOrbcomm && o.both && o.state.find("VDL2") == std::string::npos, "no hold: beta94's both");
+    }
+
     std::printf("── §6 cost words\n");
     {
         bool heavy = false;

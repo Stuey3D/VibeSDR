@@ -217,6 +217,9 @@ object VibeServerBoot {
                          // ★★★ V12: …nor the DX scanner (the owner's scan is the screen's, and borrows the radio briefly)
                          "dxScan"))
             c.remove(k)
+        // ★★★ beta96 no landing map / kept mode either — PUT empty, not removed: the engine reads the map off the config JSON
+        //     (setVibeServerFmDefaults), and an absent key would leave the owner's kept VDL2 in force for the scan
+        c.put("landingMap", ""); c.put("landingModes", ""); c.put("mapKeep", false)
         c.put("advertise", false)
         c.put("maxUsers", 1)
         c.put("centerFreq", 225_648_000.0)   // 12B, as before — DAB entry moves it to the block anyway
