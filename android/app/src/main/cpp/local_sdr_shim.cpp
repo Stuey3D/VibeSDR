@@ -1187,13 +1187,20 @@ static std::atomic<bool>     g_vsAdsbKeep{false};
 /* ★★★ beta96 THE LANDING MAP'S OTHER MODES (vibe_keep_store.h, docs/v12/KEEP-RUNNING.md — Stuart 11-26: "I thought I'd be able
  *  to set VDL2 as the Sony's background mode"). ADS-B keeps its own two above (g_vsLandingAdsb / g_vsAdsbKeep — the config
  *  mirrors it there); VDL2, ACARS, ACARS + VDL2, AIS and the VOR map are here: the mode a new listener lands in, and with
- *  g_vsMapKeep the mode the radio sits in whenever nobody is connected. LocalSdrShim::setVibeServerMap. */
+ *  (b96-bgsplit) the mode the radio sits in with nobody connected is g_vsBgEntry below. LocalSdrShim::setVibeServerMap. */
 static std::mutex            g_vsMapMtx;
 static vibekeep::Entry       g_vsMapEntry;            // g_vsMapMtx — kind None = no map landing (or ADS-B's)
 static std::atomic<int>      g_vsMapKind{0};          // vibekeep::Kind of g_vsMapEntry (lock-free reads)
-static std::atomic<bool>     g_vsMapKeep{false};
+/* ★★★ beta96 b96-bgsplit THE BACKGROUND WHOLE-RADIO MODE — separate from the landing (Stuart 11-26: "Listen-Amateur uses FM
+ *  radio as his landing zone, so if he enabled background AIS that would break that"). What the radio sits in whenever nobody
+ *  is connected: VDL2, ACARS, ACARS + VDL2, AIS, AIS + DSC, the VOR map, ISM on a band. ADS-B as the background is
+ *  g_vsAdsbKeep (kept ADS-B's own tick). Kind None = MANUAL background decoding (BgRunner's profiles, as ever). The first
+ *  arrival pauses it unless the landing IS this mode (bgWholePauseForListener); the last one leaving brings it back. */
+static vibekeep::Entry       g_vsBgEntry;             // g_vsMapMtx
+static std::atomic<int>      g_vsBgKind{0};           // vibekeep::Kind of g_vsBgEntry
 static void vsMapFromConfigJson(const std::string& json);   // ★ Android: setVibeServerFmDefaults reads the map off the config
 static vibekeep::Entry vsMapEntry() { std::lock_guard<std::mutex> lk(g_vsMapMtx); return g_vsMapEntry; }
+static vibekeep::Entry vsBgEntry() { std::lock_guard<std::mutex> lk(g_vsMapMtx); return g_vsBgEntry; }
 /* ★★ THE OWNER'S BROADCAST FM DEFAULTS AND WHO GETS THEM — LocalSdrShim::setVibeServerFmDefaults, vibe_fm_defaults.h.
  *  g_fm holds the rules and the listeners' recent choices; every use is under g_fmMtx, and the region is read at the
  *  moment of use (the band plan's ITU region is settled at start, possibly after the defaults arrive). Unconfigured
@@ -9139,7 +9146,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  channels (and the ORBCOMM band when the sky plot rides it) — so strong neighbours (the 2 m band, the airband's
              *  voice channels) stay out of the 8-bit converter all day (Stuart 11-25: the 2 m overload, 28 dB cut). A listener
              *  in the mode sees the edges of the waterfall dim; that is the filter, as on a real receiver. */
-            if (g_avMode.load(std::memory_order_relaxed) && (dev || useTcp()) && mapKeepHolds() && mapModeOnNow()
+            if (g_avMode.load(std::memory_order_relaxed) && (dev || useTcp()) && mapKeepHolds() && bgModeOnNow()
                 && avBand_ && std::string(avBand_->id) == "vdl2") {
                 const vibe::satsched::Region v = vibekeep::vdl2Region();
                 double lo = v.lo, hi = v.hi;
@@ -18303,23 +18310,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  nothing. A listener arriving JOINS it (the box is the viewer); the last one leaving does not take it away. One rule,
      *  keepHolds(), is read by every idle decider (the park, release, the RSP probe, background decoding, the DX scanner, an
      *  Icom's power-off). ADS-B keeps its own (adsbKeepTick) — the config mirrors that case into landingAdsb. */
-    /** The kept mode is on now (and for the datalink: on the kept BAND). */
-    bool mapModeOnNow() const {
-        const int k = g_vsMapKind.load(std::memory_order_relaxed);
+    /** A whole-radio entry is on now (and for the datalink: on its BAND; AIS in its variant; ISM on its band, no custom
+     *  frequency) — the landing's or the background's (b96-bgsplit: two entries, one rule). */
+    bool entryOnNow(const vibekeep::Entry& e) const {
+        const int k = int(e.kind);
         if (k == vibekeep::Avdata) {
             if (!g_avMode.load(std::memory_order_relaxed) || !avBand_) return false;
-            return vsMapEntry().band == avBand_->id;
+            return e.band == avBand_->id;
         }
         // ★★★ beta96 AIS, or the maritime combination: on in the kept variant (a listener's switch to the other is somebody's use)
-        if (k == vibekeep::Ais) return g_aisMode.load(std::memory_order_relaxed) && g_aisDsc.load(std::memory_order_relaxed) == (vsMapEntry().band == vibemar::kBand);
+        if (k == vibekeep::Ais) return g_aisMode.load(std::memory_order_relaxed) && g_aisDsc.load(std::memory_order_relaxed) == (e.band == vibemar::kBand);
         if (k == vibekeep::Vormap) return g_vorMode.load(std::memory_order_relaxed);
         // ★★ the Amateur map's ISM: on its kept band (a custom frequency a listener picked is not the keep's)
-        if (k == vibekeep::Ism) return g_ismMode.load(std::memory_order_relaxed) && ismBand_ && ismCustomHz_ <= 0 && vsMapEntry().band == ismBand_->id;
+        if (k == vibekeep::Ism) return g_ismMode.load(std::memory_order_relaxed) && ismBand_ && ismCustomHz_ <= 0 && e.band == ismBand_->id;
         return false;
     }
-    /** "" = the landing map's mode can run on this radio now (the mode's own why-not, with the rate and the owner's blocks). */
-    std::string mapWhyNot() const {
-        const vibekeep::Entry e = vsMapEntry();
+    /** "" = the entry's mode can run on this radio now (the mode's own why-not, with the rate and the owner's blocks). */
+    std::string entryWhyNot(const vibekeep::Entry& e) const {
         if (e.kind == vibekeep::Avdata) {
             const vibeavi::Band* b = vibeavi::bandById(e.band);
             return b ? vsAvdataWhyNot(b) : std::string("there is no such datalink band");
@@ -18332,27 +18339,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (g_icomOn.load() || !vsIsmReach(*b)) return std::string("this radio cannot tune the ") + b->name + " band";
             return vsIsmWhyNot();
         }
-        return "no landing map mode";
+        return "no whole-radio mode";
     }
-    /** ★★★ DOES THE LANDING MAP'S KEEP-RUNNING MODE HOLD THE IDLE RADIO NOW? Ticked, AND it can run here (or is on) — a radio
-     *  whose rate, lock or blocks rule it out falls back to the ordinary idle behaviour, exactly as adsbKeepHolds. */
+    /** The LANDING map's mode is on now / may run (the connect path's landing). */
+    bool mapModeOnNow() const { return g_vsMapKind.load(std::memory_order_relaxed) != vibekeep::None && entryOnNow(vsMapEntry()); }
+    std::string mapWhyNot() const { return entryWhyNot(vsMapEntry()); }
+    /** ★★★ b96-bgsplit the BACKGROUND whole-radio mode is on now / may run. */
+    bool bgModeOnNow() const { return g_vsBgKind.load(std::memory_order_relaxed) != vibekeep::None && entryOnNow(vsBgEntry()); }
+    std::string bgWhyNot() const { return entryWhyNot(vsBgEntry()); }
+    /** ★★★ DOES THE BACKGROUND WHOLE-RADIO MODE (b96-bgsplit; b96-keeprun's "keep the landing map's mode running") HOLD THE
+     *  IDLE RADIO NOW? Chosen, AND it can run here (or is on) — a radio whose rate, lock or blocks rule it out falls back to the
+     *  ordinary idle behaviour, exactly as adsbKeepHolds. (The name is kept from b96-keeprun: "map" = the map's modes.) */
     bool mapKeepHolds() const {
-        if (!g_vsMapKeep.load(std::memory_order_relaxed) || frontDoorOnly || decoderOnly) return false;
-        if (g_vsMapKind.load(std::memory_order_relaxed) == vibekeep::None) return false;
-        return mapModeOnNow() || mapWhyNot().empty();
+        if (frontDoorOnly || decoderOnly) return false;
+        if (g_vsBgKind.load(std::memory_order_relaxed) == vibekeep::None) return false;
+        return bgModeOnNow() || bgWhyNot().empty();
     }
     /** ★★★ ONE RULE FOR EVERY IDLE DECIDER: a keep-running mode — kept ADS-B or the landing map's — owns the idle radio. */
     bool keepHolds() const { return adsbKeepHolds() || mapKeepHolds(); }
     /** The kept mode's name for the admin lines ("VDL2", "ADS-B"). */
     std::string keepName() const {
         if (adsbKeepHolds()) return "ADS-B";
-        if (mapKeepHolds()) return vsMapEntry().name;
+        if (mapKeepHolds()) return vsBgEntry().name;
         return std::string();
     }
     /** ★ The kept mode is on BECAUSE the keep put it there (nobody's use of it) — read by the resume, the passes. Cleared by
      *  the mode's leave and by any listener's own frame for that mode (a band step is somebody's use). */
     std::atomic<bool> mapByKeep_{false};
-    bool mapKeptNow() const { return mapByKeep_.load() && mapModeOnNow(); }
+    bool mapKeptNow() const { return mapByKeep_.load() && bgModeOnNow(); }
     double mapKeepRetryAt_ = 0;
     bool   mapKeepLoggedWhy_ = false, mapKeepStarted_ = false;
     /** ★★★ beta96 the shared 137 MHz capture's tuner centre for kept VDL2 between passes (0 = the band's own 136.8625):
@@ -18360,11 +18374,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<double> avCentreOverride_{0.0};
     void mapKeepTick() {
         if (stopping.load() || restarting.load() || frontDoorOnly || decoderOnly) return;
-        if (!g_vsMapKeep.load(std::memory_order_relaxed) || g_vsMapKind.load(std::memory_order_relaxed) == vibekeep::None) { mapKeepLoggedWhy_ = false; return; }
+        if (g_vsBgKind.load(std::memory_order_relaxed) == vibekeep::None) { mapKeepLoggedWhy_ = false; return; }   // ★ b96-bgsplit the BACKGROUND mode
         if (g_benchHold.load()) return;   // ★★★ never takes the radio back while a benchmark measures the machine
         // ★★ a satellite pass has the radio (or is taking it): the kept mode comes back when its session ends
         if (satPassBusy_.load() || satWantsRadio_.load()) return;
-        if (mapModeOnNow()) {
+        if (bgModeOnNow()) {
             /* ★ Already in the kept mode. With nobody here it is the keep's again (a listener's band step meanwhile was
              *  somebody's use of it) — the passes and the resume read that (mapKeptNow). The mode never leaves for want of
              *  listeners while it is kept (wholeModeLeavesWhenEmpty), so this is where that hand-back happens. */
@@ -18373,7 +18387,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
                 if (!anyone) {
                     mapByKeep_.store(true);
-                    LOGI("[MAP] last listener left \xe2\x80\x94 staying in %s (kept running when nobody is connected)", vsMapEntry().name.c_str());
+                    LOGI("[MAP] last listener left \xe2\x80\x94 staying in %s (kept running when nobody is connected)", vsBgEntry().name.c_str());
                 }
             }
             return;
@@ -18392,8 +18406,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         if (anyone) return;
-        const vibekeep::Entry e = vsMapEntry();
-        const std::string why = mapWhyNot();
+        const vibekeep::Entry e = vsBgEntry();
+        const std::string why = bgWhyNot();
         if (!why.empty()) {
             if (!mapKeepLoggedWhy_) {
                 mapKeepLoggedWhy_ = true;
@@ -18424,7 +18438,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("[MAP] keep running: nobody is connected (%s) \xe2\x80\x94 entering %s so the next listener finds the map warm",
              mapKeepStarted_ ? "the last listener left" : "the server has started", e.name.c_str());
         handleControl(nullptr, e.msg);
-        if (mapModeOnNow()) { mapKeepStarted_ = true; mapKeepRetryAt_ = 0; mapByKeep_.store(true); applyAutoIf(); }   // ★ the kept filter, now the centre is set
+        if (bgModeOnNow()) { mapKeepStarted_ = true; mapKeepRetryAt_ = 0; mapByKeep_.store(true); applyAutoIf(); }   // ★ the kept filter, now the centre is set
         else { avCentreOverride_.store(0.0); LOGI("[MAP] keep running %s: the entry did not open \xe2\x80\x94 trying again in 60 s", e.name.c_str()); }
     }
     /** ★ Where kept VDL2 sits: with ORBCOMM monitoring switched on and the capture holding both, the shared centre; else 0
@@ -29408,6 +29422,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   bool first = true;
                   if (!g_icomOn.load()) for (const auto& b : vibeism::bands()) if (vsIsmReach(b)) { j += std::string(first ? "\"" : ",\"") + b.id + "\""; first = false; }
                   j += "]"; }
+                /* ★★★ beta96 b96-bgsplit (Stuart 11-26: "ISM is WORLDWIDE"): the background / landing ISM choice offers ANY band of
+                 *  ISM's own plan this radio reaches — the server's region's own bands first (vibeism::regionBands, the ISM mode's
+                 *  landing order), then every other one ("own":false). Names and regions come from the plan itself, so the page
+                 *  and the app hold no band list of their own. */
+                { const vibeism::Region rg = vibeism::regionAt(g_bgLat.load(), g_bgLon.load());
+                  j += std::string(",\"ismRegion\":\"") + vibeism::regionName(rg) + "\",\"ismPlan\":[";
+                  bool first = true;
+                  auto add = [&](const vibeism::Band& b, bool own) {
+                      char e[256];
+                      std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"own\":%s}", first ? "" : ",", b.id, b.name, b.region, own ? "true" : "false");
+                      j += e; first = false;
+                  };
+                  if (!g_icomOn.load()) {
+                      std::vector<std::string> done;
+                      for (const char* id : vibeism::regionBands(rg)) if (const vibeism::Band* b = vibeism::bandById(id); b && vsIsmReach(*b)) { add(*b, true); done.push_back(id); }
+                      for (const auto& b : vibeism::bands()) if (vsIsmReach(b) && std::find(done.begin(), done.end(), std::string(b.id)) == done.end()) add(b, false);
+                  }
+                  j += "]"; }
                 // ★★ V12 2026-10-27: whether THIS radio reaches the NDB band — the setup page offers an NDB background profile only then
                 { double nlo = 0, nhi = 0; j += std::string(",\"ndbHw\":") + (vsNdbReach(nlo, nhi) ? "true" : "false"); }
                 /* ★★ V12 2026-10-28: the bands THIS radio's Band digital spots can sit on — the setup page's Band VFO picks
@@ -32981,6 +33013,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *    `mode = "dab"` (see the per-client tune path: "dab" is not a demodulator). */
             // ★★ V12: an owner's scan holds a shared radio (g_scanLock) — an arrival joins it where it is, never landed
             const bool newSession = firstOfSession && landedSession != session && !g_scanLock.load();
+            /* ★★★ b96-bgsplit THE FIRST ARRIVAL AFTER THE BACKGROUND MODE (bgWholePauseForListener just paused it): the radio's
+             *  state was the background's, nobody's — so the owner's landing applies to whoever this is, as at a start
+             *  (startOnDab's "first state, not a move"), shared dial or not. */
+            const bool afterBg = firstOfSession && bgWholePaused_.exchange(false);
             const bool firstEver  = firstOfSession && !anySessionYet.exchange(true);
             /* ★★★ V12: ADS-B AS THE LANDING — the same rules as a DAB landing, in the same places below, because it is
              *  the same kind of thing: a whole-radio mode whose box IS the viewer. It beats a DAB landing (a radio lands
@@ -33036,7 +33072,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             bool landOnDab = false;
             if (newSession && landDabCh >= 0
-                && (startOnDab || (!adminOk.load() && !preTuned && !sharedDialNow))) {
+                && (startOnDab || afterBg || (!adminOk.load() && !preTuned && !sharedDialNow))) {
                 if (vsModeBlocked("dab"))
                     LOGI("[DAB] landing station ignored — DAB is blocked on this radio; the plain landing applies");
                 else if (!vsDabCapable())
@@ -33047,9 +33083,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 else landOnDab = true;
             }
             bool landOnAdsb = adsbLand && newSession
-                           && (startOnAdsb || (!adminOk.load() && !preTuned && !sharedDialNow));
+                           && (startOnAdsb || afterBg || (!adminOk.load() && !preTuned && !sharedDialNow));
             bool landOnMap  = mapLand && newSession
-                           && ((firstEver && mapLand) || (!adminOk.load() && !preTuned && !sharedDialNow));   // ★★★ beta96 — startOnAdsb's rule
+                           && ((firstEver && mapLand) || afterBg || (!adminOk.load() && !preTuned && !sharedDialNow));   // ★★★ beta96 — startOnAdsb's rule
             /* ★★★ V12 DAB ONLY, WHOLE RADIO: a new listener LANDS in DAB — the owner's landing block (and station) when set,
              *  else the radio's last block, else the server's own choice (the "no block named" rule). A radio already in DAB
              *  just carries on. (A wide locked range lands each listener on their own multiplex in dabLrTick instead.) */
@@ -33170,7 +33206,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  the tuner to 96.1 MHz under a mode that was still on: no aircraft, a noise floor 13 dB up (the FM band),
              *  and the gain rule — rightly reading a hot floor — walking the gain down for nothing. Found by the gain
              *  A/B script's own reconnect. ADS-B owns the dial until it is left (EXIT ADS-B lands them properly). */
-            const bool adsbHolds = g_adsbMode.load(std::memory_order_relaxed) || (mapE.kind != vibekeep::None && mapModeOnNow());   // ★★★ beta96 the map's mode likewise
+            const bool adsbHolds = g_adsbMode.load(std::memory_order_relaxed) || (mapE.kind != vibekeep::None && mapModeOnNow())   // ★★★ beta96 the map's mode likewise
+                                || (mapKeepHolds() && bgModeOnNow());   // ★★★ b96-bgsplit and the background mode, where it stays (it IS the landing)
             if (adsbHolds && !landOnAdsb && !landOnMap && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && (!sharedDialNow || startLanding))
                 LOGI("new session — the receiver is in ADS-B, so the plain landing waits for EXIT ADS-B");
@@ -39120,16 +39157,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  what it costs (the setup benchmark — the default, never a gate), and the satellites beside it. Admin page only: an
      *  idle kept mode is nothing a listener feels (feedback_health_pill_genuine_only). */
     std::string keepRunJson() {
-        const bool adsb = g_vsLandingAdsb.load(std::memory_order_relaxed);
-        const vibekeep::Entry e = adsb ? vibekeep::Entry{} : vsMapEntry();
-        std::string name, bench, why; bool keep = false, on = false, kept = false;
+        /* ★★★ b96-bgsplit THE BACKGROUND LINE (the admin page's keepRun): the background whole-radio mode — its state, why
+         *  not, its cost — and, beside it, where new listeners land (the separate choice). "bg":false = manual background
+         *  decoding (its own line, bgStatusJson); the landing is still said. */
+        const bool adsb = g_vsAdsbKeep.load(std::memory_order_relaxed);
+        const vibekeep::Entry e = adsb ? vibekeep::Entry{} : vsBgEntry();
+        std::string landJ;
+        {
+            const vibekeep::Entry le = vsMapEntry();
+            if (g_vsLandingAdsb.load()) landJ = ",\"land\":\"map\",\"landTitle\":\"" + std::string(vibekeep::mapTitle(vibekeep::kMapAvMar)) + "\",\"landMode\":\"ADS-B\"";
+            else if (le.kind != vibekeep::None) landJ = ",\"land\":\"map\",\"landTitle\":\"" + std::string(vibekeep::mapTitle(le.map)) + "\",\"landMode\":\"" + vibe::gallery::jsonEsc(le.name) + "\"";
+            else if (g_vsLandingDabCh.load() >= 0 && size_t(g_vsLandingDabCh.load()) < vibedab::kBandIIICount)
+                landJ = std::string(",\"land\":\"dab\",\"landMode\":\"DAB ") + vibedab::kBandIII[g_vsLandingDabCh.load()].name + "\"";
+            else {
+                std::string lm; { std::lock_guard<std::mutex> lk(g_vsLandingMtx); lm = g_vsLandingMode; }
+                char b2[96]; std::snprintf(b2, sizeof b2, ",\"land\":\"plain\",\"landHz\":%.0f", g_vsLandingHz.load());
+                landJ = b2 + (lm.empty() ? std::string() : ",\"landDemod\":\"" + vibe::gallery::jsonEsc(lm) + "\"");
+            }
+        }
+        std::string name, bench, why; bool on = false, kept = false;
         if (adsb) {
-            name = "ADS-B"; bench = "adsb_"; keep = g_vsAdsbKeep.load(); on = g_adsbMode.load(); kept = on && adsbByKeep_.load();
+            name = "ADS-B"; bench = "adsb_"; on = g_adsbMode.load(); kept = on && adsbByKeep_.load();
             why = on ? std::string() : vsAdsbWhyNot();
         } else if (e.kind != vibekeep::None) {
-            name = e.name; bench = e.bench; keep = g_vsMapKeep.load(); on = mapModeOnNow(); kept = mapKeptNow();
-            why = on ? std::string() : mapWhyNot();
-        } else return "{\"map\":\"\"}";
+            name = e.name; bench = e.bench; on = bgModeOnNow(); kept = mapKeptNow();
+            why = on ? std::string() : bgWhyNot();
+        } else return "{\"bg\":false,\"map\":\"\"" + landJ + "}";
+        const bool keep = true;
         const std::string mapId = adsb ? std::string(vibekeep::kMapAvMar) : e.map;
         bool anyone;
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
@@ -39138,11 +39192,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (on) state = kept || !anyone ? "running" : "listeners";
         else if (satPassBusy_.load() || satWantsRadio_.load()) state = "pass";
         else if (anyone) state = "listeners";
-        else state = keep ? "starting" : "landing";
+        else state = "starting";
         const double pct = vsBenchRowPct(bench);
         bool heavy = false;
         const std::string cost = vibekeep::costWords(pct, &heavy);
-        std::string j = "{\"map\":\"" + mapId + "\",\"title\":\"" + vibekeep::mapTitle(mapId) + "\",\"mode\":\"" + vibe::gallery::jsonEsc(name)
+        std::string j = "{\"bg\":true,\"map\":\"" + mapId + "\",\"title\":\"" + vibekeep::mapTitle(mapId) + "\",\"mode\":\"" + vibe::gallery::jsonEsc(name)
                       + "\",\"keep\":" + (keep ? "true" : "false") + ",\"on\":" + (on ? "true" : "false")
                       + ",\"state\":\"" + state + "\",\"why\":\"" + vibe::gallery::jsonEsc(why) + "\"";
         if (!cost.empty()) j += ",\"cost\":\"" + vibe::gallery::jsonEsc(cost) + "\"" + (heavy ? ",\"heavy\":true" : "");
@@ -39154,7 +39208,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (orbSkyRider_.load()) j += ",\"orbRider\":true";
         if (avRiding_.load()) j += ",\"riding\":true";
         if (on && g_avMode.load() && avCentreOverride_.load() > 0) { char c[48]; std::snprintf(c, sizeof c, ",\"centre\":%.0f", rtlCenter.load() + hwOffsetHz()); j += c; }
-        return j + "}";
+        return j + landJ + "}";
     }
     // ══ ★★ V12 beta90 UNATTENDED SATELLITE PASSES (Stuart 2026-11-21, docs/v12/SATELLITE-BEST.md "Decided 3") ══════════
     /* "a user can specify that they want to receive meteor passes and when a pass is happening the current background
@@ -39184,7 +39238,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★★ beta96 can kept VDL2 share a capture with a Meteor pass on this radio (the 137.9 downlink, the wider case)? */
     bool keepVdl2CanShare() {
         if (!mapKeepHolds()) return false;
-        const vibekeep::Entry e = vsMapEntry();
+        const vibekeep::Entry e = vsBgEntry();
         if (e.kind != vibekeep::Avdata || e.band != "vdl2") return false;
         vibe::satsched::Region m; m.lo = 137.9e6 - 75e3 - 6.2e3; m.hi = 137.9e6 + 75e3 + 6.2e3;
         return vibekeep::shareFit(std::min(usableSpan(), (double)sampleRate * vibe::kBandFlatFrac), false, &m).ok;
@@ -39428,8 +39482,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    regions hold VDL2 too (satIfTick), so the filter opens over 136.69–138.0 MHz for the pass and closes after. */
     std::atomic<bool> orbSkyRider_{false};           // ★ the sky plot runs beside kept VDL2, not in a session
     void keepOrbRiderTickLocked(const vibe::bg::Config& cfg, const std::string& why) {
-        bool want = cfg.sat.on && cfg.sat.orbcomm && why.empty() && !satWork_.on && g_avMode.load() && mapModeOnNow()
-                 && mapKeepHolds() && vsMapEntry().band == "vdl2" && !g_benchHold.load();
+        bool want = cfg.sat.on && cfg.sat.orbcomm && why.empty() && !satWork_.on && g_avMode.load() && bgModeOnNow()
+                 && mapKeepHolds() && vsBgEntry().band == "vdl2" && !g_benchHold.load();
         if (want) want = vsSatReachWhy(vibe::satsched::kOrbLoHz, vibe::satsched::kOrbHiHz).empty() && satEngine().orbcommUp(satClock().unix) > 0;
         if (want) {   // ★ the capture must really hold the band (a listener's band step moved it: then not)
             const double hw = rtlCenter.load() + hwOffsetHz();
@@ -39603,7 +39657,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  ordinary demodulator) but its VDL2 service rides the session's capture (avRiderSync); nothing is lost but the few
          *  seconds of the hand-over. Where it cannot fit (an HF+), it pauses and resumes like ADS-B. */
         if (!satWork_.on && mapKeptNow()) {
-            const vibekeep::Entry ke = vsMapEntry();
+            const vibekeep::Entry ke = vsBgEntry();
             if (!o.runPass) {
                 satPassNow_ = ke.name + " is kept running \xe2\x80\x94 waiting for a pass" + (orbSkyRider_.load() ? " (ORBCOMM sky plot riding its capture)" : "");
                 return;
@@ -39621,7 +39675,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             satPassInternal() = true;
             handleControl(nullptr, "{\"type\":\"" + ke.kindWord() + "\",\"on\":0}");
             satPassInternal() = false;
-            if (mapModeOnNow()) {   // ★ refused (it is this radio's only mode): the pass is not taken
+            if (bgModeOnNow()) {   // ★ refused (it is this radio's only mode): the pass is not taken
                 satWantsRadio_.store(false);
                 satPassWhy_ = satPassNow_ = ke.name + " is this radio's only mode \xe2\x80\x94 a pass cannot take it";
                 return;
@@ -41243,7 +41297,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             || (g_ndbMode.load(std::memory_order_relaxed) && ndbOrigin_ != "background")
             || ((g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
                  || g_ismMode.load(std::memory_order_relaxed))
-                && !(mapKeepHolds() && mapModeOnNow()))   // ★★★ beta96 the landing map's kept mode stays
+                && !(mapKeepHolds() && bgModeOnNow()))   // ★★★ beta96 the background (kept) mode stays
             || g_sdMode.load(std::memory_order_relaxed)
             || (g_adsbMode.load(std::memory_order_relaxed) && !adsbKeepHolds());
     }
@@ -41285,9 +41339,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  table stays warm for the next arrival, and the radio is the keep's again (a listener's own frames meanwhile were
          *  somebody's use of it — now it is nobody's). A different mode or band a listener chose leaves as ever, and
          *  mapKeepTick puts the kept one back. */
-        const bool keepStays = mapKeepHolds() && mapModeOnNow();
+        const bool keepStays = mapKeepHolds() && bgModeOnNow();
         if (keepStays) {
-            LOGI("[MAP] last listener left \xe2\x80\x94 staying in %s (kept running when nobody is connected)", vsMapEntry().name.c_str());
+            LOGI("[MAP] last listener left \xe2\x80\x94 staying in %s (the background mode when nobody is connected)", vsBgEntry().name.c_str());
             mapByKeep_.store(true);
         }
         if (g_dabMode.load(std::memory_order_relaxed)) {
@@ -41402,7 +41456,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  because nobody was here; that is not "used since you left", so with nobody else here the mode comes back. */
         const bool idleAdsb = adsb && adsbByKeep_.load() && kind != "adsb";
         // ★★★ beta96 the landing map's kept mode (VDL2, AIS …) is the idle default the same way — unless it IS what comes back
-        const vibekeep::Entry ke = vsMapEntry();
+        const vibekeep::Entry ke = vsBgEntry();
         const bool idleMap = mapKeptNow() && !(kind == ke.kindWord() && ((kind != "avdata" && kind != "ism") || rec.ismBand == ke.band));
         if (rec.kind != kind || rec.at <= 0.0)
             return std::string("The receiver is no longer in ") + name + " \xe2\x80\x94 it has been restarted or used since you left.";
@@ -41428,7 +41482,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★★★ beta96 the landing map's kept mode likewise (a datalink band step needs no leave: the entry steps it)
         if (mapKeptNow()) {
-            const vibekeep::Entry ke = vsMapEntry();
+            const vibekeep::Entry ke = vsBgEntry();
             if (rec.kind != ke.kindWord()) {
                 LOGI("[MAP] the idle default (%s) gives way \xe2\x80\x94 %s is coming back for the listener who left it", ke.name.c_str(), rec.kind.c_str());
                 const std::string kw = ke.kindWord();
@@ -41580,6 +41634,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         idleParkDueAt.store(nowSecs() + g);
         LOGI("no listeners — idle park in %.0fs (grace period)", g);
     }
+    /** ★★★ b96-bgsplit A LISTENER ARRIVED WHILE THE BACKGROUND WHOLE-RADIO MODE HAS THE RADIO (Stuart 11-26: "when the first
+     *  listener joins, the radio switches from the background choice to the LANDING choice"). The mode the KEEP put there
+     *  (nobody's use of it: adsbByKeep_ / mapKeptNow) pauses through its own door — its stores (the ship store, the aircraft
+     *  table's sharing, the day's logs) are written as at any leave and stay — and the radio is back on the owner's plain
+     *  landing (where the keep tick entered it from); the connect path then lands the newcomer where the owner said
+     *  (afterBg). ★ Unless the landing IS that mode (b96-keeprun's "map + keep it running", a single mode): then they join
+     *  the warm map, exactly as before. The last listener leaving gives the radio back to the background mode (the keep ticks). */
+    std::atomic<bool> bgWholePaused_{false};
+    void bgWholePauseForListener(const char* who) {
+        if (g_adsbMode.load() && adsbByKeep_.load()) {
+            if (g_vsLandingAdsb.load()) return;   // ★ the landing IS ADS-B: join it
+            LOGI("[BACKGROUND] %s \xe2\x80\x94 ADS-B (the background mode) pauses; the owner's landing applies", who);
+            adsbLeave(false);
+            bgWholePaused_.store(true);
+            return;
+        }
+        if (!mapKeptNow()) return;
+        const vibekeep::Entry be = vsBgEntry(), le = vsMapEntry();
+        if (!g_vsLandingAdsb.load() && le.kind == be.kind && le.band == be.band) return;   // ★ the landing IS this mode: join it
+        LOGI("[BACKGROUND] %s \xe2\x80\x94 %s (the background mode) pauses; the owner's landing applies", who, be.name.c_str());
+        if (be.kind == vibekeep::Avdata) avLeave(false);
+        else if (be.kind == vibekeep::Ais) aisLeave(false);
+        else if (be.kind == vibekeep::Vormap) vorLeave(false);
+        else if (be.kind == vibekeep::Ism) ismLeave(false);
+        avCentreOverride_.store(0.0);
+        mapByKeep_.store(false);
+        bgWholePaused_.store(true);
+    }
     void resumeCaptureIdle(bool fromBg = false) {
 #if VIBE_HAVE_ICOM
         if (useIcom()) icom->setInUse(true);   // ★ a listener arrived: a radio the park switched off is woken now
@@ -41587,6 +41669,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12: a listener arriving ends background decoding FIRST, and gets the dial back (see bgStopForListener).
         //    `fromBg` is background decoding taking the radio back for itself, which must not stop itself.
         if (!fromBg) bgStopForListener("a listener arrived");
+        if (!fromBg) bgWholePauseForListener("a listener arrived");   // ★★★ b96-bgsplit the background whole-radio mode likewise
         // ★★★ V12 …and the DX scanner: the hop in progress is thrown away, the dial given back (dxStopForListener)
         if (!fromBg) dxStopForListener("a listener arrived");
         // ★ A listener is back, so any pending park is off. This runs EARLY in the connect path,
@@ -47397,6 +47480,13 @@ std::string LocalSdrShim::backgroundCapsJson() {
     first = true;
     for (const auto& b : vibeism::bands()) { j += std::string(first ? "\"" : ",\"") + b.id + "\""; first = false; }
     j += "]";
+    /* ★★★ b96-bgsplit ISM IS WORLDWIDE: the server's region's own bands, most used first (vibeism::regionBands — the ISM mode's
+     *  landing order) — the app's background / landing ISM choice lists these first and defaults to the first it reaches. */
+    { const vibeism::Region rg = vibeism::regionAt(g_bgLat.load(), g_bgLon.load());
+      j += std::string(",\"ismRegion\":\"") + vibeism::regionName(rg) + "\",\"ismOwn\":[";
+      bool f2 = true;
+      for (const char* id : vibeism::regionBands(rg)) { j += std::string(f2 ? "\"" : ",\"") + id + "\""; f2 = false; }
+      j += "]"; }
     std::vector<vibe::digi::Span> spans = vsSpotSpans();
     const bool radioOpen = !spans.empty();
     if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::allModes(), [](double, double) { return true; });
@@ -48534,24 +48624,43 @@ void LocalSdrShim::setVibeServerFmDefaults(const std::string& json) {
      *  on a locked range every listener has their own channel and the new defaults reach the next one to arrive. */
     { auto* P = instance().p; if (P && !P->perClientDsp() && !P->useIcom() && P->specListenerCount() == 0) P->fmApplyShared(st); }
 }
-/* ★★★ beta96 THE OWNER'S LANDING, AND THE SINGLE MODE OVER IT: the setters keep what the owner saved (g_vsOwn*) and
- *  vsApplyLanding works out what runs — a keepable single mode (ADS-B, VDL2, ACARS, the VOR map, AIS, ISM on its band) is the
- *  landing AND kept running whatever the landing card says; General gives the owner's landing back. g_vsMapMtx. */
-static bool        g_vsOwnAdsbLand = false, g_vsOwnAdsbKeep = false, g_vsOwnMapKeep = false;
-static std::string g_vsOwnMap, g_vsOwnModes;
-static void vsApplyLandingAdsb(bool land, bool keepRunning);
-static void vsApplyMap(const std::string& map, const std::string& modesCsv, bool keep);
+/* ★★★ beta96 THE OWNER'S LANDING AND BACKGROUND, AND THE SINGLE MODE OVER THEM: the setters keep what the owner saved
+ *  (g_vsOwn*) and vsApplyLanding works out what runs — b96-bgsplit: TWO choices, the LANDING (ADS-B → g_vsLandingAdsb, another
+ *  map mode → g_vsMapEntry) and the BACKGROUND whole-radio mode (ADS-B → g_vsAdsbKeep, another → g_vsBgEntry; none = manual).
+ *  A keepable single mode (ADS-B, VDL2, ACARS, the VOR map, AIS, ISM on its band) is BOTH, whatever the cards say; General
+ *  gives the owner's back. A caller that never names the background (b96-keeprun's setVibeServerMap(…, keep), an Android
+ *  config with no bgMode) has it derived the old way — keep = background is the landing map's mode (vibekeep::migrate). g_vsMapMtx. */
+static bool        g_vsOwnAdsbLand = false, g_vsOwnAdsbKeep = false, g_vsOwnMapKeep = false, g_vsOwnBgSet = false;
+static std::string g_vsOwnMap, g_vsOwnModes, g_vsOwnBg;
+static vibekeep::Entry vsEntryOf(const std::string& csv) {
+    vibekeep::Entry e;
+    if (!vibekeep::entryFor(vibekeep::parseCsv(csv), e)) return vibekeep::Entry{};
+    if (e.kind == vibekeep::Ism) { if (const vibeism::Band* b = vibeism::bandById(e.band)) e.name = std::string("ISM ") + b->name; }
+    return e;
+}
 static void vsApplyLanding() {
-    bool al, ak, mk; std::string m, mo, single;
-    { std::lock_guard<std::mutex> lk(g_vsMapMtx); al = g_vsOwnAdsbLand; ak = g_vsOwnAdsbKeep; m = g_vsOwnMap; mo = g_vsOwnModes; mk = g_vsOwnMapKeep; }
+    vibekeep::Stored st; std::string single;
+    { std::lock_guard<std::mutex> lk(g_vsMapMtx);
+      st.landingAdsb = g_vsOwnAdsbLand; st.adsbKeepRunning = g_vsOwnAdsbKeep; st.landingMap = g_vsOwnMap; st.landingModes = g_vsOwnModes;
+      st.mapKeep = g_vsOwnMapKeep; st.bgMode = g_vsOwnBg; st.bgSet = g_vsOwnBgSet; }
     { std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx); single = g_vsSingleMode; }
-    if (vibekeep::singleKeepable(single)) {
-        if (single == "adsb") { vsApplyLandingAdsb(true, true); vsApplyMap("", "", false); }
-        else { vsApplyLandingAdsb(false, false); vsApplyMap(vibekeep::singleMap(single), single, true); }
-        return;
-    }
-    vsApplyLandingAdsb(al, ak);
-    vsApplyMap(m, mo, mk);
+    vibekeep::migrate(st);
+    std::string land = st.landingMap.empty() ? std::string() : st.landingModes, bg = st.bgMode;
+    if (vibekeep::singleKeepable(single)) land = bg = single;   // ★ single mode overrides both groups
+    const bool landAdsb = land == "adsb", bgAdsb = bg == "adsb";
+    vibekeep::Entry le = landAdsb ? vibekeep::Entry{} : vsEntryOf(land);
+    vibekeep::Entry be = bgAdsb ? vibekeep::Entry{} : vsEntryOf(bg);
+    const bool wasLandAdsb = g_vsLandingAdsb.exchange(landAdsb), wasBgAdsb = g_vsAdsbKeep.exchange(bgAdsb);
+    std::string wasL, wasB;
+    { std::lock_guard<std::mutex> lk(g_vsMapMtx); wasL = g_vsMapEntry.name; wasB = g_vsBgEntry.name; g_vsMapEntry = le; g_vsBgEntry = be; }
+    const int wasLK = g_vsMapKind.exchange(int(le.kind)), wasBK = g_vsBgKind.exchange(int(be.kind));
+    if (wasLandAdsb != landAdsb || wasBgAdsb != bgAdsb || wasLK != int(le.kind) || wasBK != int(be.kind) || wasL != le.name || wasB != be.name)
+        LOGI("[LANDING] new listeners land %s; background decoding: %s",
+             landAdsb ? "in ADS-B (the Aviation & Maritime map)"
+             : le.kind != vibekeep::None ? ("on the " + std::string(vibekeep::mapTitle(le.map)) + " map in " + le.name).c_str()
+             : "on the plain landing (or a DAB station)",
+             bgAdsb ? "ADS-B whenever nobody is connected"
+             : be.kind != vibekeep::None ? (be.name + " whenever nobody is connected").c_str() : "manual (the profiles, if any)");
 }
 void LocalSdrShim::setVibeServerLandingAdsb(bool land, bool keepRunning) {
     { std::lock_guard<std::mutex> lk(g_vsMapMtx); g_vsOwnAdsbLand = land; g_vsOwnAdsbKeep = keepRunning; }
@@ -48559,6 +48668,10 @@ void LocalSdrShim::setVibeServerLandingAdsb(bool land, bool keepRunning) {
 }
 void LocalSdrShim::setVibeServerMap(const std::string& map, const std::string& modesCsv, bool keep) {
     { std::lock_guard<std::mutex> lk(g_vsMapMtx); g_vsOwnMap = map; g_vsOwnModes = modesCsv; g_vsOwnMapKeep = keep; }
+    vsApplyLanding();
+}
+void LocalSdrShim::setVibeServerBackground(const std::string& bgCsv) {
+    { std::lock_guard<std::mutex> lk(g_vsMapMtx); g_vsOwnBg = bgCsv; g_vsOwnBgSet = true; }
     vsApplyLanding();
 }
 void LocalSdrShim::setVibeServerSingle(const std::string& tokIn) {
@@ -48572,35 +48685,8 @@ void LocalSdrShim::setVibeServerSingle(const std::string& tokIn) {
     if (was != tok || !tok.empty())
         LOGI("[SINGLE] radio use: %s", tok.empty() ? "General (listeners choose from the modes ticked)"
                                                    : ("single mode " + tok + " \xe2\x80\x94 every other mode is off for listeners; it is the landing"
-                                                      + std::string(vibekeep::singleKeepable(tok) ? " and kept running" : "")).c_str());
+                                                      + std::string(vibekeep::singleKeepable(tok) ? " and the background mode" : "")).c_str());
     vsApplyLanding();
-}
-static void vsApplyLandingAdsb(bool land, bool keepRunning) {
-    // ★ Keep-running is a refinement of the landing, never on its own: the page shows it only beneath the choice.
-    const bool keep = land && keepRunning;
-    const bool was = g_vsLandingAdsb.exchange(land, std::memory_order_relaxed);
-    const bool wasKeep = g_vsAdsbKeep.exchange(keep, std::memory_order_relaxed);
-    if (was != land || wasKeep != keep || land)
-        LOGI("[ADS-B] landing: %s%s", land ? "a new listener lands in ADS-B" : "off",
-             keep ? " — and it keeps running when nobody is connected" : "");
-}
-static void vsApplyMap(const std::string& map, const std::string& modesCsv, bool keep) {
-    vibekeep::Stored st; st.landingMap = map; st.landingModes = modesCsv; st.mapKeep = keep;
-    vibekeep::migrate(st);
-    vibekeep::Entry e;
-    const bool any = !st.landingMap.empty() && vibekeep::entryFor(vibekeep::parseCsv(st.landingModes), e);
-    // ★ ADS-B is setVibeServerLandingAdsb's (the config mirrors it into landingAdsb / adsbKeepRunning): nothing here for it
-    if (!any || e.kind == vibekeep::Adsb) e = vibekeep::Entry{};
-    if (e.kind == vibekeep::Ism) { if (const vibeism::Band* b = vibeism::bandById(e.band)) e.name = std::string("ISM ") + b->name; }
-    const bool k = e.kind != vibekeep::None && st.mapKeep;
-    std::string was;
-    { std::lock_guard<std::mutex> lk(g_vsMapMtx); was = g_vsMapEntry.name; g_vsMapEntry = e; }
-    const int wasKind = g_vsMapKind.exchange(int(e.kind));
-    const bool wasKeep = g_vsMapKeep.exchange(k);
-    if (wasKind != int(e.kind) || wasKeep != k || was != e.name || e.kind != vibekeep::None)
-        LOGI("[MAP] landing: %s%s", e.kind == vibekeep::None ? "no landing map mode (ADS-B's own setting, or the plain landing)"
-                                   : ("a new listener lands on the " + std::string(vibekeep::mapTitle(e.map)) + " map in " + e.name).c_str(),
-             k ? " \xe2\x80\x94 kept running when nobody is connected" : "");
 }
 /** ★★★ beta96 ANDROID: the landing map rides the config JSON the boot already hands setVibeServerFmDefaults (VibeServerBoot
  *  passes the WHOLE config there — "the engine reads those keys off the config itself"), so no new JNI. Only a JSON that
@@ -48609,7 +48695,7 @@ static void vsMapFromConfigJson(const std::string& json) {
     // ★ a WHOLE config (it carries the landing keys of any version) — never the Linux daemon's fm*-only JSON. A config with
     //   beta95's ADS-B pair and no map keys applies "no map" (the ADS-B setter has it), so nothing stale outlives it.
     if (json.find("\"landingMap\"") == std::string::npos && json.find("\"landingModes\"") == std::string::npos
-        && json.find("\"landingAdsb\"") == std::string::npos) return;
+        && json.find("\"landingAdsb\"") == std::string::npos && json.find("\"bgMode\"") == std::string::npos) return;
     auto str = [&](const char* k) {
         const std::string key = std::string("\"") + k + "\"";
         size_t p = json.find(key); if (p == std::string::npos) return std::string();
@@ -48622,6 +48708,7 @@ static void vsMapFromConfigJson(const std::string& json) {
     { const size_t p = json.find("\"mapKeep\""); if (p != std::string::npos) { const size_t c = json.find(':', p);
         if (c != std::string::npos) { size_t v = c + 1; while (v < json.size() && json[v] == ' ') ++v; keep = json.compare(v, 4, "true") == 0 || json.compare(v, 1, "1") == 0; } } }
     LocalSdrShim::setVibeServerMap(str("landingMap"), str("landingModes"), keep);
+    if (json.find("\"bgMode\"") != std::string::npos) LocalSdrShim::setVibeServerBackground(str("bgMode"));   // ★★★ b96-bgsplit
     LocalSdrShim::setVibeServerSingle(str("singleMode"));   // ★★★ beta96 the single-mode radio rides the same JSON
 }
 void LocalSdrShim::setConfigured(bool on) { g_vsConfigured.store(on); }

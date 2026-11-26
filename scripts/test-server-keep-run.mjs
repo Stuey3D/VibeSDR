@@ -225,7 +225,7 @@ console.log('\nKeep ISM 868 running (the Amateur map)');
   try {
     await waitFor(() => /\[MAP\] keep running: nobody is connected \(the server has started\) — entering ISM 868/.test(S.log()), 8000);
     ok(/\[MAP\] keep running: nobody is connected \(the server has started\) — entering ISM 868/.test(S.log()), '★ ISM 868 entered with nobody connected (the band from its own plan)');
-    ok(/\[MAP\] landing: a new listener lands on the Amateur map in ISM 868/.test(S.log()), 'the landing is the Amateur map');
+    ok(/\[LANDING\] new listeners land on the Amateur map in ISM 868/.test(S.log()), 'the landing is the Amateur map');
     const A = spectrum(S.port, crypto.randomUUID());
     await waitFor(() => parsed(A, 'ism').length > 0, 3000);
     ok(parsed(A, 'ism').length > 0, 'a new client gets ISM reports at once');

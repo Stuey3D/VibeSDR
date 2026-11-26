@@ -1,7 +1,8 @@
 // test_keep_run.ts — the app's landing map + keep-running rule (src/utils/keepRun.ts, beta96): the SAME gate cases as
 // vibeserver/test-keep-run.cpp §3/§4 and scripts/test-setup-keep-run.mjs, the local radio's facts, the ADS-B mirror and
 // beta95's migration. Run: node --no-warnings scripts/test_keep_run.ts
-import { singleOptionsLocal, singleFromTicks, singleWords, keepGate, keepAvailLocal, keepMirror, keepMigrate, keepParse, keepRateWords, keepSatWords, keepName, KEEP_MODES } from '../src/utils/keepRun.ts';
+import { singleOptionsLocal, singleFromTicks, singleWords, keepGate, keepAvailLocal, keepMirror, keepMigrate, keepParse, keepRateWords, keepSatWords, keepName, KEEP_MODES,
+         keepBgMigrate, keepBgNormal, keepMapKeepMirror, keepIsmOrder, keepIsmDefault } from '../src/utils/keepRun.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 const all = () => KEEP_MODES.map((m) => ({ id: m.id, hw: true, why: '' }));
@@ -98,6 +99,29 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
   ok(opts.some((o) => o.tok === 'aisdsc' && /MARITIME/.test(o.label)) && !singleOptionsLocal({ avail: keepAvailLocal(base).avail, ismBands: [], dab: false, ndb: false, shown: () => false, sat: false }).some((o) => o.tok === 'aisdsc'),
      'single mode lists MARITIME on the RSP at 8 only');
   ok(keepParse('aisdsc').join() === 'aisdsc' && singleWords('aisdsc') === 'MARITIME (AIS + DSC)', 'the token and its words');
+}
+// ★★★ b96-bgsplit BACKGROUND DECODING / WHERE NEW LISTENERS LAND — the app's copy of vibekeep::migrate's rules
+{
+  ok(keepBgMigrate(null, true, 'vdl2', true) === 'vdl2', 'b96-keeprun map + VDL2 + keep → background VDL2');
+  ok(keepBgMigrate(null, true, 'vdl2', false) === '', 'map + VDL2, no keep → background manual');
+  ok(keepBgMigrate(null, true, 'adsb', true) === 'adsb', 'beta95 ADS-B + keep (migrated to the map) → background ADS-B');
+  ok(keepBgMigrate(null, false, '', false) === '', 'nothing → manual');
+  ok(keepBgMigrate('ais', true, 'vdl2', true) === 'ais', 'a stored background always wins');
+  ok(keepBgMigrate('', true, 'vdl2', true) === '', '…even a stored manual');
+  ok(keepBgNormal('ais,adsb') === 'adsb' && keepBgNormal('acars,vdl2') === 'vdl2,acars' && keepBgNormal('bogus') === '', 'normalised as the server does');
+  ok(keepMapKeepMirror(true, 'vdl2', 'vdl2') && !keepMapKeepMirror(true, 'adsb', 'ais') && !keepMapKeepMirror(false, '', 'ais'), 'mapKeep mirrors "background = the landing map\'s mode"');
+  const mir = keepMirror(true, 'adsb', keepMapKeepMirror(true, 'adsb', 'ais'));
+  ok(mir.landingAdsb && !mir.adsbKeepRunning, 'background AIS + land on ADS-B: the beta95 pair says ADS-B landing, no keep');
+  const g = keepGate(all(), false, '', 2_400_000, ['ais'], '');
+  ok(find(g, 'ism').drawn && find(g, 'ais').on && !find(g, 'adsb').enabled, 'the background gate draws every map (ISM too), one at a time');
+  ok(keepSatWords('vdl2', true).length > 0 && keepSatWords('', false) === '', 'the satellites words follow the background');
+  // ★★ ISM is worldwide: the region's own bands first
+  const reach = ['315', '433', '868', '907', '910', '915', '923'];
+  ok(keepIsmDefault(reach, ['907', '910', '904', '315', '915', '913']) === '907' && keepIsmOrder(reach, ['907', '910', '904', '315', '915', '913']).slice(0, 4).map((x) => x.id).join() === '907,910,315,915',
+     'a US server: 907, 910, 315, 915 first');
+  ok(keepIsmDefault(reach, ['433', '868', '315', '915']) === '433' && keepIsmOrder(reach, ['433', '868', '315', '915']).filter((x) => x.own).map((x) => x.id).join() === '433,868,315,915',
+     'a UK server: 433 and 868 first (its own), every other band still offered');
+  ok(keepIsmOrder(reach, []).length === reach.length && keepIsmDefault(['868'], ['433']) === '868', 'an older engine (no own list), or a radio without its region\'s band: still offered');
 }
 console.log(`keep run (app): ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

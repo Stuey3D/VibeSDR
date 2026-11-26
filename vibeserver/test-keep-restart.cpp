@@ -66,14 +66,18 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLanding(96.1e6, "wfm");
     LocalSdrShim::setVibeServerIdleGrace(0.0);
     int good = 0, total = 0;
-    struct Phase { const char* map; const char* modes; const char* tune; const char* name; double rate = 2.4e6; };
+    struct Phase { const char* map; const char* modes; const char* tune; const char* name; double rate = 2.4e6; const char* bg = nullptr; };
     /* ★★★ beta96 + the MARITIME combination kept (AIS + DSC, b96-maritime) on a radio listing 8 MS/s (the fake rtl_tcp given an
      *  RSP's rate list — VIBE_TEST_TCP_RATES, tests only) and started at 8 MS/s: every start back between channel 70 and AIS. */
     const Phase phases[] = { { "avmar", "vdl2", "tune 136.8", "kept VDL2" }, { "amateur", "ism:868", "tune 868.", "kept ISM 868" },
-                             { "avmar", "aisdsc", "tune 159.", "kept AIS + DSC (8 MS/s)", 8.0e6 } };
+                             { "avmar", "aisdsc", "tune 159.", "kept AIS + DSC (8 MS/s)", 8.0e6 },
+                             /* ★★★ b96-bgsplit BACKGROUND AIS with the PLAIN landing (96.1 WFM — Listen-Amateur's shape): no map at all,
+                              *  the background choice alone (setVibeServerBackground, authoritative from here on — so this phase is LAST) */
+                             { "", "", "tune 16", "background AIS, FM landing", 2.4e6, "ais" } };
     for (const Phase& ph : phases) {
-        LocalSdrShim::setVibeServerMap(ph.map, ph.modes, true);   // ★ set once per phase, as the boot does; the statics outlive every start
-        const int n0 = std::string(ph.modes) == "vdl2" ? starts : 2;
+        LocalSdrShim::setVibeServerMap(ph.map, ph.modes, !ph.bg);   // ★ set once per phase, as the boot does; the statics outlive every start
+        if (ph.bg) LocalSdrShim::setVibeServerBackground(ph.bg);
+        const int n0 = std::string(ph.modes) == "vdl2" || ph.bg ? starts : 2;
         if (ph.rate > 3e6) ::setenv("VIBE_TEST_TCP_RATES", "8000000,6000000,5000000,4000000,3000000,2048000,2000000", 1);
         else ::unsetenv("VIBE_TEST_TCP_RATES");
         for (int n = 1; n <= n0; ++n, ++total) {

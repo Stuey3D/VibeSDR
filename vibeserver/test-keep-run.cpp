@@ -14,6 +14,7 @@
 #include "vibe_band_slice.h"
 #include "vibe_keep_run.h"
 #include "vibe_decoder_reach.h"
+#include "vibe_ism_bands.h"
 
 #include <cstdio>
 #include <string>
@@ -293,6 +294,75 @@ int main() {
         const std::vector<const char*> D = { "wfm", "nfm", "am", "usb", "lsb", "drm" }, W = { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" };
         CHECK(!singleBlocks("aisdsc", "ais", D, W) && singleBlocks("aisdsc", "adsb", D, W) && singleBlocks("aisdsc", "nfm", D, W),
               "…AIS stays on, every other mode off");
+    }
+
+
+    std::printf("── §10 b96-bgsplit THE TWO CHOICES — background decoding / where new listeners land (Stuart 11-26)\n");
+    {
+        // every old shape → the two groups, identical behaviour
+        { Stored s; s.landingAdsb = true; s.adsbKeepRunning = true; applyRead(s, true, false);
+          CHECK(s.bgMode == "adsb" && s.landingModes == "adsb" && s.landingMap == kMapAvMar, "beta95 ADS-B + keep → background ADS-B + land on the map in ADS-B"); }
+        { Stored s; s.landingAdsb = true; applyRead(s, true, false);
+          CHECK(s.bgMode.empty() && s.landingModes == "adsb", "beta95 ADS-B landing only → background manual + land in ADS-B"); }
+        { Stored s; applyRead(s, false, false);
+          CHECK(s.bgMode.empty() && s.landingMap.empty() && !s.mapKeep, "nothing set → background manual + the plain landing (never default on)"); }
+        { Stored s; s.landingMap = kMapAvMar; s.landingModes = "vdl2"; s.mapKeep = true; applyRead(s, false, true);
+          CHECK(s.bgMode == "vdl2" && s.landingModes == "vdl2" && s.mapKeep, "b96-keeprun map + VDL2 + keep → background VDL2 + land on the map in VDL2 (mapKeep mirrors)"); }
+        { Stored s; s.landingMap = kMapAvMar; s.landingModes = "vdl2"; s.mapKeep = false; applyRead(s, false, true);
+          CHECK(s.bgMode.empty() && s.landingModes == "vdl2" && !s.mapKeep, "b96-keeprun map + VDL2, no keep → background manual + land in VDL2"); }
+        { Stored s; s.landingMap = kMapAmateur; s.landingModes = "ism:868"; s.mapKeep = true; applyRead(s, false, true);
+          CHECK(s.bgMode == "ism:868" && s.landingModes == "ism:868", "b96-keeprun Amateur ISM 868 kept → background ISM 868 + land on the Amateur map"); }
+        { Stored s; s.landingMap = kMapAvMar; s.landingModes = "vdl2,acars"; s.mapKeep = true; applyRead(s, false, true);
+          CHECK(s.bgMode == "vdl2,acars", "the combination kept → background the combination: %s", s.bgMode.c_str()); }
+        { Stored s; s.landingMap = kMapAvMar; s.landingModes = "aisdsc"; s.mapKeep = true; applyRead(s, false, true);
+          CHECK(s.bgMode == "aisdsc" && s.mapKeep, "AIS + DSC kept → background AIS + DSC"); }
+        // the split itself (Listen-Amateur's case)
+        { Stored s; s.bgMode = "ais"; applyRead(s, false, true, true);
+          CHECK(s.bgMode == "ais" && s.landingMap.empty() && !s.mapKeep && !s.adsbKeepRunning && !s.landingAdsb,
+                "background AIS + the plain landing (FM): no map landing, the mirrors OFF (an older build idles, never lands in AIS)"); }
+        { Stored s; s.bgMode = "ais"; s.landingMap = kMapAvMar; s.landingModes = "adsb"; applyRead(s, false, true, true);
+          CHECK(s.bgMode == "ais" && s.landingAdsb && !s.adsbKeepRunning && !s.mapKeep, "background AIS + land on the map in ADS-B: ADS-B landing mirrored, no keep mirror"); }
+        { Stored s; s.bgMode = "adsb"; applyRead(s, false, true, true);
+          CHECK(s.bgMode == "adsb" && !s.landingAdsb && !s.adsbKeepRunning, "background ADS-B + the plain landing: the beta95 pair stays off (keep needed the landing)"); }
+        { Stored s; s.bgMode = "ism:915"; applyRead(s, false, false, true);
+          CHECK(s.bgMode == "ism:915", "background ISM on any band of the plan (915)"); }
+        { Stored s; s.bgMode = "ais,adsb"; applyRead(s, false, false, true);
+          CHECK(s.bgMode == "adsb", "two modes no single mode decodes: the first in table order: %s", s.bgMode.c_str()); }
+        { Stored s; s.bgMode = "bogus"; applyRead(s, false, false, true); CHECK(s.bgMode.empty(), "an unknown word → manual"); }
+        // an older writer over a split config
+        { Stored s; s.bgMode = "ais"; s.bgSet = true; s.landingAdsb = false; s.adsbKeepRunning = false; applyRead(s, true, false);
+          CHECK(s.bgMode == "ais", "a beta95 page's 'ADS-B off' never clears background AIS it cannot know about"); }
+        { Stored s; s.bgMode = "adsb"; s.bgSet = true; s.landingMap = kMapAvMar; s.landingModes = "adsb"; s.landingAdsb = false; s.adsbKeepRunning = false;
+          applyRead(s, true, false);
+          CHECK(s.bgMode.empty() && s.landingMap.empty(), "a beta95 page switching its ADS-B landing + keep off clears the ADS-B background it implied"); }
+        { Stored s; s.bgMode = "ais"; s.bgSet = true; applyRead(s, false, false);
+          CHECK(s.bgMode == "ais", "a read with no landing words (a partial update) leaves the background as it is"); }
+        // idempotent through the writer's mirrors
+        { Stored s; s.bgMode = "vdl2"; s.landingMap = kMapAvMar; s.landingModes = "vdl2"; applyRead(s, false, true, true);
+          Stored again = s; again.bgSet = false; applyRead(again, false, true);   // ★ read back WITHOUT bgMode (an older beta96 reader)
+          CHECK(again.bgMode == "vdl2" && again.mapKeep, "the mirror carries 'background VDL2 + landing VDL2' to a b96-keeprun reader"); }
+        // the entry the background runs as
+        { Stored s; s.bgMode = "aisdsc"; s.bgSet = true; migrate(s); Entry e; CHECK(bgEntry(s, e) && e.kind == Ais && e.band == "ais+dsc", "background AIS + DSC opens through AIS's door with the combination's band"); }
+        { Stored s; migrate(s); Entry e; CHECK(!bgEntry(s, e), "manual: no entry"); }
+        // the gate over every map ("" = the background card)
+        { const auto o = gate({ {"adsb"}, {"vdl2"}, {"acars"}, {"vor"}, {"ais"}, {"ism"} }, false, "", 2.4e6, {"ais"}, "");
+          CHECK(find(o, "ism") && find(o, "ism")->drawn && find(o, "adsb") && !find(o, "adsb")->enabled && find(o, "ais")->on,
+                "the background card draws every map's modes, one at a time at 2.4 MS/s"); }
+    }
+
+    std::printf("── §11 ISM IS WORLDWIDE (Stuart 11-26): the region's own bands first, from the plan\n");
+    {
+        using namespace vibeism;
+        auto has = [](Region r, const char* id) { for (const char* x : regionBands(r)) if (std::string(x) == id) return true; return false; };
+        const Region us = regionAt(40.7, -74.0), uk = regionAt(51.5, -0.1);
+        CHECK(us == Region::NorthAmerica && has(us, "915") && has(us, "315"), "a US server: 915 and 315 are its own");
+        CHECK(uk == Region::Other && has(uk, "868") && has(uk, "433"), "a UK server: 868 and 433 are its own");
+        CHECK(!has(uk, "907") && !has(us, "868"), "and not each other's mesh bands");
+        for (Region r : { Region::Other, Region::NorthAmerica, Region::SouthAmerica, Region::Oceania, Region::Asia, Region::India, Region::China })
+            for (const char* id : regionBands(r)) CHECK(bandById(id) != nullptr, "region list names a band of the plan: %s", id);
+        const Band* l = landingBand(40.7, -74.0, [](const Band&) { return true; });
+        CHECK(l && std::string(l->id) == "907", "the ISM mode's landing is unchanged (US → 907)");
+        CHECK(tokenOk("ism:315") && tokenOk("ism:927") && tokenOk("ism:479"), "any band id is a background / landing token");
     }
 
     std::printf("── §6 cost words\n");

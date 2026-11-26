@@ -44,6 +44,9 @@ export type BgSpotBand = { id: string; name: string; hz: number; lo: number; hi:
 export type BgCaps = {
   decoders: BgDecoderDef[];
   ismBands: string[];
+  /** ★★★ b96-bgsplit the server's region's own ISM bands, most used first (empty = an older engine), and the region's name. */
+  ismOwn: string[];
+  ismRegion: string;
   spotBands: BgSpotBand[];
   /** ★ V12 beta90: the skimmers' bands (null = an older engine: a skimmer row keeps its typed centre). */
   skimBands: BgSkimBands | null;
@@ -174,6 +177,8 @@ export function parseBgCaps(json: string | null | undefined): BgCaps | null {
         band: !!d.band, ndb: !!d.ndb, ...(d.fax ? { fax: true } : {}),
         ...(d.skim === 'cw' || d.skim === 'rtty' || d.skim === 'psk' ? { skim: d.skim as BgSkimKind, width: +d.width || 0 } : {}) })),
       ismBands: Array.isArray(j.ismBands) ? j.ismBands.map(String) : [],
+      ismOwn: Array.isArray(j.ismOwn) ? j.ismOwn.map(String) : [],
+      ismRegion: typeof j.ismRegion === 'string' ? j.ismRegion : '',
       spotBands: Array.isArray(j.spotBands) ? j.spotBands : [],
       skimBands: parseSkimBands(j.skimBands),
       maxVfos: j.maxVfos > 0 ? j.maxVfos : 16,

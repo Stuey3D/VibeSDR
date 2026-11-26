@@ -76,13 +76,13 @@ inline std::vector<Offer> gate(const std::vector<Avail>& avail, bool comboOk, co
     std::vector<std::string> chosen, chosenTok;
     for (const auto& t : parseCsv(toCsv(chosenIn))) {
         const Mode* md = modeById(t);
-        if (!md || md->map != map) continue;
+        if (!md || (!map.empty() && md->map != map)) continue;   // ★ b96-bgsplit: map "" = every map's modes (the BACKGROUND choice)
         for (const auto& a : avail) if (a.id == md->id && a.hw && a.why.empty()) { chosen.push_back(md->id); chosenTok.push_back(t); }
     }
     if (chosen.size() > 1 && !(isCombo(chosen) && comboOk)) { chosen.resize(1); chosenTok.resize(1); }
     std::vector<Offer> out;
     for (const auto& m : modes()) {
-        if (m.map != map) continue;   // ★ each landing map draws its own modes
+        if (!map.empty() && m.map != map) continue;   // ★ each landing map draws its own modes ("" = all: the background card)
         Offer o; o.id = m.id; o.name = m.name; o.group = m.group; o.tok = m.id;
         for (size_t i = 0; i < chosen.size(); ++i) if (chosen[i] == m.id) o.tok = chosenTok[i];
         const Avail* a = nullptr;
