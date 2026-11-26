@@ -53,7 +53,7 @@ eq('one group drawn: no group names', liveChips(['adsb', 'vdl2'], liveOf('adsb')
 eq('one layer alone: no chip row', liveChips(['ships'], liveOf('ais')), []);
 yes('the live layer\'s chip says so', /live now/.test(chips[0].words));
 eq('a layer switched off is off …', liveLayerOn('vdl2', ['adsb', 'vdl2'], { vdl2: false }, liveOf('adsb')), false);
-eq('… but the live one cannot be', liveLayerOn('adsb', ['adsb', 'vdl2'], { adsb: false }, liveOf('adsb')), true);
+eq('… and a live one too (WARNINGS off to read NAVTEX\'s weather)', liveLayerOn('warnings', ['navst', 'warnings', 'weather'], { warnings: false }, liveOf('navtex')), false);
 eq('absent = off', liveLayerOn('dsc', ['adsb'], {}, liveOf('adsb')), false);
 eq('the composers\' toggles: aviation', avLayersFrom({ hfdlst: false }, ['adsb', 'hfdlst', 'airports'], liveOf('adsb')),
    { adsb: true, acars: true, vdl2: true, hfdl: true, adsc: true, stations: false, airports: true });

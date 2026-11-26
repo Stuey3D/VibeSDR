@@ -147,11 +147,11 @@ export function liveChips(present: LiveLayerId[], live: LiveOf): LiveChip[] {
     return { id, label: d.label, words: isLive ? `${d.words} — live now` : d.words, group: g, live: isLive };
   });
 }
-/** On: present, and (one layer alone, or the live one, or switched on). ★ The live layer cannot be switched off — it is
- *  what the receiver is doing; its chip still shows it is live. */
-export function liveLayerOn(id: LiveLayerId, present: LiveLayerId[], toggled: Partial<Record<LiveLayerId, boolean>>, live: LiveOf): boolean {
+/** On: present, and (one layer alone, or switched on). ★ A live layer can be switched off like any other (NAVTEX's three
+ *  layers are live together, and WARNINGS off to read the weather is the point of a toggle) — its chip stays, marked live. */
+export function liveLayerOn(id: LiveLayerId, present: LiveLayerId[], toggled: Partial<Record<LiveLayerId, boolean>>, _live?: LiveOf): boolean {
   if (!present.includes(id)) return false;
-  if (present.length < 2 || live.layers.includes(id)) return true;
+  if (present.length < 2) return true;
   return toggled[id] !== false;
 }
 /** Saved toggles. Old maps' keys (aviation 'stations', shipping 'stations') carried over once as starting values. */

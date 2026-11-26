@@ -207,7 +207,7 @@ interface MapOverlayProps {
           tabs?: Array<{ id: string; label: string; n: number }>; tab?: string; onTab?: (id: string) => void;
           sort?: string | null; onSort?: (s: string) => void; filter?: string; onFilterClear?: () => void;
           /** ★ beta96 a row chosen (an aircraft → MESSAGES filtered to it) */
-          onPick?: (key: string) => void } | null;
+          onPick?: (key: string) => string | void } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
@@ -2948,7 +2948,7 @@ export default function MapOverlay(
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
-                         safety={trk.safety} onFocus={(k) => { trk.onPick?.(k); trkFocus(k); }} selected={trkSel} onFootprint={trkFootprint}
+                         safety={trk.safety} onFocus={(k) => { const to = trk.onPick?.(k); trkFocus(typeof to === 'string' && to ? to : k); }} selected={trkSel} onFootprint={trkFootprint}
                          ink={ink} areaW={winW} areaH={winH}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}

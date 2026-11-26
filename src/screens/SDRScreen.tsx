@@ -17,7 +17,10 @@
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
-import { AV_EMPTY, avCompose, avLayersOf, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
+import { AV_EMPTY, AV_SRC, avCompose, avLayersOf, avMerge, avNowRule, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';
+// ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules (the web's too)
+import { liveChrome, livePresent, liveChips, liveProfile, liveTabs, liveTabPick, aircraftOrder, msgFeedUpdate, msgFilter, avLayerOf, shipLayerOf,
+         AV_ID, SHIP_ID, TAB_LABEL, LIVE_ROW_CAP, type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../services/liveMaps';   // ★ V12 2026-11-16 the AVIATION MAP
 import { digiStationsSanitise, digiStationsMerge, digiStationRows, digiTotalsOf, type StoredStation, type DigiTotals } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
 import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the logs' radio filter
 import { digiAprsPoints, digiOverlayClean, type DigiMapOverlay } from '../utils/digiMapShared';
@@ -97,7 +100,7 @@ import { audioQuietFor, noticePlan, shouldAskPermission, endedWhy, NOTICE_DELAY_
 // ★ V12 AIS + APRS (docs/v12/AIS-APRS.md) — the web's tracks.ts rules for the app
 import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsIcon, aprsItems, aprsListRows,
          aprsLogPush, aprsMessageLines, aprsPacketSanitise, aprsSanitise, aprsStatus, aprsTuneFor, aprsBaudOf, APRS_EMPTY,
-         type AisCap, type AisReport, type AprsBaud, type AprsList } from '../services/tracks';
+         type AisCap, type AisReport, type AprsBaud, type AprsList, type TrackRow } from '../services/tracks';
 // ★ V12 PACKET (docs/v12/AX25-9600-FX25-IL2P.md): AUTO / 1200 / 9600 / 300, FX.25 + IL2P, the frame log — the web's rule
 import { packetDefault, packetIdle, packetMergeLog, packetParams, packetStatusExtra, packetTune, parsePacketCaps, parsePacketFrame,
          type PacketCaps, type PacketFrame, type PacketMode } from '../services/packet';
@@ -4694,15 +4697,16 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
   const shownMap: MapKind | null = adsbViewOpen && !IS_APPLE_TV ? 'adsb' : ndbViewOpen && !IS_APPLE_TV ? 'ndb'   // ★ V12 NDB: its map, as ADS-B's
     // ★ V12 AIS's ship map is the mode's screen; APRS's station map is the decoder box's MAP (neither on Apple TV)
-    : aisViewOpen && !IS_APPLE_TV ? 'ais' : aprsMapOpen && !IS_APPLE_TV ? 'aprs'
+    // ★★★ beta96 AIS mode's map, the shipping map and the aviation map are ONE page: the AIR & SEA map
+    : aisViewOpen && !IS_APPLE_TV ? 'airsea' : aprsMapOpen && !IS_APPLE_TV ? 'aprs'
     // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
     : dscMapOpen && !IS_APPLE_TV ? 'dsc'
-    : navMapOpen && !IS_APPLE_TV ? 'navtex'
+    : navMapOpen && !IS_APPLE_TV ? 'airsea'
     : ismGal && !IS_APPLE_TV ? 'ism'
     : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism'
     : vmMapOpen && !IS_APPLE_TV && vmOn ? 'vormap'   // ★ V12 the VOR / ILS map: the mode's own screen, as NDB's
     : sdMapOpen && !IS_APPLE_TV && sdOn ? 'sondes'   // ★ V12 the SONDES box's MAP (the mode carries on)
-    : avMapOpen && !IS_APPLE_TV && (avOn || avMapFocus !== 'datalink') ? 'avdata' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on); beta90 VIEWS' AVIATION standalone
+    : avMapOpen && !IS_APPLE_TV && (avOn || avMapFocus !== 'datalink') ? 'airsea' : mapKind;   // ★ V12 the DATALINK box's MAP (the mode carries on); beta90 VIEWS' AVIATION standalone
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
   const [cityPickerOpen, setCityPickerOpen] = useState(false);
@@ -12417,7 +12421,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [avLayers, setAvLayers] = useState<AvLayers>(avLayersOf(null));
   useEffect(() => { AsyncStorage.getItem('lsv_av_map_layers').then((v) => setAvLayers(avLayersOf(v))).catch(() => {}); }, []);
   const [avShared, setAvShared] = useState<SharedAircraft | null>(null);
-  const avSharedPolling = avMapOpen && (avOn || avMapFocus !== 'datalink') && !IS_APPLE_TV;   // ★ beta90 standalone too
+  // ★★ beta96 and whenever the AIR & SEA map is up (AIS mode's, the shipping map's): its aircraft are this table
+  const avSharedPolling = ((avMapOpen && (avOn || avMapFocus !== 'datalink')) || navMapOpen || aisViewOpen) && !IS_APPLE_TV;   // ★ beta90 standalone too
   useEffect(() => {
     if (!avSharedPolling) return;
     let live = true, t: ReturnType<typeof setTimeout> | null = null;
@@ -12438,6 +12443,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       items: c.items, rows: c.rows, status: c.status, empty: AV_EMPTY, trail: () => Promise.resolve([] as [number, number][]),
       credit: c.credit,   // ★ beta91 the Mictronics ODC-By line at the list's foot while a row shows the aircraft data
       toggles: c.toggles, toggled: avLayers as Record<string, boolean>, profile: c.profile,
+      planes: c.planes, present: c.present,   // ★ beta96 the AIR & SEA map's AIRCRAFT order and chips
       onToggle: (id: string, on: boolean) => setAvLayers((l) => { const n = { ...l, [id]: on }; AsyncStorage.setItem('lsv_av_map_layers', JSON.stringify(n)).catch(() => {}); return n; }),
     };
   }, [avReport, avShared, avLayers, trkRx?.lat, trkRx?.lon, avOn, avMapFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -12522,7 +12528,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  saved messages a request) — new or updated warnings pulse, the map is never reloaded. */
   // ★★ V12 2026-11-02: every layer is asked for (what each has decides which toggles exist — no dead controls), and the
   //    poll also runs while AIS mode's map is open (it is the SHIPPING MAP too: NAVTEX, DSC and the stored ships beside it)
-  const shipPolling = navMapOpen || (aisViewOpen && !IS_APPLE_TV);
+  const shipPolling = navMapOpen || (aisViewOpen && !IS_APPLE_TV) || (avMapOpen && (avOn || avMapFocus !== 'datalink') && !IS_APPLE_TV);   // ★ beta96 the AIR & SEA map's ships too
   useEffect(() => {
     if (!shipPolling) return;
     let live = true, t: ReturnType<typeof setTimeout> | null = null;
@@ -12602,6 +12608,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const building = navBuilding(navWarnRep);
     return {
       items: [...sc.items, ...(navL.stations ? navItems(navReport) : []), ...navMetItems(areas, now, 'app'), ...navWarnItems(warns, now, 'app')],
+      shipRows: sc.rows, navRows: rows.slice(sc.rows.length), present: sc.present,   // ★ beta96 the AIR & SEA map's SHIPS / NAVTEX tabs
       rows, empty: shipFocus === 'dsc' ? DSC_SHIP_EMPTY : shipFocus === 'ships' ? AIS_EMPTY : NAV_EMPTY, focus: shipKey,
       status: [sc.status, navL.stations ? navStatus(navReport) : '', navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : '', building].filter(Boolean).join(' · '),
       note: building,
@@ -12632,6 +12639,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       items: [...(shipsOn ? aisTrk.items : []), ...sc.items, ...(navL.stations ? navItems(navReport) : []),
               ...(navL.weather ? navMetItems(seaPlaceMet(navMetVisible(navMetRep, navRange)), now, 'app') : []), ...(navL.warnings ? navWarnItems(navWarnVisible(navWarnRep, navRange), now, 'app') : [])],
       rows: [...(shipsOn ? aisTrk.rows : []), ...sc.rows, ...(navL.stations ? navListRows(navReport) : [])],
+      shipRows: [...(shipsOn ? aisTrk.rows : []), ...sc.rows], navRows: navL.stations ? navListRows(navReport) : [], present: sc.present,   // ★ beta96 the tabs
       status: [aisTrk.status, sc.status, navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : ''].filter(Boolean).join(' · '),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
       onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
@@ -12648,6 +12656,113 @@ export default function SDRScreen({ route, navigation }: Props) {
     setNavMapOpen(false); setShipKey('');
     if (navFromGallery.current) { navFromGallery.current = false; setGalleryOpen(true); }   // ★ back to the gallery it came from
   }, []);
+  /* ★★★ V12 beta96 THE AIR & SEA MAP (services/liveMaps.ts, docs/v12/ONE-MAP.md) — the aviation map (avTrk) and the
+   *  shipping map (navTrk / AIS mode's aisShipTrk) as ONE MapOverlay page ('airsea'), the lists as TABS (AIRCRAFT ·
+   *  MESSAGES · SHIPS · NAVTEX). ★★★ The TITLE, the EXIT key, the live chips and the camera are COMPUTED here from the
+   *  CURRENT mode on every render and pushed into the page — never baked in when it was built — so a mode change while it
+   *  is open can never leave it wearing the old one (Mac Ha 11-26). The web's asRender is the same rule. */
+  const airSeaUp = (aisViewOpen || navMapOpen || (avMapOpen && (avOn || avMapFocus !== 'datalink'))) && !IS_APPLE_TV;
+  const [asPicked, setAsPicked] = useState<LiveTab | null>(null);
+  const [asOpened, setAsOpened] = useState<LiveTab | null>(null);
+  const [asSort, setAsSort] = useState<AircraftSort>('nearest');
+  const [asMsgKey, setAsMsgKey] = useState('');
+  useEffect(() => { AsyncStorage.getItem('lsv_airsea_sort').then((v) => { if (v === 'latest' || v === 'nearest') setAsSort(v); }).catch(() => {}); }, []);
+  // ★ the tab each opener came from (the newest one wins); a fresh opening forgets the viewer's last pick
+  useEffect(() => { if (aisViewOpen) { setAsOpened('ships'); setAsPicked(null); } }, [aisViewOpen]);
+  useEffect(() => { if (navMapOpen) { setAsOpened(shipFocus === 'navtex' ? 'navtex' : 'ships'); setAsPicked(null); } }, [navMapOpen, shipFocus]);
+  useEffect(() => { if (avMapOpen) { setAsOpened(avMapFocus === 'adsb' ? 'aircraft' : 'messages'); setAsPicked(null); if (avMapFocus !== 'adsb') setAsSort('latest'); } }, [avMapOpen, avMapFocus]);
+  useEffect(() => { if (!airSeaUp) { setAsMsgKey(''); setAsPicked(null); } }, [airSeaUp]);
+  const asMsgs = useRef<LiveMsg[]>([]);
+  const asMsgSeen = useRef(new Map<string, number>());
+  const airSeaMode: LiveMode = aisOn && aisViewOpen ? 'ais' : avOn ? 'datalink' : activeDecoder === 'hfdl' && avMapOpen ? 'hfdl'
+    : activeDecoder === 'navtex' && navMapOpen ? 'navtex' : activeDecoder === 'dsc' && navMapOpen ? 'dsc' : '';
+  const airSeaTrk = useMemo(() => {
+    if (!airSeaUp) return null;
+    const chrome = liveChrome('airsea', airSeaMode, onlyModeHere === 'ais');
+    const live = chrome.live;
+    // ★ the app's DATALINK map is its box's (the mode carries on): CLOSE MAP; AIS mode's map is the mode (EXIT AIS)
+    const exitLabel = airSeaMode === 'ais' && aisViewOpen ? chrome.exitLabel : 'CLOSE MAP';
+    const ship = (aisViewOpen ? aisShipTrk : navTrk) as typeof navTrk;   // ★ never Apple TV's bare aisTrk here (airSeaUp is off there)
+    const av = avTrk;
+    // ── the chips: each composer's own presence (its no-dead-controls rule), ours in order, the live ones first ──
+    const avIds = (av.present ?? []).map((id) => AV_ID[id]);
+    const shipIds = (ship.present ?? []).map((id) => SHIP_ID[id]);
+    const have: Partial<Record<LiveLayerId, number>> = {};
+    for (const id of [...avIds, ...shipIds]) have[id] = 1;
+    const aviationAny = (av.planes?.length ?? 0) > 0 || live.layers.some((l) => avLayerOf(l) != null);
+    const present = livePresent('airsea', have, live, aviationAny ? ['airports'] : []).filter((id) => have[id] || live.layers.includes(id) || id === 'airports');
+    const toggled: Record<string, boolean> = {};
+    for (const id of present) {
+      const a = avLayerOf(id), sh = shipLayerOf(id);
+      toggled[id] = a ? avLayers[a] !== false : sh ? shipLayers[sh] !== false : true;
+    }
+    const on = (id: LiveLayerId) => present.includes(id) && toggled[id] !== false;
+    // ── MESSAGES: every aircraft's last message as it changes (the owner's text only where the server sent it) ──
+    const planesAll = avNowRule(avMerge(avOn ? avReport : null, avShared), avShared).planes;
+    const bodies = new Map<string, string>();
+    if (avOn && avReport) for (const a of avReport.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
+    asMsgs.current = msgFeedUpdate(asMsgs.current, asMsgSeen.current, planesAll.map((p) => ({ key: `a:${p.key}`, who: p.flight || p.reg || p.icao || 'aircraft',
+      src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age, label: p.label, labelName: p.labelName,
+      text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || '') })), Date.now());
+    const msgs = msgFilter(asMsgs.current, asMsgKey).slice(0, LIVE_ROW_CAP);
+    const hm = (t: number) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
+    const msgRows: TrackRow[] = msgs.map((m) => ({ key: `m:${m.id}`, colour: AV_SRC.find((x) => x.name === m.src.split(' + ')[0])?.colour ?? '#9fb0c2', flag: '', name: m.who,
+      second: [m.label, m.labelName, m.src, m.text ?? ''].filter(Boolean).join(' · '), sp: '', trend: 0 as const, range: '', brg: '', noPos: false, age: hm(m.t), em: false }));
+    // ── AIRCRAFT: one row each, emergency + military pinned, NEAREST | LATEST ──
+    const byKey = new Map(av.rows.map((r) => [r.key, r]));
+    const rx = trkRx;
+    const order = aircraftOrder((av.planes ?? []).map((p) => {
+      let nm: number | null = null;
+      if (rx && p.lat != null && p.lon != null) { const d2r = Math.PI / 180; const h = Math.sin((p.lat - rx.lat) * d2r / 2) ** 2 + Math.cos(rx.lat * d2r) * Math.cos(p.lat * d2r) * Math.sin((p.lon - rx.lon) * d2r / 2) ** 2;
+        nm = 2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(h))) / 1.852; }
+      return { key: `a:${p.key}`, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
+    }), asSort).slice(0, LIVE_ROW_CAP);
+    const acRows = order.map((x) => byKey.get(x.key)).filter((r): r is TrackRow => !!r);
+    const shipRows = (on('ships') || on('dsc')) ? (ship.shipRows ?? []) : [];
+    const navRows = ship.navRows ?? [];
+    const tabHave: Partial<Record<LiveTab, number>> = { aircraft: acRows.length, messages: asMsgs.current.length, ships: shipRows.length || (aisViewOpen ? 1 : 0), navtex: navRows.length };
+    const tabs = liveTabs('airsea', tabHave, live, asOpened);
+    const tab = liveTabPick(tabs, asPicked, live, asOpened) ?? 'aircraft';
+    const rows = tab === 'aircraft' ? acRows : tab === 'messages' ? msgRows : tab === 'ships' ? shipRows.slice(0, LIVE_ROW_CAP) : navRows.slice(0, LIVE_ROW_CAP);
+    const msgWho = asMsgKey ? (asMsgs.current.find((m) => m.key === asMsgKey)?.who ?? asMsgKey.replace(/^a:/, '')) : '';
+    return {
+      ...ship,
+      title: chrome.title, exitLabel,
+      camera: (live.layers.some((l) => shipLayerOf(l) != null) ? 'track' : 'aircraft') as 'aircraft' | 'track',
+      items: [...(aviationAny ? av.items : []), ...ship.items],
+      rows,
+      status: [aviationAny ? av.status : '', ship.status].filter(Boolean).join(' \u00b7 '),
+      empty: tab === 'aircraft' ? AV_EMPTY : tab === 'messages' ? 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs \u2014 on any radio of this server.' : ship.empty,
+      credit: tab === 'aircraft' && !!av.credit,
+      toggles: liveChips(present, live).map((c) => ({ id: c.id, label: c.live ? `\u25CF ${c.label}` : c.label, words: c.words })),
+      toggled,
+      onToggle: (id: string, v: boolean) => {
+        const a = avLayerOf(id as LiveLayerId), sh = shipLayerOf(id as LiveLayerId);
+        if (a) av.onToggle(a, v); else if (sh) ship.onToggle?.(sh, v);
+      },
+      profile: liveProfile('airsea', present, on),
+      // ★ the DATALINK's bands are its box's; the map keeps the maritime time filter where a maritime layer is drawn
+      ranges: present.some((id) => shipLayerOf(id) != null && id !== 'areas') ? ship.ranges : undefined,
+      tabs: tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs.current, asMsgKey).length : tabHave[t] ?? 0 })),
+      tab, onTab: (t: string) => setAsPicked(t as LiveTab),
+      sort: tab === 'aircraft' ? asSort : null,
+      onSort: (v: string) => { const n: AircraftSort = v === 'latest' ? 'latest' : 'nearest'; setAsSort(n); AsyncStorage.setItem('lsv_airsea_sort', n).catch(() => {}); },
+      filter: tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', onFilterClear: () => setAsMsgKey(''),
+      // ★ an aircraft chosen → MESSAGES filtered to it; a message chosen → its aircraft found on the map
+      onPick: (k: string) => {
+        if (k.startsWith('a:')) { setAsMsgKey(k); return k; }
+        if (k.startsWith('m:')) { const m = asMsgs.current.find((x) => `m:${x.id}` === k); return m ? m.key : k; }
+        return k;
+      },
+      trail: (key: string) => (key.startsWith('a:') ? Promise.resolve([] as [number, number][]) : (ship.trail as (k: string) => Promise<[number, number][]>)(key)),
+    };
+  }, [airSeaUp, airSeaMode, aisViewOpen, aisShipTrk, navTrk, avTrk, avLayers, shipLayers, avOn, avReport, avShared, asPicked, asOpened, asSort, asMsgKey, trkRx?.lat, trkRx?.lon, onlyModeHere]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★ CLOSE MAP puts every opener's map away; EXIT AIS leaves the mode (the map goes with it). */
+  const closeAirSea = useCallback(() => {
+    if (aisViewOpen && aisOnRef.current && airSeaTrk?.exitLabel === 'EXIT AIS') { exitAis(); return; }
+    setAisViewOpen(false); setAvMapOpen(false);
+    if (navMapOpen) closeNavMap();
+  }, [aisViewOpen, airSeaTrk?.exitLabel, navMapOpen]);   // eslint-disable-line react-hooks/exhaustive-deps
   const closeIsmMap = useCallback(() => {
     if (ismGal) { setIsmGal(null); setGalleryOpen(true); return; }   // ★ back to the gallery it came from
     setIsmMapOpen(false); setIsmFocus('');
@@ -17947,21 +18062,21 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
-      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
-                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'vormap' ? setVmMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
+      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' || shownMap === 'airsea') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
+                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'vormap' ? setVmMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : shownMap === 'airsea' ? (setAisViewOpen(false), setAvMapOpen(false), setNavMapOpen(false)) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
         /* ★★ V12 THE ONLY MODE: the map's EXIT becomes CLOSE MAP (the mode carries on) with the note under the title */
-        only={shownMap && onlyModeHere === shownMap ? onlyModeNote(shownMap) : undefined}
+        only={shownMap === 'airsea' ? (aisViewOpen && onlyModeHere === 'ais' ? onlyModeNote('ais') : undefined) : shownMap && onlyModeHere === shownMap ? onlyModeNote(shownMap) : undefined}
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'vormap' ? exitVormap() : shownMap === 'avdata' ? setAvMapOpen(false) : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'vormap' ? exitVormap() : shownMap === 'avdata' ? setAvMapOpen(false) : shownMap === 'airsea' ? closeAirSea() : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}
-        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lon ?? null : undefined}
+        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' || shownMap === 'airsea' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' || shownMap === 'airsea' ? navReport?.rx : null))?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' || shownMap === 'airsea' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' || shownMap === 'airsea' ? navReport?.rx : null))?.lon ?? null : undefined}
         /* ★★ V12 NDB: the report, the readings kept, Find and the stats (NdbLiveList) — the page opens no socket of its own. */
         ndb={shownMap === 'ndb' ? {
           report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
@@ -17971,7 +18086,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDecide: (act, ident, hz, airfield) => { client.current?.ndbConfirm?.(act, ident, hz, airfield); },
         } : undefined}
         /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
-        trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : shownMap === 'sondes' ? sdTrk : shownMap === 'vormap' ? vmTrk : shownMap === 'avdata' ? avTrk : null}
+        trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : shownMap === 'sondes' ? sdTrk : shownMap === 'vormap' ? vmTrk : shownMap === 'avdata' ? avTrk : shownMap === 'airsea' ? airSeaTrk : null}
         /* ★ V12 the spots map's MODE filter and legend: this server's modes (vibeserver.json spotModes), by family */
         spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}

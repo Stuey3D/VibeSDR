@@ -622,13 +622,12 @@ export class TrackView {
     if (sig === this.tglSig) return;
     this.tglSig = sig;
     host.hidden = !toggles.length;
-    // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, LIVE on the live layer's —
-    //   the live layer is what the receiver is doing, so its chip is always pressed
+    // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, a red LIVE dot on the live
+    //   layer's (what the receiver is doing now)
     host.innerHTML = toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
-      + `<button class="btn${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${x.live || toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}"${x.live ? ' aria-disabled="true"' : ''}>${esc(x.label)}</button>`).join('');
+      + `<button class="btn${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('');
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
-        if (b.classList.contains('live')) return;   // ★ beta96 the live layer cannot be switched off
         const on = b.getAttribute('aria-pressed') !== 'true';
         b.setAttribute('aria-pressed', String(on));
         this.o.onToggle?.(b.dataset.tgl || '', on);

@@ -10524,7 +10524,9 @@ function asViewOpts() {
     ...ship,
     title: MAP_TITLE.airsea, exitLabel: 'CLOSE MAP', listTitle: 'AIRCRAFT',
     onExit: () => asExit(),
-    labelZoom: 5, focusZoom: 8, nautical: true, profile: 'airsea',
+    // ★ the track layer's zooms are the shipping map's (its items are ships, NAVTEX, HFDL stations — the aircraft are the
+    //   ADS-B layer's, with its own label rules)
+    labelZoom: 3, focusZoom: 6, nautical: true, profile: 'airsea',
     aircraft: true, mixed: true, imageBase: adsbImageBase() || null,
     labelRank: (it: any) => it._rk ?? 0,
     onRange: (id: string) => {
