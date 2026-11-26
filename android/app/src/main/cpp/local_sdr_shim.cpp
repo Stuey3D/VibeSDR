@@ -20753,14 +20753,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  still leave, and the server's own moves (sock null) still can. "" = no only mode. */
     std::string onlyModeNow() const {
         if (dabOnlyNow()) return "dab";
-        static const char* kDemods[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
-                                         "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
-        for (const char* m : kDemods) if (!vsModeBlocked(m)) return {};
-        const char* left = nullptr;
-        for (const char* m : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" })
-            if (!vsModeBlocked(m)) { if (left) return {}; left = m; }
-        if (!left) return {};
-        const std::string k = left;
+        // ★ beta96 the list half is vibereach::onlyModeLeft (tested in test-new-modes.cpp with Paul's exact list)
+        const std::string k = vibereach::onlyModeLeft([](const char* m) { return vsModeBlocked(m); });
+        if (k.empty()) return {};
         if (k == "adsb")   return g_adsbMode.load(std::memory_order_relaxed) || vsAdsbWhyNot().empty()     ? k : std::string();
         if (k == "ism")    return g_ismMode.load(std::memory_order_relaxed)  || vsIsmWhyNot().empty()      ? k : std::string();
         if (k == "ndb")    return g_ndbMode.load(std::memory_order_relaxed)  || vsNdbWhyNot().empty()      ? k : std::string();
@@ -45409,8 +45404,8 @@ void LocalSdrShim::setBandRegion(int region, bool known) {
 
 std::string LocalSdrShim::regionDefaultsJson() {
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
-    const std::string j = vibereach::regionJson(g_vsRegionKnown);
-    return j.empty() ? std::string("{}") : "{" + j.substr(1) + "}";
+    const std::string j = vibereach::regionJson(g_vsRegionKnown) + vibereach::modeGensJson();   // ★★★ beta96 + the generations
+    return "{" + j.substr(1) + "}";
 }
 
 void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv) {

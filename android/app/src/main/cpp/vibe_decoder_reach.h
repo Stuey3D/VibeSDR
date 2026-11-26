@@ -27,6 +27,7 @@
 #include "vibe_bands.h"
 #include "decoders/digi_bands.h"
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -241,37 +242,143 @@ inline std::vector<std::string> tokens(const std::string& csv) {
     return out;
 }
 
-// ── NEW-MODE DEFAULT ──────────────────────────────────────────────────────────────────────────────────────────────
+// ── NEW MODES (beta96) ────────────────────────────────────────────────────────────────────────────────────────────
 
-/** ★★ beta93 (11-25) A WHOLE-RADIO MODE ADDED AFTER THE OWNER MADE THE RADIO SINGLE-PURPOSE starts OFF on it. The only-mode
- *  rule (local_sdr_shim.cpp onlyModeNow) needs every demodulator and every OTHER whole-radio mode blocked; a list saved
- *  before VOR MAP existed cannot name "vormap", so on update an ADS-B-only receiver (the Almere radio the rule was built
- *  for, 11-18) would quietly stop being ADS-B-only and its listeners could leave ADS-B again. Off by default where the
- *  owner's own list blocks EVERY demodulator; the owner's tick always wins (off = "vormap", on = "+vormap" — the region
- *  defaults' words). Same rule in the Setup page (NEW_MODE_DEFAULTS) and the app (ServerModeScreen newModeOff). */
-inline const std::vector<RegionDefault>& newModeDefaults() {
-    static const std::vector<RegionDefault> t = {
-        { "vormap", 0u, "Off by default on this radio: it was set up with every listening mode switched off before VOR MAP existed" },
+/* ★★★ beta96 A MODE AN UPDATE ADDS IS NOT SWITCHED ON BEHIND A RESTRICTED OWNER'S BACK (Stuart 11-26, docs/v12/NEW-MODES-OFF.md).
+ *  The owner's list is a BLOCKED list, so any mode it does not name is on — including every mode a later release adds.
+ *  Paul's Almere radio was set up ADS-B only (every other mode off, the only-mode exit lock on); later betas added
+ *  modes his list could not name (DV signalling, VOR MAP …), they came in ON, and listeners could leave ADS-B again.
+ *  (beta93's fix covered VOR MAP only, and only where the list named EVERY demodulator — his did not name dvsig.)
+ *
+ *  THE RULE. Each switch on the Setup page's Modes and decoders card has the GENERATION it first appeared in (the table
+ *  below = the per-release mode lists). The owner's list carries two words of its own, beside the ids:
+ *    • "seen@N"        — the owner has seen every switch up to generation N (written by every save of the card);
+ *    • "newmodes@on" / "newmodes@off" — the owner's answer to "when an update adds new modes" (absent = automatic).
+ *  A switch newer than what the owner has seen is NEW. A new switch is OFF unless the owner ticked it ("+id") when:
+ *    • the radio is SINGLE-MODE by the owner's own ticks (every listening demodulator they saw is off, and at most one
+ *      whole-radio mode they saw is on) — ALWAYS, whatever the answer above: the exit lock must hold; or
+ *    • the owner said "newmodes@off"; or
+ *    • automatic, and the owner blocked ANY switch (a restricted receiver). Nothing blocked = new modes ON, as ever.
+ *  MIGRATION: a list written before beta96 has no "seen@". Unrestricted: everything counts as seen (no change). Restricted:
+ *  the newest switch the list NAMES is the oldest release that can have written it, so everything after that one is new
+ *  — an ADS-B-only list from beta81 names nothing newer than generation 80, so DV signalling (87), VOR MAP (93) … are
+ *  new and, the radio being single-mode, off. ONE RULE, THREE READERS: the Setup page (MODE_GENS … in
+ *  vibe_setup_page.h, a copy test-new-modes.cpp holds to this table) and the app (src/lib/newModes.ts, which reads the
+ *  table from its own engine: LocalSdrShim::regionDefaultsJson → modeGensJson). */
+struct ModeGen { const char* id; int gen; bool option; };
+/** ★ The generation of THIS build's list. Adding a switch to BLOCKABLE (vibe_setup_page.h, ServerModeScreen.tsx)? Add it
+ *  below with the release it ships in and raise this to match — test-new-modes.cpp fails on a switch missing here. */
+constexpr int kModeGenNow = 96;
+inline const std::vector<ModeGen>& modeGens() {
+    static const std::vector<ModeGen> t = {
+        // 0 — the list as 11.x shipped it (vibeserver-mac-v11.0.16)
+        {"wfm",0,false},{"nfm",0,false},{"am",0,false},{"usb",0,false},{"lsb",0,false},{"cwu",0,false},{"cwl",0,false},
+        {"dab",0,false},{"rds",0,false},{"rtty",0,false},{"navtex",0,false},{"wefax",0,false},{"sstv",0,false},
+        {"ft8",0,false},{"time",0,false},{"spots",0,false},
+        // 63 — V12 up to beta63 (lite-v12.0.0-beta63)
+        {"tone",63,false},{"sam",63,false},{"sau",63,false},{"sal",63,false},{"ecssu",63,false},{"ecssl",63,false},
+        {"amst",63,false},{"drm",63,false},{"spotsband",63,false},{"ism",63,false},{"lora",63,false},{"cw",63,false},
+        {"psk",63,false},{"dsc",63,false},{"sitora",63,false},{"same",63,false},{"selcal",63,false},{"mfsk",63,false},
+        {"hell",63,false},{"ndb",63,false},{"jtty",63,false},{"ais",63,false},{"aisstore",63,false},{"aprs",63,false},
+        {"adsb",63,false},{"lora+all",63,true},
+        // 80 — FreeDV, M17, LoRa APRS / MeshCom / FANET, HFDL, NCDXF, balloons, tones, Comm-B, datalink, sondes
+        {"freedv",80,false},{"rade",80,false},{"m17",80,false},{"loraaprs",80,false},{"meshcom",80,false},
+        {"fanet",80,false},{"hfdl",80,false},{"ncdxf",80,false},{"balloon",80,false},{"tones",80,false},
+        {"commb",80,false},{"avdata",80,false},{"sondes",80,false},{"tones+digits",80,true},{"avdata+text",80,true},
+        // 87 — DV signalling, VARA tag, LRPT, VOR / ILS, SARSAT, ALE
+        {"dvsig",87,false},{"varatag",87,false},{"lrpt",87,false},{"vor",87,false},{"sarsat",87,false},{"ale",87,false},
+        {"dvsig+ids",87,true},{"ale+amd",87,true},
+        // 90 — FUNcube telemetry · 91 — satellite labels, FT8 dig deeper
+        {"fctlm",90,false},{"satlabels",91,false},{"ft8+deep",91,true},{"ft8-deep",91,true},
+        // 93 — ORBCOMM, VOR MAP, the datalink's 8 MS/s
+        {"orbcomm",93,false},{"vormap",93,false},{"avdata+8m",93,true},
     };
     return t;
 }
+/** The listening demodulators and the whole-radio modes — the only-mode rule's two lists (local_sdr_shim.cpp onlyModeNow). */
 inline const std::vector<const char*>& listeningDemods() {
     static const std::vector<const char*> t = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
                                                 "usb", "lsb", "cwu", "cwl", "drm", "freedv", "m17", "dvsig" };
     return t;
 }
-/** The new-mode default that switches `id` off on a radio whose owner list is `t`, or nullptr. */
-inline const RegionDefault* newModeOff(const std::string& id, const std::vector<std::string>& t) {
-    auto has = [&](const std::string& k) { for (const auto& x : t) if (x == k) return true; return false; };
-    for (const auto& d : newModeDefaults()) {
-        if (id != d.id || has(d.id) || has(std::string("+") + d.id)) continue;
-        for (const char* m : listeningDemods()) if (!has(m)) return nullptr;
-        // ★ …and another whole-radio mode is still on: the list then offered exactly that, and keeps offering only that.
-        //   Every other one off too = the owner left VOR MAP as the one thing on purpose (VOR only) — not a default.
-        for (const char* w : { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes" }) if (!has(w)) return &d;
-        return nullptr;
-    }
+inline const std::vector<const char*>& wholeRadioModes() {
+    static const std::vector<const char*> t = { "dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap" };
+    return t;
+}
+inline const ModeGen* modeGen(const std::string& id) {
+    for (const auto& m : modeGens()) if (id == m.id) return &m;
     return nullptr;
+}
+/** ★★ THE ONLY MODE's list half (local_sdr_shim.cpp onlyModeNow asks this, then whether that mode can run here): the
+ *  one whole-radio mode left on when every listening demodulator is off, or "" — `blocked(id)` is the ENFORCED list. */
+template <class Blocked> inline std::string onlyModeLeft(Blocked blocked) {
+    for (const char* m : listeningDemods()) if (!blocked(m)) return {};
+    const char* left = nullptr;
+    for (const char* m : wholeRadioModes()) if (!blocked(m)) { if (left) return {}; left = m; }
+    return left ? std::string(left) : std::string();
+}
+/** The owner's own words about new modes ("seen@N", "newmodes@…") — never a mode, never enforced, never published. */
+inline bool isNewModesWord(const std::string& tok) {
+    return tok.compare(0, 5, "seen@") == 0 || tok.compare(0, 9, "newmodes@") == 0;
+}
+struct NewModesState {
+    int  seen = kModeGenNow;   // generation the owner has seen
+    bool stamped = false;      // "seen@N" present (else derived)
+    bool restricted = false;   // the owner blocked any switch of the table
+    bool single = false;       // single-mode by the owner's ticks (the exit lock)
+    int  policy = 0;           // +1 "newmodes@on", -1 "newmodes@off", 0 automatic
+    bool off = false;          // new switches start OFF on this radio
+};
+inline NewModesState newModesState(const std::vector<std::string>& t) {
+    auto has = [&](const std::string& k) { for (const auto& x : t) if (x == k) return true; return false; };
+    NewModesState s;
+    int evidence = 0;
+    for (const auto& x : t) {
+        if (x.compare(0, 5, "seen@") == 0) {
+            const int n = std::atoi(x.c_str() + 5);
+            s.seen = n < 0 ? 0 : n > kModeGenNow ? kModeGenNow : n;
+            s.stamped = true;
+        } else if (x == "newmodes@on") s.policy = 1;
+        else if (x == "newmodes@off") s.policy = -1;
+        else if (const ModeGen* g = modeGen(x[0] == '+' ? x.substr(1) : x)) {
+            if (g->gen > evidence) evidence = g->gen;
+            if (x[0] != '+' && !g->option) s.restricted = true;
+        }
+    }
+    if (!s.stamped) s.seen = s.restricted ? evidence : kModeGenNow;
+    auto seenOff = [&](const char* id) { const ModeGen* g = modeGen(id); return !g || g->gen > s.seen || has(id); };
+    bool demodsOff = true;
+    for (const char* d : listeningDemods()) if (!seenOff(d)) { demodsOff = false; break; }
+    if (demodsOff) {
+        int left = 0;
+        for (const char* w : wholeRadioModes()) if (!seenOff(w)) ++left;
+        s.single = left <= 1;
+    }
+    s.off = s.single || s.policy < 0 || (s.policy == 0 && s.restricted);
+    return s;
+}
+/** Is `id` a NEW switch here (newer than the owner has seen, not an option)? */
+inline bool isNewMode(const std::string& id, const NewModesState& s) {
+    const ModeGen* g = modeGen(id);
+    return g && !g->option && g->gen > s.seen;
+}
+/** True when new switch `id` is off on this radio by the rule above (the owner has not ticked it). */
+inline bool newModeOff(const std::string& id, const std::vector<std::string>& t) {
+    const NewModesState s = newModesState(t);
+    if (!isNewMode(id, s) || !s.off) return false;
+    for (const auto& x : t) if (x == id || x == "+" + id) return false;
+    return true;
+}
+/** `,"modeGen":96,"modeGens":{"wfm":0,…}` — the table, for the Setup page and the app (one table, three readers). */
+inline std::string modeGensJson() {
+    std::string j = ",\"modeGen\":" + std::to_string(kModeGenNow) + ",\"modeGens\":{";
+    bool first = true;
+    for (const auto& m : modeGens()) {
+        if (m.option) continue;
+        j += std::string(first ? "" : ",") + "\"" + m.id + "\":" + std::to_string(m.gen);
+        first = false;
+    }
+    return j + "}";
 }
 
 /** ★★★ THE LIST THE SERVER ENFORCES: the owner's own CSV, plus each region default that is off here and that the owner
@@ -283,7 +390,7 @@ inline std::string effectiveBlocked(const std::string& ownerCsv, int region) {
     auto has = [&](const std::string& k) { for (const auto& x : t) if (x == k) return true; return false; };
     std::string out;
     for (const auto& x : t) {
-        if (x[0] == '+') continue;
+        if (x[0] == '+' || isNewModesWord(x)) continue;   // ★ beta96 "seen@N" / "newmodes@…" are the owner's words, not modes
         out += (out.empty() ? "" : ",") + x;
     }
     for (const auto& d : regionDefaults()) {
@@ -291,8 +398,9 @@ inline std::string effectiveBlocked(const std::string& ownerCsv, int region) {
         if (has(d.id) || has(std::string("+") + d.id)) continue;
         out += (out.empty() ? "" : ",") + std::string(d.id);
     }
-    for (const auto& d : newModeDefaults())   // ★★ beta93 a mode added after the owner made the radio single-purpose
-        if (newModeOff(d.id, t)) out += (out.empty() ? "" : ",") + std::string(d.id);
+    // ★★★ beta96 a switch added after the owner restricted this radio (newModesState) — off until they tick it
+    for (const auto& m : modeGens())
+        if (!m.option && newModeOff(m.id, t)) out += (out.empty() ? "" : ",") + std::string(m.id);
     return out;
 }
 
