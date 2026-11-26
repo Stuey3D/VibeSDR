@@ -114,4 +114,19 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
     ok(/focusIdx/.test(t) && /part|linked/.test(t), `${f}: drawn by half, the focus ring by the pad's index`);
   }
 }
+// ★★★ beta96 maps2 THE AMATEUR MAP's TABS (SPOTS · APRS · MESH · BEACONS): TrackLiveList over the 'digi' page — drawn by React
+//    Native so the pad reaches it — and the window keys (DigiMapKeys) above the map. ONE pad order for both: the top nav owner
+//    takes the pad, so two owners would leave the keys unreachable while the list is up. The tab keys and the rows are
+//    TrackLiveList's (RangeKey / Row — useNavButton + NavRing, counted above).
+{
+  const mo = readFileSync(path.join(root, 'src/components/MapOverlay.tsx'), 'utf8');
+  const tl = readFileSync(path.join(root, 'src/components/TrackLiveList.tsx'), 'utf8');
+  const dk = readFileSync(path.join(root, 'src/components/DigiMapKeys.tsx'), 'utf8');
+  ok(/const amNav = usePanelNav\(visible && amOn, \{ flat: true \}\)/.test(mo), 'AMATEUR: the map owns one pad order while its list is up');
+  ok(/<TrackLiveList title="STATIONS"[^]*?tabs=\{amList\.tabs\}[^]*?nav=\{\{ navCtx: amNav\.navCtx/.test(mo), 'AMATEUR: the tabs and rows join it (TrackLiveList, nav)');
+  ok(/navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo), 'AMATEUR: the window keys join the same order');
+  ok(/usePanelNav\(!nb\.modal && !p\.nav,/.test(tl) && /const \{ navCtx, scrollProps \} = p\.nav \?\? own;/.test(tl), 'TrackLiveList: a shared order replaces its own (never two owners)');
+  ok(/usePanelNav\(!p\.navCtx,/.test(dk) && /const navCtx = p\.navCtx \?\? own\.navCtx;/.test(dk), 'DigiMapKeys: a shared order replaces its own');
+  ok(/accessibilityRole="tablist"[^]*?\{tabs\.map\(\(t\) => <RangeKey /.test(tl) && /function RangeKey[^]*?useNavButton\(onPress\)/.test(tl), 'TrackLiveList: every tab is a pad key');
+}
 process.exit(fails ? 1 : 0);

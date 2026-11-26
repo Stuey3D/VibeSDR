@@ -177,7 +177,7 @@ import { parseSkimBands, skimPickable, type SkimBands, type SkimKind } from '../
 import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
          mergeRttyHistory, type CwList, type CwSpot } from '../services/cwList';
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
-import { amMeshPoints, amBeaconPoints, amLiveOf } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { amMeshPoints, amBeaconPoints, amLiveOf, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { NCDXF_BANDS, NCDXF_CALLS, ncdxfFollowAllowed, ncdxfFollowBand, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { TONES_DEFAULTS, type TonesOptions } from '../services/tones';   // ★ V12 DTMF + 5-tone
 import { BALLOON_AUTO, balloonMerge, type BalloonPayload, type BalloonPicture, type BalloonReport, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
@@ -12523,6 +12523,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★★ beta92 the radio filter's choices on the DIGI MODES MAP (logRadio.ts — 2+ radios hold stations, else null). */
   const [digiRadios, setDigiRadios] = useState<LogRadio[] | null>(null);
   const [digiAprsOn, setDigiAprsOn] = useState(false);
+  const [digiOpenedOn, setDigiOpenedOn] = useState<AmLayer>('spots');
   const [digiOverlay, setDigiOverlay] = useState<DigiMapOverlay | null>(null);
   /* ★★★ THE ONE OPENER (services/digiModesMap.ts — the satellite client and anything else call it): the layer, a station
    *  to centre on, a caller's overlay (an ISS pass's track and footprint). */
@@ -12531,6 +12532,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (IS_TV) return;
       if (o.overlay !== undefined) setDigiOverlay(digiOverlayClean(o.overlay));
       if (o.layer === 'aprs') setDigiAprsOn(true);
+      setDigiOpenedOn(o.layer ?? 'spots');   // ★ beta96 maps2 the AMATEUR list's tab while nothing else picks one
       if (o.focus) setAprsFocus(String(o.focus).slice(0, 40));
       if (o.window && /^(1h|24h|7d|30d|all)$/.test(o.window)) { setDigiWin(o.window); setDigiStore(new Map()); }
       setModeSelOpen(false);
@@ -12574,7 +12576,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     mesh: amMeshPoints(ismReport?.devices ?? [], ismStored?.nodes ?? [], Math.floor(Date.now() / 1000)),
     beacons: amBeaconPoints(ncdxfReport, NCDXF_BANDS.map((b) => b.label)),
     live: amLiveOf(activeDecoder ?? (spotsKind === 'digi' ? 'spots' : ''), ismOn),
-  } : null), [localMapOpen, digiStorePolling, ismReport, ismStored, ncdxfReport, activeDecoder, spotsKind, ismOn]);   // eslint-disable-line react-hooks/exhaustive-deps
+    opened: digiOpenedOn,
+  } : null), [localMapOpen, digiStorePolling, ismReport, ismStored, ncdxfReport, activeDecoder, spotsKind, ismOn, digiOpenedOn]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);

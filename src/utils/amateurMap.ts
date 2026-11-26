@@ -110,8 +110,83 @@ export function amTabs(have: Partial<Record<AmLayer, number>>, live: AmLayer | '
   return AM_TABS.filter((t) => (have[t] ?? 0) > 0 || t === live || t === opened);
 }
 
+/** ★ The tab shown: the viewer's pick while it is still offered, else the live layer's, else the one opened on, else the
+ *  first (the web window's amList rule — one rule for both). */
+export function amTabNow(tabs: readonly AmLayer[], pick: AmLayer | '' | null | undefined, live: AmLayer | '', opened: AmLayer | ''): AmLayer {
+  if (pick && tabs.includes(pick)) return pick;
+  if (live && tabs.includes(live)) return live;
+  if (opened && tabs.includes(opened)) return opened;
+  return tabs[0] ?? 'spots';
+}
+
+/* ★★★ beta96 maps2 THE APP's LIST, IN TABS (TrackLiveList over the 'digi' page — React Native, so a pad walks it): the same
+ *  rows as the web window's amList (main.ts) — a spot says who heard it (the store's src: background decoding / a
+ *  listener's decoder; one not yet stored is this app's own decoder's), APRS its symbol and comment, MESH its network,
+ *  BEACONS its site and bands — every one through the HEARD IN window (amKeep), at most AM_ROWS_MAX a tab. */
+export const AM_ROWS_MAX = 300;
+/** A spot as the list reads it (the app's SpotRow: time in ms; `src` set on a station from the store). */
+export interface AmSpotIn { call: string; mode: string; band: string; time: number; distKm?: number; country?: string; src?: number }
+/** An APRS station as the list reads it (digiMapShared.ts DigiAprsPoint: age = since last heard, s). */
+export interface AmAprsIn { key: string; call: string; age: number; km: number | null; symName?: string; comment?: string }
+export interface AmListIn { spots?: readonly AmSpotIn[] | null; aprs?: readonly AmAprsIn[] | null; mesh?: readonly AmMeshPoint[] | null; beacons?: readonly AmBeaconPoint[] | null }
+/** One row (services/tracks.ts TrackRow's shape — TrackLiveList draws it). */
+export interface AmRow { key: string; colour: string; flag: string; name: string; second: string; sp: string; trend: 0; range: string; brg: string; noPos: false; age: string; em: false }
+/** "45 s" · "12 min" · "3 h" · "2 days" — the row's age (the list adds "heard … ago" for a screen reader). */
+export function amAgoShort(sec: number): string {
+  const s = Math.max(0, Math.round(Number.isFinite(sec) ? sec : 0));
+  return s < 90 ? `${s} s` : s < 5400 ? `${Math.round(s / 60)} min` : s < 172800 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`;
+}
+/** ★ A spot's key — the map page's own key(s) (call|band|MODE), prefixed, so a row finds its marker. */
+export function amSpotKey(call: string, band: string, mode: string): string { return `spot:${call}|${band}|${String(mode || '').toUpperCase()}`; }
+const kmTxt = (km: number | null | undefined) => (km != null && Number.isFinite(km) && km >= 0 ? `${Math.round(km)} km` : '');
+/** The spots in the window, each station-band-mode once (the newest wins), newest first. */
+function spotsIn(spots: readonly AmSpotIn[] | null | undefined, win: string, nowMs: number): AmSpotIn[] {
+  const by = new Map<string, AmSpotIn>();
+  for (const s of spots ?? []) {
+    if (!s || !s.call || !amKeep((nowMs - s.time) / 1000, win)) continue;
+    const k = amSpotKey(s.call, s.band, s.mode), was = by.get(k);
+    if (!was || s.time > was.time || (s.time === was.time && s.src != null && was.src == null)) by.set(k, s);
+  }
+  return [...by.values()].sort((a, b) => b.time - a.time);
+}
+/** ★ How many of each layer are in the window (the tabs' counts). */
+export function amCountsOf(d: AmListIn, win: string, nowMs: number): Record<AmLayer, number> {
+  return {
+    spots: spotsIn(d.spots, win, nowMs).length,
+    aprs: (d.aprs ?? []).filter((a) => amKeep(a.age, win)).length,
+    mesh: (d.mesh ?? []).filter((x) => amKeep(x.age, win)).length,
+    beacons: (d.beacons ?? []).filter((x) => amKeep(x.age, win)).length,
+  };
+}
+/** ★★ The rows of one tab. `colourOf` is the mode's colour (digiModes.ts digiModeStyle — the marker's). */
+export function amListRows(tab: AmLayer, d: AmListIn, win: string, nowMs: number, colourOf: (mode: string) => string): AmRow[] {
+  const row = (key: string, colour: string, name: string, second: string, range: string, ageSec: number): AmRow =>
+    ({ key, colour, flag: '', name, second, sp: '', trend: 0, range, brg: '', noPos: false, age: amAgoShort(ageSec), em: false });
+  if (tab === 'spots') {
+    return spotsIn(d.spots, win, nowMs).slice(0, AM_ROWS_MAX).map((s) => row(amSpotKey(s.call, s.band, s.mode), colourOf(s.mode), s.call,
+      [String(s.mode || '').toUpperCase(), s.band, s.country, s.src != null ? amSrcWords(s.src) : 'Heard by this app\u2019s decoder'].filter(Boolean).join(' \u00b7 '),
+      kmTxt(s.distKm), (nowMs - s.time) / 1000));
+  }
+  if (tab === 'aprs') {
+    return (d.aprs ?? []).filter((a) => amKeep(a.age, win)).slice(0, AM_ROWS_MAX).map((a) => row(`aprs:${a.key}`, '#88CCEE', a.call,
+      [a.symName || 'APRS', a.comment].filter(Boolean).join(' \u00b7 '), kmTxt(a.km), a.age));
+  }
+  if (tab === 'mesh') {
+    return (d.mesh ?? []).filter((x) => amKeep(x.age, win)).slice(0, AM_ROWS_MAX).map((x) => row(x.key, x.net === 'MeshCore' ? '#ff9f43' : '#67ea94', x.name,
+      [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), '', x.age));
+  }
+  return (d.beacons ?? []).filter((x) => amKeep(x.age, win)).slice(0, AM_ROWS_MAX).map((x) => row(x.key, '#d2a8ff', x.call,
+    `${x.where} \u00b7 ${x.bands.join(' ')}`, '', x.age));
+}
+/** ★ What an empty tab says (the web window's words). */
+export function amEmptyWords(tab: AmLayer): string {
+  return tab === 'mesh' ? 'No mesh node with a position in this window — ISM mode hears MeshCore and Meshtastic.'
+    : tab === 'beacons' ? 'No NCDXF beacon heard in this window — the NCDXF decoder tracks them.'
+    : tab === 'aprs' ? 'No APRS station with a position in this window.' : 'No station with a locator in this window.';
+}
+
 /* ★★ THE SAME RULES AS PAGE TEXT (both map pages are their own documents): the window, the layer drawing for MESH and
- *  BEACONS, the list's rows. Plain ES5; no backticks, no backslashes. The page supplies L (Leaflet or the GPU adapter),
+ *  BEACONS (each marker kept in AM_MK by its key, so a list row can open it), the list's rows. Plain ES5; no backticks, no backslashes. The page supplies L (Leaflet or the GPU adapter),
  *  esc() and RIM. scripts/test_amateur_map.ts runs amKeepJs against amKeep. */
 export const AMATEUR_JS = `
 function amWinSec(win){switch(String(win||'').toLowerCase()){case '2m':return 120;case '5m':return 300;case '15m':return 900;case '30m':return 1800;
@@ -123,12 +198,14 @@ function amMeshCard(n){return '<div class="pop"><b>'+esc(n.name)+'</b><br>'+esc(
   +(n.approx?'Position rounded to about 1 km<br>':'')+(n.live?'Heard now on ISM':'Remembered by this server')+' &middot; '+esc(amAgo(n.age))+'</div>';}
 function amBeaconCard(b){return '<div class="pop"><b>'+esc(b.call)+'</b> &middot; '+esc(b.where)+'<br>NCDXF / IARU beacon &middot; heard on '+esc(b.bands.join(', '))
   +'<br>Down to '+esc(['','100 W','10 W','1 W','0.1 W'][b.best]||'')+' &middot; '+esc(amAgo(b.age))+'</div>';}
-function amDrawMesh(group,nodes,win,live){group.clearLayers();var out=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];if(!amKeep(n.age,win))continue;out.push(n);
-  L.circleMarker([n.lat,n.lon],{radius:live?7:6,color:RIM,weight:1.2,fillColor:AM_MESH_COL[n.net]||'#67ea94',fillOpacity:n.live?0.95:0.55,label:'M',labelColor:'#000000'})
+var AM_MK={};
+function amMkClear(pre){for(var k in AM_MK)if(k.indexOf(pre)===0)delete AM_MK[k];}
+function amDrawMesh(group,nodes,win,live){group.clearLayers();amMkClear('mesh:');var out=[];for(var i=0;i<nodes.length;i++){var n=nodes[i];if(!amKeep(n.age,win))continue;out.push(n);
+  AM_MK[n.key]=L.circleMarker([n.lat,n.lon],{radius:live?7:6,color:RIM,weight:1.2,fillColor:AM_MESH_COL[n.net]||'#67ea94',fillOpacity:n.live?0.95:0.55,label:'M',labelColor:'#000000'})
    .addTo(group).bindPopup(amMeshCard(n));}return out;}
-function amDrawBeacons(group,list,win,live,me){group.clearLayers();var out=[];for(var i=0;i<list.length;i++){var b=list[i];if(!amKeep(b.age,win))continue;out.push(b);
+function amDrawBeacons(group,list,win,live,me){group.clearLayers();amMkClear('bcn:');var out=[];for(var i=0;i<list.length;i++){var b=list[i];if(!amKeep(b.age,win))continue;out.push(b);
   if(me)L.polyline([[me.lat,me.lon],[b.lat,b.lon]],{color:'#d2a8ff',weight:1,opacity:0.45,dashArray:'3 5'}).addTo(group);
-  L.circleMarker([b.lat,b.lon],{radius:live?8:7,color:RIM,weight:1.2,fillColor:'#d2a8ff',fillOpacity:0.95,label:'B',labelColor:'#000000'})
+  AM_MK[b.key]=L.circleMarker([b.lat,b.lon],{radius:live?8:7,color:RIM,weight:1.2,fillColor:'#d2a8ff',fillOpacity:0.95,label:'B',labelColor:'#000000'})
    .addTo(group).bindPopup(amBeaconCard(b));}return out;}
 function amSrcWords(src){var w=[];if(src&1)w.push('background decoding');if(src&2)w.push('a listener’s decoder');if(src&4)w.push('a satellite pass');return w.length?'Heard by '+w.join(' and '):'';}
 function amRow(key,col,name,sub,right){return '<div class="amRow" role="button" tabindex="0" data-k="'+esc(key)+'"><i style="background:'+esc(col)+'"></i><span class="n"><b>'+esc(name)+'</b><small>'+esc(sub)+'</small></span><span class="r">'+esc(right)+'</span></div>';}

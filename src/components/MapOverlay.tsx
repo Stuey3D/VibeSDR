@@ -31,7 +31,7 @@ import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle, spotsListModes } from '../utils/digiModes';
 import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the digi map's radio filter
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
-import { useOverlay } from './PanelNav';
+import { useOverlay, usePanelNav } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
@@ -91,7 +91,7 @@ import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM, DIGI_WINDOWS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
 import { DIGI_STATS_JS, DIGI_WIDE_PX, digiPanelsOf, type DigiPanelsShown } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
-import { AMATEUR_JS, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { AMATEUR_JS, AM_TAB_LABEL, amTabs, amTabNow, amCountsOf, amListRows, amEmptyWords, type AmAprsIn, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import DigiMapKeys from './DigiMapKeys';
 import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the window and panel keys (the pad reaches them)
 /* ★★★ beta92 ONE AUTO FIT FOR EVERY MAP (Stuart 11-23: "all maps to have an auto fit that gently glides the zoom in and out
@@ -227,7 +227,7 @@ interface MapOverlayProps {
   /** ★★ V12 beta90 APRS on the DIGI MODES MAP: the APRS box's stations (digiMap.ts DigiAprsPoint shape), and a key to open on. */
   aprsPoints?: unknown[] | null;
   /** ★★★ beta96 stage 7 THE AMATEUR MAP (kind 'digi', the server's): MESH, BEACONS and the live layer (src/utils/amateurMap.ts). */
-  amateur?: { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | '' } | null;
+  amateur?: { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | ''; opened?: AmLayer | '' } | null;
   aprsFocus?: string;
   /** ★★ V12 beta90 a caller's overlay on the DIGI MODES MAP (digiMapShared.ts DigiMapOverlay — a satellite pass). */
   digiOverlay?: unknown | null;
@@ -676,6 +676,13 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   body:not(.dwide).dstOn #dsum{bottom:calc(50% + 6px);}
   body.dsumOn #toast{bottom:calc(var(--dsh,0px) + 6px);}
   body.dsumOn:not(.dwide) .maplibregl-ctrl-bottom-left,body.dsumOn:not(.dwide) .leaflet-bottom.leaflet-left{bottom:var(--dsh,0px);}
+  /* ★★★ beta96 maps2 THE AMATEUR MAP's LIST (TrackLiveList, React Native, bottom-left as every map's list — __amListWH gives its
+     height and right edge): narrow, the summary strip, the toast and the scale sit ABOVE it; wide, the summary starts right of it. */
+  body.amL:not(.dwide) #dsum{bottom:calc(max(8px,env(safe-area-inset-bottom)) + var(--amH,0px) + 8px);}
+  body.amL:not(.dwide) #toast{bottom:calc(var(--amH,0px) + var(--dsh,0px) + 18px);}
+  body.amL:not(.dwide) .maplibregl-ctrl-bottom-left,body.amL:not(.dwide) .leaflet-bottom.leaflet-left{bottom:calc(var(--amH,0px) + var(--dsh,0px) + 10px);}
+  body.amL.dwide #dsum{left:calc(var(--amX,0px) + 12px);right:56px;margin:0;width:auto;max-width:none;}
+  body.amL.dwide .maplibregl-ctrl-bottom-left,body.amL.dwide .leaflet-bottom.leaflet-left{bottom:calc(var(--amH,0px) + 18px);}
   ` : ''}
   ${isTrk ? `
   /* ★★ ADS-B (and V12 NDB, AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
@@ -2057,6 +2064,19 @@ if(KIND==='digi'||KIND==='cw'){
   if(bcnKey)bcnKey.addEventListener('click',function(){bcnOn=!bcnOn;amDraw();});
   if(fAge)fAge.addEventListener('change',function(){aprsDraw();amDraw();});
   if(window.__pendingAm){window.__amPush(window.__pendingAm);window.__pendingAm=null;}
+  /* ★★★ beta96 maps2 THE LIST's ROWS (TrackLiveList, React Native, over this page — amateurMap.ts amListRows): a row CENTRES its
+   *  station and opens its card. Keys: 'spot:' + this page's key(s), 'aprs:' + the station's key, 'mesh:…' / 'bcn:…' (AM_MK).
+   *  A layer switched off is switched back on (the person asked to see that station). */
+  window.__amFocus=function(k){try{k=String(k||'').slice(0,120);if(digiFit)digiFit.pause();
+    var go=function(lat,lon,m,z){map.flyTo([lat,lon],Math.max(map.getZoom(),z),{animate:true,duration:0.8});if(m&&m.openPopup)setTimeout(function(){try{m.openPopup();}catch(e){}},850);};
+    if(k.indexOf('spot:')===0){var sk=k.slice(5),s=byKey[sk];if(s)go(s.plat,s.plon,markers[sk],5);return;}
+    if(k.indexOf('aprs:')===0){aprsWant=k.slice(5);aprsOn=true;aprsDraw();return;}
+    if(k.indexOf('mesh:')===0){if(!meshOn){meshOn=true;amDraw();}var n=amMesh.find(function(x){return x.key===k;});if(n)go(n.lat,n.lon,AM_MK[k],9);return;}
+    if(k.indexOf('bcn:')===0){if(!bcnOn){bcnOn=true;amDraw();}var b=amBcn.find(function(x){return x.key===k;});if(b)go(b.lat,b.lon,AM_MK[k],4);return;}
+  }catch(e){console.error('amateur focus',e);}};
+  /* ★ the list's footprint (0 × 0 = none): the summary strip, the toast and the scale stand clear of it (CSS: body.amL) */
+  window.__amListWH=function(w,h,x){var b=document.body,on=Number(w)>0&&Number(h)>0;b.classList.toggle('amL',on);
+    b.style.setProperty('--amH',(on?Math.round(Number(h)):0)+'px');b.style.setProperty('--amX',(on?Math.round(Number(x)||0):0)+'px');};
   function aprsLabels(){try{document.body.classList.toggle('aprsLb',map.getZoom()>=8);}catch(e){}}
   map.on('zoomend',aprsLabels);aprsLabels();
   /* ★★ beta92 THE FIT KEY (Stuart 11-23: "spots map could do with the auto fit button too") — the AIS / APRS maps' FIT,
@@ -2672,6 +2692,41 @@ export default function MapOverlay(
   useEffect(() => { if (visible && isTrkKind && trk?.focus) trkFocus(trk.focus); }, [visible, kind, trk?.focus]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!visible) setTrkSel(null); }, [visible, kind]);
 
+  /* ★★★ beta96 maps2 THE AMATEUR MAP's LIST, IN TABS — SPOTS · APRS · MESH · BEACONS (TrackLiveList, React Native over the page,
+   *  so a pad and the keyboard walk it; the web window's #amList in the app). The rows are amateurMap.ts amListRows — the web's
+   *  rows, through the HEARD IN window (the window keys' choice): a spot says who heard it, a row centres its station
+   *  (__amFocus). The tab: the viewer's pick, else the live layer's, else the one opened on (amTabNow). Not while the narrow
+   *  STATS sheet covers the bottom half (its ✕ brings the list back). One pad order with the window keys (amNav). */
+  const amOn = kind === 'digi' && !!amateur && !!storeWindows && !(digiPanels.stats && !digiWide);
+  const amNav = usePanelNav(visible && amOn, { flat: true });
+  const amKeysNav = useMemo(() => (amNav.navCtx ? { ...amNav.navCtx, scrollRef: { current: null } } : null), [amNav.navCtx]);   // ★ the keys never scroll the list
+  const [amPick, setAmPick] = useState<AmLayer | ''>('');
+  const [amSel, setAmSel] = useState<string | null>(null);
+  const [amTick, setAmTick] = useState(0);
+  useEffect(() => { if (!visible || !amOn) return; const t = setInterval(() => setAmTick((n) => n + 1), 30_000); return () => clearInterval(t); }, [visible, amOn]);   // ★ the ages move on
+  useEffect(() => { if (!visible) { setAmPick(''); setAmSel(null); } }, [visible]);
+  const amList = useMemo(() => {
+    if (!amOn || !amateur) return null;
+    const now = Date.now(), win = digiWinShown;
+    const d = { spots: spots ?? [], aprs: (aprsPoints ?? []) as AmAprsIn[], mesh: amateur.mesh, beacons: amateur.beacons };   // ★ digiAprsPoints' rows (DigiAprsPoint)
+    const n = amCountsOf(d, win, now);
+    const tabs = amTabs(n, amateur.live, amateur.opened ?? '');
+    const tab = amTabNow(tabs, amPick, amateur.live, amateur.opened ?? '');
+    return { tabs: tabs.map((t) => ({ id: t, label: `${amateur.live === t ? '● ' : ''}${AM_TAB_LABEL[t]}`, n: n[t] })), tab,
+             rows: amListRows(tab, d, win, now, (m) => digiModeStyle(m).colour), empty: amEmptyWords(tab),
+             status: `Heard in ${DIGI_WINDOWS.find((w) => w.id === win)?.words ?? 'this window'} · background decoding and every listener` };
+  }, [amOn, amateur, spots, aprsPoints, digiWinShown, amPick, amTick]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const amFocus = (key: string) => {
+    setAmSel(key);
+    webRef.current?.injectJavaScript(`window.__amFocus&&window.__amFocus(${JSON.stringify(String(key).slice(0, 120))});true;`);
+  };
+  const amLeft = digiWide && digiPanels.stats ? 282 : 0;   // ★ wide: right of the STATS column (the page's 280 px + its margin)
+  const amFootprint = (w: number, h: number) => {
+    const x = 10 + (safeInsets?.left ?? 0) + amLeft + w;
+    webRef.current?.injectJavaScript(`window.__amListWH&&window.__amListWH(${Math.round(w) || 0},${Math.round(h) || 0},${Math.round(x)});true;`);
+  };
+  useEffect(() => { if (visible && kind === 'digi' && !amOn) webRef.current?.injectJavaScript('window.__amListWH&&window.__amListWH(0,0,0);true;'); }, [visible, kind, amOn]);
+
   if (!visible || !kind) return null;
 
   return (
@@ -2927,7 +2982,17 @@ export default function MapOverlay(
         {kind === 'digi' && !!pageUri && !packError && digiMapTop > 0 && (
           <DigiMapKeys top={digiMapTop} left={safeInsets?.left ?? 0} windows={!!storeWindows} win={digiWinShown}
                        onWin={(w) => { setDigiWinShown(w); pushWin(w); onDigiWindow?.(w); }}
-                       shown={digiPanels} onPanel={setDigiPanel} onHeight={setDigiKeysH} ink={ink} />
+                       shown={digiPanels} onPanel={setDigiPanel} onHeight={setDigiKeysH} ink={ink}
+                       navCtx={amOn && amKeysNav ? amKeysNav : undefined} />
+        )}
+        {/* ★★★ beta96 maps2 THE AMATEUR MAP's tabs and rows (amList above) — the pad walks them after the window keys. */}
+        {kind === 'digi' && !!amList && !!pageUri && !packError && (
+          <TrackLiveList title="STATIONS" rows={amList.rows} status={amList.status} empty={amList.empty}
+                         tabs={amList.tabs} tab={amList.tab} onTab={(id) => setAmPick(id as AmLayer)}
+                         onFocus={amFocus} selected={amSel} onFootprint={amFootprint}
+                         nav={{ navCtx: amNav.navCtx, scrollProps: amNav.scrollProps }} leftExtra={amLeft}
+                         ink={ink} areaW={winW - amLeft} areaH={winH}
+                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (

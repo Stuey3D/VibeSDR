@@ -78,6 +78,12 @@ export interface TrackLiveListProps {
   /** ★★★ beta96 stage 8 NDB LIVE: the beacon list's body (NdbLiveList useNdbBody — the tiles, RINGS · UNHEARD · HEARD LOG ·
    *  FIND NDB · STATS, the rows with their readings, the card, the dialogs) is the NAVAIDS tab's. null = not live. */
   ndb?: NdbBodyInput | null;
+  /** ★★★ beta96 maps2 THE AMATEUR MAP: one pad order shared with the keys above the map (DigiMapKeys) — the owner of the
+   *  keys is the map, not each panel (two owners would leave the first one's keys unreachable: the top owner takes the pad).
+   *  Absent = this list's own (every other map). */
+  nav?: { navCtx: React.ContextType<typeof NavCtx>; scrollProps: ReturnType<typeof usePanelNav>['scrollProps'] } | null;
+  /** ★ Extra room on the left (the AMATEUR map's wide STATS column) — added to the inset. */
+  leftExtra?: number;
 }
 const RANGE_H = 30;
 
@@ -113,10 +119,11 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
   useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { navCtx, scrollProps } = usePanelNav(!nb.modal, { flat: true });   // ★ an NDB dialog takes the pad
+  const own = usePanelNav(!nb.modal && !p.nav, { flat: true });   // ★ an NDB dialog takes the pad
+  const { navCtx, scrollProps } = p.nav ?? own;
   const s = useMemo(() => makeStyles(p.ink), [p.ink]);
   const placed = ab.placed + p.rows.filter((r) => !r.noPos).length;
-  const pos = { left: EDGE + p.insets.left, bottom: EDGE + p.insets.bottom };
+  const pos = { left: EDGE + p.insets.left + (p.leftExtra ?? 0), bottom: EDGE + p.insets.bottom };
   return (
     <>
     <NavCtx.Provider value={navCtx}>

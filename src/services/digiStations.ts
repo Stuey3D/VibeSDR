@@ -100,7 +100,8 @@ export function digiStationRows(held: Map<string, StoredStation>): SpotRow[] {
   for (const s of held.values()) {
     if (!s.grid) continue;
     out.push({ kind: 'digi', time: s.last * 1000, mode: s.mode, band: s.band, call: s.call, snr: s.snr, freqHz: s.freq,
-               grid: s.grid, country: s.country, ...(s.km != null ? { distKm: s.km } : {}), ...(s.radios.length ? { radios: s.radios } : {}) });
+               grid: s.grid, country: s.country, ...(s.km != null ? { distKm: s.km } : {}), ...(s.radios.length ? { radios: s.radios } : {}),
+               src: s.src });   // ★ beta96 maps2 who heard it (the AMATEUR map's row)
   }
   return out;
 }
