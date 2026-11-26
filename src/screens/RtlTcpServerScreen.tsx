@@ -225,7 +225,7 @@ export default function RtlTcpServerScreen({ navigation, route }: Props) {
     return (
       <SafeAreaView style={[styles.root, { backgroundColor: C.bg }]}>
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
-          <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>RTL-TCP</Text>
+          <Text style={[styles.h1, { color: C.text, fontFamily: F }]}>RTL-TCP (Compatibility)</Text>
           <Text style={[styles.sub, { color: C.textDim, fontFamily: F }]}>
             The radio&rsquo;s raw IQ for SDR#, SDR++ or SDR Console, with VibeAGC. Local network only, one program at a
             time, no PIN. Any radio but an Icom.

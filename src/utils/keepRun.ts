@@ -90,6 +90,8 @@ export function keepAvailLocal(f: {
   driver: string; isIcom: boolean; blockedModes: string; rate: number; dabRateBoost: boolean; lockedOwnVfos: boolean;
   /** the ISM bands this radio reaches (the engine's caps.ismBands) — none = no ISM row */
   ismBands?: string[];
+  /** ★★★ beta96 the radio's caps carry "ais+8m" (it lists 8 MS/s and reaches channel 70 + AIS) — an Airspy Mini does not */
+  ais8mOk?: boolean;
 }): { avail: KeepAvail[]; comboOk: boolean; comboWhy: string } {
   const blocks = new Set(f.blockedModes.split(/[,;\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean));
   const hf = f.driver === 'airspyhf';
@@ -99,7 +101,9 @@ export function keepAvailLocal(f: {
     if (f.lockedOwnVfos) hw = false;   // ★ a locked centre with its own-VFO listeners: a whole-radio mode would move the window
     let why = '';
     // ★★★ beta96 AIS + DSC: only a wide radio whose rate holds both (an RSP at 8, an R2 at 10, a HackRF, a USRP) — not drawn elsewhere
-    if (m.id === 'aisdsc') hw = hw && !hf && ['sdrplay', 'airspy', 'hackrf', 'usrp'].includes(f.driver) && f.rate >= KEEP_MARITIME_MIN;
+    // ★★★ …or the owner's "ais+8m" (MARITIME may raise the capture to 8 MS/s — the radio's list has it: these four drivers)
+    if (m.id === 'aisdsc') hw = hw && !hf && ['sdrplay', 'airspy', 'hackrf', 'usrp'].includes(f.driver)
+                           && (f.rate >= KEEP_MARITIME_MIN || (blocks.has('ais+8m') && !!f.ais8mOk));
     if (m.id === 'aisdsc' && blocks.has('dsc')) why = 'DSC is switched off for this radio (modes offered to listeners).';
     else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (modes offered to listeners).`;
     else if (m.id === 'adsb' && f.rate > 0 && f.rate < 2_400_000 && !f.dabRateBoost)

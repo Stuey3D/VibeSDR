@@ -48,15 +48,18 @@ export function choicesFor(o: { lite: boolean; rtlTcpSupported: boolean; icom: b
 
 /** The words on the list — one place, so the tour and About can quote them. */
 export const CHOICE_WORDS: Record<ServerChoice, { title: string; tag: string; desc: string }> = {
-  simple: { title: 'VibeServer Simple', tag: 'Local network only',
-            desc: 'A name, a capture width and a waterfall rate, then Start. Everyone on your Wi-Fi can listen. '
-                + 'No internet listing, no sharing, no feeds.' },
-  full:   { title: 'VibeServer Full', tag: 'Every setting',
-            desc: 'The full server screen: PIN and admin password, public listing on vibesdr.net, shared and locked '
-                + 'ranges, decoders, background decoding, the community map and feeds.' },
-  rtltcp: { title: 'RTL-TCP', tag: 'Raw IQ',
+  // ★★★ beta96 (Stuart 11-26) the three entry labels, EXACTLY these words — the "(…)" is part of the label, not a tag.
+  simple: { title: 'VibeServer Simple (Local Network Only)', tag: '',
+            desc: 'A name, a capture width, a waterfall rate and an optional PIN, then Start. Everyone on your home '
+                + 'network can listen; anyone else is refused. No internet listing, no sharing, no feeds.' },
+  full:   { title: 'VibeServer Full', tag: '',
+            desc: 'Every setting, in two tabs (Server and Radio): PIN and admin password, public listing on vibesdr.net, '
+                + 'shared and locked ranges, decoders, background decoding, the community map and feeds.' },
+  rtltcp: { title: 'RTL-TCP (Compatibility)', tag: '',
             desc: 'For SDR#, SDR++ or SDR Console, with VibeAGC. Local network only, one listener, no PIN.' },
 };
+/** The entry labels in list order — what the tour, About and the tests quote. */
+export const ENTRY_LABELS = [CHOICE_WORDS.simple.title, CHOICE_WORDS.full.title, CHOICE_WORDS.rtltcp.title] as const;
 
 /**
  * ★ The address on this network, made exactly as the server makes it (VibeServerOps.hostSlug): lower case, anything
@@ -69,7 +72,32 @@ export function mdnsLabel(s: string): string {
 }
 
 /** The keys Simple writes into the one settings store — and nothing else. */
-export const SIMPLE_KEYS = ['name', 'mdnsName', 'sampleRate', 'lockedRate', 'rateLock', 'maxFftRate', 'simple'] as const;
+export const SIMPLE_KEYS = ['name', 'mdnsName', 'sampleRate', 'lockedRate', 'rateLock', 'maxFftRate', 'simple',
+                            'simplePin', 'simpleRawIq'] as const;
+
+/**
+ * ★★★ beta96 (Stuart 11-26) SIMPLE'S PIN — optional, digits only, up to 12 (the server PIN's own rule: ServerModeScreen,
+ *     vibe_android_setup.h settingsPatch). Kept under its OWN key (simplePin) so a PIN set for Full's public server is
+ *     never overwritten by Simple's, and the other way round; the Simple view runs it as the server's PIN.
+ */
+export function pinProblem(pin: string): string {
+  const p = String(pin ?? '');
+  if (!p) return '';
+  if (!/^[0-9]+$/.test(p)) return 'A PIN is digits only.';
+  if (p.length > 12) return 'A PIN is at most 12 digits.';
+  return '';
+}
+/** What a PIN box keeps of what was typed (the same filter Full's box uses). */
+export const pinTyped = (t: string) => String(t ?? '').replace(/[^0-9]/g, '').slice(0, 12);
+
+/**
+ * ★★★ beta96 SIMPLE'S RAW IQ OUT — Full's control (RAW IQ OUT: Off / Local only), with "Local & public" left out: a Simple
+ *     server is local network only, so a public choice would be a dead control (AGENTS.md). Kept under its own key
+ *     (simpleRawIq) for the same reason as the PIN. 0 = off, 1 = local network.
+ */
+export const SIMPLE_RAWIQ_CHOICES: ReadonlyArray<readonly [0 | 1, string]> = [[0, 'Off'], [1, 'Local only']];
+/** Not for Lite (Full has no RAW IQ there either: Lite is a VibeServer only) nor an Icom (no IQ). */
+export const simpleRawIqOffered = (o: { lite: boolean; icom: boolean }) => !o.lite && !o.icom;
 
 /**
  * ★★★ WHAT A SIMPLE SERVER RUNS WITH BESIDES ITS FOUR: the RADIO's own settings — what the aerial and the hardware need,
@@ -100,14 +128,22 @@ export const RADIO_KEYS = [
 export const LAN_ONLY_OFF: Record<string, string | boolean> = {
   communityMap: false, pskrOn: false, wsprnetOn: false, dmrIdLookup: false,
   adsbFeed: '', bgDecode: '', dxScan: '',
+  // ★★★ beta96 (Stuart 11-26) …and the engine REFUSES a client that is not on the home network (private IPv4, link-local,
+  //     ULA, the box's own IPv6 prefixes) — the RTL-TCP door's rule, LocalSdrShim acceptLoop. Not only "nothing invites
+  //     the internet in": a port an owner forwards by hand still answers nobody outside.
+  lanOnly: true,
 };
 
 /** What Simple sends to Start: its four, and the mark. The server merges them into the store (simpleMerge). */
-export function simpleStartConfig(o: { name: string; mdnsName: string; rate: number; topRate: number; fps: number }) {
+export function simpleStartConfig(o: { name: string; mdnsName: string; rate: number; topRate: number; fps: number;
+                                       pin?: string; rawIq?: number }) {
   const name = String(o.name || '').trim() || 'VibeSDR';
   const rate = Math.max(0, Math.round(o.rate || 0));
   return {
     simple: true,
+    // ★ only when the screen has them (Simple's own); a start that does not (remote setup's) leaves the stored ones alone
+    ...(o.pin !== undefined ? { simplePin: pinTyped(o.pin) } : {}),
+    ...(o.rawIq !== undefined ? { simpleRawIq: o.rawIq === 1 ? 1 : 0 } : {}),
     name,
     mdnsName: String(o.mdnsName || '').trim(),
     // ★ 0 = listeners choose their span: start at the radio's top rate (its own list), never pin.
@@ -131,8 +167,11 @@ export function simpleView(cfg: Record<string, unknown>): Record<string, unknown
   const out: Record<string, unknown> = {};
   for (const k of [...SIMPLE_KEYS, ...RADIO_KEYS]) if (k in cfg) out[k] = cfg[k];
   Object.assign(out, LAN_ONLY_OFF);
-  // ★ One listener's radio, as Simple always was; no PIN (local network only), the web page on.
-  out.maxUsers = 1; out.advanced = false; out.pin = ''; out.webServer = true;
+  // ★ One listener's radio, as Simple always was; Simple's own PIN (none unless typed), the web page on.
+  out.maxUsers = 1; out.advanced = false; out.webServer = true;
+  out.pin = pinProblem(String(cfg.simplePin ?? '')) ? '' : String(cfg.simplePin ?? '');
+  // ★ RAW IQ OUT: Off or the local network — never public (LAN only); the stream ceiling is the radio's own span.
+  out.rawIq = Number(cfg.simpleRawIq) === 1 ? 1 : 0; out.rawIqMax = out.rawIq ? 1 : 0; out.rawIqLanMaxHz = 0;
   return out;
 }
 

@@ -110,9 +110,100 @@ export function opModeSummary(use: 'single' | 'locked', single: string, singleNa
   return 'Locked ' + mhz(centreHz - rateHz / 2) + '–' + mhz(centreHz + rateHz / 2) + ' MHz';
 }
 
+/** ★★★ beta96 (Stuart 11-26) PSK Reporter is ADVICE (amber), never a blocker — and the uploader sends NOTHING until the name is
+ *  valid (vibe_spot_report.h receiverNameOk: 3–20 of letters, digits, / -, with a letter — the Setup page's rule). */
+export function pskrNameOk(n: string): boolean {
+  const c = String(n || '').trim().replace(/[^A-Za-z0-9/-]/g, '').slice(0, 20);
+  return c.length >= 3 && /[A-Za-z]/.test(c);
+}
+export function pskrAdvice(on: boolean, call: string): string {
+  if (!on || pskrNameOk(call)) return '';
+  return String(call || '').trim() ? 'PSK Reporter: that receiver name is not valid, so no spots are sent'
+                                    : 'PSK Reporter: no callsign, so no spots are sent';
+}
+
 /** No location: satellites and maps need one (the satellite engine's own "this server has no location set"). */
 export function locationMust(mode: string, hasPlace: boolean, moving: boolean): string {
   if (moving) return '';   // ★ on the move: the nearest town is the location
   if (mode === 'manual' && hasPlace) return '';
   return 'Location not set: satellites and maps need it';
+}
+
+/* ══ ★★★ beta96 (Stuart 11-26) THREE STATES, AND RED ONLY WHEN START IS REFUSED ════════════════════════════════════════════
+ *  GREEN  set up / nothing needed.
+ *  AMBER  something worth setting that does not stop the server (no location: satellites and maps; PSK Reporter with no
+ *         callsign; remote settings off). Calm: a small mark and the reason in the one line — never opened by itself.
+ *  RED !  a setting that PREVENTS the start (no admin password, a flight-tracker entry Start refuses, background profiles the
+ *         engine refuses, a malformed Icom CI-V address). Shown red ONLY after the owner pressed START and it was refused:
+ *         that tab is selected, the section opened and marked red with the reason, Start says what is missing. It stays red
+ *         until it is fixed. Before a START a blocking section reads AMBER — browsing never shouts.
+ *  ★ ONE RULE SET WITH THE WEB SETUP PAGE (vibe_setup_page.h SEC_RULES): the same rule names, blocking or advisory, and
+ *    scripts/test_setup_sections.ts holds the two lists together. The app has no directory-address / Beast / modes-all-off
+ *    refusals of its own (its Start never made them), and the page has no admin-password / Icom / background ones (the page
+ *    is signed in with the password; the others are the phone's). */
+export type SecTone = 'green' | 'amber' | 'red';
+export const RULES = {
+  /** the web page's (SEC_RULES there) */
+  web: { block: ['dir', 'modes', 'flight-trackers', 'beast', 'pskr-invalid', 'radio-never-set-up'],
+         advise: ['location', 'pskr-no-callsign', 'radio-not-detected'] },
+  /** the app's — the rule names each SecDef's `block` / `advise` carries */
+  app: { block: ['admin-password', 'flight-trackers', 'background-profile', 'icom-civ'],
+         advise: ['location', 'pskr-no-callsign', 'remote-settings-off'] },
+} as const;
+/** A rule that exists on both sides must be the same kind on both (test_setup_sections.ts). */
+export function rulesAgree(): string[] {
+  const bad: string[] = [];
+  const kind = (side: { block: readonly string[]; advise: readonly string[] }, r: string) =>
+    side.block.includes(r) ? 'block' : side.advise.includes(r) ? 'advise' : '';
+  for (const r of [...RULES.web.block, ...RULES.web.advise]) {
+    const a = kind(RULES.app, r), w = kind(RULES.web, r);
+    if (a && a !== w) bad.push(r);
+  }
+  return bad;
+}
+
+/** The section's state: red only once START was tried and refused for it (and still is); otherwise the blocking reason reads
+ *  amber, like any advice; nothing to say = green. `line` is what the header says under the title. */
+export function secState(o: { summary: string; block: string; advise: string; tried: boolean }): { tone: SecTone; line: string; must: string } {
+  if (o.block && o.tried) return { tone: 'red', line: '! ' + o.block, must: o.block };
+  if (o.block) return { tone: 'amber', line: o.block, must: '' };
+  if (o.advise) return { tone: 'amber', line: o.advise, must: '' };
+  return { tone: 'green', line: o.summary, must: '' };
+}
+
+/** START pressed: the first section that blocks it, in the order drawn — SERVER tab before RADIO — and every blocker (all of
+ *  them are marked tried, so each shows red; the first one's tab is selected and it is opened). null = Start may go. */
+export function startRefusal<T extends { key: string; group: SectionGroup; block: string; title: string }>(secs: T[]):
+    { first: T; all: T[]; line: string } | null {
+  const all = secs.filter((s) => !!s.block);
+  if (!all.length) return null;
+  const first = all.find((s) => s.group === 'server') ?? all[0];
+  const more = all.length > 1 ? ` (and ${all.length - 1} more, marked red)` : '';
+  return { first, all, line: `Not started — ${first.title}: ${first.block}${more}.` };
+}
+
+/** The tried set after a START: every current blocker added; anything no longer blocking forgotten (red until fixed). */
+export function triedAfterStart(prev: Record<string, boolean>, blockers: string[]): Record<string, boolean> {
+  const out: Record<string, boolean> = { ...prev };
+  for (const k of blockers) out[k] = true;
+  return out;
+}
+export function triedPrune(prev: Record<string, boolean>, blockingNow: (key: string) => boolean): Record<string, boolean> {
+  let changed = false;
+  const out: Record<string, boolean> = {};
+  for (const k of Object.keys(prev)) { if (blockingNow(k)) out[k] = true; else changed = true; }
+  return changed ? out : prev;
+}
+
+/** ★★★ beta96 FULL IS TABBED (Stuart 11-26: "works like the web Setup page") — SERVER | RADIO, the radio being this device's. */
+export type FullTab = 'server' | 'radio';
+export const FULL_TABS: ReadonlyArray<{ id: FullTab; label: string }> = [{ id: 'server', label: 'SERVER' }, { id: 'radio', label: 'RADIO' }];
+/** The tab label for the radio: the radio's own name when known, as the web page's tab does. */
+export const radioTabLabel = (model: string) => (model && model.trim() ? 'RADIO · ' + model.trim() : 'RADIO');
+/** A START refused for these sections: forget "closed by hand while red" for them, so each opens again. */
+export function reopenFor(m: SectionMemo, keys: string[]): SectionMemo {
+  const dismissed = { ...m.dismissed };
+  let changed = false;
+  for (const k of keys) if (k in dismissed) { delete dismissed[k]; changed = true; }
+  return changed ? { ...m, dismissed } : m;
 }

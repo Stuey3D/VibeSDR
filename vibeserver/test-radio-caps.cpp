@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
         no(c, "Icom", { "wfm", "rds", "tone", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "drm", "dab", "spotsband", "ism",
                         "lora", "loraaprs", "fanet", "meshcom", "ndb", "ais", "aisstore", "adsb", "commb", "same",
                         "dvsig",      // ★ V12 DV ID reads IQ, as M17
-                        "avdata", "avdata+8m",
+                        "avdata", "avdata+8m", "ais+8m",
                         "vormap" });  // ★ V12 the VOR / ILS map: a whole-radio IQ mode
         ok(!c.s.usage && !c.s.vfoB && !c.s.rawIq && !c.s.nbWide && !c.s.landing && !c.s.gain && !c.s.hardware,
            "Icom: no usage chooser, VFO A/B, Raw IQ, impulse NB, landing, gain or hardware card");
@@ -62,6 +62,7 @@ int main(int argc, char** argv) {
         // ★★ V12 2026-11-24 the datalink yes; its 8 MS/s switch for ACARS + VDL2 never (an RTL tops out at 2.4 MS/s)
         yes(c, "RTL (no DS)", { "avdata" });
         no(c, "RTL (no DS)", { "avdata+8m" });
+        no(c, "RTL (no DS)", { "ais+8m" });   // ★★★ beta96 MARITIME's 8 MS/s switch: never on an RTL
         yes(c, "RTL (no DS)", { "vormap" });   // ★ V12 the VOR / ILS map: 108–118 MHz at 2.4 MS/s (5 windows)
         ok(c.s.usage && c.s.vfoB && c.s.rawIq && c.s.nbWide && c.s.fmDefaults && c.s.dabLanding && c.s.adsbLanding && c.s.dxScan,
            "RTL: the IQ settings, FM defaults, both landings and the DX scanner");
@@ -92,7 +93,8 @@ int main(int argc, char** argv) {
                        "vormap" });   // ★★ V12 2026-11-24 the VOR map too: 14 windows, a slower sweep (Stuart: "it can do it just slower")
         no(c, "HF+", { "dab", "adsb", "commb", "ism", "lora", "loraaprs", "fanet", "meshcom",
                        "sondes",          // ★ it stops at 260 MHz
-                       "avdata+8m" });    // ★ 912 kS/s: no 8 MS/s switch drawn
+                       "avdata+8m",       // ★ 912 kS/s: no 8 MS/s switch drawn
+                       "ais+8m" });       // ★★★ beta96 …nor MARITIME's
         ok(!c.s.dabLanding && !c.s.adsbLanding && c.s.fmDefaults && c.s.dxScan, "HF+: no DAB / ADS-B landing; FM defaults and DX scan");
         ok(c.s.ppb && !c.s.ppm && !c.s.biasT && !c.s.directSampling, "HF+: ppb, no ppm, bias-T or direct sampling");
         ok(c.hints.empty(), "HF+: no hint (nothing the owner could change)");
@@ -109,6 +111,7 @@ int main(int argc, char** argv) {
         yes(c, "R2", { "wfm", "dab", "adsb", "ism", "ais", "ft8", "spotsband", "rtty", "vormap" });
         no(c, "R2", { "drm", "amst", "navtex", "wefax", "time", "ndb", "sitora" });
         yes(c, "R2", { "avdata", "avdata+8m" });   // ★ 10 MS/s: the switch is drawn
+        yes(c, "R2", { "ais", "dsc", "ais+8m" });  // ★★★ beta96 MARITIME's too
         ok(c.hints.size() == 1 && c.hints[0].find("24 MHz") != std::string::npos, "R2: the upconverter hint");
     }
     // ── HACKRF (1 MHz – 6 GHz) ──
@@ -116,7 +119,7 @@ int main(int argc, char** argv) {
         const Caps c = of("hackrf");
         yes(c, "HackRF", { "wfm", "dab", "adsb", "ism", "ais", "drm", "wefax", "time", "navtex", "vormap" });
         no(c, "HackRF", { "ndb" });   // ★ nothing below 1 MHz: no LF (the top of medium wave, 1–1.7 MHz, it reaches)
-        yes(c, "HackRF", { "amst", "avdata+8m" });
+        yes(c, "HackRF", { "amst", "avdata+8m", "ais+8m" });
         ok(c.hints.empty(), "HackRF: no hint");
     }
     // ── USRP B2xx (50 MHz – 6 GHz) ──

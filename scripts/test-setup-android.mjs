@@ -116,10 +116,11 @@ for (const c of CASES) {
   const isCtrl = (el) => /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || el.classList.contains('mode');
   const notHere = ALL.filter((id) => !supSet.has(id) && doc.getElementById(id) && isCtrl(doc.getElementById(id)) && !hiddenByPrune(doc.getElementById(id)) && !inHiddenModal(doc.getElementById(id)));
   ok(notHere.length === 0, `${c.name}: no other radio's control survives${notHere.length ? ' — ' + notHere.join(' ') : ''}`);
-  // Simple: the Advanced-only controls hide, the rest stay.
-  const s = render(c.pf, { webServer: true, compressAudio: true, advanced: false });
+  // ★★★ beta96 no Simple / Advanced on the phone any more: with the web client OFF (no admin page) the admin-page rows hide,
+  //     the rest stay; with it on, everything the phone offers is shown (the stored `advanced` no longer decides).
+  const s = render(c.pf, { webServer: false, compressAudio: true, advanced: true });
   const advShown = s.adv.filter((id) => s.doc.getElementById(id) && !hiddenByPrune(s.doc.getElementById(id)));
-  ok(advShown.length === 0, `${c.name}: Simple hides every Advanced-only control${advShown.length ? ' — ' + advShown.join(' ') : ''}`);
+  ok(advShown.length === 0, `${c.name}: web client off hides every admin-page control${advShown.length ? ' — ' + advShown.join(' ') : ''}`);
   const restHidden = s.sup.filter((id) => !s.adv.includes(id) && s.doc.getElementById(id) && hiddenByPrune(s.doc.getElementById(id)));
   ok(restHidden.length === 0, `${c.name}: …and keeps the rest${restHidden.length ? ' — hidden ' + restHidden.join(' ') : ''}`);
 }
@@ -141,21 +142,17 @@ for (const c of CASES) {
   ok(vis(rsp, 'rfNotch') && vis(rsp, 'rspVibeAgc') && vis(rsp, 'antennaMap') && vis(rsp, 'ppm') && !vis(rsp, 'adsb256'), 'RSP: its card, sockets by band and ppm; none of the RTL\'s');
 }
 
-// ── The phone's own server card, and Simple/Advanced live ──
+// ── The phone's own server card — ★★★ beta96 no Simple / Advanced any more: the full set follows the web client ──
 {
   const { doc } = render({ driver: 'rtl', tunnel: true }, { webServer: true, compressAudio: false, advanced: false });
   const card = doc.getElementById('androidSrvCard');
   ok(!!card && card.parentElement && card.parentElement.id === 'serverPane', 'the "This phone\'s server" card is drawn on the server tab');
-  ok(doc.getElementById('androidWebServer').checked && !doc.getElementById('androidCompress').checked && doc.getElementById('androidAdvanced').value === '0',
-     '…filled from the phone (web on, compression off, Simple)');
-  ok(hiddenByPrune(doc.getElementById('users')), 'Simple: the listener count is hidden');
-  doc.getElementById('androidAdvanced').value = '1';
-  doc.getElementById('androidAdvanced').dispatchEvent(new doc.defaultView.Event('change'));
-  ok(!hiddenByPrune(doc.getElementById('users')) && !hiddenByPrune(doc.getElementById('gainMax')), 'choosing Advanced shows its controls at once');
+  ok(doc.getElementById('androidWebServer').checked && !doc.getElementById('androidCompress').checked && !doc.getElementById('androidAdvanced'),
+     '…filled from the phone (web on, compression off), and no Simple / Advanced choice (beta96)');
+  ok(!hiddenByPrune(doc.getElementById('users')) && !hiddenByPrune(doc.getElementById('gainMax')), 'web client on: the full set (listeners, gain limits) is shown');
   doc.getElementById('androidWebServer').checked = false;
   doc.getElementById('androidWebServer').dispatchEvent(new doc.defaultView.Event('change'));
-  ok(doc.getElementById('androidAdvanced').value === '0' && doc.getElementById('androidAdvanced').disabled && hiddenByPrune(doc.getElementById('users')),
-     'no web client → Simple, and Advanced cannot be chosen (the admin page IS the web client)');
+  ok(hiddenByPrune(doc.getElementById('users')), 'no web client → the admin-page rows go with it (the admin page IS the web client)');
 }
 
 // ── The device-only facts ──

@@ -533,6 +533,8 @@ public:
     static void setAsnHandler(AsnFn fn);
     /** Serve the browser client at GET /. Off = app-only (a browser gets 403). */
     static void setVibeServerWebEnabled(bool on);
+    /** ★★★ beta96 VibeServer Simple: refuse every client not on the home network (the RTL-TCP door's isPrivateIp rule). */
+    static void setVibeServerLanOnly(bool on);
     /** Pin the capture rate (Hz). 0 = client-controlled. */
     static void setVibeServerLockedRate(double rate);
     /** ★★★ PIN THE HARDWARE CENTRE (Hz). 0 = follows the VFO, as it always has.

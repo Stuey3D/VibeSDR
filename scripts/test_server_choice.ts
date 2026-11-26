@@ -44,7 +44,25 @@ const view = SC.simpleView(merged);
 ok(view.communityMap === false && view.pskrOn === false && view.wsprnetOn === false && view.dmrIdLookup === false
    && view.adsbFeed === '' && view.bgDecode === '' && view.dxScan === '', 'it RUNS local-network-only: no community map, no feeds, no background');
 ok(view.maxUsers === 1 && view.advanced === false && view.pin === '' && !('lockedCentre' in view) && !('landingMessage' in view),
-   '…one listener, no PIN, Full\'s server behaviour left in the store');
+   '…one listener, no PIN (none typed — Full\'s 1234 is NOT used), Full\'s server behaviour left in the store');
+
+// ── ★★★ beta96 (Stuart 11-26) the entry labels, Simple's PIN, LAN only, RAW IQ ──────────────────────────────────────────
+ok(SC.ENTRY_LABELS.join(' | ') === 'VibeServer Simple (Local Network Only) | VibeServer Full | RTL-TCP (Compatibility)',
+   `entry labels exactly as Stuart gave them (${SC.ENTRY_LABELS.join(' | ')})`);
+ok(SC.pinProblem('') === '' && SC.pinProblem('1234') === '' && SC.pinProblem('123456789012') === ''
+   && SC.pinProblem('1234567890123') !== '' && SC.pinProblem('12a4') !== '', 'PIN rule = the server PIN\'s: optional, digits only, up to 12');
+ok(SC.pinTyped(' 12-34ab5678901234 ') === '123456789012', 'the PIN box keeps digits only, 12 at most');
+const withPin = SC.simpleView(SC.simpleMerge(full, SC.simpleStartConfig({ name: 'k', mdnsName: '', rate: 0, topRate: 1, fps: 10, pin: '4321', rawIq: 1 })));
+ok(withPin.pin === '4321', 'Simple\'s PIN IS ENFORCED: the view runs it as the server PIN');
+ok(SC.simpleMerge(full, SC.simpleStartConfig({ name: 'k', mdnsName: '', rate: 0, topRate: 1, fps: 10, pin: '4321' })).pin === '1234',
+   '…under its own key: Full\'s stored PIN is untouched');
+ok(SC.simpleView({ ...merged, simplePin: '12x' }).pin === '', 'a stored PIN that breaks the rule runs as none (never a PIN nobody can type)');
+ok(view.lanOnly === true && withPin.lanOnly === true, 'LAN ONLY ENFORCED: every Simple view carries lanOnly (the engine refuses non-local clients)');
+ok(withPin.rawIq === 1 && withPin.rawIqMax === 1 && withPin.rawIqLanMaxHz === 0, 'RAW IQ OUT on Simple: local network');
+ok(SC.simpleView({ ...merged, simpleRawIq: 2 }).rawIq === 0 && view.rawIq === 0, '…never public (a 2 runs as off), off by default');
+ok(SC.SIMPLE_RAWIQ_CHOICES.map((c) => c[1]).join() === 'Off,Local only', 'Simple\'s RAW IQ choices: Off / Local only (no dead public choice)');
+ok(!SC.simpleRawIqOffered({ lite: true, icom: false }) && !SC.simpleRawIqOffered({ lite: false, icom: true })
+   && SC.simpleRawIqOffered({ lite: false, icom: false }), 'RAW IQ OUT not drawn on Lite or an Icom (as in Full)');
 ok(view.biasT === true && view.ppm === 3 && view.adminPassword === 'hunter22', '…the radio\'s own settings and the admin password kept');
 ok(SC.isSimpleConfig(merged) && !SC.isSimpleConfig(full), 'the mark');
 
@@ -69,7 +87,7 @@ const boot = rd('android/app/src/main/java/com/vibesdr/app/VibeServerBoot.kt');
 const kList = (name: string) => { const m = boot.match(new RegExp(`val ${name} = listOf\\(([^)]*)\\)`)); return m ? [...m[1].matchAll(/"([A-Za-z0-9]+)"/g)].map((x) => x[1]) : []; };
 ok(kList('SIMPLE_KEYS').join() === SC.SIMPLE_KEYS.join(), 'SIMPLE_KEYS: Kotlin = TypeScript');
 ok(kList('RADIO_KEYS').join() === SC.RADIO_KEYS.join(), 'RADIO_KEYS: Kotlin = TypeScript');
-ok([...kList('LAN_ONLY_OFF_FALSE'), ...kList('LAN_ONLY_OFF_EMPTY')].sort().join() === Object.keys(SC.LAN_ONLY_OFF).sort().join(),
+ok([...kList('LAN_ONLY_OFF_FALSE'), ...kList('LAN_ONLY_OFF_EMPTY'), ...kList('LAN_ONLY_OFF_TRUE')].sort().join() === Object.keys(SC.LAN_ONLY_OFF).sort().join(),
    'LAN_ONLY_OFF: Kotlin = TypeScript');
 const ops = rd('android/app/src/main/java/com/vibesdr/app/VibeServerOps.kt');
 const slug = ops.match(/fun hostSlug\(name: String\): String \{[\s\S]*?\n    \}/)?.[0] ?? '';
@@ -81,6 +99,16 @@ const remote = rd('android/app/src/main/java/com/vibesdr/app/VibeRemoteSetup.kt'
 const shim = rd('android/app/src/main/cpp/local_sdr_shim.cpp');
 const page = rd('android/app/src/main/cpp/vibe_setup_page.h');
 ok(/val cfg = effective\(cfgIn\)/.test(boot), 'every start path runs the Simple VIEW (applyAndStart)');
+ok(/setVibeServerLanOnly\(cfg\.b\("lanOnly", false\)\)/.test(boot), 'LAN only reaches the engine on every start (absent = off: Full as before)');
+ok(/out\.put\("pin", if \(simplePinOk\(sp\)\) sp else ""\)/.test(boot) && /"rawIq", ri/.test(boot), 'Kotlin view: Simple\'s PIN and RAW IQ (the TS twin)');
+ok(/nativeSetVibeServerLanOnly/.test(rd('android/app/src/main/cpp/vibe_localsdr_jni.cpp')), 'the JNI entry exists');
+{
+  const h = shim.slice(shim.indexOf('void handleConnection('));
+  const gate = h.slice(h.indexOf('g_vsLanOnly.load('), h.indexOf('g_vsLanOnly.load(') + 900);
+  ok(/!isPrivateIp\(peer\) \|\| viaTunnel\(\*sock\)/.test(gate) && /socketPeerAddress\(\)/.test(gate),
+     'the engine refuses a non-local client with the RTL-TCP door\'s own rule (isPrivateIp on the REAL peer), and the tunnel');
+  ok(h.indexOf('g_vsLanOnly.load(') < h.indexOf('const std::string reqPath'), '…before any route answers');
+}
 ok(/!VibeServerBoot\.isSimple\(cfg\)\) VibeTunnel\.restoreIfWanted/.test(ops) && /!VibeServerBoot\.isSimple\(cfg\)\) VibeTunnel\.restoreIfWanted/.test(restore),
    'LAN only: no listing put back for a Simple server — Start AND the restore');
 ok(/isSimple\(cfg\)\) try \{ VibeTunnel\.pauseForServerStop/.test(ops), 'LAN only: a tunnel still up is closed');
@@ -129,6 +157,10 @@ ok(/multiSet\(\[\[NAME_KEY, n\], \['vs_rate'/.test(simple) && /setMdnsName\(mdns
 ok(simple.indexOf('testID="simple-start"') < simple.indexOf('>SERVER NAME<'), 'Simple: START first');
 ok(/replace\('ServerMode', \{ vibeServerOnly: true, keepOnExit/.test(simple), 'Simple → Full hands the running server over');
 ok(/<DeviceReset /.test(simple) && /<DeviceCredentials /.test(simple), 'Simple: password change and reset too');
+ok(simple.indexOf('testID="simple-start"') < simple.indexOf('testID="simple-pin"') && /pinProblem\(pin\)/.test(simple)
+   && /if \(pinWhy\) \{ setError/.test(simple), 'Simple: a PIN field under START, refused at Start if it breaks the rule');
+ok(/SIMPLE_RAWIQ_CHOICES\.map/.test(simple) && /rawIq: rawIqOk \? rawIq : 0/.test(simple), 'Simple: RAW IQ OUT (Off / Local only), sent with Start');
+ok(/CHOICE_WORDS\[c\]\.title/.test(rd('src/screens/ServerChoiceScreen.tsx')), 'the entry draws the labels from CHOICE_WORDS');
 const choice = rd('src/screens/ServerChoiceScreen.tsx');
 ok(/if \(choice\) \{ navigation\.replace\(routeFor\(choice\)/.test(choice), 'the remembered choice opens straight away');
 ok(/'‹ Server type'|‹ Server type/.test(simple + rd('src/components/ServerTopBar.tsx') + rd('src/screens/RtlTcpServerScreen.tsx')),

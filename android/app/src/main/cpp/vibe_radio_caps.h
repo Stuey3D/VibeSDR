@@ -62,6 +62,7 @@ inline const std::vector<const char*>& allModes() {
         "dsc", "sitora", "same", "selcal", "mfsk", "hell", "ndb", "jtty", "ais", "aisstore", "aprs", "adsb", "commb", "loraaprs", "fanet", "meshcom",
         "hfdl", "avdata",   // ★ V12 aviation (docs/v12/AVIATION.md): HFDL on the dial, Aircraft datalink (ACARS / VDL2)
         "avdata+8m",        // ★ V12 2026-11-24 …its option: raise the capture to 8 MS/s for ACARS + VDL2 together (a "+" token)
+        "ais+8m",           // ★★★ beta96 AIS's option: MARITIME (AIS + DSC channel 70) may raise the capture to 8 MS/s (a "+" token)
         "sondes",           // ★ V12 RS41 radiosondes (docs/v12/RS41.md): a whole-radio mode on 400–406 MHz
         "balloon",          // ★ V12 balloons (docs/v12/BALLOONS.md): a listener's decoder on USB, 70 cm
         "tones",            // ★ V12 DTMF + 5-tone selcall (docs/v12/TONES.md): a listener's decoder on NFM / AM, any frequency
@@ -213,6 +214,10 @@ inline Caps compute(const Facts& f) {
         /* ★★ …and its 8 MS/s switch for ACARS + VDL2 together: only where BOTH sets are in reach and the radio lists a rate
          *  of 8 MS/s or more (an RSP, an Airspy R2, a HackRF, a USRP) — never an RTL or the HF+ (AGENTS.md: no dead switch). */
         if (id == "avdata+8m") return rateKnown && f.maxRateHz >= 8.0e6 - 1000 && holds(R, 131.50e6, 136.99e6);
+        /* ★★★ beta96 …and MARITIME's (Stuart 11-26: "like the datalink's avdata+8m"): only where channel 70 AND AIS are both in
+         *  reach (156.5125–162.0375 MHz) and the radio lists 8 MS/s or more (an RSP, an Airspy R2, a HackRF, a USRP) — never an
+         *  RTL or the HF+ (AGENTS.md: no dead switch). Dropped below when AIS or DSC cannot run here. */
+        if (id == "ais+8m") return rateKnown && f.maxRateHz >= 8.0e6 - 1000 && holds(R, 156.51e6, 162.04e6);
         // ★ V12 Radiosondes: one 2 MHz band of 400–406 MHz whole — not the HF+ (it stops short of 400 MHz), not an Icom (no IQ)
         if (id == "sondes") return d != "airspyhf" && (holds(R, 400.0e6, 402.0e6) || holds(R, 402.0e6, 404.0e6) || holds(R, 404.0e6, 406.0e6));
         /* ★ V12 the VOR / ILS map: the whole navaid band (108–117.95 MHz and its windows' edges) at ≥ 700 kS/s (vibevormap::kMinRateHz —
@@ -259,6 +264,7 @@ inline Caps compute(const Facts& f) {
     };
     drop("rds", "wfm"); drop("tone", "nfm"); drop("lora", "ism"); drop("aisstore", "ais"); drop("spotsband", "spots"); drop("commb", "adsb");
     drop("loraaprs", "lora"); drop("fanet", "lora"); drop("meshcom", "lora"); drop("avdata+8m", "avdata");
+    drop("ais+8m", "ais"); drop("ais+8m", "dsc");   // ★★★ beta96 MARITIME needs both
 
     // ── the settings ──
     Settings& s = c.s;

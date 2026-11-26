@@ -90,6 +90,11 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
   ok(hwOf(keepAvailLocal({ ...base, driver: 'sdrplay', rate: 8_000_000 })).hw, 'RSP 8 MS/s: drawn');
   ok(hwOf(keepAvailLocal({ ...base, driver: 'hackrf', rate: 20_000_000 })).hw && hwOf(keepAvailLocal({ ...base, driver: 'airspy', rate: 10_000_000 })).hw, 'HackRF 20, Airspy R2 10: drawn');
   ok(/DSC is switched off/.test(hwOf(keepAvailLocal({ ...base, driver: 'usrp', rate: 8_000_000, blockedModes: 'dsc' })).why), 'DSC switched off: greyed with the reason');
+  // ★★★ beta96 the owner's "ais+8m": MARITIME drawn at 2 MS/s where the radio can take 8 MS/s — never an RTL, never a Mini
+  ok(!hwOf(keepAvailLocal({ ...base, driver: 'sdrplay', rate: 2_000_000 })).hw, 'RSP 2 MS/s, switch off: not drawn');
+  ok(hwOf(keepAvailLocal({ ...base, driver: 'sdrplay', rate: 2_000_000, blockedModes: 'ais+8m', ais8mOk: true })).hw, 'RSP 2 MS/s, ais+8m on: drawn (the capture will be raised)');
+  ok(!hwOf(keepAvailLocal({ ...base, driver: 'airspy', rate: 3_000_000, blockedModes: 'ais+8m', ais8mOk: false })).hw, 'Airspy Mini (no 8 MS/s in its caps), switch on: not drawn');
+  ok(!hwOf(keepAvailLocal({ ...base, blockedModes: 'ais+8m', ais8mOk: false })).hw, 'RTL, switch on: not drawn');
   const rsp = keepAvailLocal({ ...base, driver: 'sdrplay', rate: 8_000_000 });
   let g = keepGate(rsp.avail, rsp.comboOk, rsp.comboWhy, 8_000_000, ['aisdsc']);
   ok(find(g, 'aisdsc').on && !find(g, 'ais').enabled && /AIS \+ DSC \(channel 70\) is ticked/.test(find(g, 'ais').why), 'ticked: AIS greyed — ' + find(g, 'ais').why);

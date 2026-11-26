@@ -230,6 +230,13 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 .card.sec.secOpen > .secHead{margin-bottom:10px}
 .card.sec h2.secOrig{display:none}
 .card.sec.secMust{border-color:var(--bad)}
+/* \u2605\u2605\u2605 beta96 (Stuart 11-26) THREE STATES, calm until a save: a small mark before the title — green (set up / nothing
+   needed), amber (worth setting, the server runs without it) — and RED with "!" only after a Save that it stopped. */
+.secHead .secMark{flex:none;width:9px;height:9px;border-radius:50%;margin-top:7px;background:var(--line)}
+.card.sec.secOk > .secHead .secMark{background:var(--good)}
+.card.sec.secWarn > .secHead .secMark{background:var(--amber)}
+.card.sec.secWarn > .secHead .secSum{color:var(--amber)}
+.card.sec.secMust > .secHead .secMark{background:var(--bad)}
 .card.sec.secMust > .secHead .secTitle,.card.sec.secMust > .secHead .secChev{color:var(--bad)}
 .card.sec.secMust > .secHead .secSum{color:#ff9b9b;white-space:normal}
 #secAllRow{display:flex;gap:8px;justify-content:flex-end;margin:0 0 10px}
@@ -1124,12 +1131,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <div class="hint">Off: browsers get nothing &mdash; only the VibeSDR app can connect. This page stays.</div></label>
         <label><input type="checkbox" id="androidCompress"> <span class="lbl">Compress the spectrum and audio for the app</span>
           <div class="hint">On is right for nearly everyone; off sends far more data.</div></label>
-        <label><span class="lbl">Mode</span>
-          <select id="androidAdvanced">
-            <option value="0">Simple &mdash; plug in and share</option>
-            <option value="1">Advanced &mdash; shared, managed, public</option>
-          </select>
-          <div class="hint" id="androidAdvancedHint"></div></label>
+        <!-- ★★★ beta96 (Stuart 11-26) the phone's old Simple / Advanced choice is gone: the phone's Full server is always the
+             full screen, with the web client (its admin page) on; "Simple" is only the app's VibeServer Simple entry. One
+             listener or many is the radio tab's Listeners and Operating mode. -->
       </div>
       <!-- ★★★ WINDOWS: START WHEN WINDOWS STARTS (Stuart, 2026-10-26: "we need a button to start on boot"). Only on a
            Windows server. "Starts at boot" = a Scheduled Task as Windows' restricted LOCAL SERVICE account, nobody
@@ -3269,6 +3273,20 @@ function benchApplyDefaults() {
       benchNote(avbBox, "ACARS + VDL2 together is off: both decoders at 8 MS/s measured " + Math.round(avb.pct) + "% of a core here at their busiest thread. Tick it to use it anyway — ACARS and VDL2 each work either way.");
     }
   }
+  // ★★★ beta96 MARITIME AT 8 MS/s ("ais+8m", under AIS — Stuart 11-26: exactly as dec_avboth): a GREEN dec_aisdsc ticks it
+  //     ON on a fresh setup, anything else leaves it off with the figure. Only where the box is drawn (caps "ais+8m").
+  //     Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
+  const amb = row("dec_aisdsc");
+  const ambBox = document.querySelector('input[data-mode="ais+8m"]');
+  if (amb && amb.grade !== "none" && ambBox) {
+    if (amb.grade === "green") {
+      if (!ambBox.checked) { ambBox.checked = true; ambBox.dispatchEvent(new Event("change")); }
+      benchNote(ambBox, "MARITIME at 8 MS/s is on: AIS + DSC together measured " + Math.round(amb.pct) + "% of a core here at its busiest thread, so it was turned on.");
+    } else {
+      if (ambBox.checked) { ambBox.checked = false; ambBox.dispatchEvent(new Event("change")); }
+      benchNote(ambBox, "MARITIME at 8 MS/s is off: AIS + DSC together measured " + Math.round(amb.pct) + "% of a core here at its busiest thread. Tick it to use it anyway — AIS works either way.");
+    }
+  }
   // ★★ V12 beta91 FT8 / FT4 DIG DEEPER is AUTOMATIC (ft8DeepAuto): nothing is written here — the box shows what the server
   //    decides from this benchmark until the owner makes a choice of their own (ft8DeepRefresh, from renderBench).
   // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
@@ -4001,6 +4019,10 @@ const AVDATA_TEXT_NOTICE = "ACARS messages are not meant for the public. Reading
 const AVDATA_8M_NOTICE = "Adds \u201cACARS + VDL2\u201d to the aircraft datalink\u2019s bands: picking it raises this radio\u2019s "
   + "capture to 8 MS/s so both sets of channels fit inside the flat part of its filter, and leaving gives your own rate back. "
   + "Without it, ACARS + VDL2 is offered only when the radio already runs at 6.1 MS/s or more. Never while you have pinned the rate.";
+/* \u2605\u2605\u2605 beta96 MARITIME's 8 MS/s option's line. ONE TEXT, TWO READERS: ServerModeScreen.tsx AIS_8M_NOTICE. */
+const AIS_8M_NOTICE = "Lets MARITIME (AIS + DSC channel 70) raise this radio\u2019s capture to 8 MS/s so channel 70 and both AIS "
+  + "channels fit inside the flat part of its filter, and leaving gives your own rate back. Without it, MARITIME is offered "
+  + "only when the radio already runs at 6.2 MS/s or more. Never while you have pinned the rate.";
 /* ★ V12 tones (docs/v12/TONES.md): beside the 5-tone opt-in — what it is and who sees it. */
 /** ★ ONE TEXT, TWO READERS: src/screens/ServerModeScreen.tsx ALE_AMD_NOTICE. */
 const ALE_AMD_NOTICE = "Off the amateur bands an ALE text message (AMD) is a private message between government, military "
@@ -4161,6 +4183,9 @@ const BLOCKABLE = [
    *  (every radio on this server shows them, with nobody in AIS). Ticked = kept; off = the store is neither written nor
    *  served. Under AIS: nothing to keep without it. */
   { id: "aisstore", label: "AIS: keep the ships for the SHIPPING MAP (in the gallery)", parent: "ais" },
+  /* ★★★ beta96 (Stuart 11-26, the datalink's "avdata+8m" for the sea): "+" token, IN the CSV when ticked. `cap`: drawn only
+   *  where the radio itself can (vibe_radio_caps.h "ais+8m": channel 70 and AIS in reach, a rate of 8 MS/s or more). */
+  { id: "ais+8m", label: "MARITIME: AIS + DSC together (raise the capture to 8 MS/s)", parent: "ais", on: true, cap: true },
   { id: "aprs",   label: "APRS" },
   /* ★ ADS-B (aircraft on 1090 MHz, a whole-radio mode) — the server enforced "adsb"; the page never offered it. */
   { id: "adsb",   label: "ADS-B aircraft" },
@@ -4386,7 +4411,7 @@ const MODE_GENS = {
 };
 /** The options' generations — evidence of when a list was written, never a NEW switch themselves. */
 const MODE_GEN_OPTIONS = { "lora+all": 63, "tones+digits": 80, "avdata+text": 80, "dvsig+ids": 87, "ale+amd": 87,
-                           "ft8+deep": 91, "ft8-deep": 91, "avdata+8m": 93 };
+                           "ft8+deep": 91, "ft8-deep": 91, "avdata+8m": 93, "ais+8m": 96 };
 const LISTEN_DEMODS = ["wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl",
                        "drm", "freedv", "m17", "dvsig"];
 const WHOLE_MODES = ["dab", "adsb", "ism", "ndb", "ais", "avdata", "sondes", "vormap"];
@@ -4526,8 +4551,9 @@ function androidKeeps(e, keep, advOff) {
 function androidPrune() {
   androidSrvCard();   // ★ first: the Simple/Advanced choice below is read from it
   const keep = new Set((cfg.android && Array.isArray(cfg.android.supported)) ? cfg.android.supported : []);
-  const adv = $("androidAdvanced") ? $("androidAdvanced").value === "1"
-            : !!(cfg.android && cfg.android.server && cfg.android.server.advanced);
+  // ★★★ beta96 no Simple / Advanced choice any more: the full set whenever the web client (the admin page) is on
+  const adv = $("androidWebServer") ? $("androidWebServer").checked
+            : !!(cfg.android && cfg.android.server && cfg.android.server.webServer !== false);
   const advOff = new Set(!adv && cfg.android && Array.isArray(cfg.android.advancedOnly) ? cfg.android.advancedOnly : []);
   const root = document.getElementById("setup");
   if (!root || !root.querySelectorAll) return;
@@ -4558,7 +4584,7 @@ function androidPrune() {
     + "The phone's own server screen shows every change made here.";
   androidDeviceCard();
 }
-/** ★★ beta88: the three server settings only a phone has — the web client, Opus for listeners, Simple/Advanced. */
+/** ★★ beta88: the server settings only a phone has — the web client, Opus for listeners (beta96: no Simple/Advanced). */
 function androidSrvCard() {
   const card = $("androidSrvCard");
   if (!card || card.__filled) return;
@@ -4566,26 +4592,13 @@ function androidSrvCard() {
   const s = (cfg.android && cfg.android.server) || {};
   $("androidWebServer").checked = s.webServer !== false;
   $("androidCompress").checked = s.compressAudio !== false;
-  $("androidAdvanced").value = s.advanced ? "1" : "0";
-  const sync = () => {
-    const web = $("androidWebServer").checked;
-    // ★ The phone's rule: no web client, no Advanced (the admin page IS the web client).
-    if (!web) $("androidAdvanced").value = "0";
-    $("androidAdvanced").disabled = !web;
-    $("androidAdvancedHint").textContent = !web
-      ? "Advanced needs the web client: its admin page is served to a browser."
-      : $("androidAdvanced").value === "1"
-        ? "Adds shared listening, tuning and gain limits, and the admin page. Its settings are shown below."
-        : "One listener at a time with the whole radio. Choose Advanced to share it or to limit where people may tune.";
-  };
-  $("androidWebServer").addEventListener("change", () => { sync(); androidPrune(); });
-  $("androidAdvanced").addEventListener("change", () => { sync(); androidPrune(); });
-  sync();
+  // ★ The phone's rule: no web client, no admin page — so the sharing / banning / limits rows go with it (androidPrune)
+  $("androidWebServer").addEventListener("change", () => { androidPrune(); });
 }
 function androidSrvCollect() {
   if (!$("androidWebServer")) return {};
   return { webServer: $("androidWebServer").checked, compressAudio: $("androidCompress").checked,
-           advanced: $("androidWebServer").checked && $("androidAdvanced").value === "1" };
+           advanced: $("androidWebServer").checked };   // ★★★ beta96 the phone's Full = the full set with the web client on
 }
 /** ★★ beta88: the phone's own front-end rows on the radio tab (filled from the radio, posted with it). */
 function androidRadioFill(r) {
@@ -4798,6 +4811,8 @@ function modeBlockRender() {
                                    + esc(AVDATA_TEXT_NOTICE) + `</div></div>`;
     if (m.id === "avdata+8m") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="avdata8mHint" style="margin:2px 0 0 24px">`
                                  + esc(AVDATA_8M_NOTICE) + `</div></div>`;
+    if (m.id === "ais+8m") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="ais8mHint" style="margin:2px 0 0 24px">`
+                              + esc(AIS_8M_NOTICE) + `</div></div>`;
     if (m.id === "tones+digits") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="tonesDigitsHint" style="margin:2px 0 0 24px">`
                                    + esc(TONES_DIGITS_NOTICE) + `</div></div>`;
     if (m.id === "dvsig+ids") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="dvsigIdsHint" style="margin:2px 0 0 24px">`
@@ -5124,7 +5139,9 @@ function keepFacts(r) {
       // ★★★ beta96 drawn only where the capture holds both (the server's word, or the form's new rate against its minRate)
       const need = s && s.minRate ? s.minRate : KEEP_MARITIME_MIN;
       const tunes = s ? s.tunes !== false : drv !== "icom" && drv !== "airspyhf";
-      hw = s && !(rate > 0 && rate !== (HW && HW.mapRate)) ? !!s.hw : tunes && rate >= need;
+      // ★★★ beta96 …or the owner's "ais+8m" ticked on a radio that can take 8 MS/s (the server's answer still wins once saved)
+      const boost = blocks.has("ais+8m") && capMode("ais+8m", r);
+      hw = s && !(rate > 0 && rate !== (HW && HW.mapRate)) ? !!s.hw || (tunes && boost) : tunes && (rate >= need || boost);
       why = blocks.has("ais") ? "AIS is switched off for this radio (Modes offered to listeners)."
           : blocks.has("dsc") ? "DSC is switched off for this radio (Modes offered to listeners)." : (s && s.hw && s.why && !/needs a capture/.test(s.why) ? s.why : "");
     } else if (blocks.has(m.block)) why = `${m.name} is switched off for this radio (Modes offered to listeners).`;
@@ -5729,6 +5746,7 @@ function modeBlockSummary() {
     + (ft8DeepOwner() ? ` FT8 / FT4 dig deeper: ${ft8DeepOwner() > 0 ? "on" : "off"} (your choice).` : "")
     + (all.includes("avdata+text") ? " Aircraft message text is shown to you." : "")
     + (all.includes("avdata+8m") && drawn("avdata+8m") ? " The aircraft datalink may raise the capture to 8 MS/s for ACARS + VDL2." : "")
+    + (all.includes("ais+8m") && drawn("ais+8m") ? " MARITIME may raise the capture to 8 MS/s for AIS + DSC." : "")
     + (all.includes("tones+digits") ? " 5-tone numbers are shown to you." : "")
     + (all.includes("dvsig+ids") ? " Digital-voice radio IDs off the amateur bands are shown to you." : "")
     + (all.includes("ale+amd") ? " ALE message text is shown to you." : "");
@@ -9607,7 +9625,7 @@ if ($("beastAddGo")) {
   $("beastAddrSave").onclick = async () => {
     const r0 = radio();
     const why = beastAddrWhy($("beastAddr").value);
-    if (why) { $("beastAddrMsg").textContent = "Not changed — " + why + "."; return; }
+    if (why) { $("beastAddrMsg").textContent = "Not changed — " + why + "."; secTried("radio:ads-b-beast-feed"); return; }
     try {
       const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), { method: "POST",
         body: JSON.stringify({ action: "beastaddr", serial: r0.serial, beastIn: $("beastAddr").value.trim() }) });
@@ -12057,10 +12075,8 @@ $("saveRadioBtn").onclick = async () => {
   const list = radioList();
   if (!list.length) return;
   // ★ This posts the whole machine too (collect()), so the same address rule holds here.
-  if (dirReachStops()) return;
-  if (modesStop()) return;   // ★★★ beta96 never a radio with no modes
-  if (pskrStops()) return;
-  if (afStops()) return;   // ★★ beta96 a wrong flight-tracker entry is said, not saved
+  // ★★★ beta96 the save path's refusals, each one's section shown RED on its own tab (secSaveStops)
+  if (secSaveStops(false)) return;
   // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
   await hwPending;
@@ -12148,19 +12164,24 @@ function pskrWhy() {
   const c = pskrCallValue();
   if (/^[A-Za-z0-9\/-]{3,20}$/.test(c) && /[A-Za-z]/.test(c)) {
     if (!$("wsprnetOn").checked || wsprnetCallOk(wsprnetCallValue() || c.toUpperCase())) return {};
-    return { box: "wsprnetCall", short: "WSPRnet needs a callsign" };
+    // \u2605\u2605\u2605 beta96 a TYPED WSPRnet callsign that is not one blocks the save; an empty one only advises (amber)
+    return { box: "wsprnetCall", short: "WSPRnet needs a callsign", blocking: !!wsprnetCallValue() };
   }
-  return { box: "pskrCall", short: "PSK Reporter needs a receiver name (your callsign)" };
+  /* \u2605\u2605\u2605 beta96 (Stuart 11-26) "PSK Reporter ticked with no callsign" is AMBER: the server runs and simply sends nothing
+   *  (vibeserver_config.h: nothing is sent without pskrCall) — the app's Start never refused it either. A name TYPED but not
+   *  a valid one is an invalid field the save refuses (RED). */
+  return { box: "pskrCall", short: c ? "PSK Reporter: that receiver name is not valid" : "PSK Reporter: no callsign, so no spots are sent",
+           blocking: !!c };
 }
 function pskrStops() {
   const w = pskrWhy();
-  if (!w.box) return false;
+  if (!w.box || !w.blocking) return false;
   if (w.box === "wsprnetCall") {
     $("saveErr").textContent = "Not saved \u2014 WSPRnet needs a callsign: enter one under \u201cAlso send WSPR spots to WSPRnet\u201d, or switch that off.";
     $("wsprnetCall").scrollIntoView({behavior: "smooth", block: "center"}); $("wsprnetCall").focus();
     return true;
   }
-  $("saveErr").textContent = "Not saved \u2014 PSK Reporter needs a receiver name (your callsign, or e.g. G4ABC-SDR), or switch it off.";
+  $("saveErr").textContent = "Not saved \u2014 PSK Reporter: that receiver name is not valid (3\u201320 letters, digits, / or -, with a letter, e.g. G4ABC-SDR). Fix it, empty it (no spots are sent then), or switch it off.";
   $("pskrCall").scrollIntoView({behavior: "smooth", block: "center"}); $("pskrCall").focus();
   return true;
 }
@@ -12222,10 +12243,9 @@ function dirReachStops() {
 
 $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
-  if (dirReachStops()) return;
-  if (modesStop()) return;   // ★★★ beta96 never a radio with no modes
-  if (pskrStops()) return;
-  if (afStops()) return;   // ★★ beta96 a wrong flight-tracker entry is said, not saved
+  // ★★★ beta96 the save path's refusals, each one's section shown RED on its own tab (secSaveStops); radios never set up
+  //     turn red too (they will not be on air after this restart) — said, not refused: the other radios still go on air
+  if (secSaveStops(true)) return;
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
   // ★★★ WAIT FOR THE FORM TO BELONG TO THIS RADIO. stashRadio() refuses to read a form that is
@@ -12450,8 +12470,8 @@ function secEnsure() {
     h.classList.add("secOrig");
     const b = document.createElement("button");
     b.type = "button"; b.className = "secHead"; b.setAttribute("aria-expanded", "false");
-    b.innerHTML = '<span class="secChev" aria-hidden="true">▸</span><span class="secTxt"><span class="secTitle"></span>'
-      + '<span class="secSum"></span></span>';
+    b.innerHTML = '<span class="secChev" aria-hidden="true">▸</span><span class="secMark" aria-hidden="true"></span>'
+      + '<span class="secTxt"><span class="secTitle"></span><span class="secSum"></span></span>';
     b.querySelector(".secTitle").textContent = title;
     // ★ e.detail is 0 for a click made by Enter / Space / a remote's OK — then the focus goes INTO the section it opened
     b.addEventListener("click", (e) => secToggle(card, undefined, e.detail === 0));
@@ -12590,23 +12610,67 @@ const SEC_SUM = {
   "radio:time-limit": () => { const m = parseInt(secV("sessionLimit"), 10) || 0; return m ? m + " min · " + secT("sessionLimitMode") : "No limit"; },
 };
 
-/* ── what each section MUST have — the save path's refusals and the server's facts (see the header above) ── */
+/* ── ★★★ beta96 (Stuart 11-26) THREE STATES — GREEN set up / nothing needed · AMBER worth setting, the server runs without it ·
+ *  RED "!" a setting that PREVENTS the save (the save path's own refusals: dirWhy, modesWhy, afWhy, beastAddrWhy, a typed
+ *  PSK Reporter / WSPRnet name that is not one) — shown red ONLY after a SAVE / APPLY & RESTART it stopped, on its own tab,
+ *  opened, and red until it is fixed. Until a save is tried a blocking section is AMBER (calm), like any advice.
+ *  ★ ONE RULE SET WITH THE APP (src/utils/setupSections.ts RULES — scripts/test_setup_sections.ts compares the names):
+ *    blocking  dir · modes · flight-trackers · beast · pskr-invalid · radio-never-set-up
+ *    advisory  location · pskr-no-callsign · radio-not-detected
+ *  ★ A radio never set up is blocking in the sense that it will not be on air after the restart — the master save marks it
+ *    red but does not refuse (the other radios go on air). */
 function secLocationWhy() {
   if (ANDROID) return "";   // ★ a phone's location is the phone's own (the device card)
   const has = (secV("lat") && secV("lon")) || /^[A-Ra-r]{2}[0-9]{2}/.test(secV("locator")) || secC("locFollow");
   return has ? "" : "Location not set: satellites and maps need it";
 }
-const SEC_MUST = {
-  "server:where-this-receiver-is": secLocationWhy,
+const SEC_BLOCK = {
   "server:advertise-on-vibesdr-net": () => dirWhy(),
-  "server:psk-reporter": () => pskrWhy().short || "",
+  "server:psk-reporter": () => { const w = pskrWhy(); return w.blocking ? w.short : ""; },
   "radio:sdr-display-name": () => curRadio >= 0 && radio().enabled !== false && !radio().configured ? "Not set up yet: save this radio to put it on air" : "",
-  "radio:radio": () => SDR_ALARM.has(radio().serial) ? "Not detected: see the notice above" : "",
   "radio:ads-b-beast-feed": () => radio().driver === "beast" && beastAddrWhy(secV("beastAddr")) ? "Beast feed address missing or wrong: " + beastAddrWhy(secV("beastAddr")) : "",
   "radio:modes-and-decoders": () => modesWhy(radio()),
   "radio:share-ads-b-with-flight-trackers": () => afWhy(),
 };
-
+const SEC_ADVISE = {
+  "server:where-this-receiver-is": secLocationWhy,
+  "server:psk-reporter": () => { const w = pskrWhy(); return w.box && !w.blocking ? w.short : ""; },
+  "radio:radio": () => SDR_ALARM.has(radio().serial) ? "Not detected: see the notice above" : "",
+};
+/** The rule names (for the test that holds web and app to one list). */
+const SEC_RULES = { block: ["dir", "modes", "flight-trackers", "beast", "pskr-invalid", "radio-never-set-up"],
+                    advise: ["location", "pskr-no-callsign", "radio-not-detected"] };
+/** ctx|key of every section a save was STOPPED on (or, for a radio never set up, saved past) — red until fixed. */
+let SEC_TRIED = {};
+function secTried(key, ctx) { SEC_TRIED[(ctx || secCtx()) + "|" + key] = 1; secRefresh(); }
+/** Select tab `i` (-1 = SERVER) the way a click does — the form is stashed, nothing typed is lost. */
+function secGoTab(i) {
+  if (curRadio === i) return;
+  const b = document.querySelector('#radioTabs [data-i="' + i + '"], [data-i="' + i + '"]');
+  if (b) b.click();
+}
+/** The section, opened and in view (its "!" decides it is open — secWantOpen). */
+function secShow(key) {
+  secRefresh();
+  const card = secCards().find(c => c.dataset.sec === key);
+  if (!card) return;
+  secPaint(card, true);
+  try { card.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) { /* old browser */ }
+}
+/** ★★★ THE SAVE GATE (both Save buttons): the save path's refusals in their order; the first one found selects its tab, opens
+ *  its section red with "!" and the reason, and the save is refused with its own line (saveErr). `master`: the Save that
+ *  restarts — radios never set up are marked red as well (not refused). */
+function secSaveStops(master) {
+  const stop = (tab, key, say) => { secGoTab(tab); secTried(key); say(); secShow(key); return true; };
+  if (dirWhy()) return stop(-1, "server:advertise-on-vibesdr-net", dirReachStops);
+  const list = radioList();
+  for (let i = 0; i < list.length; i++)
+    if (modeDrawn().has(modeRadioKey(list[i], i)) && modesWhy(list[i])) return stop(i, "radio:modes-and-decoders", modesStop);
+  if (pskrWhy().blocking) return stop(-1, "server:psk-reporter", pskrStops);
+  if (afWhy()) return stop(curRadio, "radio:share-ads-b-with-flight-trackers", afStops);
+  if (master) { list.forEach((r, i) => { if (r.enabled !== false && !r.configured) SEC_TRIED[i + "|" + (r.serial || "") + "|radio:sdr-display-name"] = 1; }); secRefresh(); }
+  return false;
+}
 let secPending = 0;
 function secSchedule() {
   if (secPending) return;
@@ -12618,9 +12682,15 @@ function secRefresh() {
   for (const card of secCards()) {
     const key = card.dataset.sec, b = secHeadOf(card);
     if (!b) continue;
-    let must = "", sum = "";
-    try { must = SEC_MUST[key] ? (SEC_MUST[key]() || "") : ""; } catch (e) { must = ""; }
+    let block = "", advise = "", sum = "";
+    try { block = SEC_BLOCK[key] ? (SEC_BLOCK[key]() || "") : ""; } catch (e) { block = ""; }
+    try { advise = SEC_ADVISE[key] ? (SEC_ADVISE[key]() || "") : ""; } catch (e) { advise = ""; }
     try { sum = SEC_SUM[key] ? (SEC_SUM[key]() || "") : ""; } catch (e) { sum = ""; }
+    // ★★★ beta96 red only after a save it stopped, and until fixed; a fixed one forgets the attempt
+    const tk = secCtx() + "|" + key;
+    if (!block && SEC_TRIED[tk]) delete SEC_TRIED[tk];
+    const must = block && SEC_TRIED[tk] ? block : "";
+    const warn = must ? "" : (block || advise);
     if (card.__must !== must || card.__mustCtx !== secCtx()) {
       // ★ fixed under the owner's hands (same tab), never a tab switch to a radio without the problem
       if (card.__must && !must && card.__mustCtx === secCtx() && card.classList.contains("secOpen")) card.__stayOpen = secCtx();
@@ -12628,7 +12698,10 @@ function secRefresh() {
     }
     const red = !!must;
     if (card.classList.contains("secMust") !== red) card.classList.toggle("secMust", red);
-    const text = red ? "! " + must : sum;
+    if (card.classList.contains("secWarn") !== !!warn) card.classList.toggle("secWarn", !!warn);
+    if (card.classList.contains("secOk") !== (!red && !warn)) card.classList.toggle("secOk", !red && !warn);
+    card.dataset.secState = red ? "red" : warn ? "amber" : "green";
+    const text = red ? "! " + must : warn ? warn : sum;
     const el = b.querySelector(".secSum");
     if (el.textContent !== text) el.textContent = text;
     secPaint(card, secWantOpen(card));

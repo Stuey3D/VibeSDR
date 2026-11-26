@@ -295,6 +295,8 @@ inline const std::vector<ModeGen>& modeGens() {
         {"fctlm",90,false},{"satlabels",91,false},{"ft8+deep",91,true},{"ft8-deep",91,true},
         // 93 — ORBCOMM, VOR MAP, the datalink's 8 MS/s
         {"orbcomm",93,false},{"vormap",93,false},{"avdata+8m",93,true},
+        // 96 — MARITIME's 8 MS/s (AIS + DSC channel 70)
+        {"ais+8m",96,true},
         // 96 — SATELLITE mode as its own switch (it ran from beta90, with no switch)
         {"sat",96,false},
     };

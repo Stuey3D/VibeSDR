@@ -3,7 +3,11 @@
  * being simple and we need that back").
  *
  * One short screen, the spirit of the July 2026 server screen (name, capture width, waterfall rate, Start):
- *   START (first, so nobody scrolls for it) · SERVER NAME · ADDRESS ON THIS NETWORK (.local) · CAPTURE WIDTH · WATERFALL
+ *   START (first, so nobody scrolls for it) · SERVER NAME · ADDRESS ON THIS NETWORK (.local) · PIN (optional) ·
+ *   CAPTURE WIDTH · WATERFALL · RAW IQ OUT (Off / Local only)
+ * ★★★ beta96 (Stuart 11-26): the PIN (digits, up to 12 — the server PIN's rule), HOME NETWORK ONLY ENFORCED (the engine
+ *     refuses any client that is not on the local network — the RTL-TCP door's rule, `lanOnly`), and Full's RAW IQ OUT
+ *     without its public choice. PIN and RAW IQ live under their own keys (simplePin / simpleRawIq): Full's stay untouched.
  * Running: one status block — serving / the address to open / listeners — and the /setup line once a password exists.
  *
  * ★★ Everything else takes the server's defaults — the radio's own rates from its own list (the Full screen's, per
@@ -35,7 +39,7 @@ import {
   getMdnsName, setMdnsName, setChoice, startSimpleServer, storeFacts, saveAdminPasswordOnDevice, setupAddressLine,
   adoptRemoteAdminPassword,
 } from '../services/serverChoiceStore';
-import { mdnsLabel, remoteSettingsLine } from '../utils/serverChoice';
+import { CHOICE_WORDS, mdnsLabel, pinProblem, pinTyped, remoteSettingsLine, SIMPLE_RAWIQ_CHOICES, simpleRawIqOffered } from '../utils/serverChoice';
 import { RATE_OPTIONS_AHF, RATE_OPTIONS_ASP, RATE_OPTIONS_HRF, RATE_OPTIONS_RSP, RATE_OPTIONS_RTL } from './ServerModeScreen';
 
 const Local: any = (NativeModules as any).VibeLocalSDR;
@@ -56,6 +60,8 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
   const [status, setStatus] = useState<VibeServerStatus | null>(null);
   const [notSimple, setNotSimple] = useState(false);
   const [facts, setFacts] = useState<{ hasAdminPassword: boolean; remote: boolean; hasStore: boolean } | null>(null);
+  const [pin, setPin] = useState('');
+  const [rawIq, setRawIq] = useState(0);
   const [mdnsHost, setMdnsHost] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +84,7 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
       const rt = Number(g['vs_rate']); if (Number.isFinite(rt) && rt >= 0) setRate(rt);
       if (g['vs_fps'] === 'full' || g['vs_fps'] === 'half' || g['vs_fps'] === 'quarter') setFps(g['vs_fps']);
       setMdns(m); setRadio(r); setFacts(f);
+      if (f) { setPin(f.simplePin || ''); setRawIq(f.simpleRawIq === 1 ? 1 : 0); }
       if (st?.running && st.port > 0) {
         setRunning({ ip: st.ip, port: st.port }); setStatus(st); runningRef.current = true;
         setNotSimple(!!f && !f.simple);   // ★ started from Full: not local-network-only until restarted here
@@ -116,9 +123,12 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
          : d === 'airspy' ? RATE_OPTIONS_ASP : RATE_OPTIONS_RTL;
   }, [radio]);
   const topRate = rateOptions.find((o) => o.value > 0)?.value ?? 0;
+  const rawIqOk = simpleRawIqOffered({ lite: isLite, icom: isIcom });
+  const pinWhy = pinProblem(pin);
 
   const start = useCallback(async () => {
     setError(null);
+    if (pinWhy) { setError('Not started \u2014 PIN: ' + pinWhy); return; }
     if (Local?.isBackgroundRestricted) {
       try {
         if (await Local.isBackgroundRestricted()) {
@@ -141,12 +151,12 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
       await setChoice('simple');
       if (runningRef.current) { await stopVibeServer(); runningRef.current = false; }
       const info = await startSimpleServer({ name: n, mdnsName: mdns.trim(), rate: isIcom ? 0 : rate, topRate,
-                                             fps: fpsForTier(fps) });
+                                             fps: fpsForTier(fps), pin, rawIq: rawIqOk ? rawIq : 0 });
       setRunning({ ip: info.ip, port: info.port }); runningRef.current = true; setNotSimple(false); setMdnsHost('');
     } catch (e: any) {
       setError(e?.message ?? 'Could not start VibeServer. Is a supported radio plugged in?');
     } finally { setStarting(false); }
-  }, [name, mdns, rate, fps, isIcom, topRate]);
+  }, [name, mdns, rate, fps, isIcom, topRate, pin, pinWhy, rawIq, rawIqOk]);
 
   const stop = useCallback(async () => {
     await stopVibeServer(); runningRef.current = false; setRunning(null); setStatus(null);
@@ -190,7 +200,7 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
     return (
       <SafeAreaView style={[s.root, { backgroundColor: C.bg }]}>
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
-          <Text style={[s.h1, { color: C.text, fontFamily: F }]}>VibeServer Simple</Text>
+          <Text style={[s.h1, { color: C.text, fontFamily: F }]}>{CHOICE_WORDS.simple.title}</Text>
           {/* ★ THE ONE-LINE STATUS — running, where to open it, who is on. */}
           <View style={[s.card, { borderColor: C.ok }]}>
             <Text style={{ color: C.ok, fontFamily: F, fontSize: 18 }}>● Serving on this network</Text>
@@ -200,6 +210,9 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
             <Text style={{ color: C.text, fontFamily: F, fontSize: 16, marginTop: 4 }}>{host}.local:{running.port}</Text>
             <Text style={{ color: C.textDim, fontFamily: F, fontSize: 14, marginTop: 8 }}>
               {listeners}/{maxUsers} listening{status?.radioProblem ? ' — ' + status.radioProblem : ''}
+            </Text>
+            <Text style={{ color: C.textDim, fontFamily: F, fontSize: 13, marginTop: 4 }} testID="simple-access">
+              {(pin ? 'PIN ' + pin : 'No PIN') + ' \u00b7 home network only' + (rawIqOk && rawIq ? ' \u00b7 RAW IQ OUT on' : '')}
             </Text>
             <Text style={{ color: C.textDim, fontFamily: F, fontSize: 13, marginTop: 8, lineHeight: 18 }} testID="simple-setup-line">
               {remoteSettingsLine({ running, mdnsHost: host, hasAdminPassword: !!facts?.hasAdminPassword, remoteOn: !!facts?.remote })}
@@ -236,7 +249,7 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
   return (
     <SafeAreaView style={[s.root, { backgroundColor: C.bg }]}>
       <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
-        <Text style={[s.h1, { color: C.text, fontFamily: F }]}>VibeServer Simple</Text>
+        <Text style={[s.h1, { color: C.text, fontFamily: F }]}>{CHOICE_WORDS.simple.title}</Text>
         <Text style={[s.sub, { color: C.textDim, fontFamily: F }]}>
           Share {radio?.model ? 'the ' + radio.model : 'the radio'} with everyone on this Wi-Fi. Local network only.
         </Text>
@@ -253,6 +266,13 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
           autoCapitalize="none" autoCorrect={false} style={inputStyle} />
         <Text style={[s.hint, { color: C.textDim, fontFamily: F }]}>
           Other devices can open {mdnsLabel(mdns || name)}.local. Empty = made from the server name.
+        </Text>
+
+        <Text style={[s.section, { color: C.section, fontFamily: F }]}>PIN (OPTIONAL)</Text>
+        <TextInput value={pin} onChangeText={(t) => setPin(pinTyped(t))} keyboardType="number-pad" testID="simple-pin"
+          placeholder="No PIN" placeholderTextColor={C.placeholder} style={inputStyle} />
+        <Text style={[s.hint, { color: pinWhy ? C.bad : C.textDim, fontFamily: F }]}>
+          {pinWhy || 'Digits only, up to 12. Listeners on your network enter it once; empty = anyone on your network may listen.'}
         </Text>
 
         {!isIcom && (<>
@@ -273,9 +293,25 @@ export default function SimpleServerScreen({ navigation, route, tokens }: Props)
             ))}
           </View>
         </>)}
+        {rawIqOk && (<>
+          {/* ★★★ beta96 Full's RAW IQ OUT, Simple's way: Off or Local only (a Simple server is never public). */}
+          <Text style={[s.section, { color: C.section, fontFamily: F }]}>RAW IQ OUT</Text>
+          <View style={s.wrap}>
+            {SIMPLE_RAWIQ_CHOICES.map(([v, lbl]) => (
+              <ServerKey key={v} {...ink} testID={'simple-rawiq-' + v} title={(rawIq === v ? '✓ ' : '') + lbl}
+                color={rawIq === v ? C.keyAct : C.key} border={rawIq === v ? C.borderBright : C.border}
+                style={s.chip} onPress={() => setRawIq(v)} />
+            ))}
+          </View>
+          <Text style={[s.hint, { color: C.textDim, fontFamily: F }]}>
+            A listener can take the channel they are tuned to as an rtl_tcp stream for a decoder that does not run in a
+            browser — they switch it on under RAW IQ OUT in the audio menu. The port opens only while somebody has it on.
+          </Text>
+        </>)}
 
         <Text style={[s.hint, { color: C.textDim, fontFamily: F, marginTop: 16 }]}>
-          Local network only: no listing on vibesdr.net, no community map, no feeds, no background decoding.
+          Home network only: devices that are not on your own network are refused, and there is no listing on
+          vibesdr.net, no community map, no feeds, no background decoding.
           {facts?.hasStore ? ' Settings you made in VibeServer Full are kept for when you switch back.' : ''}
         </Text>
         <ServerKey {...ink} focused={hl === 1} onFocusHere={() => setHl(1)} testID="simple-full"
