@@ -200,6 +200,29 @@ int main() {
         for (int i = 0; i < 1000; i++) { NavMsg x = m[0]; x.id = "GA" + std::to_string(i % 100); x.khz = i; x.last = now - i; lots.push_back(x); }
         CHECK(count(navMsgRows(lots), "],[") + 1 == (int)kNavMsgMax, "capped at kNavMsgMax");
         CHECK(dropStrField("{\"a\":1,\"txt\":\"x\\\"y\",\"b\":2}", "txt") == "{\"a\":1,\"b\":2}", "a forecast's text taken out of the poll");
+        // ★★ beta96: the copies' decode quality (Stuart 11-26: "I hear it with a large red part in the middle, NickB hears it
+        //    all green → use NickB's") — ranked weak % first, then clean %, then the lowest slice, then the mean SNR
+        auto rec = [](const char* q) { NavMsg m; navQualityFrom(m, q, [](const std::string& l, const char* k) {
+            const std::string kk = std::string("\"") + k + "\":"; const size_t p = l.find(kk); return p == std::string::npos ? 0.0 : std::strtod(l.c_str() + p + kk.size(), nullptr); }); return m; };
+        const NavMsg redMid = rec("{\"nqc\":90,\"nqf\":8,\"nql\":2,\"nqd\":1,\"snr\":14.2,\"smin\":1,\"red\":22,\"tl\":[15,1]}");
+        const NavMsg green  = rec("{\"nqc\":85,\"nqf\":14,\"nql\":1,\"nqd\":0,\"snr\":11.0,\"smin\":9,\"red\":0}");
+        const NavMsg old    = rec("{\"f\":\"x.txt\",\"title\":\"Station G\"}");
+        CHECK(redMid.hasQ && redMid.hasSnr && redMid.qClean == 90 && redMid.qFec == 8 && redMid.qLost == 2 && redMid.snr == 14 && redMid.snrMin == 1 && redMid.redPct == 22,
+              "the quality read from an index line: 90/8/2 %%, 14 dB, lowest 1, 22 %% weak");
+        CHECK(!old.hasQ && !old.hasSnr, "an older record: no quality");
+        {
+            std::vector<NavMsg> two;
+            NavMsg a = redMid; a.file = "red.txt"; a.id = "GA99"; a.khz = 518; a.first = a.last = now - 100; a.text = "ZCZC GA99\nGALE\nNNNN\n"; two.push_back(a);
+            NavMsg b = green;  b.file = "grn.txt"; b.id = "GA99"; b.khz = 518; b.first = b.last = now - 900; b.text = a.text; b.lost = 1; two.push_back(b);
+            const auto f = navFold(two);
+            CHECK(f.size() == 1 && f[0].file == "grn.txt", "★ the all-green copy beats the red-middle one, though its mean SNR is lower and it is older (%s)", f.empty() ? "" : f[0].file.c_str());
+            const std::string r = navMsgRows(f);
+            CHECK(r.find(",85,14,1,11,9,0]") != std::string::npos, "its row ends clean, FEC, lost %%, SNR, lowest, weak %%: %s", r.c_str());
+            CHECK(r.find("\"tl\"") == std::string::npos && r.find("[15,1]") == std::string::npos, "never the slices");
+            NavMsg c = a; c.hasQ = c.hasSnr = false; c.file = "o.txt"; c.id = "GB01";
+            CHECK(navMsgRows({ c }).find("\"GA99\"") == std::string::npos && navMsgRows({ c }).back() == ']' && count(navMsgRows({ c }), ",") == 10,
+                  "an older copy's row: the 11 members as before");
+        }
     }
     std::printf("== 9. the remembered rows (sondes / APRS / VOR) beside the gallery, bounded by their windows\n");
     {

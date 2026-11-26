@@ -135,6 +135,9 @@ import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxS
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
+import { bodyTextBase, fileBodyStart, fileTextBase, navtexQualityDetail, navtexQualityLine, navtexSnrLine, snrColour, snrOfItem, snrRanges, splitOfItem,
+         type NavtexQualityFields } from '../../../src/utils/navtexQuality';
+import { paintSnrStrip, qualityBar, snrHBar, watchSnrStrip } from './navtexSnrDom';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../../../src/services/squelchNeighbours';
 import { SqlAutoTrack } from '../../../src/utils/sqlAutoTrack';
@@ -14926,6 +14929,7 @@ function renderNavtex() {
     const body = navtexBody(shown);
     const pre = $('nvText');
     if (pre.textContent !== body) pre.textContent = body;
+    nvQualityPaint(shown, body);
   }
   if (!nvViewPrev && atBottom) view.scrollTop = view.scrollHeight;
   // ★ The status says where it is in the broadcast — WEFAX's "standing by" between charts.
@@ -14938,6 +14942,24 @@ function renderNavtex() {
   const saveBtn = $<HTMLButtonElement>('decSave');
   saveBtn.style.display = shown ? '' : 'none';
   saveBtn.title = 'Save this message as a text file';
+}
+/* ★★ beta96 (Stuart 11-26) — DISPLAY ONLY: the message's decode quality (the server's FEC split, after its NNNN) and its
+ *  SNR — the horizontal timeline growing while it arrives, and the strip down the left of the text colouring each line by
+ *  the SNR it was decoded at (worst slice per rendered line; follows re-wrapping). Each part only when measured. */
+let nvPaintedFor: unknown = null;
+function nvQualityPaint(m: NonNullable<typeof navtexAsm.live>, body: string) {
+  const split = m.split, q = m.snr;
+  const ql = navtexQualityLine(split), sl = navtexSnrLine(q);
+  $('nvQual').hidden = !ql && !sl;
+  qualityBar($('nvQBar'), split);
+  $('nvQText').textContent = ql ? `${ql} · ${navtexQualityDetail(split)}` : '';
+  snrHBar($('nvSnrBar'), q);
+  $('nvSnrText').textContent = sl ?? '';
+  $('nvSnrText').style.color = q ? snrColour(q.avg) : '';
+  const paint = () => paintSnrStrip($('nvWrap'), $('nvStrip'), $('nvText'), q ? snrRanges(q, bodyTextBase(body), body.length) : null);
+  nvPaintedFor = m;
+  paint();
+  watchSnrStrip($('nvWrap'), () => { const s = nvViewPrev ? navtexAsm.prev : navtexAsm.live; if (s && s === nvPaintedFor) nvQualityPaint(s, navtexBody(s)); });
 }
 function toggleNavtexPrev() {
   if (!navtexAsm.prev && !nvViewPrev) return;
@@ -15168,6 +15190,8 @@ function initDecoders(host: string, auth: AuthState) {
     },
     // ★ NAVTEX: the server's own FEC count for the message its NNNN just closed — into the title (2026-10-05).
     onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
+    // ★★ beta96 NAVTEX: a second's SNR slice — into the message arriving (its timeline and the strip beside its text)
+    onNavtexSlice: (sig, noise) => { if (activeDec === 'navtex' && navtexAsm.slice(sig, noise)) queueNavtexRender(); },
     // ★ FELD HELL's 0x02 (a fresh decoder): the next line starts a new page; the one on screen stays until it does.
     onImageStart: (w, h) => {
       if (activeDec === 'hell') { hellPager.reset(); return; }
@@ -19684,7 +19708,8 @@ function initRecorder() {
 // Storm Austen came in), and listeners' own decoders. The server keeps it (vibe_gallery.h) and serves it read-only;
 // this lists it newest first, filters by decoder, opens a text item inline and downloads any item.
 // ★ Text from the air is shown with textContent, never as HTML.
-interface GalleryItem { f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
+interface GalleryItem extends NavtexQualityFields {   // ★ beta96 NAVTEX decode quality + SNR timeline (navtexQuality.ts)
+                        f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
                         title: string; partial?: boolean; wl?: boolean; bytes: number; s?: string; dn?: string;
                         /** ★ V12 DSC: 3 distress · 2 urgency · 1 safety; and the position the item is about, for MAP. */
                         lv?: number; plat?: number; plon?: number;
@@ -19760,7 +19785,7 @@ function galChartsEl(): HTMLElement {
   let el = document.getElementById('galCharts');
   if (!el) {
     el = document.createElement('div'); el.id = 'galCharts'; el.hidden = true;
-    $('galText').parentElement!.insertBefore(el, $('galText'));
+    $('galWrap').parentElement!.insertBefore(el, $('galWrap'));
     tlmEnsureCss();
   }
   return el;
@@ -19790,7 +19815,7 @@ function galSkyEl(): HTMLElement {
   let el = document.getElementById('galSky');
   if (!el) {
     el = document.createElement('div'); el.id = 'galSky'; el.hidden = true;
-    $('galText').parentElement!.insertBefore(el, $('galText'));
+    $('galWrap').parentElement!.insertBefore(el, $('galWrap'));
     const st = document.createElement('style');
     st.textContent = `#galSky svg{display:block;width:100%;max-width:420px;height:auto;margin:6px auto;color:var(--btn-text,#ddd)}`
       + `#galSky .galSkyLeg{display:flex;flex-wrap:wrap;justify-content:center;gap:2px 12px;font-size:12px;color:var(--text-dim)}`
@@ -19978,6 +20003,12 @@ async function renderGallery(page = galPage) {
       src.textContent = [galWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, heardByText(it.ri, galRadios) || it.r, formatSize(it.bytes)]
         .filter((x) => !!x).join(' · ');
       n.appendChild(src);
+      // ★★ beta96 a NAVTEX message's SNR timeline, thin, under its line (an older record: none)
+      if (it.k === 'navtex') {
+        const q = snrOfItem(it);
+        if (q) { const b = document.createElement('span'); b.className = 'snrBar galSnr'; snrHBar(b, q); n.appendChild(b);
+                 src.textContent += ` · ${navtexSnrLine(q)}`; }
+      }
       row.appendChild(f); row.appendChild(n);
       // ★ A position the item is about (a DSC distress call): MAP, on this server's own map.
       if (typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
@@ -20173,6 +20204,7 @@ async function openGalleryItem(it: GalleryItem) {
   // ★ A chart or a picture is shown as itself; the browser fetches it (same origin, the same read auth).
   const img = $('galImg') as HTMLImageElement;
   galOutlineSetup(it, url);
+  galQualSetup(null, null);
   if (/\.(png|jpg)$/i.test(it.f)) {   // ★ V12 balloons: SSDV pictures are JPEGs
     galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24
     $('galText').hidden = true; img.hidden = false; img.src = url;
@@ -20180,6 +20212,7 @@ async function openGalleryItem(it: GalleryItem) {
     return;
   }
   img.hidden = true; img.removeAttribute('src'); $('galText').hidden = false;
+  galQualSetup(it, null);
   galTlmSeq++; if (document.getElementById('galCharts')) galChartsEl().hidden = true;
   galSkySeq++; if (document.getElementById('galSky')) galSkyEl().hidden = true;   // ★★ 2026-11-24
   $('galText').textContent = 'Loading…';
@@ -20187,11 +20220,35 @@ async function openGalleryItem(it: GalleryItem) {
     const r = await fetch(url, { cache: 'no-store' });
     const body = r.ok ? await r.text() : 'This item is no longer on the server (the gallery is full and keeps the newest).';
     $('galText').textContent = body;
+    if (r.ok) galQualSetup(it, body);   // ★ beta96 NAVTEX: the quality bar and the SNR strip beside the text
     if (r.ok && it.k === 'fctlm' && /\.csv$/i.test(it.f) && galShowTlm(it, body)) return;   // ★★ beta91 charts, not a CSV wall
     if (r.ok) void galTranslateSetup(it, body);
   } catch { $('galText').textContent = 'Could not reach the server.'; }
 }
 
+/* ★★ beta96 a NAVTEX gallery message: the decode-quality bar and SNR timeline above it (the file's own head says the
+ *  figures in words), and the strip down the left of the text — mapped from the record's slices (tl / tc) onto the file
+ *  (the message text starts after its ZCZC line). An older record, or anything not NAVTEX: nothing. */
+function galQualSetup(it: GalleryItem | null, body: string | null) {
+  const wrap = $('galWrap'), strip = $('galStrip'), pre = $('galText');
+  const q = it && it.k === 'navtex' ? snrOfItem(it) : null, split = it && it.k === 'navtex' ? splitOfItem(it) : null;
+  $('galQual').hidden = !q && !split;
+  qualityBar($('galQBar'), split);
+  snrHBar($('galSnrBar'), q);
+  const base = body ? fileTextBase(body) : -1, from = body ? fileBodyStart(body) : -1;
+  const ranges = q && body && base >= 0 && from >= 0 ? snrRanges(q, base, body.length, from) : null;
+  // ★ only over the file as received — TRANSLATE replaces the text, and the strip goes until ORIGINAL brings it back
+  const paint = () => { if (pre.textContent === body) paintSnrStrip(wrap, strip, pre, ranges); else paintSnrStrip(wrap, strip, pre, null); };
+  galQualPaint = paint;
+  paint();
+  watchSnrStrip(wrap, () => galQualPaint(), pre);
+  if (!galQualMo && typeof MutationObserver !== 'undefined') {
+    galQualMo = new MutationObserver(() => requestAnimationFrame(() => galQualPaint()));
+    galQualMo.observe(pre, { childList: true, characterData: true, subtree: true });
+  }
+}
+let galQualPaint: () => void = () => {};
+let galQualMo: MutationObserver | null = null;
 /* ★★ V12 METEOR LRPT's MAP OUTLINE in the gallery viewer (docs/v12/LRPT-MAP-OVERLAY.md). The picture stays the saved
  *  plain PNG; the outline (its own small item, named by the picture's "geo") is an SVG over it, shown when the viewer's
  *  MAP OUTLINE switch is ON (remembered in this browser; OFF until switched — OUTLINE_DEFAULT_ON). DOWNLOAD follows the

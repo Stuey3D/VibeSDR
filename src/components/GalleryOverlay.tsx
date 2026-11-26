@@ -44,10 +44,12 @@ import Svg, { Path as SvgPath, Text as SvgText } from 'react-native-svg';
 import { parseOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl,
          outlineLabelSize, OUTLINE_INK, type Outline } from '../utils/lrptOutline';
 import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ beta92 the DIGI MODES MAP row (the web's words)
-import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 THE SKY PLOT (src/utils/skyPlot.ts)
+import SkyPlotView from './SkyPlotView';
+import { NavtexQualityRow, SnrStripText, SnrTimeline } from './NavtexQuality';   // ★★ beta96 NAVTEX decode quality + SNR
+import { fileBodyStart, fileTextBase, navtexSnrLine, snrOfItem, snrRanges, splitOfItem, type NavtexQualityFields } from '../utils/navtexQuality';   // ★★ 2026-11-24 THE SKY PLOT (src/utils/skyPlot.ts)
 import { parseSkyPlotJson, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyMode, type SkyPlotData } from '../utils/skyPlot';
 
-export interface GalleryItem {
+export interface GalleryItem extends NavtexQualityFields {   // ★ beta96 NAVTEX decode quality + SNR timeline (navtexQuality.ts)
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
   title: string; partial?: boolean; wl?: boolean; bytes: number;
   /** ★ V12 2026-10-25: a standing card's slot ("ismsum-433-…"), and an item's own download name ("ISM 433.92 2026-10-25.txt"). */
@@ -431,8 +433,19 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                        + (showTr && trNote ? ' · ' : '') + trNote}
                     </Text>
                   )}
+                  {/* ★★ beta96 a NAVTEX message: its quality bar and SNR timeline (the file's head says the figures in
+                      words), and the strip down the left of the text — over the file as received, not a translation */}
+                  {open.k === 'navtex' && !!text && (
+                    <NavtexQualityRow split={splitOfItem(open)} snr={snrOfItem(open)} color={pt.ink.textDim} words={false} />
+                  )}
                   <ScrollView style={s.textBox} contentContainerStyle={scrollLane}>
-                    <Text selectable style={s.mono}>{(showTr && trText != null ? trText : text) || 'Loading…'}</Text>
+                    {(() => {
+                      const shown = (showTr && trText != null ? trText : text) || 'Loading…';
+                      const q = open.k === 'navtex' && shown === text && textOk ? snrOfItem(open) : null;
+                      const base = q ? fileTextBase(text) : -1, from = q ? fileBodyStart(text) : -1;
+                      return <SnrStripText text={shown} selectable style={s.mono}
+                                           ranges={q && base >= 0 && from >= 0 ? snrRanges(q, base, text.length, from) : null} />;
+                    })()}
                   </ScrollView>
                 </>
               )}
@@ -611,7 +624,10 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                           <Text style={s.tag}>{`  ${galleryOriginTag(it)}${it.partial ? ' · PARTIAL' : ''}`}</Text>
                         </Text>
                         {/* ★ only the parts an item has (an ISM day has no demodulator) — the web client's rule */}
-                        <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, heardByText(it.ri, radios) || it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
+                        <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, heardByText(it.ri, radios) || it.r, size(it.bytes),
+                                              it.k === 'navtex' ? navtexSnrLine(snrOfItem(it)) : null].filter((x) => !!x).join(' · ')}</Text>
+                        {/* ★★ beta96 a NAVTEX message's SNR timeline, thin (an older record: none) */}
+                        {it.k === 'navtex' && <View style={{ marginTop: 3, maxWidth: 200 }}><SnrTimeline snr={snrOfItem(it)} height={3} /></View>}
                       </View>
                       {!!onShipMap && it.k === 'dsc' && typeof it.plat === 'number' && typeof it.plon === 'number' && (
                         <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show this call's position on the shipping map: ${it.title}`}

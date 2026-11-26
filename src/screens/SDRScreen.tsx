@@ -6553,6 +6553,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         queueDecoderStatus(tuneHintText.current || decStateText.current);
       },
       onNavtexFec: (fec) => { if (navtexAsmRef.current?.setFec(fec)) setNavtexFecSeq((n) => n + 1); },
+      // ★★ beta96 a second's SNR slice — into the message arriving (its timeline and the strip beside its text)
+      onNavtexSlice: (sig, noise) => {
+        if (activeDecRef.current === 'navtex' && navtexAsmRef.current?.slice(sig, noise)) setNavtexFecSeq((n) => n + 1);
+      },
       // ★ The lock lost mid-message ends it [end lost] — a co-channel station took over, or it faded (utils/navtex).
       onNavtexState: (st) => {
         if (activeDecRef.current === 'navtex' && navtexAsmRef.current?.lockState(st, Date.now())) setNavtexFecSeq((n) => n + 1);

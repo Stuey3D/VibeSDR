@@ -39,6 +39,8 @@ import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
+import { NavtexQualityRow, SnrStripText, SnrTimeline } from './NavtexQuality';   // ★★ beta96 decode quality + SNR
+import { bodyTextBase, snrRanges } from '../utils/navtexQuality';
 import { type NavtexAssembler, type NavtexMessage, navtexTitle, navtexLostPct, navtexBody, navtexFileName,
          navtexFileText } from '../utils/navtex';
 import { SLANT_STEP, parseAlign, wefaxAlignKey, wefaxFormat, wefaxPreset, type WefaxAlign } from '../utils/wefaxAlign';
@@ -1626,6 +1628,8 @@ export default function DecoderPanel({
             {[nvViewingPrev ? 'PREVIOUS' : !nvShown.done ? 'RECEIVING' : 'STANDING BY',
               navtexLostPct(nvShown) != null ? `${navtexLostPct(nvShown)}% lost` : ''].filter(Boolean).join(' · ')}
           </Text>
+          {/* ★★ beta96 the live status: the SNR timeline, growing while the message arrives (no text to sit beside here) */}
+          {!!nvShown.snr && <View style={{ flexBasis: '100%', marginTop: 4, maxWidth: 260 }}><SnrTimeline snr={nvShown.snr} /></View>}
         </View>
       ) : (
         <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
@@ -2085,9 +2089,12 @@ export default function DecoderPanel({
                       .filter(Boolean).join(' · ')}
                   </Text>
                 </View>
-                <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]} selectable>
-                  {navtexBody(nvShown)}
-                </Text>
+                {/* ★★ beta96 (Stuart 11-26): the decode quality and SNR, and the strip down the left of the text — each
+                    rendered line coloured by the SNR it was decoded at (worst slice per line; follows re-wrapping) */}
+                <NavtexQualityRow split={nvShown.split} snr={nvShown.snr} color={tk.muted} fontFamily={FONT} />
+                {(() => { const body = navtexBody(nvShown);
+                  return <SnrStripText text={body} selectable style={[dp.output, { color: dc.output, fontFamily: FONT }]}
+                                       ranges={nvShown.snr ? snrRanges(nvShown.snr, bodyTextBase(body), body.length) : null} />; })()}
               </>
             ) : (
               <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>

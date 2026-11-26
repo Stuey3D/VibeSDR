@@ -7709,17 +7709,18 @@ static void communityNavtex(int64_t now, std::map<std::string, CommunitySec>& ou
     }
     // messages: every copy in the window (and those a warning or forecast names), folded to one per id
     {
-        struct Copy { std::string f; int64_t t; double hz; };
+        struct Copy { std::string f; int64_t t; double hz; NavMsg q; };
         std::vector<Copy> copies;
         g.forEachLive("navtex", [&](const std::string& l) {
             const int64_t t = (int64_t)vibe::gallery::lineNum(l, "t");
             const std::string f = vibe::gallery::lineStr(l, "f");
             if (f.empty() || (t < now - kNavMsgSinceSec && !pinned.count(f))) return;
-            if (copies.size() < 4000) copies.push_back({ f, t, vibe::gallery::lineNum(l, "hz") });
+            NavMsg q; navQualityFrom(q, l, vibe::gallery::lineNum);   // ★ beta96: its decode quality, when recorded
+            if (copies.size() < 4000) copies.push_back({ f, t, vibe::gallery::lineNum(l, "hz"), q });
         });
         std::vector<NavMsg> cs;
         for (const auto& c : copies) {
-            NavMsg m; m.file = c.f; m.first = m.last = c.t; m.khz = std::round(c.hz / 500.0) / 2.0; m.pinned = pinned.count(c.f) > 0;
+            NavMsg m = c.q; m.file = c.f; m.first = m.last = c.t; m.khz = std::round(c.hz / 500.0) / 2.0; m.pinned = pinned.count(c.f) > 0;
             m.text = vsnav::navReadText(c.f);
             if (m.text.size() > 16384) m.text.resize(16384);
             m.id = navMsgId(m.text); m.lost = navLost(m.text);
