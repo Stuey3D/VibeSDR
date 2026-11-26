@@ -116,6 +116,8 @@ try {
   console.log('── the SDRplay ──');
   ok(await tab('/RSP1A/'), 'the RSP1A tab');
   ok(await until(async () => (await js(`document.getElementById("hw").innerHTML.length`)) > 0, 15000), "the radio's hardware block is drawn");
+  // ★ beta96 b96-setupux: sections start closed — "visible there" is judged with this tab's sections open (OPEN ALL, as an owner would)
+  ok(await js(`(() => { const b = document.getElementById("secOpenAll"); if (!b) return false; b.click(); return true; })()`), 'OPEN ALL on the RSP1A tab');
   ok(await until(async () => (await where()) === 'rspGainHere', 15000), `★ the gain settings sit under the radio's own AGC rows (${await where()})`);
   ok(await js(`(() => { const h = document.getElementById("rspGainHere"), v = document.getElementById("rspVibeAgc");
     return !!h && !!v && !!(v.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING) && !!document.getElementById("hw").contains(h); })()`),
