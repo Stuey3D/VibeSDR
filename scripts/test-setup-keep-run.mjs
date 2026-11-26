@@ -33,10 +33,11 @@ const els = {};
 const $ = (id) => (els[id] ||= new El(id));
 
 const fnNames = ['singleBlockOf', 'singleWords', 'singleOptions', 'singleFromTicks', 'singleRender', 'singleKeepable', 'modeLandingId', 'keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords', 'keepFacts', 'keepSatWords',
-                 'mapLandRender', 'keepSetModes', 'keepMirror', 'keepMigrate', 'adsbLandOffer'];
+                 'mapLandRender', 'keepSetModes', 'keepMirror', 'keepMigrate', 'adsbLandOffer',
+                 'keepBgNormal', 'keepIsmPlan', 'keepIsmDefault', 'keepIsmSelect', 'bgWholeRender', 'bgSetWhole', 'opModeSync'];   // ★ b96-bgsplit
 const body = constOf('LISTEN_DEMODS') + constOf('WHOLE_MODES') + constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('KEEP_MARITIME_MIN') + constOf('ADSB_MIN_RATE') + fnNames.map(grab).join('\n');
 const make = new Function('env', `
-  let { $, radio, HW, adsbLandForm, modeBlockSet, plainLandingWords, esc, bgIsmBands, modeTree, modeCapShown, dabLandHwCan, DAB_DECODER } = env;
+  let { $, radio, HW, dabLandRender, spRender, adsbLandForm, modeBlockSet, plainLandingWords, esc, bgIsmBands, modeTree, modeCapShown, dabLandHwCan, DAB_DECODER } = env;
   const setHW = (h) => { HW = h; };
   ${body}
   return { ${fnNames.join(', ')}, setHW };`);
@@ -44,7 +45,7 @@ const make = new Function('env', `
 let RADIO = {};
 let FORM = { users: 1, rate: 2400000, boost: false, blocked: false };
 let BLOCKS = new Set();
-const P = make({ $, radio: () => RADIO, HW: null, adsbLandForm: () => FORM, modeBlockSet: () => BLOCKS,
+const P = make({ $, radio: () => RADIO, HW: null, dabLandRender: () => {}, spRender: () => {}, adsbLandForm: () => FORM, modeBlockSet: () => BLOCKS,
                  plainLandingWords: () => '96.100 MHz WFM', esc: (t) => String(t),
                  bgIsmBands: () => [{ id: '433', label: '433.92 MHz' }, { id: '868', label: '868 MHz SRD' }],
                  modeTree: () => ['wfm', 'nfm', 'am', 'usb', 'lsb', 'drm', 'sondes'].map((id) => ({ id })), modeCapShown: (t, m) => m.id !== 'drm',
@@ -100,15 +101,22 @@ console.log('── the card: an RTL at 2.4 MS/s (the Sony)');
   ok(/data-keep="acars" disabled/.test(h) && /6\.1 MS\/s/.test(h), 'ACARS greyed: the combination needs 6.1 MS/s');
   ok(/AVIATION/.test(h) && /MARITIME/.test(h) && /about 9 % of one core/.test(h), 'grouped, with the benchmark cost');
   ok($('mapRateNote').textContent === '2.4 MS/s detected: you can choose one of these modes.', `the rate line: ${$('mapRateNote').textContent}`);
-  ok(!$('mapKeep').checked && !$('mapKeep').disabled && $('mapKeepLbl').textContent === 'Keep VDL2 running when nobody is connected', 'keep-running: offered, never ticked by default, named');
-  ok(/share VDL2's 137 MHz capture/.test($('mapKeepNote').innerHTML) && /costs CPU all the time/.test($('mapKeepNote').innerHTML), 'the note: CPU and the shared 137 MHz capture');
-  RADIO.mapKeep = true; P.keepMirror(RADIO); P.mapLandRender();
-  ok($('mapKeep').checked && !$('bgKeepNote').classList.contains('hide') && /VDL2 is kept running/.test($('bgKeepNote').textContent), 'kept: the Background Decoding card says VDL2 owns the idle radio');
-  ok(/SHARES its 137 MHz capture/.test(P.keepSatWords(RADIO)), 'the satellites line: VDL2 shares the capture');
+  ok(RADIO.bgMode === '' && !RADIO.mapKeep && /choose VDL2 under <b>Background decoding<\/b>/.test($('mapBgNote').innerHTML), '★ b96-bgsplit landing alone: background stays manual, the note points at the Background decoding card');
+  // ★★ the background choice (its own card): VDL2, the same as the landing → mapKeep mirrored
+  P.bgSetWhole(['vdl2']); P.mapLandRender();
+  ok(RADIO.bgMode === 'vdl2' && RADIO.mapKeep && $('bgKindWhole').checked && /data-bgmode="vdl2" checked/.test($('bgModeList').innerHTML), 'background VDL2: stored, mirrored as mapKeep, drawn ticked');
+  ok(/costs CPU all the time/.test($('bgWholeNote').innerHTML) && /land on the map in VDL2 too/.test($('bgWholeNote').innerHTML), 'the background note: CPU, and listeners join it');
+  ok(/also this radio's <b>Background decoding<\/b>/.test($('mapBgNote').innerHTML), 'the landing card says the map is populated');
+  ok(/SHARES its 137 MHz capture/.test(P.keepSatWords(RADIO)) && /SHARES/.test($('bgSatNote').textContent), 'the satellites line: VDL2 shares the capture');
+  ok(/data-bgmode="ism"/.test($('bgModeList').innerHTML) && /data-bgmode="adsb" disabled/.test($('bgModeList').innerHTML), 'the background card draws every map (ISM too), one at a time');
   ok(!RADIO.adsbKeepRunning && !RADIO.landingAdsb, 'still no ADS-B pair (an older server idles the radio, never lands in ADS-B)');
   // switching to ADS-B (the newest tick wins where only one fits)
   P.keepSetModes(['vdl2', 'adsb']);
-  ok(RADIO.landingModes === 'adsb' && RADIO.landingAdsb && RADIO.adsbKeepRunning, 'ticking ADS-B replaces VDL2 and mirrors the ADS-B pair (kept)');
+  ok(RADIO.landingModes === 'adsb' && RADIO.landingAdsb && !RADIO.adsbKeepRunning && !RADIO.mapKeep && RADIO.bgMode === 'vdl2', '★ landing ADS-B, background still VDL2: the keep mirrors OFF (different modes)');
+  P.mapLandRender();
+  ok(/runs <b>VDL2<\/b>/.test($('mapBgNote').innerHTML) && /pauses it and lands here in ADS-B/.test($('mapBgNote').innerHTML), 'the landing card says VDL2 pauses for the arrival');
+  P.bgSetWhole(['adsb']);
+  ok(RADIO.adsbKeepRunning && RADIO.mapKeep && RADIO.bgMode === 'adsb', 'background ADS-B + landing ADS-B: the beta95 pair mirrored (an older build keeps ADS-B)');
   ok(/ADS-B pauses for the pass/.test(P.keepSatWords(RADIO)), 'the satellites line for ADS-B: pauses');
   // the owner lowers the rate in the form: ADS-B greyed by its own rule
   FORM = { users: 1, rate: 2048000, boost: false, blocked: false }; P.mapLandRender();
@@ -128,7 +136,8 @@ console.log('── the card: an RSP1B at 8 MS/s');
   ok(RADIO.landingModes === 'vdl2,acars', `ACARS + VDL2 stored together: ${RADIO.landingModes}`);
   P.mapLandRender();
   ok(/8 MS\/s detected: one mode at a time, or ACARS & VDL2 together/.test($('mapRateNote').textContent), `the rate line: ${$('mapRateNote').textContent}`);
-  ok($('mapKeepLbl').textContent === 'Keep ACARS + VDL2 running when nobody is connected', 'keep names the pair');
+  P.bgSetWhole(['vdl2', 'acars']);
+  ok(RADIO.bgMode === 'vdl2,acars' && RADIO.mapKeep, `the background holds the pair too: ${RADIO.bgMode}`);
   ok(/data-keep="ais"[^>]* disabled/.test($('mapModeList').innerHTML), 'AIS greyed beside the pair');
 }
 
@@ -146,7 +155,8 @@ console.log('── ★★★ beta96 the MARITIME row (AIS + DSC channel 70)');
   ok(/data-keep="aisdsc"/.test($('mapModeList').innerHTML) && /AIS \+ DSC \(channel 70\)/.test($('mapModeList').innerHTML), 'RSP at 8: "AIS + DSC (channel 70)" drawn under MARITIME');
   P.keepSetModes(['aisdsc']); P.mapLandRender();
   ok(RADIO.landingModes === 'aisdsc' && /data-keep="ais"[^>]* disabled/.test($('mapModeList').innerHTML), 'ticked and stored as aisdsc; AIS greyed beside it (one choice)');
-  ok($('mapKeepLbl').textContent === 'Keep AIS + DSC (channel 70) running when nobody is connected', `keep names it: ${$('mapKeepLbl').textContent}`);
+  P.bgSetWhole(['aisdsc']);
+  ok(RADIO.bgMode === 'aisdsc' && RADIO.mapKeep, `background AIS + DSC: ${RADIO.bgMode}`);
   ok(P.singleOptions(RADIO).some((o) => o.tok === 'aisdsc' && /MARITIME/.test(o.label)), 'single mode offers MARITIME: AIS + DSC');
   BLOCKS = new Set(['dsc']); P.mapLandRender();
   ok(/data-keep="aisdsc"[^>]* disabled/.test($('mapModeList').innerHTML) && /DSC is switched off/.test($('mapModeList').innerHTML), 'DSC switched off: greyed with the reason');
@@ -168,7 +178,7 @@ console.log('── an Airspy HF+ and an Icom');
   P.mapLandRender();
   ok(!/data-keep="adsb"/.test($('mapModeList').innerHTML) && !/data-keep="vor"/.test($('mapModeList').innerHTML) && /data-keep="vdl2" checked/.test($('mapModeList').innerHTML),
      'HF+: no ADS-B or VOR row at all (AGENTS.md), VDL2 offered');
-  ok(/Airspy HF\+ \u2014 pauses VDL2 for the pass/.test(P.keepSatWords({ ...RADIO, mapKeep: true })), 'the satellites line names the HF+ pause');
+  ok(/Airspy HF\+ \u2014 pauses VDL2 for the pass/.test(P.keepSatWords({ ...RADIO, bgMode: 'vdl2' })), 'the satellites line names the HF+ pause');
   P.setHW(null); RADIO = { driver: 'icom' }; P.mapLandRender();
   ok($('mapLandWrap').classList.contains('hide'), 'an Icom: the card is not drawn');
 }
@@ -226,12 +236,20 @@ console.log('── migration of a beta95 radio');
   const r = { landingAdsb: true, adsbKeepRunning: true };
   P.keepMigrate(r);
   ok(r.landingMap === 'avmar' && r.landingModes === 'adsb' && r.mapKeep, 'beta95 ADS-B + keep → the map, ADS-B, kept (as the server reads it)');
+  ok(r.bgMode === 'adsb', '…and the background is ADS-B (b96-bgsplit)');
   const n = { landingAdsb: false }; P.keepMigrate(n);
-  ok(!n.landingMap, 'nothing set stays nothing');
+  ok(!n.landingMap && n.bgMode === '', 'nothing set stays nothing (background manual)');
+  const k = { landingMap: 'avmar', landingModes: 'vdl2', mapKeep: true }; P.keepMigrate(k);
+  ok(k.bgMode === 'vdl2', 'b96-keeprun map + VDL2 + keep → background VDL2');
+  const k2 = { landingMap: 'avmar', landingModes: 'vdl2', mapKeep: false }; P.keepMigrate(k2);
+  ok(k2.bgMode === '', 'b96-keeprun map + VDL2, no keep → background manual');
+  const k3 = { landingMap: 'avmar', landingModes: 'vdl2', mapKeep: true, bgMode: 'ais' }; P.keepMigrate(k3);
+  ok(k3.bgMode === 'ais', 'a stored bgMode always wins');
 }
 
 // ★ the save carries the three (and the mirrored pair)
 ok(/landingMap: radio\(\)\.landingMap === "avmar" \|\| radio\(\)\.landingMap === "amateur" \? radio\(\)\.landingMap : ""/.test(src) && /landingModes: /.test(src) && /mapKeep: \(radio\(\)\.landingMap === "avmar"/.test(src), 'the save writes landingMap / landingModes / mapKeep (either map)');
+ok(/bgMode: keepBgNormal\(radio\(\)\.bgMode\)/.test(src), '★ b96-bgsplit the save writes bgMode');
 
 console.log('── the AMATEUR map: ISM on 868 for MeshCore (Stuart 11-26)');
 {
@@ -241,12 +259,12 @@ console.log('── the AMATEUR map: ISM on 868 for MeshCore (Stuart 11-26)');
   ok(RADIO.landingModes === '' , 'ISM without a band is not stored');
   P.keepSetModes(['ism:868']);
   ok(RADIO.landingModes === 'ism:868' && !RADIO.landingAdsb, `ISM 868 stored as its token: ${RADIO.landingModes}`);
-  RADIO.mapKeep = true; P.keepMirror(RADIO); P.mapLandRender();
+  RADIO.bgMode = 'ism:868'; P.keepMirror(RADIO); P.mapLandRender();
   const h = $('mapModeList').innerHTML;
   ok(/data-keep="ism" checked/.test(h) && !/data-keep="vdl2"/.test(h), 'the Amateur map draws ISM only (ticked)');
   ok(/select data-keepband="ism"/.test(h) && /value="868" selected/.test(h) && /value="433"/.test(h), "the band from ISM's own plan (this radio's), 868 selected");
+  ok(RADIO.mapKeep, 'background ISM 868 = the landing: mirrored as mapKeep');
   ok(/MeshCore, Meshtastic, LoRaWAN/.test(h) && /about 11 % of one core/.test(h), 'grouped with the LoRa words, priced by dec_ism');
-  ok($('mapKeepLbl').textContent === 'Keep ISM 868 MHz SRD running when nobody is connected', $('mapKeepLbl').textContent);
   ok(/ISM 868 MHz SRD pauses for the pass/.test(P.keepSatWords(RADIO)), 'the satellites words: ISM pauses for a pass');
   BLOCKS = new Set(['ism']); P.mapLandRender();
   ok(/data-keep="ism"[^>]* disabled/.test($('mapModeList').innerHTML), 'ISM switched off: greyed, said');
@@ -254,6 +272,23 @@ console.log('── the AMATEUR map: ISM on 868 for MeshCore (Stuart 11-26)');
   RADIO = { driver: 'rtlsdr', landingMap: 'avmar' }; P.keepSetModes(['ism:868']);
   ok(RADIO.landingModes === '', 'ISM is not an Aviation & Maritime mode');
   ok(P.keepParse('ism:868,ism:433,vdl2').join() === 'vdl2,ism:868', 'tokens in table order, one ISM band');
+}
+
+console.log('── ★★ ISM IS WORLDWIDE (Stuart 11-26): the band list is the server\'s plan, the region\'s own first');
+{
+  const plan = (region, own) => ({ ...hwRtl(2400000), ismRegion: region, ismPlan: [
+    ...own.map((id) => ({ id, name: id + ' MHz', region: 'r', own: true })),
+    ...['315', '433', '868', '907', '915', '923'].filter((x) => !own.includes(x)).map((id) => ({ id, name: id + ' MHz', region: 'r', own: false }))] });
+  P.setHW(plan('North America', ['907', '910', '315', '915'])); RADIO = { driver: 'rtlsdr', landingMap: 'amateur', bgMode: '' };
+  ok(P.keepIsmDefault() === '907', 'a US server: its first own band by default (907, the ISM mode\'s own landing)');
+  let sel = P.keepIsmSelect('ism:915');
+  ok(/optgroup label="Your region \(North America\)"/.test(sel) && /value="915" selected/.test(sel) && /value="315"/.test(sel) && /Other regions/.test(sel) && /value="868"/.test(sel),
+     'a US server sees 915 and 315 under its region, 868 under other regions');
+  P.setHW(plan('elsewhere', ['433', '868', '315', '915'])); P.bgSetWhole(['ism:' + P.keepIsmDefault()]);
+  ok(RADIO.bgMode === 'ism:433', `a UK server: background ISM defaults to its own 433 (${RADIO.bgMode})`);
+  sel = P.keepIsmSelect('ism:868');
+  ok(/Your region \(elsewhere\)/.test(sel) && /value="868" selected/.test(sel) && /value="433"/.test(sel) && /value="907"/.test(sel), 'a UK server sees 868 and 433 as its own, every other band still offered');
+  ok(/ISM \(choose a band\)/.test(src), 'the choice reads "ISM (choose a band)"');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

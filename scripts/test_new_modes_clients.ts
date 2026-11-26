@@ -120,6 +120,11 @@ for (const [csv, what] of cases) {
   const allOff = NM.allSet('', false, ids, 'adsb', {}, MG)!;
   ok(onlyLeft(appOff(allOff)) === 'adsb', 'ALL OFF keeping the landing mode (ADS-B): ADS-B only, the exit lock applies');
   ok(NM.allSet('', false, ids, '', {}, MG) === null, 'ALL OFF with no landing mode it can name: refused');
+  { // ★★★ b96-bgsplit ALL OFF keeps the BACKGROUND mode on beside the landing's (FM landing + background AIS)
+    const v = NM.allSet('', false, ids, 'wfm', {}, MG, 'ais')!;
+    const own = new Set(v.split(','));
+    ok(!own.has('wfm') && !own.has('ais') && own.has('adsb'), 'ALL OFF: the landing (WFM) and the background (AIS) stay on, the rest off');
+  }
   ok(NM.allSet('', false, ids, 'zzz', {}, MG) === null, 'ALL OFF with a landing mode not on the card: refused');
   const allOn = NM.allSet(PAUL, true, ids, 'adsb', {}, MG)!;
   ok([...appOff(allOn)].length === 0, 'ALL ON: nothing off (new switches ticked with "+id")');

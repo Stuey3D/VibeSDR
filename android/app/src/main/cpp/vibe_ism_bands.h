@@ -140,26 +140,30 @@ inline const char* regionName(Region r) {
  *  923; Asia → 923 (AS923-1 and four countries' Meshtastic LongFast), then 920; everywhere else and no position → 433.92,
  *  868. After the region's own list, every other band in step order, so a radio that reaches only some still lands.
  *  `can(id)` = reachable. (Before 2026-11-12 the Americas landed on 315 — Stuart's "US → 315/915 by what's most common".) */
-template <class Can> inline const Band* landingBand(double lat, double lon, Can can) {
+/** ★★★ beta96 b96-bgsplit (Stuart 11-26: "ISM is WORLDWIDE"): the region's OWN bands, most used first — the order the
+ *  landing band walks, and the order the background / landing ISM choice lists them in (then every other band of the plan,
+ *  under "other regions"). Ids only; the plan (bands()) stays the one source of truth for what a band is. */
+inline const std::vector<const char*>& regionBands(Region r) {
     // ★ beta72: each region's own world blocks after its beta71 landing (LORA-WORLD-BANDS.md §Country → block)
-    static const char* const na[] = {"907", "910", "904", "315", "915", "913", nullptr};
-    static const char* const sa[] = {"923", "904", "915", "920", "917", "907", nullptr};
-    static const char* const oc[] = {"920", "915", "917", "923", "433", nullptr};
-    static const char* const as[] = {"923", "922", "920", "917", "433", "315", nullptr};
-    static const char* const in[] = {"865", "867", "433", nullptr};
-    static const char* const cn[] = {"479", "433", nullptr};
-    static const char* const eu[] = {"433", "868", "315", "915", nullptr};
-    const char* const* order = eu;
-    switch (regionAt(lat, lon)) {
-        case Region::NorthAmerica: order = na; break;
-        case Region::SouthAmerica: order = sa; break;
-        case Region::Oceania: order = oc; break;
-        case Region::Asia: order = as; break;
-        case Region::India: order = in; break;
-        case Region::China: order = cn; break;
-        default: break;
+    static const std::vector<const char*> na = {"907", "910", "904", "315", "915", "913"};
+    static const std::vector<const char*> sa = {"923", "904", "915", "920", "917", "907"};
+    static const std::vector<const char*> oc = {"920", "915", "917", "923", "433"};
+    static const std::vector<const char*> as = {"923", "922", "920", "917", "433", "315"};
+    static const std::vector<const char*> in = {"865", "867", "433"};
+    static const std::vector<const char*> cn = {"479", "433"};
+    static const std::vector<const char*> eu = {"433", "868", "315", "915"};
+    switch (r) {
+        case Region::NorthAmerica: return na;
+        case Region::SouthAmerica: return sa;
+        case Region::Oceania: return oc;
+        case Region::Asia: return as;
+        case Region::India: return in;
+        case Region::China: return cn;
+        default: return eu;
     }
-    for (int i = 0; order[i]; ++i) { const Band* b = bandById(order[i]); if (b && can(*b)) return b; }
+}
+template <class Can> inline const Band* landingBand(double lat, double lon, Can can) {
+    for (const char* id : regionBands(regionAt(lat, lon))) { const Band* b = bandById(id); if (b && can(*b)) return b; }
     for (const auto& b : bands()) if (can(b)) return &b;
     return nullptr;
 }

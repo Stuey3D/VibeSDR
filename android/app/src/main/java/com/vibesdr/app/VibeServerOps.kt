@@ -400,7 +400,7 @@ object VibeServerOps {
         cfg.put("rawIq", 0); cfg.put("rawIqMax", 0)
         cfg.put("pskrOn", false); cfg.put("wsprnetOn", false)
         cfg.put("landingAdsb", false); cfg.put("adsbKeepRunning", false)
-        cfg.put("landingMap", ""); cfg.put("landingModes", ""); cfg.put("mapKeep", false); cfg.put("singleMode", "")   // ★★★ beta96 nor a kept map mode
+        cfg.put("landingMap", ""); cfg.put("landingModes", ""); cfg.put("mapKeep", false); cfg.put("singleMode", ""); cfg.put("bgMode", "")   // ★★★ beta96 nor a kept map mode (b96-bgsplit: nor a background mode)
         cfg.put("spectrogram", false)
         cfg.put("lockedCentre", 0.0); cfg.put("lockedRate", 0.0); cfg.put("rateLock", false)
         cfg.put("fftRate", 10.0)                    // ★ the spectrum only feeds VibeAGC here — nobody watches it

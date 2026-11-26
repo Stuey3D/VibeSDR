@@ -222,7 +222,14 @@ struct Config {
      *  the same ADS-B landing and never lands anywhere it does not know. ★ All OFF by default. */
     std::string landingMap;
     std::string landingModes;
-    bool   mapKeep = false;
+    bool   mapKeep = false;      // ★ b96-bgsplit: a MIRROR of "background = the landing map's mode" (see bgMode)
+    /* ★★★ beta96 b96-bgsplit BACKGROUND DECODING — what the radio does when NOBODY is connected, SEPARATE from the landing
+     *  (Stuart 11-26: "Listen-Amateur uses FM radio as his landing zone, so if he enabled background AIS that would break
+     *  that"). "" = manual (bgDecode's profiles, as ever); else ONE whole-radio mode token of vibe_keep_store.h ("ais",
+     *  "aisdsc", "adsb", "vdl2", "acars,vdl2", "vor", "ism:<band>"). The first listener's arrival pauses it and lands them
+     *  per the landing; the last one leaving brings it back. Migration (vibekeep::migrate): mapKeep / adsbKeepRunning =
+     *  background is the landing map's mode. Written ALWAYS (an absent key means "derive it from the old words"). */
+    std::string bgMode;
     /* ★★★ beta96 THE SINGLE-MODE RADIO (Stuart 11-26; vibe_keep_store.h singleBlocks): "" = General (listeners choose from the
      *  ticked modes); else the one mode ("adsb", "vdl2", "ais", "ism:868", "dab", "wfm" …) — the server blocks every other mode
      *  ON TOP of blockedModes (kept untouched underneath), lands and keeps it, and holds the only-mode exit lock. */
@@ -517,6 +524,7 @@ struct RadioConfig {
     std::string landingMap;              // ★★★ beta96 the landing map + modes + keep — see Config::landingMap
     std::string landingModes;
     bool   mapKeep = false;
+    std::string bgMode;                  // ★★★ b96-bgsplit the background choice — see Config::bgMode
     std::string singleMode;              // ★★★ beta96 the single-mode radio — see Config::singleMode
     int    users = 1;
     /* ★★★ 20, NOT 15 — 15 WAS A RATE NOBODY COULD CHOOSE (2026-09-24). The setup page offers

@@ -20,7 +20,7 @@ export const KEEP_MODES: { id: KeepModeId; name: string; group: 'aviation' | 'ma
   // ★★★ beta96 THE MARITIME COMBINATION (vibe_maritime_combo.h): AIS + DSC channel 70 from one wide capture — one choice, drawn
   //     only where the capture holds both (KEEP_MARITIME_MIN)
   { id: 'aisdsc', name: 'AIS + DSC (channel 70)', group: 'maritime', block: 'ais' },
-  { id: 'ism',   name: 'ISM',           group: 'ism',      block: 'ism', map: 'amateur' },
+  { id: 'ism',   name: 'ISM (choose a band)', group: 'ism', block: 'ism', map: 'amateur' },   // ★★ b96-bgsplit any band of ISM's plan
 ];
 export const KEEP_GROUP_WORDS: Record<string, string> = { aviation: 'AVIATION', maritime: 'MARITIME', ism: 'ISM \u00b7 sensors and LoRa (MeshCore, Meshtastic, LoRaWAN)' };
 export const MAP_AMATEUR = 'amateur';
@@ -62,12 +62,13 @@ export type KeepOffer = { id: KeepModeId; tok: string; name: string; group: stri
 
 /** vibekeep::gate — one mode at a time at an ordinary rate (the rest greyed with the rate and the reason), ACARS + VDL2
  *  together only where the capture holds both. */
-export function keepGate(avail: KeepAvail[], comboOk: boolean, comboWhy: string, rateHz: number, chosenIn: string[], map: KeepMap = 'avmar'): KeepOffer[] {
+export function keepGate(avail: KeepAvail[], comboOk: boolean, comboWhy: string, rateHz: number, chosenIn: string[], map: KeepMap | '' = 'avmar'): KeepOffer[] {
   const av = (id: string) => avail.find((a) => a.id === id);
-  let toks = keepParse(chosenIn.join(',')).filter((t) => { const a = av(keepBase(t)); return keepMapOf(t) === map && !!a && a.hw && !a.why; });
+  // ★★★ b96-bgsplit map '' = every map's modes (the BACKGROUND DECODING card)
+  let toks = keepParse(chosenIn.join(',')).filter((t) => { const a = av(keepBase(t)); return (!map || keepMapOf(t) === map) && !!a && a.hw && !a.why; });
   let chosen = toks.map(keepBase);
   if (chosen.length > 1 && !(keepIsCombo(chosen) && comboOk)) { chosen = chosen.slice(0, 1); toks = toks.slice(0, 1); }
-  return KEEP_MODES.filter((m) => (m.map ?? 'avmar') === map).map((m) => {
+  return KEEP_MODES.filter((m) => !map || (m.map ?? 'avmar') === map).map((m) => {
     const o: KeepOffer = { id: m.id, tok: toks.find((t) => keepBase(t) === m.id) ?? m.id, name: m.name, group: m.group, drawn: true, enabled: true, on: false, why: '' };
     const a = av(m.id);
     if (!a || !a.hw) { o.drawn = false; o.enabled = false; return o; }
@@ -112,12 +113,36 @@ export function keepAvailLocal(f: {
   return { avail, comboOk, comboWhy };
 }
 
-/** The ADS-B pair an older engine reads, mirrored from the map (vibekeep::migrate). */
+/** The ADS-B pair an older engine reads, mirrored from the map (vibekeep::migrate). `keep` = the background IS the landing's mode. */
 export function keepMirror(map: boolean, modes: string, keep: boolean): { landingAdsb: boolean; adsbKeepRunning: boolean } {
   const ids = keepParse(modes);
   const landingAdsb = map && ids.length === 1 && ids[0] === 'adsb';   // ★ ADS-B is an Aviation & Maritime mode, so this is that map
   return { landingAdsb, adsbKeepRunning: landingAdsb && keep };
 }
+/* ── ★★★ b96-bgsplit BACKGROUND DECODING, separate from the landing (Stuart 11-26: "Listen-Amateur uses FM radio as his landing
+ *  zone, so if he enabled background AIS that would break that"). '' = manual (the profiles); else ONE whole-radio mode of
+ *  any map. vibekeep::bgNormalise / migrate, the same rules. ── */
+export function keepBgNormal(csv: string | null | undefined): string {
+  let ids = keepParse(csv);
+  if (ids.length > 1 && !keepIsCombo(ids)) ids = ids.slice(0, 1);
+  return ids.join(',');
+}
+/** The background as stored: a stored bgMode wins; never stored → b96-keeprun's keep (background = the landing map's mode). */
+export function keepBgMigrate(stored: string | null, mapOn: boolean, modes: string, mapKeep: boolean): string {
+  if (stored != null) return keepBgNormal(stored);
+  return mapOn && mapKeep ? keepBgNormal(modes) : '';
+}
+/** b96-keeprun's mapKeep, now a MIRROR: the background is exactly the landing map's mode. */
+export function keepMapKeepMirror(mapOn: boolean, modes: string, bg: string): boolean {
+  const m = keepParse(modes).join(',');
+  return mapOn && !!m && !!bg && keepBgNormal(bg) === m;
+}
+/** ★★ ISM IS WORLDWIDE: the bands this radio reaches, the server's region's own first (caps.ismOwn), then the rest. */
+export function keepIsmOrder(reach: string[], own: string[]): { id: string; own: boolean }[] {
+  const o = own.filter((b) => reach.includes(b));
+  return [...o.map((id) => ({ id, own: true })), ...reach.filter((b) => !o.includes(b)).map((id) => ({ id, own: false }))];
+}
+export function keepIsmDefault(reach: string[], own: string[]): string { return keepIsmOrder(reach, own)[0]?.id ?? ''; }
 /** beta95's stored pair → the map (only when the map has never been stored). */
 export function keepMigrate(stored: { map: string | null; landingAdsb: boolean; adsbKeep: boolean }): { map: boolean; modes: string; keep: boolean } | null {
   if (stored.map != null) return null;
@@ -125,6 +150,7 @@ export function keepMigrate(stored: { map: string | null; landingAdsb: boolean; 
   return { map: true, modes: 'adsb', keep: stored.adsbKeep };
 }
 /** The satellites beside a kept mode — the server's satKeepWarn, said before Start. */
+/** The satellites beside the BACKGROUND whole-radio mode (b96-bgsplit: `modes` is the background, `keep` whether one is set). */
 export function keepSatWords(modes: string, keep: boolean, ismWords?: Record<string, string>): string {
   const ids = keepParse(modes);
   if (!keep || !ids.length) return '';

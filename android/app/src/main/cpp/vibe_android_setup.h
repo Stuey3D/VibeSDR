@@ -300,7 +300,7 @@ inline const std::vector<Control>& controlTable() {
         { "idleGrace",                                   D_ANY,   0 },
         { "spectrogram",                                 D_RADIO, P_ADV },
         { "rate rateLock maxFps",                        D_RADIO, 0 },
-        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
+        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick singleWindow modeSingleUse", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
         { "dabRateBoost",                                D_RADIO, 0 },
         { "adsb256 ism256",                              D_RTL,   0 },
         { "dabScanLabels",                               D_RADIO, P_LITE },
@@ -310,7 +310,7 @@ inline const std::vector<Control>& controlTable() {
           "bandCopyFrom gainList gainAdd",               D_RADIO, P_ADV },
         { "gainIfBw",                                    D_RTL,   P_ADV },
         { "allowPick allowLo allowHi blockPick blockLo blockHi", D_ANY, P_ADV },
-        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList mapKeep", D_RADIO, 0 },   // ★★★ beta96 the landing map
+        { "dabLandOn dabLandBlock dabLandStation adsbLandOn adsbKeep mapLandOn mapLandWhich mapModeList landKindPlain landKindDab landKindMap bgKindManual bgKindWhole bgModeList", D_RADIO, 0 },   // ★★★ beta96 the landing map; b96-bgsplit the landing choice + the background mode
         { "fmDeemph fmStereo fmNr fmIms fmCeq fmAutoBw fmNb fmReturn fmRemember", D_RADIO, 0 },
         { "antRangePreset antFilterPreset antPortNames", D_ANY,   0 },
         { "swYes swNo swBroker swUser swPass swLocked swAntennas", D_ANY, 0 },
@@ -560,11 +560,14 @@ inline std::string pageConfig(const std::string& raw) {
     r.set("adsbKeepRunning", J::boolean(boolOr(S("adsbKeepRunning"), false)));
     {   // ★★★ beta96 the landing map — a beta95 config's ADS-B pair reads as the map + ADS-B (vibekeep::applyRead)
         const J* lm = S("landingMap"); const J* lmo = S("landingModes"); const J* mk = S("mapKeep");
+        const J* bm = S("bgMode");   // ★★★ b96-bgsplit the background choice (absent = derived from the keep words)
         vibekeep::Stored ks;
         ks.landingAdsb = boolOr(S("landingAdsb"), false); ks.adsbKeepRunning = boolOr(S("adsbKeepRunning"), false);
         ks.landingMap = strOr(lm, ""); ks.landingModes = strOr(lmo, ""); ks.mapKeep = boolOr(mk, false);
-        vibekeep::applyRead(ks, true, lm || lmo || mk);
+        ks.bgMode = strOr(bm, ""); ks.bgSet = false;
+        vibekeep::applyRead(ks, true, lm || lmo || mk, bm && bm->t == J::Str);
         r.set("landingMap", J::str(ks.landingMap)); r.set("landingModes", J::str(ks.landingModes)); r.set("mapKeep", J::boolean(ks.mapKeep));
+        r.set("bgMode", J::str(ks.bgMode));
         r.set("landingAdsb", J::boolean(ks.landingAdsb)); r.set("adsbKeepRunning", J::boolean(ks.adsbKeepRunning));
     }
     { const std::string sm = strOr(S("singleMode"), ""); r.set("singleMode", J::str(vibekeep::singleOk(sm) ? sm : "")); }   // ★★★ beta96
@@ -861,12 +864,15 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             /* ★★★ beta96 THE LANDING MAP: the page's words win; the ADS-B pair is mirrored from them (vibekeep::migrate), so the
              *  boot's setVibeServerLandingAdsb and the engine's map (read off this same config) can never disagree. */
             const J* lm = r->get("landingMap"); const J* lmo = r->get("landingModes"); const J* mk = r->get("mapKeep");
-            if ((lm && lm->t == J::Str) || (lmo && lmo->t == J::Str)) {
+            const J* bgm = r->get("bgMode");   // ★★★ b96-bgsplit
+            if ((lm && lm->t == J::Str) || (lmo && lmo->t == J::Str) || (bgm && bgm->t == J::Str)) {
                 vibekeep::Stored ks;
                 ks.landingAdsb = boolOr(r->get("landingAdsb"), false); ks.adsbKeepRunning = boolOr(r->get("adsbKeepRunning"), false);
                 ks.landingMap = strOr(lm, "").substr(0, 16); ks.landingModes = strOr(lmo, "").substr(0, 64); ks.mapKeep = boolOr(mk, false);
-                vibekeep::applyRead(ks, false, true);
+                ks.bgMode = strOr(bgm, "").substr(0, 64); ks.bgSet = false;
+                vibekeep::applyRead(ks, false, true, bgm && bgm->t == J::Str);
                 p.set("landingMap", J::str(ks.landingMap)); p.set("landingModes", J::str(ks.landingModes)); p.set("mapKeep", J::boolean(ks.mapKeep));
+                p.set("bgMode", J::str(ks.bgMode));
                 p.set("landingAdsb", J::boolean(ks.landingAdsb)); p.set("adsbKeepRunning", J::boolean(ks.adsbKeepRunning));
             }
         }

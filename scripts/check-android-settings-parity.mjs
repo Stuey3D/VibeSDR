@@ -93,8 +93,13 @@ const TABLE = [
   P(['adsbKeep'], 'adsbKeep', 'adsbKeepRunning'),
   // ★★★ beta96 the landing map + keep-running modes (utils/keepRun.ts on the screen; the engine reads them off the config)
   P(['mapLandOn', 'mapLandWhich'], 'landingMap', 'landingMap'),
-  P(['mapKeep'], 'mapKeep', 'mapKeep'),
+  // ★★★ b96-bgsplit keep-running became BACKGROUND DECODING (its own choice); the landing is one choice of three
+  P(['bgKindManual', 'bgKindWhole'], 'BACKGROUND DECODING', 'bgMode'),
+  P(['landKindPlain', 'landKindDab', 'landKindMap'], 'WHERE LISTENERS START', 'landingMap'),
   P(['radioUseGeneral', 'radioUseSingle', 'singlePick'], 'RADIO USE', 'singleMode'),
+  // ★ the Setup page's Operating mode tile (Single use) keeps its tuning arrangement — the app's RADIO USE row sits beside
+  //   its own unlocked / locked choice (radioUse), so nothing extra is needed there
+  N(['singleWindow'], 'the Setup page\'s Single use tile carries the radio\'s tuning (unlocked / locked) beneath it; the app\'s server screen already shows its own unlocked / locked choice beside RADIO USE'),
   // ★★★ beta96 new modes (b96-newmodes, docs/v12/NEW-MODES-OFF.md): the policy is a word in blockedModes ("newmodes@on|off");
   //    the screen's Modes card has the same pair (utils/newModes.ts setPolicy), the engine reads it off blockedModes
   P(['newModesPolOn', 'newModesPolOff'], 'When an update adds new modes', 'blockedModes'),
@@ -218,7 +223,7 @@ const S0 = read('src/screens/ServerModeScreen.tsx');
 ok(/bgDecode: live\.current\.bgJson/.test(S0), 'Start sends the profiles read through the live ref (never a stale closure)');
 ok(/\[K\.bgDecode, live\.current\.bgJson\]/.test(S0), 'Start persists the profiles it sends');
 ok(/live\.current\.bgProblem/.test(S0), 'Start refuses profiles the engine would refuse');
-ok(/!isIcom && !!bgCaps && \(/.test(S0), 'not drawn on an Icom, nor on an engine without it (never drawn empty)');
+ok(/!isIcom && !!bgCaps && !bgWhole && \(/.test(S0), 'not drawn on an Icom, nor on an engine without it (never drawn empty) — nor while a whole-radio background mode is chosen (b96-bgsplit)');
 ok(/NativeModules as any\)\.VibeLocalSDR\b/.test(S0) && !/NativeModules as any\)\.VibeLocalSdrModule/.test(S0), 'the screen calls the native module by its real name, VibeLocalSDR');
 
 // ── 5. the owner's DAB band scan ("Scan all DAB blocks", a button — not an input, so not in the id table) ──

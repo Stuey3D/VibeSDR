@@ -129,11 +129,19 @@ ok(blk.warn && blk.head.includes('profile 1 (ISM 433.92 MHz ISM) cannot run \u20
 }
 
 // ★★★ beta96 the landing map / keep-running line, and the shared 137 MHz capture on the satellite line
-ok(keepRunLines(null) === null && keepRunLines({ map: '' }) === null, 'keepRun: no landing map → nothing');
+ok(keepRunLines(null) === null && keepRunLines({ map: '' }) === null && keepRunLines({ bg: false, map: '', land: 'plain', landHz: 96.1e6 }) === null, 'keepRun: manual background → nothing (bgLines says that)');
+{ // ★★★ b96-bgsplit the background line names where new listeners land
+  const a = keepRunLines({ bg: true, map: 'avmar', mode: 'AIS', on: false, state: 'listeners', land: 'plain', landHz: 96_100_000, landDemod: 'wfm' })!;
+  ok(/paused — listeners have the radio/.test(a.head) && a.rows.some((r) => r === 'new listeners land on 96.100 MHz WFM — AIS pauses while they are on'), 'bg AIS + FM landing: ' + a.head + ' / ' + a.rows[0]);
+  const b = keepRunLines({ bg: true, map: 'avmar', mode: 'VDL2', on: true, state: 'running', land: 'map', landTitle: 'Aviation & Maritime', landMode: 'VDL2' })!;
+  ok(b.rows[0] === 'new listeners land on the Aviation & Maritime map in VDL2 — they join it already populated', 'bg = landing: ' + b.rows[0]);
+  const d = keepRunLines({ bg: true, map: 'avmar', mode: 'ADS-B', on: true, state: 'running', land: 'dab', landMode: 'DAB 12B' })!;
+  ok(/new listeners land on DAB 12B/.test(d.rows[0]), 'bg ADS-B + DAB landing: ' + d.rows[0]);
+}
 {
   const k = keepRunLines({ map: 'avmar', title: 'Aviation & Maritime', mode: 'VDL2', keep: true, on: true, state: 'running',
                            cost: 'about 9 % of one core (setup benchmark)', orbRider: true, centre: 137179000 })!;
-  ok(k.head === 'Aviation & Maritime \u00b7 VDL2 kept running \u00b7 running (nobody needs to be connected)', 'keepRun head: ' + k.head);
+  ok(k.head === 'Background decoding \u00b7 VDL2 \u00b7 running (nobody needs to be connected)', 'keepRun head (b96-bgsplit: the background line): ' + k.head);
   ok(k.rows.some((r) => r.startsWith('cost: about 9 %')) && k.rows.some((r) => /137\.1790 MHz/.test(r)) && k.rows.some((r) => /ORBCOMM sky plot building/.test(r)) && !k.warn,
      'keepRun rows: the cost, the shared centre, the sky plot');
   const c = keepRunLines({ map: 'avmar', mode: 'ADS-B', keep: true, on: false, state: 'cannot', why: 'ADS-B needs a capture of 2.4 MS/s' })!;

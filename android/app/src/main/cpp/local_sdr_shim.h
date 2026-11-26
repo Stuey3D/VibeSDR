@@ -877,6 +877,11 @@ public:
     /** ★★★ beta96 THE SINGLE-MODE RADIO ("" = General): every other mode blocked over the owner's list (vsModeBlocked), the
      *  mode landed and kept running where keep-running applies, the only-mode lock (onlyModeNow). vibe_keep_store.h. */
     static void setVibeServerSingle(const std::string& token);
+    /** ★★★ beta96 b96-bgsplit THE BACKGROUND CHOICE, separate from the landing: "" = manual background decoding (the
+     *  profiles), else the whole-radio mode token(s) the radio sits in whenever nobody is connected ("ais", "adsb", "vdl2",
+     *  "acars,vdl2", "aisdsc", "vor", "ism:868"). Once called it is authoritative over setVibeServerMap's `keep` (which
+     *  otherwise derives it: keep = background is the landing map's mode). Android: read off the config JSON (bgMode). */
+    static void setVibeServerBackground(const std::string& bgCsv);
     /** ★★ THE OWNER'S BROADCAST FM DEFAULTS, AND WHETHER THE SERVER REMEMBERS OR RETURNS (vibe_fm_defaults.h).
      *  `json` is a flat object with the config's fm* keys (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb,
      *  fmRemember); absent keys take the defaults. An UNCHANGED set is ignored, so re-applying a config forgets
