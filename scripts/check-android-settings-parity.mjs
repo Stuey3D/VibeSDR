@@ -95,6 +95,9 @@ const TABLE = [
   P(['mapLandOn', 'mapLandWhich'], 'landingMap', 'landingMap'),
   P(['mapKeep'], 'mapKeep', 'mapKeep'),
   P(['radioUseGeneral', 'radioUseSingle', 'singlePick'], 'RADIO USE', 'singleMode'),
+  // ★★★ beta96 new modes (b96-newmodes, docs/v12/NEW-MODES-OFF.md): the policy is a word in blockedModes ("newmodes@on|off");
+  //    the screen's Modes card has the same pair (utils/newModes.ts setPolicy), the engine reads it off blockedModes
+  P(['newModesPolOn', 'newModesPolOff'], 'When an update adds new modes', 'blockedModes'),
   P(['dabLandOn', 'dabLandBlock', 'dabLandStation'], 'landingDabCh', 'landingDabChannel'),
   P(['landingFreq', 'demodMode'], 'WHERE LISTENERS START', { sent: 'centerFreq: landingHz', applied: 'setVibeServerLanding(centerFreq, mode)' }),
   P(['fmDeemph', 'fmStereo', 'fmNr', 'fmIms', 'fmCeq', 'fmAutoBw', 'fmNb', 'fmReturn', 'fmRemember'], 'BROADCAST FM DEFAULTS', { sent: 'fmDefaultsKeys(cfg.fmDefaults', applied: 'setVibeServerFmDefaults(cfg.toString())' }),
