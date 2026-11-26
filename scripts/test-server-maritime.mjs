@@ -94,7 +94,8 @@ async function server(tag, radioExtra = {}, opt = {}) {
   return { port, dir, status, getJson, L, stop };
 }
 const spectrum = (port) => ws(port, `/ws/user-spectrum?user_session_id=${crypto.randomUUID().slice(0, 12)}&bins=256&proto=1`);
-const hwMode = (sp, id) => { const h = lastOf(sp, 'hwinfo'); return h && Array.isArray(h.mapModes) ? h.mapModes.find((m) => m.id === id) : null; };
+/** The Setup page's facts (GET /vibeserver/hardware — mapModes, the landing gate). */
+const hwMode = async (S, id) => { const h = await S.getJson('/vibeserver/hardware'); return h && Array.isArray(h.mapModes) ? h.mapModes.find((m) => m.id === id) : null; };
 
 try {
   // ── 1. an RTL at 2.4 MS/s: AIS as before, no combination ─────────────────────────────────────────────────────────────
@@ -106,8 +107,8 @@ try {
       ok(st && st.ais === true && st.aisDsc === undefined, `vibeserver.json: ais ${st && st.ais}, aisDsc ${st && st.aisDsc} (absent — no MARITIME key)`);
       const sp = spectrum(S.port);
       await until(() => sp.open && !!lastOf(sp, 'hwinfo'), 5000);
-      const m = hwMode(sp, 'aisdsc');
-      ok(m && m.hw === false && hwMode(sp, 'ais')?.hw === true, `hwinfo mapModes: aisdsc hw ${m && m.hw} (not drawn), ais hw true; minRate ${m && m.minRate}`);
+      const m = await hwMode(S, 'aisdsc');
+      ok(m && m.hw === false && (await hwMode(S, 'ais'))?.hw === true, `hwinfo mapModes: aisdsc hw ${m && m.hw} (not drawn), ais hw true; minRate ${m && m.minRate}`);
       sp.send({ type: 'ais', on: 1, band: 'ais+dsc' });
       ok(await until(() => !!lastOf(sp, 'ais_error'), 4000) && /6\.2 MS\/s/.test(lastOf(sp, 'ais_error')?.why || ''), `asked anyway: refused — "${lastOf(sp, 'ais_error')?.why}"`);
       ok(!/\[AIS\] mode ON/.test(S.L()), 'the radio did not move');
@@ -124,7 +125,7 @@ try {
       ok(st && st.ais === true && st.aisDsc === true, `vibeserver.json: ais ${st && st.ais}, aisDsc ${st && st.aisDsc}`);
       const sp = spectrum(S.port);
       await until(() => sp.open && !!lastOf(sp, 'hwinfo'), 5000);
-      const m = hwMode(sp, 'aisdsc');
+      const m = await hwMode(S, 'aisdsc');
       ok(m && m.hw === true && !m.why && m.minRate > 6.1e6 && m.minRate < 6.2e6, `hwinfo mapModes aisdsc: ${JSON.stringify(m)}`);
       await sleep(800);
       sp.send({ type: 'ais', on: 1, band: 'ais+dsc' });

@@ -2138,6 +2138,19 @@ else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))
 fi
 
+# ★★★ beta96 THE MARITIME COMBINATION (AIS + DSC ch 70) through the server: a fake rtl_tcp at 8 MS/s with an RSP's rate list
+#     replays `test-maritime-combo --write-clip` (16 MB, deleted after): not offered on an RTL; offered, entered, 4 ships + the
+#     DSC call, the gallery's pin + day log, AIS alone in place, leave; kept at start; single mode. Needs VIBESERVER_BIN.
+printf '\n\033[1m── Maritime: AIS + DSC together (end to end: the server) ──\033[0m\n'
+if [ -x "$OUT/test-maritime-combo" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-maritime-combo" --write-clip "$OUT/maritime-clip.cu8" 8000000 >/dev/null 2>&1
+  VIBE_MARITIME_CLIP="$OUT/maritime-clip.cu8" node --max-old-space-size=512 scripts/test-server-maritime.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/maritime-clip.cu8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-maritime-combo build'; notrun=$((notrun+1))
+fi
+
 # ★★★ V12 SONDES (docs/v12/RS41.md): the real server on a fake rtl_tcp replaying a synthetic 403.005 MHz capture
 #     (test-rs41 --write-clip: three RS41s from our own transmitter): the capability and bands, the sonde table, no
 #     temperature before the calibration is whole, the band step, the receiver given back, the owner's switch; then the web
