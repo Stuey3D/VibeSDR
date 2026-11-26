@@ -236,6 +236,12 @@ export function parseSatTrack(m: unknown): SatTrack | null {
 /** hwinfo → the button: absent = no button at all (the radio reaches no listed downlink); else live or greyed. */
 export function satCapFrom(j: Record<string, unknown> | null | undefined): SatCap | null {
   if (!j || typeof j.doppler !== 'number' || j.doppler < 1) return null;
+  /* ★★★ beta96 (Paul's ADS-B-only radio drew SATELLITE): the owner's switches as hwinfo states them. "sat" blocked, or
+   *  every demodulator a downlink lands in (NFM / USB / LSB) blocked, or a single-mode radio (onlyMode) = no SATELLITE.
+   *  A beta96 server already leaves `doppler` out then; this holds against an older one. */
+  const bl = Array.isArray(j.blocked) ? (j.blocked as unknown[]).map((x) => String(x).toLowerCase()) : [];
+  if (bl.includes('sat') || ['nfm', 'usb', 'lsb'].every((m) => bl.includes(m))) return null;
+  if (typeof j.onlyMode === 'string' && j.onlyMode) return null;
   const why = str(j.dopplerWhy, 200) ?? '';
   // ★★ beta94 `dopplerNeed: "location"` = the engine has no position (Local Hardware offers its own — satPlace.ts)
   return { ok: !why, why, ...(!why || j.dopplerNeed !== 'location' ? {} : { need: 'location' as const }) };

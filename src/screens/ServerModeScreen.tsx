@@ -62,6 +62,8 @@ const BLOCKABLE: ModeEntry[] = [
   // ★★ beta91 satellite labels on the waterfall (vibe_sat_engine.h skyLabels) — names only (★★ 2026-11-24 ORBCOMM is decoded
   //    from a SATELLITE pick now, so the old "ORBCOMM is never decoded" was dropped — as on the server's setup page)
   { id: 'satlabels', label: 'Satellite labels on the waterfall (names only)' },
+  // ★★★ beta96 SATELLITE mode itself — off = no SATELLITE button for listeners (the engine stops offering `doppler`)
+  { id: 'sat', label: 'SATELLITE mode (pick a satellite, Doppler followed)' },
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Band skimmer: a whole band at once', parent: 'spots' },
