@@ -308,6 +308,63 @@
     }
     return out;
   }
+  /* ★★★ beta96 THE OUTLINE'S SHAPE (Stuart 11-26: "still a STAR" on the Sony and Almere — per-1° max plus beta95's ±2°
+   *  lend gives long thin needles to 150+ NM and deep dips between them where the data is sparse). Three steps, on the
+   *  merged per-bearing maxima (the live-grown outline and the server's stored one go through the SAME rule):
+   *  1. EMPTY SECTORS stay empty: a run of RANGE_GAP_DEG or more bearings with nothing heard (the sea, a hill) is a GAP —
+   *     no range is invented there; the outline closes across it from the last heard bearing on each side (a chord,
+   *     never a spoke to the receiver).
+   *  2. FILL DIPS: a morphological CLOSE over the bearings (dilate, then erode, window ±RANGE_CLOSE_DEG, wrapping at 360°,
+   *     gaps ignored), so a bearing that just saw fewer aircraft between two well-heard ones is lifted to their level.
+   *  3. SOFTEN NEEDLES: each bearing lends its neighbours its range less RANGE_TAPER of it per degree, out to
+   *     ±RANGE_SPREAD_DEG, and the outline is the max of those — one far aircraft makes a broad bump, not a needle.
+   *  Every step only raises a bearing, so each bearing's true furthest point (the FURTHEST chip's aircraft) stays ON the
+   *  outline. Gap bearings stay 0. */
+  const RANGE_GAP_DEG = 10, RANGE_CLOSE_DEG = 4, RANGE_TAPER = 0.03, RANGE_SPREAD_DEG = 8;
+  function rangeShape(km) {
+    if (!Array.isArray(km)) return km;
+    const n = km.length, v = km.map((x) => Math.max(0, Number(x) || 0));
+    if (!v.some((x) => x > 0)) return v;
+    const per = n / 360, gapN = Math.max(1, Math.round(RANGE_GAP_DEG * per));
+    const cw = Math.max(1, Math.round(RANGE_CLOSE_DEG * per)), sw = Math.max(1, Math.round(RANGE_SPREAD_DEG * per));
+    // 1. the gaps: runs of ≥ gapN empty bearings (found around the circle, starting just after a heard one)
+    const gap = new Array(n).fill(false);
+    let start = v.findIndex((x) => x > 0);
+    for (let k = 1, run = []; k <= n; k++) {
+      const i = (start + k) % n;
+      if (v[i] > 0) { if (run.length >= gapN) for (const j of run) gap[j] = true; run = []; }
+      else run.push(i);
+    }
+    // 2. CLOSE: dilate over the heard (and short-dip) bearings, then erode — both ignoring the gaps
+    const dil = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (gap[i]) continue;
+      let m = 0;
+      for (let d = -cw; d <= cw; d++) { const j = (i + d + n) % n; if (!gap[j] && v[j] > m) m = v[j]; }
+      dil[i] = m;
+    }
+    const clo = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (gap[i]) continue;
+      let m = Infinity;
+      for (let d = -cw; d <= cw; d++) { const j = (i + d + n) % n; if (!gap[j] && dil[j] < m) m = dil[j]; }
+      clo[i] = Math.max(v[i], m === Infinity ? 0 : m);
+    }
+    // 3. SOFTEN: the max of every bearing's tapered lend (never into a gap)
+    const out = clo.slice();
+    for (let i = 0; i < n; i++) {
+      const r = clo[i];
+      if (!(r > 0)) continue;
+      for (let d = 1; d <= sw; d++) {
+        const w = r * (1 - RANGE_TAPER * d / per);
+        if (!(w > 0)) break;
+        const a = (i + d) % n, b = (i - d + n) % n;
+        if (!gap[a] && out[a] < w) out[a] = w;
+        if (!gap[b] && out[b] < w) out[b] = w;
+      }
+    }
+    return out;
+  }
   /** Put rings (or none: null) on the GPU map's ring sources. */
   function setRingData(gl, idp, rings) {
     const s1 = gl.getSource(idp + 'rings'), s2 = gl.getSource(idp + 'ringlbl');
@@ -624,7 +681,7 @@
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
-                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
+                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, rangeShape, RANGE_GAP_DEG, RANGE_CLOSE_DEG, RANGE_TAPER, RANGE_SPREAD_DEG, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
@@ -1116,14 +1173,15 @@
       if (!e.target || !e.target.classList || !e.target.classList.contains('vsadsb-rg-all')) return;
       setPref('rangeAll', !!e.target.checked); drawRange();
     });
-    /** The outline drawn: the server's (if any) merged with the live one, smoothed (rangeSmooth), and its all-time line. */
+    /** The outline drawn: the server's (if any) merged with the live one, shaped (rangeShape), and its all-time line. */
     function rangeGeo() {
       const c = drawCentre();
       if (!c || (!rangeData && !liveHas())) return { w: null, a: null };
       const live = liveC && distNm(liveC.lat, liveC.lon, c.lat, c.lon) * NM_M <= 5000 ? liveKm : null;
-      return { w: prefs.range ? rangeRing(c.lat, c.lon, rangeSmooth(rangeMerge(rangeData && rangeData.km, live))) : null,
+      // ★★★ beta96 rangeShape (gaps kept, dips closed, needles softened) — the live and the stored outline alike
+      return { w: prefs.range ? rangeRing(c.lat, c.lon, rangeShape(rangeMerge(rangeData && rangeData.km, live))) : null,
                a: prefs.range && prefs.rangeAll && rangeData && rangeData.window !== 0
-                 ? rangeRing(c.lat, c.lon, rangeSmooth(rangeMerge(rangeData.allKm, live))) : null };
+                 ? rangeRing(c.lat, c.lon, rangeShape(rangeMerge(rangeData.allKm, live))) : null };
     }
     function drawRange() {
       if (destroyed) return;
@@ -1268,7 +1326,25 @@
     }
     const onMoveEnd = () => { drawRings(); labelAt = 0; kick(); };
     if (gl) { gl.on('movestart', onMoveStart); gl.on('moveend', onMoveEnd); }
-    else { lm.on('movestart', onMoveStart); lm.on('moveend', onMoveEnd); }
+    else { lm.on('movestart', onMoveStart); lm.on('moveend', onMoveEnd); lm.on('moveend resize', () => llClamp()); }   // ★ beta96 the card kept on the map
+    /* ★★ beta96 A PIXEL-RATIO CHANGE (a window dragged to another screen, a browser zoom, device emulation): Leaflet's canvas
+     *  renderer only redraws on a move, so the range outline was drawn stale (at the old ratio) until the map was moved. The
+     *  ratio is watched and the canvas redrawn at once. The GPU map redraws itself. */
+    let dprMq = null;
+    function dprWatch() {
+      if (gl || typeof matchMedia !== 'function') return;
+      try {
+        if (dprMq) dprMq.removeEventListener('change', dprChanged);
+        dprMq = matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)');
+        dprMq.addEventListener('change', dprChanged);
+      } catch (e) { dprMq = null; }
+    }
+    function dprChanged() {
+      if (destroyed) return;
+      dprWatch();
+      try { lm.invalidateSize(); lm.fire('moveend'); drawRange(); llClamp(); } catch (e) { console.error('adsblayer: pixel ratio redraw', e); }
+    }
+    dprWatch();
 
     /* ── range rings ────────────────────────────────────────────────────────────────────────── */
     let llRings = null;
@@ -1363,8 +1439,8 @@
       drawRx(); drawRings(); drawRange();
       kick();
     }
-    function hitHex(point) {
-      const r = 12;
+    function hitHex(point) { return hitHexR(point, 12); }
+    function hitHexR(point, r) {
       const f = gl.queryRenderedFeatures([[point.x - r, point.y - r], [point.x + r, point.y + r]], { layers: ['vsadsb-icons'] });
       if (!f.length) return null;
       // ★ The nearest of whatever is under the finger, not the first MapLibre happened to list.
@@ -1560,6 +1636,7 @@
           .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);
         p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.openOn(lm);
+        llClamp();
       }
       requestAnimationFrame(moreCue);   // ★ once it is laid out — and again if the photo arrives and grows it
       setTimeout(moreCue, 600);
@@ -1663,6 +1740,38 @@
      *  is refilled: MapLibre's x stays the node that was pressed. Leaflet keeps its x outside the content anyway; there
      *  setContent re-lays the popup's width (a folded card is narrow), and the scroll position is put back. */
     const SC_OPEN = '<div class="vsadsb-sc">', SC_CLOSE = '</div>';
+    /* ★★ beta96 THE LEAFLET CARD STAYS ON THE MAP (a 390 px map: a card over an aircraft near the left edge sat partly off
+     *  it, under the zoom keys). autoPan stays off — the card is refreshed every report and would drag the map each time —
+     *  so the card's box (never its tip, which keeps pointing at the aircraft) is slid sideways to fit inside the map. */
+    let llClampAt = 0;
+    function llClamp() {
+      if (gl || !popup || !lm) return;
+      try {
+        const el = popup.getElement && popup.getElement();
+        const w = el && el.querySelector('.leaflet-popup-content-wrapper');
+        if (!w) return;
+        w.style.transform = '';
+        const sc = w.querySelector('.vsadsb-sc');
+        if (sc) sc.style.maxHeight = '';
+        const mr = lm.getContainer().getBoundingClientRect(), pad = 8;
+        let r = w.getBoundingClientRect();
+        if (!r.width || !mr.width) return;
+        // ★ never taller than the room above the aircraft: the card scrolls inside (its own scroller) instead of running
+        //   up under the map's top bar
+        const room = r.bottom - (mr.top + pad);
+        if (sc && r.height > room) { sc.style.maxHeight = Math.max(60, sc.getBoundingClientRect().height - (r.height - room)) + 'px'; r = w.getBoundingClientRect(); }
+        // ★ and clear of the zoom keys (top-left) where the card reaches down beside them
+        const zk = lm.getContainer().querySelector('.leaflet-top.leaflet-left .leaflet-control');
+        const zr = zk && zk.getBoundingClientRect();
+        let left = mr.left + pad;
+        if (zr && zr.width && r.top < zr.bottom && zr.right + 6 + r.width <= mr.right - pad) left = zr.right + 6;
+        let dx = 0;
+        if (r.width > mr.right - pad - left) dx = left - r.left;
+        else if (r.left < left) dx = left - r.left;
+        else if (r.right > mr.right - pad) dx = mr.right - pad - r.right;
+        if (dx) w.style.transform = 'translateX(' + Math.round(dx) + 'px)';
+      } catch (e) { console.error('adsblayer: card clamp', e); }
+    }
     function renderCard(h) {
       if (!popup) return;
       const el = popup.getElement ? popup.getElement() : null;
@@ -1674,6 +1783,7 @@
         const sc2 = top && popup.getElement ? popup.getElement().querySelector('.vsadsb-sc') : null;
         if (sc2) sc2.scrollTop = top;
       }
+      llClamp();
       moreCue();
     }
     function onMinClick(e) {
@@ -1830,7 +1940,7 @@
       if (drawTrail(t)) animating = true;
       if (popup && selected && ac.has(selected)) {
         const s = ac.get(selected);
-        if (s.disp) { if (gl) popup.setLngLat([s.disp.lon, s.disp.lat]); else popup.setLatLng([s.disp.lat, s.disp.lon]); }
+        if (s.disp) { if (gl) popup.setLngLat([s.disp.lon, s.disp.lat]); else { popup.setLatLng([s.disp.lat, s.disp.lon]); if (t - llClampAt > 200) { llClampAt = t; llClamp(); } } }
       }
       if (animating) kick();
     }
@@ -2007,6 +2117,30 @@
         return true;
       },
       prefs() { return Object.assign({}, prefs); },
+      /** ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a host whose AREA marker took a press asks whether an
+       *  aircraft is under it (client px; more slack on touch) — true = this layer selected it and the area must not. */
+      pickAt(clientX, clientY, touch) {
+        if (clientX == null || clientY == null) return false;
+        const rad = touch ? 20 : 12;
+        let h = null;
+        if (gl) {
+          if (!glReady) return false;
+          const r = gl.getCanvas().getBoundingClientRect();
+          h = hitHexR({ x: clientX - r.left, y: clientY - r.top }, rad);
+        } else if (lm) {
+          // ★ the Leaflet fallback (a server without a map pack): the nearest drawn aircraft within the slack
+          const r = lm.getContainer().getBoundingClientRect(), x = clientX - r.left, y = clientY - r.top;
+          let bd = rad;
+          for (const s of ac.values()) {
+            if (!s.disp || s.goneAt || !s.ll) continue;
+            const p = lm.latLngToContainerPoint([s.disp.lat, s.disp.lon]), d = Math.hypot(p.x - x, p.y - y);
+            if (d <= bd) { bd = d; h = s.hex; }
+          }
+        }
+        if (!h) return false;
+        select(h);
+        return true;
+      },
       /** ★ beta94 what the range outline draws (a test's view): null until the server has answered or (beta95) the map
        *  has grown one live. live = the bearings grown from this map's own positions; liveFar its furthest. */
       rangeShown() {
@@ -2018,6 +2152,7 @@
       },
       destroy() {
         destroyed = true;
+        try { if (dprMq) dprMq.removeEventListener('change', dprChanged); } catch (e) { /* gone */ }
         if (rafId) cancelAnimationFrame(rafId);
         if (rangeTimer) clearInterval(rangeTimer);
         if (rangeDrawTimer) clearTimeout(rangeDrawTimer);

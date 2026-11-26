@@ -133,7 +133,8 @@ export function readDetailRange(offset: number, length: number): string | null {
 }
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-function toBase64(u: Uint8Array): string {
+/** ★ Also the bundled packs' ranged reads (mapglPack.ts readPackRange). */
+export function toBase64(u: Uint8Array): string {
   let out = '', i = 0;
   for (; i + 2 < u.length; i += 3) {
     const n = (u[i] << 16) | (u[i + 1] << 8) | u[i + 2];

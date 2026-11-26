@@ -132,14 +132,15 @@ const STEPS: Step[] = [
         // ★★ V12 DAB own station (docs/v12/DAB-OWN-STATION.md) — where the server allows it, a pick is the listener's alone
         + 'are in this menu too; DAB\u2019s station list marks \u25B6 2 beside a station two listeners are hearing, and where the '
         + 'server gives each listener their own station a pick changes only what you hear (the multiplex stays shared); they '
-        + 'are in this menu too; DATALINK opens the AVIATION MAP with the aircraft heard on the ACARS (131 MHz) or VDL2 (136 MHz) channels, '
+        // ★★★ beta96 THE AIR & SEA MAP (docs/v12/ONE-MAP.md): AIS, DATALINK, VIEWS' AVIATION / SHIPPING and the NAVTEX, DSC and HFDL MAP keys open one map
+        + 'are in this menu too; DATALINK opens the AVIATION & MARITIME map (one map for aircraft and ships, AIS opens it too) on its MESSAGES tab, the datalink live (a red dot on its keys) with the aircraft heard on the ACARS (131 MHz) or VDL2 (136 MHz) channels, '
         + 'the bands in its top bar (a radio with a wide enough capture adds ACARS + VDL2, both at once), and beside them every aircraft this server\u2019s other radios hear \u2014 ADS-B, HFDL, ADS-C \u2014 each '
         + 'aircraft once, its card saying which sources heard it, with a layer key for each source, HFDL STATIONS and AIRPORTS (on until you switch '
         + 'it off) \u2014 every aircraft drawn as on the ADS-B map, whichever source heard it (its type\u2019s silhouette, its operator\u2019s badge, the flag): range rings, AUTO and FIT, each one gliding to its new position and pointing '
-        + 'the way it is going; ADS-B\u2019s top bar gains AVIATION MAP when another source has aircraft. VIEWS, at the foot of this menu, '
+        + 'the way it is going; the ships, DSC calls, NAVTEX and sea areas this server holds sit beside them as MARITIME keys, and the list under the map has tabs \u2014 AIRCRAFT (NEAREST or LATEST), MESSAGES (tap an aircraft for its own), SHIPS, NAVTEX. ADS-B opens the same map with ADS-B live, on AIRCRAFT: ADS-B\u2019s own list first (altitude and climb, speed, range, emergencies and military at the top; NEWEST, FURTHEST and LONGEST TRACKED under the list\u2019s header), the other sources\u2019 aircraft after it, GAIN and CHAT in the top bar and EXIT ADS-B to leave. VIEWS, at the foot of this menu, '
         // ★★★ V12 beta90 (Stuart, 2026-11-21): VIEWS' three map keys — each only where this server has something for it
-        + 'holds the three maps: DIGI MODES (every station the digital modes, CW and APRS heard, background decoding and every listener, '
-        + 'over the last hour, day, week, month or all of it), AVIATION and SHIPPING \u2014 each only where this server has something for it. SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
+        + 'holds the three maps: AMATEUR (every station the digital modes, CW, RTTY and PSK, APRS, the mesh nodes and the NCDXF beacons heard, background decoding and every listener, '
+        + 'over the last hour, day, week, month or all of it \u2014 every layer the same window, the list in tabs SPOTS, APRS, MESH, BEACONS), AVIATION and SHIPPING (both the AVIATION & MARITIME map, on its aircraft or its ships) \u2014 each only where this server has something for it. SONDES finds weather balloons (RS41, DFM, M10, M20 \u2014 the type found for each) on 400\u2013406 MHz and puts them on a map '
         + '(serial, height, climb; pick one for its track), its bands in the top bar. '
         // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md) — replaced SAT and the METEOR LRPT decoder key, 2026-11-20
         + 'SATELLITE lists every satellite\u2019s passes (up now first, each rated EXCELLENT to POOR by how high it climbs, greyed where this receiver cannot hear it); tap one and the '
@@ -151,7 +152,7 @@ const STEPS: Step[] = [
         + 'to come SCHEDULE (where tuning moves nobody else: a radio of your own, a locked range, or you alone on it) tunes there at AOS and goes back to what you were on after LOS, PRIORITISE choosing which of two overlapping passes wins, while on a shared dial REMIND pops up shortly before it rises with LISTEN. '
         // ★★★ beta96 SINGLE MODE: SATELLITES (docs/v12/SAT-SINGLE.md) — the watch view; the box's note replaces EXIT
         + 'On a receiver its owner has set to SATELLITES only, you land in SATELLITE and watch the radio\u2019s own passes \u2014 the one on now or the next, its timetable, the last pass and GALLERY; during a linear transponder pass you get your own VFO across it with your own AUTO DOPPLER. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
-        + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION MAP, SELCAL, and on the VHF '
+        + '— Aviation (HFDL: tune an HFDL frequency in USB first — it decodes your own dial — with MAP in its box for the AVIATION & MARITIME map, SELCAL, and on the VHF '
         + 'and UHF tabs VOR / ILS: tune a VOR in AM for the radial you are on FROM it, its ident and the station, with a compass card in the box '
         + '(two VORs\u2019 radials cross where you are), or an ILS localiser or glideslope for how far off the approach you are), Maritime (on the UHF tab '
         + '406 BEACONS: COSPAS-SARSAT distress beacons, mostly tests \u2014 everyone sees that one was heard, its kind and country; its identity and '

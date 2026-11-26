@@ -1,5 +1,5 @@
 /**
- * NdbLiveList — the V12 NDB map's live list, beacon card and dialogs (docs/v12/NDB-SKIMMER.md; the web's NdbView in
+ * NdbLiveList — the V12 NDB map's live list body, beacon card and dialogs (beta96: useNdbBody, on the AIR & SEA map) (docs/v12/NDB-SKIMMER.md; the web's NdbView in
  * web/client/src/ndb.ts). The map itself is MapOverlay's page with the shared beacon layer; this is everything over it.
  *
  * ★★★ DRAWN BY REACT NATIVE OVER THE WEBVIEW, for AdsbLiveList's reason: a game pad and the keyboard reach the app
@@ -20,15 +20,14 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, useOverlay, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import TvTextInput from './TvTextInput';
 import { scrollLane } from '../constants/popupTokens';
-import { EDGE, MAP_TOPBAR_H, adsbListWidth, parseListOpen } from '../services/adsbList';
+import { EDGE, MAP_TOPBAR_H } from '../services/adsbList';
 import {
   NDB_BAR_ON, NDB_NO_POS, NDB_Q_COLOURS, flag, khz, ndbBars, ndbByHourOfDay, ndbEmptyText, ndbFoundKey, ndbIdentCell,
-  ndbOnMap, ndbRowLive, ndbRows, ndbStation, ndbStatsCsv, ndbStatText, ndbSusLabel, ndbTiles, nmText, utc,
+  ndbOnMap, ndbRowLive, ndbRows, ndbStation, ndbStatsCsv, ndbSusLabel, ndbTiles, nmText, utc,
   type NdbBeacon, type NdbCopy, type NdbFound, type NdbMapPrefs, type NdbReport, type NdbStats, type NdbTracks,
 } from '../services/ndb';
 
@@ -50,119 +49,90 @@ export interface NdbOverlay {
   onDecide?: (act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) => void;
 }
 
-const OPEN_KEY = 'lsv_ndb_list_open';
 const HEAD_H = 30;
 const CHIPS_H = 30;
 const ROW_H = 42;   // ★ two lines: the row and its readings
 
-/** ★ How many rows: never more than half the map's height (the map is the screen), 2–6 (it scrolls). */
-export function ndbListRowsFit(areaH: number): number {
-  const mapH = Math.max(0, areaH - MAP_TOPBAR_H);
-  return Math.max(2, Math.min(6, Math.floor((mapH * 0.5 - HEAD_H - CHIPS_H * 2) / ROW_H)));
-}
-
 type Dlg = '' | 'log' | 'find' | 'stats';
 
-export default function NdbLiveList(p: {
+/** ★★★ beta96 (docs/v12/ONE-MAP.md stage 8): NDB is a live state of the AIR & SEA map — this list no longer has a corner
+ *  of its own. Its body heads the map's NAVAIDS tab while NDB is live (TrackLiveList `ndb`), as the web's NdbView pieces
+ *  sit under the web map's NAVAIDS header: the tiles, RINGS · UNHEARD · HEARD LOG · FIND NDB · STATS, the beacon rows
+ *  with their readings; the card over the map; the dialogs on top. The map's own FIT key frames the beacons. */
+export interface NdbBodyInput {
   ndb: NdbOverlay; selected: number; onSelect: (id: number) => void;
   prefs: NdbMapPrefs; onPrefs: (p: Partial<NdbMapPrefs>) => void;
-  /** ★ beta92 THE AUTO FIT's key (src/utils/mapAutoFit.ts — the ADS-B map's AUTO): a tap is the map's to decide (paused →
-   *  resume, on → off, off → on); `fitPaused` = a touch paused it (the chip dashed, as ADS-B's AUTO is striped). */
-  onFitKey: () => void; fitPaused: boolean;
-  onFootprint?: (w: number) => void;
-  ink: { x: string; k: string; kt: string }; areaW: number; areaH: number;
-  insets: { top: number; bottom: number; left: number; right: number };
-}) {
-  const [open, setOpen] = useState(true);
-  useEffect(() => { AsyncStorage.getItem(OPEN_KEY).then((v) => setOpen(parseListOpen(v))).catch(() => {}); }, []);
-  const setOpenKept = (v: boolean) => { setOpen(v); AsyncStorage.setItem(OPEN_KEY, v ? '1' : '0').catch(() => {}); };
+}
+export interface NdbBody {
+  /** the head's height (the tiles and the keys rows) */
+  extra: number;
+  count: number;
+  head: React.ReactNode;
+  rows: React.ReactNode[];
+  empty: string;
+  /** the beacon card (over the map, inside the list's pad walk) */
+  card: React.ReactNode;
+  /** a dialog (HEARD LOG · FIND · STATS) — on top, with its own pad walk */
+  dialog: React.ReactNode;
+  /** a dialog is open: the list lets the pad go */
+  modal: boolean;
+  /** the row height (two lines) */
+  rowH: number;
+}
+export function useNdbBody(p: NdbBodyInput | null, ink: { x: string; k: string; kt: string },
+                           insets: { top: number; bottom: number; left: number; right: number }, innerW: number): NdbBody {
   const [dlg, setDlg] = useState<Dlg>('');
-  const r = p.ndb.report;
+  const r = p?.ndb.report ?? null;
   const rows = useMemo(() => (r ? ndbRows(r) : []), [r]);
-  const innerW = p.areaW - p.insets.left - p.insets.right;
-  const innerH = p.areaH - p.insets.top - p.insets.bottom;
-  // ★ a little wider than ADS-B's: the station name is the point of a row
-  const width = Math.min(360, Math.max(adsbListWidth(innerW), Math.min(innerW - EDGE * 2, 300)));
-  const fit = ndbListRowsFit(innerH);
-  useEffect(() => { p.onFootprint?.(open ? width : 0); }, [open, width]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const { navCtx, scrollProps } = usePanelNav(!dlg, { flat: true });
-  const s = useMemo(() => makeStyles(p.ink), [p.ink]);
+  const s = useMemo(() => makeStyles(ink), [ink]);
+  useEffect(() => { if (!p) setDlg(''); }, [!p]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!p) return { extra: 0, count: 0, head: null, rows: [], empty: '', card: null, dialog: null, modal: false, rowH: ROW_H };
   const nowMs = (r?.now || Date.now() / 1000) * 1000;
   const tiles = r ? ndbTiles(r) : null;
   const sel = p.selected ? r?.beacons.find((b) => b.id === p.selected) ?? null : null;
-
-  return (
+  const head = (
     <>
-      {!dlg && (
-        <NavCtx.Provider value={navCtx}>
-          <View style={[s.wrap, { left: EDGE + p.insets.left, bottom: EDGE + p.insets.bottom }, open && { width }]}
-                onTouchStart={noteTouchInteraction}>
-            <NavRow>
-              <Key s={s} style={[s.head, !open && s.pill]} onPress={() => setOpenKept(!open)}
-                   a11y={open ? `Beacon list, ${r?.identified ?? 0} identified of ${r?.carriers ?? 0} carriers. Hide the list`
-                              : `Show the beacon list, ${r?.identified ?? 0} identified`}>
-                <Text style={s.headTxt}>{open ? 'BEACONS' : 'NDB'}</Text>
-                <Text style={s.headCnt}>{`${r?.identified ?? 0} / ${r?.carriers ?? 0}`}</Text>
-                {open && <Text style={s.headSub} numberOfLines={1}>{r ? ndbStatText(r) : 'taking the receiver to the beacon band…'}</Text>}
-                {open && <View style={{ flex: 1 }} />}
-                <Text style={s.chev}>{open ? '▾' : '▸'}</Text>
-              </Key>
-            </NavRow>
-            {open && !!tiles && (
-              <NavRow>
-                <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}>
-                  {([['CARRIERS', tiles.carriers], ['IDENTIFIED', tiles.identified], ['FURTHEST', tiles.furthest], ['COVERAGE', tiles.coverage]] as const)
-                    .map(([k, v]) => <Tile key={k} s={s} k={k} v={v} />)}
-                </ScrollView>
-              </NavRow>
-            )}
-            {open && (
-              <NavRow>
-                <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}
-                            keyboardShouldPersistTaps="handled">
-                  <Chip s={s} label="RINGS" on={p.prefs.rings} a11y="Range rings in nautical miles" onPress={() => p.onPrefs({ rings: !p.prefs.rings })} />
-                  <Chip s={s} label="UNHEARD" on={p.prefs.unheard} a11y="The published beacons not heard, faint"
-                        onPress={() => { const v = !p.prefs.unheard; if (v) p.ndb.onFind(''); p.onPrefs({ unheard: v }); }} />
-                  <Chip s={s} label="FIT" on={p.prefs.autofit && !p.fitPaused} paused={p.prefs.autofit && p.fitPaused}
-                        a11y={!p.prefs.autofit ? 'Auto fit is off — keep every beacon heard and the receiver in view'
-                          : p.fitPaused ? 'Auto fit paused because you moved the map — resume' : 'Auto fit on — turn it off'}
-                        onPress={p.onFitKey} />
-                  <Chip s={s} label="HEARD LOG" on={false} a11y="Every beacon identified today" onPress={() => setDlg('log')} />
-                  <Chip s={s} label="FIND NDB" on={false} a11y="Find a published beacon" onPress={() => { p.ndb.onFind(''); setDlg('find'); }} />
-                  <Chip s={s} label="STATS" on={false} a11y="Reception statistics" onPress={() => { p.ndb.onStats(); setDlg('stats'); }} />
-                </ScrollView>
-              </NavRow>
-            )}
-            {open && r?.pos === false && <Text style={s.note} numberOfLines={2}>{NDB_NO_POS}</Text>}
-            {open && (
-              <ScrollView {...scrollProps} style={{ maxHeight: fit * ROW_H }} contentContainerStyle={scrollLane} showsVerticalScrollIndicator
-                          keyboardShouldPersistTaps="handled">
-                {rows.length ? rows.map((b) => (
-                  <NavRow key={b.id}>
-                    <Row s={s} b={b} live={ndbRowLive(b, nowMs)} words={p.ndb.tracks.words(b.id)} sel={b.id === p.selected}
-                         onPress={() => p.onSelect(b.id)} />
-                  </NavRow>
-                )) : <Text style={s.note} numberOfLines={4}>{ndbEmptyText(r)}</Text>}
-                {/* ★ Once, at the foot of the list (Stuart, 2026-10-29) — not on every unnamed beacon. */}
-                {rows.length > 0 && <Text style={s.dim}>A beacon shown by its ident alone isn't in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</Text>}
-              </ScrollView>
-            )}
-          </View>
-          {!!sel && (
-            <View style={[s.card, { left: EDGE + p.insets.left, top: p.insets.top + MAP_TOPBAR_H + EDGE + 36,
-                                    maxWidth: Math.min(320, innerW - EDGE * 2 - 44) }]}>
-              <Card s={s} b={sel} words={p.ndb.tracks.words(sel.id)} snr={p.ndb.tracks.snr(sel.id)} onClose={() => p.onSelect(0)}
-                    owner={!!p.ndb.owner} onDecide={p.ndb.onDecide} />
-            </View>
-          )}
-        </NavCtx.Provider>
+      {!!tiles && (
+        <NavRow>
+          <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}>
+            {([['CARRIERS', tiles.carriers], ['IDENTIFIED', tiles.identified], ['FURTHEST', tiles.furthest], ['COVERAGE', tiles.coverage]] as const)
+              .map(([k, v]) => <Tile key={k} s={s} k={k} v={v} />)}
+          </ScrollView>
+        </NavRow>
       )}
-      {!!dlg && (
-        <NdbDialog s={s} kind={dlg} ndb={p.ndb} insets={p.insets} onClose={() => setDlg('')}
-                   onPick={(id) => { setDlg(''); p.onSelect(id); }} />
-      )}
+      <NavRow>
+        <ScrollView horizontal showsVerticalScrollIndicator={false} showsHorizontalScrollIndicator={false} style={s.chipRow} contentContainerStyle={s.chipRowIn}
+                    keyboardShouldPersistTaps="handled">
+          <Chip s={s} label="RINGS" on={p.prefs.rings} a11y="Range rings in nautical miles" onPress={() => p.onPrefs({ rings: !p.prefs.rings })} />
+          <Chip s={s} label="UNHEARD" on={p.prefs.unheard} a11y="The published beacons not heard, faint"
+                onPress={() => { const v = !p.prefs.unheard; if (v) p.ndb.onFind(''); p.onPrefs({ unheard: v }); }} />
+          <Chip s={s} label="HEARD LOG" on={false} a11y="Every beacon identified today" onPress={() => setDlg('log')} />
+          <Chip s={s} label="FIND NDB" on={false} a11y="Find a published beacon" onPress={() => { p.ndb.onFind(''); setDlg('find'); }} />
+          <Chip s={s} label="STATS" on={false} a11y="Reception statistics" onPress={() => { p.ndb.onStats(); setDlg('stats'); }} />
+        </ScrollView>
+      </NavRow>
+      {r?.pos === false && <Text style={s.note} numberOfLines={2}>{NDB_NO_POS}</Text>}
     </>
   );
+  const rowEls = rows.map((b) => (
+    <NavRow key={`ndb:${b.id}`}>
+      <Row s={s} b={b} live={ndbRowLive(b, nowMs)} words={p.ndb.tracks.words(b.id)} sel={b.id === p.selected}
+           onPress={() => p.onSelect(b.id)} />
+    </NavRow>
+  ));
+  // ★ Once, at the foot of the list (Stuart, 2026-10-29) — not on every unnamed beacon.
+  if (rows.length) rowEls.push(<Text key="ndb:foot" style={s.dim}>A beacon shown by its ident alone isn't in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</Text>);
+  const card = sel ? (
+    <View style={[s.card, { left: EDGE + insets.left, top: insets.top + MAP_TOPBAR_H + EDGE + 36, maxWidth: Math.min(320, innerW - EDGE * 2 - 44) }]}>
+      <Card s={s} b={sel} words={p.ndb.tracks.words(sel.id)} snr={p.ndb.tracks.snr(sel.id)} onClose={() => p.onSelect(0)}
+            owner={!!p.ndb.owner} onDecide={p.ndb.onDecide} />
+    </View>
+  ) : null;
+  const dialog = dlg ? (
+    <NdbDialog s={s} kind={dlg} ndb={p.ndb} insets={insets} onClose={() => setDlg('')}
+               onPick={(id) => { setDlg(''); p.onSelect(id); }} />
+  ) : null;
+  return { extra: CHIPS_H * (tiles ? 2 : 1), count: rows.length, head, rows: rowEls, empty: ndbEmptyText(r), card, dialog, modal: !!dlg, rowH: ROW_H };
 }
 
 type S = ReturnType<typeof makeStyles>;

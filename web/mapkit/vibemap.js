@@ -195,6 +195,11 @@
     // ★ V12 2026-11-16 the AVIATION MAP with AIRPORTS switched off: aero without the airfields and runways.
     'aero-plain': { airports: false, runways: false, ports: false, rail: false,
                     places: 'major', grid: false, roads: false },
+    // ★★ V12 beta96 THE AIR & SEA MAP (docs/v12/ONE-MAP.md): aircraft AND ships — airfields, runways and ports, nothing else.
+    airsea: { airports: true, runways: true, ports: true, rail: false,
+              places: 'major', grid: false, roads: false },
+    'airsea-plain': { airports: false, runways: false, ports: true, rail: false,
+                      places: 'major', grid: false, roads: false },
     // AIS: ships. Ports matter, and a reef is a navigational fact; an airfield is noise.
     marine: { airports: false, runways: false, ports: true, rail: false,
               places: 'major', grid: false, roads: false },

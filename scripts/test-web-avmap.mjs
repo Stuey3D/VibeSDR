@@ -49,7 +49,7 @@ async function radioA() {
   await sleep(1500);
   send({ type: 'adsb', on: 1 });
   const keep = setInterval(() => { try { send({ type: 'ping' }); } catch {} }, 10000);   // ★ 30 s silent drop
-  return { adsb: (on) => send({ type: 'adsb', on: on ? 1 : 0 }), stop: () => { clearInterval(keep); try { s.end(); } catch {} srv.kill('SIGTERM'); rtl.kill('SIGTERM'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { port, adsb: (on) => send({ type: 'adsb', on: on ? 1 : 0 }), stop: () => { clearInterval(keep); try { s.end(); } catch {} srv.kill('SIGTERM'); rtl.kill('SIGTERM'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
 }
 
 async function session(tag, clip, centre, freq, mode, run, runDir) {
@@ -60,15 +60,27 @@ async function session(tag, clip, centre, freq, mode, run, runDir) {
   for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Datalink web test', locator: 'IO90bs', adminPass: 'avdata-web-admin',
     radios: [{ serial: `${tag}-web`, label: 'Test radio', enabled: true, configured: true, users: 1 }] }));
-  const rtlPort = await freePort(), port = await freePort(), dbg = await freePort();
+  const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', clip, '--hf-centre', String(centre)], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: runDir || path.join(dir, 'run') };
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', String(freq), '--mode', mode, '--users', '1'],
                     { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), 'ignore'] });
+  const failBefore = fail;
+  try { await browse(tag, port, dir, run); }
+  finally {
+    srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+    await sleep(600);
+    if (fail === failBefore) fs.rmSync(dir, { recursive: true, force: true }); else console.log(`   (kept ${dir})`);
+  }
+}
+/** ★ beta96 a page in headless Edge on a server already running (`dir` holds its profile): START, the audio gate, run. */
+async function browse(tag, port, dir, run) {
+  fs.mkdirSync(path.join(dir, 'edge'), { recursive: true });
+  const dbg = await freePort();
   const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg}`, '--no-first-run', '--no-default-browser-check',
     `--user-data-dir=${path.join(dir, 'edge')}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
-  let wsC; const failBefore = fail;
+  let wsC;
   try {
     await sleep(3000);
     const list = await (await fetch(`http://127.0.0.1:${dbg}/json/list`)).json();
@@ -92,19 +104,19 @@ async function session(tag, clip, centre, freq, mode, run, runDir) {
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
     }
-    ok(await until(`!document.getElementById('audioGate') || document.getElementById('audioGate').style.display === 'none' || !document.getElementById('audioGate').isConnected`, 8000), `${tag}: START RADIO pressed`);
+    // ★ beta96 a page joining a radio in ADS-B gets the map at once (the mode's screen, nothing to hear): the gate waits under it
+    ok(await until(`!document.getElementById('audioGate') || document.getElementById('audioGate').style.display === 'none' || !document.getElementById('audioGate').isConnected || [...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 8000), `${tag}: START RADIO pressed (or the mode's map is up)`);
     await sleep(2500);
     await run({ ev, send, shot, until });
   } catch (e) { ok(false, `${tag} driver: ${e}`); }
   finally {
     try { wsC?.close(); } catch {}
-    edge.kill(); srv.kill('SIGTERM'); rtl.kill('SIGTERM');
-    await sleep(600);
-    if (fail === failBefore) fs.rmSync(dir, { recursive: true, force: true }); else console.log(`   (kept ${dir})`);
+    edge.kill();
+    await sleep(300);
   }
 }
 
-console.log('── the AVIATION MAP in the web client (two radios, one table) ──');
+console.log('── the AIR & SEA MAP (beta96, docs/v12/ONE-MAP.md) in the web client (two radios, one table) ──');
 const A = await radioA();
 try {
   await session('avm', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, until }) => {
@@ -113,21 +125,36 @@ try {
     await sleep(700);
     await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'DATALINK'); b && b.click(); return !!b; })()`);
     ok(await until(`!!${V}`, 6000), 'DATALINK opens its view');
-    ok(/AVIATION MAP · DATALINK/.test(await ev(`${V}?.querySelector('.ttl')?.textContent`) || ''), `…the AVIATION MAP (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+    ok(/^AVIATION & MARITIME · DATALINK$/.test(await ev(`${V}?.querySelector('.ttl')?.textContent`) || ''), `…the AIR & SEA map, DATALINK live (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+    ok(await ev(`${V}.querySelector('.exit').textContent`) === 'EXIT DATALINK', 'EXIT DATALINK (the map is the mode)');
     await until(`[...${V}.querySelectorAll('button')].some(b => b.textContent.trim() === 'VDL2' && b.dataset.rng)`, 8000);
     await ev(`[...${V}.querySelectorAll('[data-rng]')].find(b => b.textContent.trim() === 'VDL2')?.click()`);
+    // ★★ beta96 DATALINK opens on MESSAGES (the feed, newest first) with the aircraft sort LATEST
+    ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'messages'`, 4000), 'DATALINK opens on the MESSAGES tab');
+    ok(await until(`[...${V}.querySelectorAll('.trkRow.trkMsg')].length >= 3`, 45000), `MESSAGES: the feed (${await ev(`${V}.querySelectorAll('.trkRow.trkMsg').length`)} messages)`);
+    { const ts = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow.trkMsg .ag')].map(e => e.textContent))`) || '[]');
+      ok(ts.every((t, i) => i === 0 || t <= ts[i - 1]), `MESSAGES newest first (${ts.slice(0, 5).join(' ')})`); }
+    ok(!(await ev(`/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(${V}.querySelector('.rows').textContent)`)), '★ MESSAGES: labels only, never a body (not the owner)');
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
+    ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'aircraft'`, 3000), 'the AIRCRAFT tab');
+    ok(await ev(`${V}.querySelector('.trkList .hd .srt [aria-pressed="true"]')?.textContent`) === 'LATEST', 'DATALINK: the aircraft sort is LATEST');
     const rowsTxt = () => ev(`${V}?.querySelector('.rows')?.textContent || ''`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '') && /VDL2 \\+ ADS-B|ADS-B \\+ VDL2/.test(${V}?.querySelector('.rows')?.textContent || '')`, 45000),
        `radio A's ADS-B joins radio B's datalink: ${(await rowsTxt()).slice(0, 300)}`);
     const n4 = await ev(`[...${V}.querySelectorAll('.trkRow')].filter(r => r.dataset.key === 'a:4CA97B').length`);
     ok(n4 === 1, `4CA97B is ONE row (${n4})`);
-    ok(await ev(`[...${V}.querySelectorAll('.sec')].some(s => /OTHER SOURCES/.test(s.textContent))`), 'a section for the other sources on this server');
-    ok(await ev(`(() => { const secs = [...${V}.querySelectorAll('.rows > *')]; const i = secs.findIndex(e => e.classList.contains('sec') && /OTHER/.test(e.textContent)); return i >= 0 && secs.slice(i).some(e => e.dataset && e.dataset.key === 'a:400F11'); })()`),
-       '400F11 (ADS-B only, radio A) is under OTHER SOURCES');
-    await until(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',') === 'VDL2,ACARS,ADS-B,ADS-C,AIRPORTS'`, 15000);
+    ok(await ev(`[...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:400F11')`), '400F11 (ADS-B only, radio A) is on the AIRCRAFT list beside the datalink\'s');
+    // ★ NEAREST: the rows by range (the receiver's own position)
+    await ev(`${V}.querySelector('.trkList .hd .srt [data-srt="nearest"]').click()`);
+    { const nm = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow')].map(r => parseFloat((r.querySelector('.rg')?.textContent || '').replace(/[^0-9.]/g, ''))).filter(x => x === x))`) || '[]');
+      ok(nm.length >= 2 && nm.every((x, i) => i === 0 || x >= nm[i - 1]), `NEAREST: by range (${nm.join(', ')} NM)`); }
+    ok(await ev(`localStorage.getItem('vibesdr.airSeaSort')`) === 'nearest', '…remembered');
+    await until(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',').startsWith('VDL2,ACARS,ADS-C,ADS-B,AIRPORTS')`, 15000);
     const tg = await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',')`);
-    ok(/^VDL2,ACARS,ADS-B,ADS-C,AIRPORTS$/.test(tg || ''), `the layer keys: ${tg} (no HFDL: nothing heard there)`);
-    ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].every(b => b.getAttribute('aria-pressed') === 'true')`), 'every layer on by default (AIRPORTS too)');
+    ok(/^VDL2,ACARS,ADS-C,ADS-B,AIRPORTS(,SEA AREAS)?$/.test(tg || ''), `the layer keys, the live ones first: ${tg} (no HFDL: nothing heard there)`);
+    ok(await ev(`JSON.stringify([...${V}.querySelectorAll('[data-tgl].live')].map(b => b.textContent.trim()))`) === JSON.stringify(['VDL2', 'ACARS', 'ADS-C']), 'the DATALINK\'s layers marked LIVE');
+    ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].filter(b => b.textContent.trim() !== 'SEA AREAS').every(b => b.getAttribute('aria-pressed') === 'true')`), 'every layer on by default (AIRPORTS too)');
+    ok(await ev(`[...${V}.querySelectorAll('[data-tgl]')].every(b => b.textContent.trim() !== 'SEA AREAS' || b.getAttribute('aria-pressed') === 'false')`), 'SEA AREAS (where offered) off by default with nothing maritime here');
     // ★★ beta90 the aircraft are the ADS-B layer's (adsblayer.js): its controls, its rings, every aircraft drawn by it
     const AC = `(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1)`;
     ok(await until(`${AC} >= 2`, 15000), `beta90: aircraft drawn by the ADS-B layer: ${await ev(AC)}`);
@@ -148,6 +175,46 @@ try {
       L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0 })]);
       const s = L.shown().find(x => x.hex === '~abc123'); return JSON.stringify(s || null); })()`) || 'null');
     ok(glide && Math.abs(glide.track - 90) < 2 && glide.gliding && glide.sparse, `beta90: a sparse aircraft faces east (${glide && glide.track?.toFixed(1)}°) and glides to its new fix (${glide && glide.gliding})`);
+    // ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas; Stuart's community-map bug): an aircraft over a sea area's
+    //    marker — a press there opens the AIRCRAFT's card, never the area's
+    {
+      await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'SEA AREAS' && b.getAttribute('aria-pressed') === 'false')?.click()`);
+      const areaSel = `[...document.querySelectorAll('.trkView:not([hidden]) .vtl-mk')].find(e => / sea area/.test(e.getAttribute('aria-label') || '') && getComputedStyle(e).display !== 'none' && !e.closest('.vtl-yhid') && e.getBoundingClientRect().width > 0 && (() => { const r = e.getBoundingClientRect(); return r.left > 60 && r.top > 120 && r.right < innerWidth - 60 && r.bottom < innerHeight - 200; })())`;
+      const got = await until(`!!${areaSel}`, 12000);
+      ok(got, 'SEA AREAS on: a sea area\'s marker in view');
+      if (got) {
+        // ★ the camera held still (AUTO off), so the marker and the aircraft stay where they are put
+        await ev(`window.__vibeAcLayer.setPrefs({ autoZoom: false })`);
+        await sleep(1500);
+        const put = `(() => { try {
+          const el = document.querySelector('[data-test-area="1"]') || ${areaSel}; if (!el) return JSON.stringify({ err: 'no area marker' });
+          el.setAttribute('data-test-area', '1');
+          const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+          // ★ GPU map (a map pack) or the Leaflet fallback (none in this test's data dir) — both press the same way
+          const m = window.__vibeTrkMap, gl = m._gl; let ll;
+          if (gl) { const c = gl.getCanvas().getBoundingClientRect(); ll = gl.unproject([x - c.left, y - c.top]); }
+          else { const c = m.getContainer().getBoundingClientRect(); ll = m.containerPointToLatLng([x - c.left, y - c.top]); }
+          // ★ the feed hands the layer the WHOLE list each time — the test's aircraft rides along with every update
+          const A = window.__vibeAcLayer; window.__testOversea = { hex: '~a5ea00', flight: 'OVERSEA', lat: ll.lat, lon: ll.lng, alt_baro: 30000, seen_pos: 1 };
+          if (!A.__upd) { A.__upd = A.update; A.update = (list) => A.__upd([...(list || []).filter((a) => a.hex !== '~a5ea00'), ...(window.__testOversea ? [window.__testOversea] : [])]); }
+          A.update([...A.shown().filter((a) => a.hex !== '~a5ea00').map((a) => ({ hex: a.hex, lat: a.lat, lon: a.lon, seen_pos: 1 })), window.__testOversea]);
+          return JSON.stringify({ x, y });
+        } catch (e) { return JSON.stringify({ err: String(e) }); } })()`;
+        let pt = JSON.parse(await ev(put) || '{}');
+        await sleep(1500);
+        pt = JSON.parse(await ev(put) || '{}');   // ★ again, where it now is (a glide in, a declutter)
+        await sleep(600);
+        await ev(`document.querySelectorAll('.vtl-card .vtl-x').forEach((b) => b.click())`);
+        await ev(`(() => { const el = document.querySelector('[data-test-area="1"]'); el && el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: ${pt.x || 0}, clientY: ${pt.y || 0}, view: window })); })()`);
+        await sleep(800);
+        const res = JSON.parse(await ev(`(() => { const ac = document.querySelector('.vsadsb-pop-dark'); const vc = document.querySelector('.vtl-card:not([hidden])');
+          return JSON.stringify({ ac: ac ? ac.textContent.slice(0, 80) : '', area: vc ? vc.textContent.slice(0, 60) : '' }); })()`) || '{}');
+        ok(!pt.err && /OVERSEA/.test(res.ac || '') && !res.area, `beta96: a press on a sea area with an aircraft over it opens the aircraft (${JSON.stringify({ pt, res })})`);
+        await ev(`(() => { const A = window.__vibeAcLayer; window.__testOversea = null; if (A.__upd) { A.update = A.__upd; delete A.__upd; } A.setPrefs({ autoZoom: true }); })()`);
+        await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button, .vsadsb-pop-dark [class*="close"]').forEach((b) => b.click())`);
+        await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'SEA AREAS')?.click()`);
+      }
+    }
     // ★ beta88 the status line counts NOW: radio A's ADS-B is decoding, its three aircraft heard within the minute
     ok(await until(`/\\bADS-B 3\\b/.test(${V}?.querySelector('.st')?.textContent || '') && !/ADS-B:/.test(${V}?.querySelector('.st')?.textContent || '')`, 10000),
        `beta88: the status line counts ADS-B now (${await ev(`${V}?.querySelector('.st')?.textContent`)})`);
@@ -169,7 +236,7 @@ try {
     ok(await ev(`(window.__vibeTrkProfile || 'aero') === 'aero'`), `AIRPORTS on: the 'aero' basemap (${await ev(`window.__vibeTrkProfile`)})`);
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'AIRPORTS').click()`);
     ok(await until(`window.__vibeTrkProfile === 'aero-plain'`, 4000), `AIRPORTS off: 'aero-plain' (${await ev(`window.__vibeTrkProfile`)})`);
-    ok(await until(`(() => { try { return JSON.parse(localStorage.getItem('vibesdr.avMapLayers')).airports === false; } catch { return false; } })()`, 2000), 'remembered');
+    ok(await until(`(() => { try { return JSON.parse(localStorage.getItem('vibesdr.airSeaLayers')).airports === false; } catch { return false; } })()`, 2000), 'remembered');
     await ev(`[...${V}.querySelectorAll('[data-tgl]')].find(b => b.textContent.trim() === 'AIRPORTS').click()`);
     ok(await until(`window.__vibeTrkProfile === 'aero'`, 4000), 'AIRPORTS back on: aero');
     const key = await ev(`${V}?.querySelector('.trkKey')?.textContent || ''`);
@@ -185,11 +252,25 @@ try {
     await ev(`${V}.querySelector('.exit').click()`);
     ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'EXIT DATALINK closes the view');
     await sleep(1500);
+    // ★★ beta96 a MODE CHANGE while the map is open: the chrome follows (the map is recomputed, never left on DATALINK)
+    ok(!(await ev(`/DATALINK/.test(document.querySelector('.trkView')?.querySelector('.ttl')?.textContent || '')`)) || await ev(`document.querySelector('.trkView').hidden`), 'the map is not left titled DATALINK');
     // the HFDL decoder box's MAP: the same map, standalone, HFDL first
     await ev(`document.querySelector('#decodersPanel [data-dec="hfdl"]')?.click()`);
     ok(await until(`getComputedStyle(document.getElementById('hfdlMapBtn')).display !== 'none'`, 4000), 'the HFDL box has MAP');
     await ev(`document.getElementById('hfdlMapBtn').click()`);
-    ok(await until(`!!${V} && /^AVIATION MAP$/.test(${V}.querySelector('.ttl')?.textContent || '')`, 5000), 'MAP opens the AVIATION MAP (standalone)');
+    ok(await until(`!!${V} && /^AVIATION & MARITIME · HFDL$/.test(${V}.querySelector('.ttl')?.textContent || '')`, 5000), `MAP opens the AIR & SEA map, HFDL live (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+    ok(await ev(`${V}.querySelector('.exit').textContent`) === 'CLOSE MAP', '…CLOSE MAP (the decoder carries on)');
+    ok(await ev(`${V}.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab`) === 'messages', '…on MESSAGES');
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
+    // ★★ tap an aircraft → MESSAGES filtered to it
+    await until(`[...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:4CA97B')`, 8000);
+    await ev(`[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === 'a:4CA97B')?.click()`);
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="messages"]').click()`);
+    ok(await until(`!${V}.querySelector('.trkList .filt').hidden && [...${V}.querySelectorAll('.trkRow.trkMsg')].length > 0 && [...${V}.querySelectorAll('.trkRow.trkMsg')].every(r => r.dataset.focus === 'a:4CA97B')`, 4000),
+       `tap an aircraft → MESSAGES shows only its messages (${await ev(`${V}.querySelector('.trkList .filt')?.textContent`)})`);
+    await ev(`${V}.querySelector('.trkList .filt button').click()`);
+    ok(await until(`${V}.querySelector('.trkList .filt').hidden && [...${V}.querySelectorAll('.trkRow.trkMsg')].some(r => r.dataset.focus !== 'a:4CA97B')`, 3000), '× ALL: every message again');
+    await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
     const tg2 = await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim()).join(',')`);
     ok(/^HFDL,HFDL STATIONS,/.test(tg2 || '') && /ADS-B/.test(tg2 || ''), `HFDL first (what it was opened for), the others after: ${tg2}`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '')`, 8000), 'the other radios\' aircraft are on it');
@@ -210,6 +291,72 @@ try {
     await ev(`${V}.querySelector('.exit').click()`);
     ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), 'CLOSE MAP closes it');
   }, RUN);
+  // ★★★ beta96 STAGE 4: ADS-B MODE IS THE AIR & SEA MAP's ADS-B-LIVE STATE (#adsbView retired) — a page on radio A, which
+  //     another listener has put in ADS-B: the map is the mode's screen, its list ADS-B's own, its chrome moved in
+  {
+    const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webavmA-'));
+    process.on('exit', () => { try { fs.rmSync(path.join(dirA, 'edge'), { recursive: true, force: true }); } catch {} });
+    const failA = fail;
+    A.adsb(true);   // ★ radio A back in ADS-B (the datalink session took it out for its beta88 checks)
+    await sleep(6000);
+    await browse('adsb', A.port, dirA, async ({ ev, send, shot, until }) => {
+      const V = `document.querySelector('.trkView:not([hidden])')`;
+      ok(await until(`/ADS-B/.test(${V}?.querySelector('.ttl')?.textContent || '')`, 20000), `ADS-B mode opens the AIR & SEA map (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+      ok(await ev(`${V}.querySelector('.ttl').textContent`) === 'AVIATION & MARITIME · ADS-B 1090 MHz', '…titled AVIATION & MARITIME · ADS-B 1090 MHz');
+      ok(await ev(`${V}.querySelector('.exit').textContent`) === 'EXIT ADS-B', '…EXIT ADS-B (the map is the mode)');
+      ok(await ev(`!document.getElementById('adsbView')`), '#adsbView is retired');
+      ok(await until(`${V}.querySelectorAll('#adsbList .adsbRow.trkRow').length >= 3`, 30000), `AIRCRAFT is ADS-B's own live list (${await ev(`${V}.querySelectorAll('#adsbList .adsbRow').length`)} rows: altitude, speed, range, bars)`);
+      ok(await ev(`(${V}.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab || ${V}.querySelector('.trkList .hd .lt')?.textContent || '').toLowerCase()`) === 'aircraft', 'on AIRCRAFT');
+      ok(await ev(`[...${V}.querySelectorAll('#adsbList .adsbRow')].every(r => r.dataset.key === 'adsb:' + r.dataset.hex)`), '…each row keyed as its aircraft on the map');
+      ok(await ev(`${V}.querySelector('.trkList .hd .srt').hidden`), '…in its own order (emergencies, military, nearest): no sort chip');
+      ok(await until(`[...${V}.querySelectorAll('[data-tgl].live')].map(b => b.textContent.trim()).join(',') === 'ADS-B' || (!${V}.querySelector('[data-tgl]'))`, 8000),
+         `the ADS-B key is LIVE (or the only layer: no chip row) (${await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim() + (b.classList.contains('live') ? '*' : '')).join(',')`)})`);
+      ok(await ev(`!!${V}.querySelector('.trkTop #adsbChat') && !!${V}.querySelector('.trkTop #adsbGain') && !!${V}.querySelector('.trkTop #adsbCapture')`), 'CHAT, GAIN and the capture warning are in the map\'s top bar');
+      ok(await until(`(() => { const c = ${V}.querySelector('.slot-head #adsbChips'); return !!c && !c.hidden && [...c.querySelectorAll('.adsbChip')].some(b => !b.hidden); })()`, 20000),
+         `NEWEST / FURTHEST / LONGEST under the list's header (${await ev(`[...document.querySelectorAll('#adsbChips .adsbChip')].filter(b => !b.hidden).map(b => b.textContent).join(' | ')`)})`);
+      ok(await ev(`!!${V}.querySelector('.slot-over #adsbFeedWarn') && !!${V}.querySelector('.slot-over #adsbGainPop')`), 'the antenna warning and the gain pop-over are over the map');
+      ok(await until(`(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : 0) >= 3`, 15000), `the live aircraft on the map (${await ev(`window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1`)})`);
+      ok(await ev(`${V}.querySelectorAll('.vtl-mk[data-key^="adsb:"]').length === 0`), '…drawn by the ADS-B layer only, never twice');
+      ok((await ev(`${V}.querySelector('.trkTop .st').textContent`) || '').length > 3, `the status line is ADS-B's (${await ev(`${V}.querySelector('.trkTop .st').textContent`)})`);
+      // a row pressed: that aircraft's card on the map, the row lit across the redraws
+      const hex = await ev(`(() => { const r = [...${V}.querySelectorAll('#adsbList .adsbRow')].find(x => !x.classList.contains('nopos')); r && r.click(); return r ? r.dataset.hex : ''; })()`);
+      ok(!!hex && await until(`!!document.querySelector('.vsadsb-pop-dark') && /${String(hex)}/i.test(document.querySelector('.vsadsb-pop-dark').textContent)`, 5000), `a row pressed opens its aircraft's card (${hex})`);
+      ok(await until(`!!${V}.querySelector('#adsbList .adsbRow.sel[data-hex="${hex}"]')`, 3000), '…and its row is lit');
+      await sleep(2500);
+      ok(await ev(`!!${V}.querySelector('#adsbList .adsbRow.sel[data-hex="${hex}"]')`), '…still lit after more reports');
+      await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button').forEach(b => b.click())`);
+      if (await ev(`!document.getElementById('adsbFar').hidden`)) {
+        await ev(`document.getElementById('adsbFar').click()`);
+        ok(await until(`!!document.querySelector('.vsadsb-pop-dark')`, 4000), 'FURTHEST shows its aircraft on the map');
+      }
+      await ev(`document.getElementById('adsbChat').click()`);
+      ok(await until(`document.getElementById('chatPanel').classList.contains('open') && !document.getElementById('chatPanel').inert && getComputedStyle(document.getElementById('chatPanel')).zIndex === '700'`, 3000), 'CHAT opens its panel over the map');
+      await ev(`document.getElementById('adsbChat').click()`);
+      console.log('   screenshot', await shot('adsb-mode'));
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+      await sleep(1500);
+      ok(await ev(`document.documentElement.scrollWidth <= 390`), `no sideways scroll at 390 px (${await ev('document.documentElement.scrollWidth')})`);
+      // ★ beta96 polish: an aircraft's card stays inside a 390 px map (the Leaflet card sat partly off its left edge)
+      for (const pick of ['first', 'last']) {
+        await ev(`(() => { const rs = [...${V}.querySelectorAll('#adsbList .adsbRow')].filter(x => !x.classList.contains('nopos')); const r = ${pick === 'first' ? 'rs[0]' : 'rs[rs.length - 1]'}; r && r.click(); return !!r; })()`);
+        await sleep(1500);
+        const fit = await ev(`(() => { const w = document.querySelector('.vsadsb-pop-dark .leaflet-popup-content-wrapper, .vsadsb-pop-dark .maplibregl-popup-content'); const m = ${V}.querySelector('.trkMapHost');
+          if (!w || !m) return 'no card'; const a = w.getBoundingClientRect(), b = m.getBoundingClientRect();
+          const z = ${V}.querySelector('.leaflet-top.leaflet-left .leaflet-control')?.getBoundingClientRect();
+          const underZoom = !!z && a.left < z.right && a.top < z.bottom && a.bottom > z.top;
+          return a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && !underZoom ? 'in'
+            : 'out ' + Math.round(a.left) + '–' + Math.round(a.right) + ' × ' + Math.round(a.top) + '–' + Math.round(a.bottom) + ' of ' + Math.round(b.left) + '–' + Math.round(b.right) + ' × ' + Math.round(b.top) + (underZoom ? ' (under the zoom keys)' : ''); })()`);
+        ok(fit === 'in', `the ${pick} aircraft's card is inside the 390 px map (${fit})`);
+      }
+      console.log('   screenshot', await shot('adsb-mode-phone'));
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(800);
+      await ev(`${V}.querySelector('.exit').click()`);
+      ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 8000), 'EXIT ADS-B: the map goes with the mode');
+      ok(await ev(`document.getElementById('adsbChat').parentElement.id === 'adsbChrome' && document.getElementById('adsbChrome').hidden`), '…its chrome parked again');
+    });
+    if (fail === failA) fs.rmSync(dirA, { recursive: true, force: true }); else console.log(`   (kept ${dirA})`);
+  }
 } finally { A.stop(); }
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

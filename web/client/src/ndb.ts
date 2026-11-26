@@ -11,14 +11,9 @@
  *    = NOT READ YET — the published beacon nearest the receiver on that frequency, a guess and labelled as one.
  * ★ Everything in a report came off the air or over the network: every string is escaped where it meets HTML.
  * ★★ MAP-FIRST, ADS-B'S PATTERN (Stuart, 2026-10-27): the beacons at their published positions on our map, each with a
- *    3-bar signal meter; the live list over the map's corner streams the readings like the CW skimmer's; the waterfall
- *    is throttled behind the map (the server's 1 fps) and the whole band is skimmed at once.
+ *    3-bar signal meter; the live list streams the readings like the CW skimmer's; the waterfall is throttled behind the
+ *    map (the server's 1 fps) and the whole band is skimmed at once. ★★★ beta96: on the AIR & SEA map (see THE VIEW).
  */
-import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
-import { loadLeafletInto } from './leafletAsset';
-import { dataUrl } from './origin';
-import { loadVibemapSource } from './chunkCache';
-import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 
 export interface NdbDb { k: 'match' | 'near' | 'cand'; ident: string; name: string; cc: string; hz: number; lat: number; lon: number; km: number; brg: number; own?: boolean }
 /** ★★ V12 2026-11-04 — the server's "Suspected …" clue for a beacon heard but not in the published list (vibe_ndb_suspect.h):
@@ -162,11 +157,13 @@ export function ndbRows(r: NdbReport): NdbBeacon[] {
 export function ndbOnMap(b: NdbBeacon): boolean { return !!b.db && !b.unlikely && Number.isFinite(b.db.lat) && Number.isFinite(b.db.lon) && !(b.db.lat === 0 && b.db.lon === 0); }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  THE VIEW — map-first, ADS-B's pattern (Stuart, 2026-10-27): the map is the mode, the live list over its corner, the
-//  top bar with EXIT NDB. The markup is #ndbView in index.html (styled with #adsbView's own rules, extended to it).
+//  THE VIEW — ★★★ beta96 (docs/v12/ONE-MAP.md stage 8): NDB is a LIVE STATE OF THE AIR & SEA MAP. Its pieces (the markup
+//  under #ndbView in index.html, which is never shown itself now — it is where they wait) are moved into the map's slots
+//  while NDB is live: RINGS · UNHEARD in the top bar, the tiles, HEARD LOG · FIND NDB · STATS and the beacon list under
+//  the NAVAIDS tab's header, the card over the map. The beacon layer (web/mapkit/ndblayer.js) is made on the map's own
+//  map (TrackView.whenMap) — no map of its own; the map's FIT key and auto fit frame the beacons (morePoints).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const MIN_KEY = 'vibesdr.ndbListMin';
 const PREF = 'vibesdr.ndbMapPrefs';
 function loadPrefs(): { rings: boolean; unheard: boolean; autofit: boolean } {
   const d = { rings: true, unheard: true, autofit: true };
@@ -184,88 +181,67 @@ export interface NdbHooks {
   owner?: () => boolean;
   decide?: (act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) => void;
 }
+/** ★ beta96 what NdbView needs of the AIR & SEA map's view (tracks.ts TrackView) — kept narrow. */
+export interface NdbHost {
+  slot(where: 'top' | 'head' | 'over'): HTMLElement;
+  whenMap(cb: (m: { gl: any; lm: any } | null) => void): () => void;
+  morePoints: (() => [number, number][]) | null;
+  pickAircraft(x: number, y: number, touch: boolean): boolean;
+  pokeFit(): void;
+  pauseFit(): void;
+  note(text: string, ms?: number): void;
+  readonly root: HTMLElement;
+}
 
-/** ★ The map: our MapLibre map (the 'aero' profile — airports and runways, where the beacons stand) with the NDB layer
- *  (web/mapkit/ndblayer.js) on it; the Leaflet map where there is no WebGL 2 or no /mapgl/. Made on entry, destroyed on
- *  exit (a MapLibre map holds a WebGL context and tens of MB of tiles — ADS-B's rule). */
+/** ★ The beacon layer on the host's map (made when the map is, gone with it). */
 export class NdbMap {
-  private gen = 0;
-  private vm: any = null;
-  private lmap: any = null;
   layer: any = null;
   private pending: (() => void) | null = null;
+  private off: (() => void) | null = null;
+  private gen = 0;
   onSelect: ((key: string | null) => void) | null = null;
-  /** ★ beta92 the shared auto fit's state (on · paused by a touch · off) — the FIT key's look and the remembered pref. */
-  onFitState: ((st: { on: boolean; paused: boolean }) => void) | null = null;
-  constructor(private host: HTMLElement, private note: (t: string) => void) {}
-  open(rx: { lat: number; lon: number } | null, prefs: Record<string, boolean>) {
-    if (this.layer) return;
+  constructor(private note: (t: string) => void) {}
+  openOn(host: NdbHost, rx: { lat: number; lon: number } | null, prefs: Record<string, boolean>) {
+    this.close();
     const my = ++this.gen;
-    void (async () => {
-      const w = window as any;
-      const kit = await probeMapGL();
-      if (my !== this.gen) return;
-      const { ADSB_LAYER_JS } = await import('./generated/adsbLayerSource');
-      const { NDB_LAYER_JS } = await import('./generated/ndbLayerSource');
-      if (my !== this.gen) return;
-      if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);   // ★ the rings are ADS-B's (VibeAdsbLayer.shared)
-      if (!w.VibeAutoFit) runSource(MAP_AUTOFIT_JS);    // ★ beta92 before the layer: it frames with the shared auto fit
-      if (!w.VibeNdbLayer) runSource(NDB_LAYER_JS);
-      if (!w.VibeNdbLayer) { this.note('The beacon layer did not load — the list still updates.'); return; }
-      const mk = (map: any) => {
-        this.layer = w.VibeNdbLayer.create(map, { receiver: rx, theme: 'dark', prefs,
-          onSelect: (k: string | null) => { try { this.onSelect?.(k); } catch (e) { console.error('[ndb] onSelect', e); } },
-          onFitState: (st: { on: boolean; paused: boolean }) => { try { this.onFitState?.(st); } catch (e) { console.error('[ndb] fit state', e); } } });
-        const p = this.pending; this.pending = null; p?.();
-      };
-      if (kit && await loadMapGLScripts(kit.base)) {
+    this.off = host.whenMap((m) => {
+      if (!m) { this.drop(); return; }
+      void (async () => {
+        const w = window as any;
+        const { ADSB_LAYER_JS } = await import('./generated/adsbLayerSource');
+        const { NDB_LAYER_JS } = await import('./generated/ndbLayerSource');
         if (my !== this.gen) return;
+        if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);   // ★ the rings are ADS-B's (VibeAdsbLayer.shared)
+        if (!w.VibeNdbLayer) runSource(NDB_LAYER_JS);
+        if (!w.VibeNdbLayer) { this.note('The beacon layer did not load — the list still updates.'); return; }
+        this.drop();
         try {
-          const vm = w.VibeMapGL.createNow(this.host, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero', scale: 'nautical',
-            center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 6 : 1.5 });
-          if (vm) {
-            this.vm = vm;
-            vm.ready.catch((e: unknown) => console.error('NDB GPU map: the style did not load', e));
-            vm.setNight(true);
-            vm.map.addControl(new w.maplibregl.NavigationControl({ showCompass: false }), 'top-left');
-            mk(vm);
-            return;
-          }
-        } catch (e) {
-          console.error('NDB GPU map failed — using the Leaflet map', e);
-          try { this.vm?.destroy(); } catch (e2) { console.error('NDB GPU map: tidy-up failed', e2); }
-          this.vm = null; this.host.innerHTML = '';
-        }
-      }
-      if (!await loadLeafletInto(document)) { if (my === this.gen) this.note('The map could not be loaded on this server — the list still updates.'); return; }
-      if (my !== this.gen) return;
-      if (!w.VibeMap) { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); }
-      const L = w.L;
-      this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
-      this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
-      if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), profile: 'aero', scale: 'nautical' });
-      mk(this.lmap);
-    })().catch((e) => { console.error('[ndb] the map could not load', e); if (my === this.gen) this.note('The map did not finish loading — the list still updates.'); });
+          this.layer = w.VibeNdbLayer.create(m.gl || m.lm, { receiver: rx, theme: 'dark', prefs, autoFit: false, drawReceiver: false,
+            yieldClick: (x: number, y: number, touch: boolean) => host.pickAircraft(x, y, touch),
+            onSelect: (k: string | null) => { try { this.onSelect?.(k); } catch (e) { console.error('[ndb] onSelect', e); } } });
+        } catch (e) { console.error('[ndb] the beacon layer could not start', e); this.layer = null; return; }
+        (window as any).__vibeNdbLayer = this.layer;   // ★ a handle for drivers (scripts/test-web-ndb.mjs), as __vibeAcLayer
+        const p = this.pending; this.pending = null; p?.();
+      })().catch((e) => console.error('[ndb] layer', e));
+    });
   }
   /** Run now if the layer is there, else as soon as it is. */
   with(f: (layer: any) => void) { if (this.layer) { try { f(this.layer); } catch (e) { console.error('[ndb] layer', e); } } else this.pending = () => this.with(f); }
-  close() {
-    this.gen++; this.pending = null;
-    try { this.layer?.destroy(); } catch (e) { console.error('[ndb] layer destroy', e); }
-    this.layer = null;
-    try { this.vm?.destroy(); } catch (e) { console.error('[ndb] map destroy', e); }
-    this.vm = null;
-    try { this.lmap?.remove(); } catch (e) { console.error('[ndb] Leaflet remove', e); }
-    this.lmap = null;
-  }
+  points(): [number, number][] { try { return this.layer?.points?.() ?? []; } catch { return []; } }
+  private drop() { try { this.layer?.destroy(); } catch (e) { console.error('[ndb] layer destroy', e); } this.layer = null; }
+  close() { this.gen++; this.pending = null; this.off?.(); this.off = null; this.drop(); }
 }
 
 /** Per-beacon live readings and SNR history, kept by the page (the report carries the last few words of every beacon). */
 interface Track { words: NdbCopy[]; snr: [number, number][] }
 
+/** The pieces moved into the map (by id) and where each goes. */
+const PIECES: Array<[string, 'top' | 'head' | 'over']> = [['ndbRings', 'top'], ['ndbUnheard', 'top'], ['ndbTiles', 'head'], ['ndbTools', 'head'], ['ndbList', 'head'], ['ndbListFoot', 'head'], ['ndbCard', 'over']];
+
 export class NdbView {
   private last: NdbReport | null = null;
   private map: NdbMap | null = null;
+  private host: NdbHost | null = null;
   private tracks = new Map<number, Track>();
   private seenSeq = 0;
   private sel = 0;
@@ -273,72 +249,60 @@ export class NdbView {
   private prefs = loadPrefs();
   private dlg = '';
   private rowsKey = '';
+  private shown = true;   // ★ the layer's chip (NDB on / off)
   constructor(private h: NdbHooks) {}
 
-  get up(): boolean { return !$('ndbView').hidden; }
+  get up(): boolean { return !!this.host; }
 
-  show() {
-    const v = $('ndbView');
-    if (!v.hidden) return;
-    v.hidden = false;
-    document.body.classList.add('adsbMap', 'ndbMap');   // ★ the health pill moves under the bar, as in ADS-B
-    let min = false;
-    try { min = localStorage.getItem(MIN_KEY) === '1'; } catch { /* private window */ }
-    this.setMin(min, false);
-    const top = $('ndbTop').getBoundingClientRect().height;
-    if (top > 0) document.documentElement.style.setProperty('--adsbTopH', `${Math.round(top)}px`);
-    $('ndbExit').onclick = () => this.h.onExit();
-    $('ndbLiveHead').onclick = () => this.setMin(!$('ndbLive').classList.contains('min'));
-    // ★★ beta92 FIT is the shared auto fit's AUTO key (ADS-B's): paused → resume, on → off, off → on — the layer decides
-    $('ndbFit').onclick = () => { this.map?.with((l) => l.fitKey()); };
+  /** ★ NDB went live on the AIR & SEA map: its pieces into the map's slots, its layer onto the map. */
+  mount(host: NdbHost) {
+    if (this.host === host) return;
+    if (this.host) this.park();
+    this.host = host;
+    for (const [id, where] of PIECES) { const el = document.getElementById(id); if (el) { el.classList.add('ndbPiece'); host.slot(where).appendChild(el); } }
+    for (const id of ['ndbRings', 'ndbUnheard']) $(id).classList.add('btn');
     $('ndbRings').onclick = () => { this.prefs.rings = !this.prefs.rings; this.savePrefs(); this.map?.with((l) => l.setPrefs({ rings: this.prefs.rings })); this.syncToggles(); };
     $('ndbUnheard').onclick = () => { this.prefs.unheard = !this.prefs.unheard; this.savePrefs(); if (this.prefs.unheard) this.h.find(''); this.map?.with((l) => l.setPrefs({ unheard: this.prefs.unheard })); this.syncToggles(); };
     $('ndbLogBtn').onclick = () => this.openLog();
     $('ndbFindBtn').onclick = () => this.openFind();
     $('ndbStatsBtn').onclick = () => { this.openDlg('<h3>RECEPTION STATS</h3><div class="ndbEmpty">Asking the server…</div>'); this.dlg = 'stats'; this.h.stats(); };
     this.syncToggles();
-    this.map = new NdbMap($('ndbMapHost'), (t) => this.note(t));
+    this.map = new NdbMap((t) => this.note(t));
     this.map.onSelect = (k) => this.select(k ? Number(k) : 0, false);
-    this.map.onFitState = (st) => {
-      this.fitPaused = st.on && st.paused;
-      if (this.prefs.autofit !== st.on) { this.prefs.autofit = st.on; this.savePrefs(); }
-      this.syncToggles();
-    };
-    this.map.open(this.h.myPos(), this.prefs);
+    this.map.openOn(host, this.h.myPos(), { ...this.prefs, autofit: false });
+    host.morePoints = () => (this.shown ? this.map?.points() ?? [] : []);
     this.h.find('');   // ★ the published beacons for the faint "unheard" markers
     this.render();
   }
-  hide() {
-    const v = $('ndbView');
-    if (v.hidden) return;
+  /** ★ NDB ended (or the map closed): the pieces back where they wait, the layer off the map. */
+  park() {
+    const park = document.getElementById('ndbView');
+    if (park) for (const [id] of PIECES) { const el = document.getElementById(id); if (el && el.parentElement !== park) park.appendChild(el); }
     this.map?.close(); this.map = null;
-    v.hidden = true;
-    document.body.classList.remove('ndbMap');
-    if (!document.getElementById('adsbView') || (document.getElementById('adsbView') as HTMLElement).hidden) document.body.classList.remove('adsbMap');
+    if (this.host) this.host.morePoints = null;
+    this.host = null;
     this.closeDlg(); this.closeCard();
-    $('ndbList').innerHTML = ''; this.rowsKey = '';
+    const list = document.getElementById('ndbList'); if (list) list.innerHTML = '';
+    this.rowsKey = '';
     this.last = null; this.tracks.clear(); this.seenSeq = 0; this.sel = 0;
-    this.note('');
   }
-  private fitPaused = false;
+  /** ★ The list's pieces show on the NAVAIDS tab only (the map's other tabs have their own rows). */
+  setTab(navaids: boolean) {
+    for (const [id, where] of PIECES) if (where === 'head') { const el = document.getElementById(id); if (el) el.hidden = !navaids; }
+  }
+  /** ★ The NDB chip: off = no beacons on the map (the list stays — it is the mode's). */
+  setShown(on: boolean) {
+    if (on === this.shown) return;
+    this.shown = on;
+    if (this.last) this.renderMap(this.last);
+    if (!on) { this.map?.with((l) => l.select('')); this.closeCard(); }
+  }
   private savePrefs() { try { localStorage.setItem(PREF, JSON.stringify(this.prefs)); } catch { /* private window */ } }
   private syncToggles() {
-    $('ndbRings').classList.toggle('on', this.prefs.rings);
-    $('ndbUnheard').classList.toggle('on', this.prefs.unheard);
-    const fit = $('ndbFit');
-    fit.classList.add('vaf-key');
-    fit.classList.toggle('on', this.prefs.autofit && !this.fitPaused);
-    fit.classList.toggle('paused', this.prefs.autofit && this.fitPaused);
-    fit.title = !this.prefs.autofit ? 'Auto fit is off — tap to keep every beacon heard and the receiver in view'
-      : this.fitPaused ? 'Auto fit paused because you moved the map — tap to resume' : 'Auto fit on — tap to turn it off';
+    $('ndbRings').classList.toggle('on', this.prefs.rings); $('ndbRings').setAttribute('aria-pressed', String(this.prefs.rings));
+    $('ndbUnheard').classList.toggle('on', this.prefs.unheard); $('ndbUnheard').setAttribute('aria-pressed', String(this.prefs.unheard));
   }
-  private setMin(min: boolean, save = true) {
-    $('ndbLive').classList.toggle('min', min);
-    $('ndbLiveHead').setAttribute('aria-expanded', min ? 'false' : 'true');
-    $('ndbLiveHead').title = min ? 'Show the beacon list' : 'Hide the list';
-    if (save) { try { localStorage.setItem(MIN_KEY, min ? '1' : '0'); } catch { /* this visit only */ } }
-  }
-  private note(t: string) { const n = $('ndbNote'); n.textContent = t; n.hidden = !t; }
+  private note(t: string) { this.host?.note(t); }
 
   update(r: NdbReport) {
     this.last = r;
@@ -352,23 +316,23 @@ export class NdbView {
     this.render();
   }
   private track(id: number): Track { let t = this.tracks.get(id); if (!t) { t = { words: [], snr: [] }; this.tracks.set(id, t); } return t; }
+  /** ★ The status line's words (the map's own status line shows them). */
+  status(): string { const r = this.last; return r ? `NDB ${khz(r.lo)}–${khz(r.hi)} kHz · ${r.identified} / ${r.carriers} identified${r.starting ? ' · starting…' : ''}` : 'NDB — skimming the beacon band…'; }
+  /** The NAVAIDS tab's count. */
+  count(): number { return this.last ? ndbRows(this.last).length : 0; }
 
   private render() {
     const r = this.last;
     if (!r || !this.up) return;
     const t = ndbTiles(r);
-    $('ndbCnt').textContent = String(r.identified);
-    $('ndbStat').textContent = `${khz(r.lo)}–${khz(r.hi)} kHz · ${r.carriers} carriers${r.starting ? ' · starting…' : ''}`;
-    $('ndbLiveN').textContent = `${r.identified} / ${r.carriers}`;
     $('ndbTiles').innerHTML = [['CARRIERS', t.carriers], ['IDENTIFIED', t.identified], ['FURTHEST', t.furthest], ['COVERAGE', t.coverage]]
       .map(([k, v]) => `<span class="adsbChip ndbTile" title="${k === 'COVERAGE' ? 'Of the published beacons in this band no further away than the furthest one heard, how many are heard now' : ''}"><span class="k">${k}</span> ${esc(v)}</span>`).join('');
     const NO_POS = 'This server has no position set — beacons are placed, but distances are unknown.';
-    if (r.pos === false) this.note(NO_POS); else if ($('ndbNote').textContent === NO_POS) this.note('');
+    if (r.pos === false) this.note(NO_POS);
     this.renderList(r);
     this.renderMap(r);
     if (this.sel) this.renderCard();
   }
-
   /** ★★ THE LIVE LIST — the CW skimmer's: lowest frequency first, a row per carrier, the readings streaming in at its
    *  end coloured by confidence (the health pill's four colours). Rows are updated IN PLACE, so the list stays where the
    *  listener scrolled it; rebuilt only when the set of carriers changes. */
@@ -416,13 +380,15 @@ export class NdbView {
     });
     const unheard = this.found.filter((f) => !placed.has(`${f.ident}@${Math.round(f.hz / 500)}`) && f.hz >= r.lo && f.hz <= r.hi)
       .map((f) => ({ lat: f.lat, lon: f.lon, ident: f.ident }));
-    this.map.with((l) => { l.update([...beacons, ...ndbSusFeed(r)], unheard); const rx = this.h.myPos(); if (rx) l.setReceiver(rx.lat, rx.lon); });
+    const shown = this.shown;
+    this.map.with((l) => { l.update(shown ? [...beacons, ...ndbSusFeed(r)] : [], shown ? unheard : []); const rx = this.h.myPos(); if (rx) l.setReceiver(rx.lat, rx.lon); });
+    this.host?.pokeFit();
   }
 
   /** A row tapped (or a marker): selected on both, its card open, the list row in view. */
   select(id: number, fromList: boolean) {
     this.sel = id;
-    if (fromList && id) this.map?.with((l) => l.focus(String(id)));
+    if (fromList && id) { this.host?.pauseFit(); this.map?.with((l) => l.focus(String(id))); }
     $('ndbList').querySelectorAll('.ndbRow').forEach((el) => el.classList.toggle('sel', Number((el as HTMLElement).dataset.id) === id));
     if (!fromList && id) ($('ndbList').querySelector(`.ndbRow[data-id="${id}"]`) as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
     if (id) this.renderCard(); else this.closeCard();
@@ -476,8 +442,9 @@ export class NdbView {
       d = document.createElement('div'); d.id = 'ndbDlg';
       d.innerHTML = '<div id="ndbDlgBox" role="dialog" aria-modal="true"></div>';
       d.onclick = (e) => { if (e.target === d) this.closeDlg(); };
-      document.body.appendChild(d);
+      (this.host?.root ?? document.body).appendChild(d);
     }
+    if (this.host && d.parentElement !== this.host.root) this.host.root.appendChild(d);   // ★ the page under the map is inert
     d.hidden = false;
     (d.querySelector('#ndbDlgBox') as HTMLElement).innerHTML = `<div class="ndbDlgHead"><span></span><button id="ndbDlgX" aria-label="Close">✕</button></div>${html}`;
     (d.querySelector('#ndbDlgX') as HTMLButtonElement).onclick = () => this.closeDlg();

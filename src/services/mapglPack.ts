@@ -19,9 +19,10 @@
  * ★ ensureMapglPack() runs on every GPU-map open; the already-copied path is one marker read.
  */
 import { Asset } from 'expo-asset';
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File, Paths, type FileHandle } from 'expo-file-system';
 import { NativeModules, Platform } from 'react-native';
 import { MAPGL_FILES, MAPGL_VERSION } from '../generated/mapglAssets';
+import { toBase64 } from './mapglDetail';
 
 const DIR = 'mapgl';
 const MARKER = '.copied';
@@ -66,6 +67,7 @@ export async function ensureMapglPack(): Promise<string> {
     /* fall through and copy */
   }
   dir.create({ intermediates: true, idempotent: true });
+  closePackHandles();   // ★ a handle on the OLD copy must never answer for the new one
   // ★ A stale marker goes BEFORE any overwrite, so a copy that dies part-way cannot be mistaken for
   //   a complete one of either version.
   try { if (marker.exists) marker.delete(); } catch { /* overwritten at the end regardless */ }
@@ -81,4 +83,43 @@ export async function ensureMapglPack(): Promise<string> {
   }
   marker.write(version);
   return DIR + '/';
+}
+
+/* ── Ranged reads of the BUNDLED packs (beta96) ───────────────────────────────────────────────────────────────────
+ * ★★★ THE MAP READS THE BASIC PACK BY RANGE, NOT WHOLE (Stuart, 11-26). The map page used to XHR each bundled pack whole
+ *     into the WebView and keep it there as an ArrayBuffer for as long as a map was open: basic 18.2 MB (since the
+ *     rivers), relief 8.4, runways 3.9 — ~30 MB, on phones that include 32-bit 1 GB ones. Now the page asks for
+ *     {name, offset, length} (MapOverlay's packRange → vibemapgl.js) and this answers with exactly those bytes, base64,
+ *     from the one file on disk — the path the High Detail pack has always used (mapglDetail.ts readDetailRange).
+ * ★ Trade-off: a bridge round trip per tile (a few KB; a world tile ~100–200 KB) instead of a memcpy — some JS-thread
+ *   time on first draw, for ~30 MB less RAM the whole time a map is open. MapLibre keeps decoded tiles either way.
+ * ★ ONLY the three bundled packs, ONLY under our own fixed folder (`mapgl/` iOS, `mapgl-bundled/` Android — the
+ *   WebView page's base), and reads are capped: the page is ours, but the bridge is not a file server. */
+const PACKS = new Set(['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles']);
+const MAX_READ = 4 * 1024 * 1024;   // ★ pmtiles asks 16 KB for the header, then directories and tiles — never MBs
+const handles = new Map<string, FileHandle>();
+
+export function closePackHandles(): void {
+  for (const h of handles.values()) { try { h.close(); } catch { /* already closed */ } }
+  handles.clear();
+}
+
+/** Exactly `length` bytes from `offset` of bundled pack `name` under `base` (the page's glBase, e.g. 'mapgl-bundled/'),
+ *  base64; fewer at the end of the file. null on any failure (the page then leaves that tile out). */
+export function readPackRange(base: string, name: string, offset: number, length: number): string | null {
+  if (!PACKS.has(name) || !/^[a-z-]+\/$/.test(base)) return null;
+  if (!(offset >= 0) || !(length > 0) || length > MAX_READ) return null;
+  const key = base + name;
+  try {
+    let h = handles.get(key);
+    if (!h) { h = new File(Paths.document, base.slice(0, -1), name).open(); handles.set(key, h); }
+    const size = h.size ?? 0;
+    if (offset >= size) return null;
+    h.offset = offset;
+    return toBase64(h.readBytes(Math.min(length, size - offset)));
+  } catch {
+    try { handles.get(key)?.close(); } catch { /* gone */ }
+    handles.delete(key);
+    return null;
+  }
 }

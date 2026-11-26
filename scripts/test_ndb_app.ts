@@ -194,10 +194,12 @@ eq('live: quiet', app.ndbRowLive(a.beacons[3], NOW * 1000), false);
   const ms = readFileSync(new URL('../src/components/ModeSelector.tsx', import.meta.url), 'utf8');
   ok('Mode sheet: the NDB key, its reason line, blockable', ms.includes('ndbKey(false)') && ms.includes('NDB unavailable') && ms.includes("isBlocked('ndb')"));
   const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
-  ok('map: EXIT NDB', mo.includes('>EXIT NDB<'));
+  // ★★★ beta96 stage 8: NDB is a live state of the AIR & SEA map — EXIT NDB is its exit (liveChrome), the 'ndb' page retired
+  const lm = readFileSync(new URL('../src/services/liveMaps.ts', import.meta.url), 'utf8');
+  ok('map: EXIT NDB (the AIR & SEA map\'s computed exit)', lm.includes("ndb:      { map: 'airsea', layers: ['ndb'], tab: 'navaids', sort: 'nearest', screen: true, name: 'NDB'"));
   // ★ beta90: the same ADS-B layer also draws the one AVIATION map (kind 'avdata') — the condition grew, the order holds
-  const adsbAt = mo.search(/\$\{isAdsb \|\| isNdb[^?]*\? `<script>\$\{ADSB_LAYER_JS\}/);
-  ok('map: the NDB layer goes in after the ADS-B layer', adsbAt >= 0 && adsbAt < mo.indexOf('${isNdb ? `<script>${NDB_LAYER_JS}'));
+  const adsbAt = mo.search(/\$\{kind === 'avdata' \|\| kind === 'airsea' \? `<script>\$\{ADSB_LAYER_JS\}/);   // ★ beta96 stage 6: the ADS-B page retired (isAdsb gone)
+  ok('map: the NDB layer goes in after the ADS-B layer (on the AIR & SEA page)', adsbAt >= 0 && adsbAt < mo.indexOf("${kind === 'airsea' ? `<script>${NDB_LAYER_JS}"));
   ok('map: the layer gets the GPU map or Leaflet, never the compat adapter', mo.includes('VibeNdbLayer.create(GLVM||map'));
   const sc = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
   // ★ db0ef3ec1 moved the rule into sessionHoldNotice.audioQuietFor (shared with the paused note) — check both halves.

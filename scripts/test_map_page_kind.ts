@@ -14,9 +14,15 @@
  * Then shownMapOf (the screen's map precedence) over the same transitions, and the wiring in MapOverlay / SDRScreen / the
  * web client (main.ts wholeMapYield).
  *
+ * ★★★ beta96 STAGE 6: ADS-B's screen is now the AIR & SEA map too, so AIS ↔ ADS-B is the SAME kind ('airsea') — the page
+ * STAYS and its chrome (title, EXIT key) is pushed in from the current mode (liveMaps.ts liveChrome → __trkChrome). The
+ * page-per-kind rule below is still the rule for two DIFFERENT kinds (AIR & SEA ↔ NDB by the shared dial, the same bug
+ * class); section 4 drives AIS ↔ ADS-B on the one page and checks the title and EXIT follow without a stale page.
+ *
  * Run: node --no-warnings scripts/test_map_page_kind.ts
  */
 import { mapPageShown, mapPageWritten, shownMapOf, type MapPage, type ShownMapState } from '../src/utils/mapPage.ts';
+import { liveChrome } from '../src/services/liveMaps.ts';
 import { readFileSync } from 'node:fs';
 
 let fails = 0, passes = 0;
@@ -26,10 +32,10 @@ const eq = (what: string, got: unknown, want: unknown) => {
 };
 const ok = (what: string, c: boolean) => eq(what, c, true);
 
-type K = 'ais' | 'adsb';
+type K = 'airsea' | 'ndb';   // ★ stage 6: two DIFFERENT kinds (AIS and ADS-B are both 'airsea' now — section 4)
 /** What the user SEES: the page the WebView loaded (title / EXIT key / layers) and the RN list drawn over it. */
 interface Seen { page: string | null; list: string | null }
-const LIST: Record<K, string> = { ais: 'RECEIVED', adsb: 'AIRCRAFT' };
+const LIST: Record<K, string> = { airsea: 'AIRCRAFT', ndb: 'BEACONS' };
 
 /** ★ The overlay as it was before beta96: a bare pageUri, kept while hidden; the WebView keyed by nothing. */
 class OldOverlay {
@@ -81,29 +87,29 @@ class NewOverlay {
 }
 
 type Overlay = OldOverlay | NewOverlay;
-const consistent = (s: Seen) => s.page === null || (s.list === 'RECEIVED' ? s.page === 'page:ais' : s.page === 'page:adsb');
+const consistent = (s: Seen) => s.page === null || (s.list === 'AIRCRAFT' ? s.page === 'page:airsea' : s.page === 'page:ndb');
 
-/* ── 1. open AIS → EXIT → select ADS-B (Mac Ha's path) ─────────────────────────────────────────────────────────── */
+/* ── 1. open AIR & SEA → EXIT → select NDB (Mac Ha's path, between two kinds) ─────────────────────────────────────────────────────────── */
 function exitThenPick(o: Overlay): Seen[] {
   const out: Seen[] = [];
-  o.render(true, 'ais'); o.write(); out.push(o.seen());          // AIS: its map
+  o.render(true, 'airsea'); o.write(); out.push(o.seen());          // AIS: its map
   o.render(false, null);                                         // EXIT AIS (aisUiOff → shownMap null)
-  o.render(true, 'adsb'); out.push(o.seen());                    // ADS-B key: the map opens AT ONCE, before its page is written
+  o.render(true, 'ndb'); out.push(o.seen());                    // ADS-B key: the map opens AT ONCE, before its page is written
   o.write(); out.push(o.seen());                                 // …the ADS-B page written
   o.render(false, null);                                         // EXIT ADS-B
-  o.render(true, 'ais'); o.write(); out.push(o.seen());          // and back to AIS
+  o.render(true, 'airsea'); o.write(); out.push(o.seen());          // and back to AIS
   return out;
 }
 {
   const old = exitThenPick(new OldOverlay());
   // ★ the negative: the old rule shows the AIS page under the ADS-B list (his first screenshot) and the reverse
-  eq('OLD exit→ADS-B: the AIS page under the AIRCRAFT list (the bug, reproduced)', old[2], { page: 'page:ais', list: 'AIRCRAFT' });
-  eq('OLD exit→AIS: the ADS-B page under the RECEIVED list (his second screenshot)', old[3], { page: 'page:adsb', list: 'RECEIVED' });
+  eq('OLD exit→NDB: the AIR & SEA page under the BEACONS list (the bug, reproduced)', old[2], { page: 'page:airsea', list: 'BEACONS' });
+  eq('OLD exit→AIR & SEA: the NDB page under the AIRCRAFT list (his second screenshot\'s shape)', old[3], { page: 'page:ndb', list: 'AIRCRAFT' });
   const nu = exitThenPick(new NewOverlay());
-  eq('NEW AIS: its own page', nu[0], { page: 'page:ais', list: 'RECEIVED' });
-  eq('NEW exit→ADS-B, before the page is written: nothing (never the last mode\'s page)', nu[1], { page: null, list: null });
-  eq('NEW exit→ADS-B: the aircraft map', nu[2], { page: 'page:adsb', list: 'AIRCRAFT' });
-  eq('NEW exit→AIS again: the shipping map', nu[3], { page: 'page:ais', list: 'RECEIVED' });
+  eq('NEW AIR & SEA: its own page', nu[0], { page: 'page:airsea', list: 'AIRCRAFT' });
+  eq('NEW exit→NDB, before the page is written: nothing (never the last mode\'s page)', nu[1], { page: null, list: null });
+  eq('NEW exit→NDB: the beacon map', nu[2], { page: 'page:ndb', list: 'BEACONS' });
+  eq('NEW exit→AIR & SEA again: its map', nu[3], { page: 'page:airsea', list: 'AIRCRAFT' });
 }
 
 /* ── 2. the mode changed UNDER the open map (the shared dial) ──────────────────────────────────────────────────── */
@@ -114,7 +120,7 @@ function underTheMap(o: Overlay, from: K, to: K): Seen[] {
   o.write(); out.push(o.seen());                                 // the new page written
   return out;
 }
-for (const [from, to] of [['ais', 'adsb'], ['adsb', 'ais']] as [K, K][]) {
+for (const [from, to] of [['airsea', 'ndb'], ['ndb', 'airsea']] as [K, K][]) {
   const old = underTheMap(new OldOverlay(), from, to);
   ok(`OLD ${from}→${to} under the open map: the page and the list disagree (the bug, reproduced)`, !consistent(old[2]));
   const nu = underTheMap(new NewOverlay(), from, to);
@@ -125,12 +131,12 @@ for (const [from, to] of [['ais', 'adsb'], ['adsb', 'ais']] as [K, K][]) {
 /* ── 3. a rewrite for the same kind in the same opening keeps the map (no reload under the user's finger) ─────── */
 {
   const o = new NewOverlay();
-  o.render(true, 'adsb'); o.write();
+  o.render(true, 'ndb'); o.write();
   const m = o.mounts, key = o.web?.key;
-  o.write('page:adsb');   // the receiver's position arrived → html rebuilt → the file rewritten
+  o.write('page:ndb');   // the receiver's position arrived → html rebuilt → the file rewritten
   eq('same kind, same opening: the WebView is not remounted', [o.mounts, o.web?.key], [m, key]);
   // …but a close and reopen of the SAME kind is a new opening: a fresh WebView on the fresh file
-  o.render(false, null); o.render(true, 'adsb'); eq('reopen, before the write: nothing shown', o.seen(), { page: null, list: null });
+  o.render(false, null); o.render(true, 'ndb'); eq('reopen, before the write: nothing shown', o.seen(), { page: null, list: null });
   o.write(); ok('reopen of the same kind: a new WebView', o.web?.key !== key && o.mounts === m + 1);
 }
 
@@ -158,17 +164,77 @@ for (const [from, to] of [['ais', 'adsb'], ['adsb', 'ais']] as [K, K][]) {
   };
   const S = (o: Partial<ShownMapState>) => shownMapOf({ ...base, ...o });
   eq('nothing open', S({}), null);
-  eq('AIS', S({ aisView: true }), 'ais');
-  eq('AIS → ADS-B, report first (both up a beat): ADS-B', S({ aisView: true, adsbView: true }), 'adsb');
-  eq('AIS → ADS-B, ais_off first: nothing, then ADS-B', [S({}), S({ adsbView: true })], [null, 'adsb']);
-  eq('ADS-B → AIS: adsb_off then the report', [S({}), S({ aisView: true })], [null, 'ais']);
-  eq('NDB under AIS: NDB', S({ ndbView: true, aisView: true }), 'ndb');
+  eq('AIS: the AIR & SEA map (beta96)', S({ aisView: true }), 'airsea');
+  eq('★ stage 6 ADS-B: the AIR & SEA map too', S({ adsbView: true }), 'airsea');
+  eq('AIS → ADS-B, report first (both up a beat): the SAME page', S({ aisView: true, adsbView: true }), 'airsea');
+  eq('AIS → ADS-B, ais_off first: nothing, then the AIR & SEA map', [S({}), S({ adsbView: true })], [null, 'airsea']);
+  eq('ADS-B → AIS: adsb_off then the report', [S({}), S({ aisView: true })], [null, 'airsea']);
+  eq('★ stage 8 NDB: the AIR & SEA map (the ndb page retired), under AIS too', [S({ ndbView: true }), S({ ndbView: true, aisView: true })], ['airsea', 'airsea']);
   eq('ISM map only while ISM is on', [S({ ismMap: true }), S({ ismMap: true, ismOn: true }), S({ ismGallery: true })], [null, 'ism', 'ism']);
-  eq('VOR map only while on', [S({ vmMap: true }), S({ vmMap: true, vmOn: true })], [null, 'vormap']);
-  eq('SONDES map only while on', [S({ sdMap: true }), S({ sdMap: true, sdOn: true })], [null, 'sondes']);
-  eq('AVIATION: datalink focus needs the mode; another focus does not', [S({ avMap: true }), S({ avMap: true, avOn: true }), S({ avMap: true, avFocusDatalink: false })], [null, 'avdata', 'avdata']);
-  eq('a picked server map under the modes', [S({ picked: 'hfdl' }), S({ picked: 'hfdl', aisView: true })], ['hfdl', 'ais']);
+  eq('VOR map only while on — ★ stage 8 the AIR & SEA map', [S({ vmMap: true }), S({ vmMap: true, vmOn: true })], [null, 'airsea']);
+  eq('SONDES map only while on — ★ stage 8 the AIR & SEA map', [S({ sdMap: true }), S({ sdMap: true, sdOn: true })], [null, 'airsea']);
+  eq('AVIATION: datalink focus needs the mode; another focus does not', [S({ avMap: true }), S({ avMap: true, avOn: true }), S({ avMap: true, avFocusDatalink: false })], [null, 'airsea', 'airsea']);
+  eq('a picked server map under the modes', [S({ picked: 'hfdl' }), S({ picked: 'hfdl', aisView: true })], ['hfdl', 'airsea']);
+  eq('NAVTEX / shipping MAP: the AIR & SEA map; DSC keeps its own', [S({ navMap: true }), S({ dscMap: true })], ['airsea', 'dsc']);
+  eq('★ stage 6 AIS ↔ ADS-B: one kind, so the page stays (its chrome is pushed — section 4)', [S({ aisView: true }), S({ aisView: true, adsbView: true }), S({ adsbView: true })], ['airsea', 'airsea', 'airsea']);
+  eq('★ stage 8 NDB ↔ ADS-B: one kind, so the page stays (its chrome is pushed)', [S({ ndbView: true, adsbView: true }), S({ ndbView: true })], ['airsea', 'airsea']);
   eq('Apple TV: only the picked map (no WebView for the modes)', [S({ appleTv: true, adsbView: true }), S({ appleTv: true, picked: 'digi', aisView: true })], [null, 'digi']);
+}
+
+/* ── 4. ★★★ stage 6: AIS ↔ ADS-B on the ONE page — the title and EXIT key follow the mode, never a stale page ──────── */
+{
+  type M = 'ais' | 'adsb';
+  /** The AIR & SEA overlay as built: ONE kind ('airsea'), the page keyed by mapPage.ts, and the chrome pushed from the
+   *  CURRENT mode (SDRScreen airSeaTrk → liveChrome → MapOverlay's __trkChrome effect, deps [title, exitLabel, pageUri]). */
+  class AirSea {
+    page: MapPage<'airsea'> | null = null; openSeq = 0; wasVisible = false; ids = 0; mounts = 0;
+    web: { key: number; title: string; exit: string } | null = null;
+    visible = false; mode: M | null = null;
+    pushed = { title: '', exit: '' };
+    render(visible: boolean, mode: M | null) {
+      if (visible && !this.wasVisible) this.openSeq++;
+      this.wasVisible = visible; this.visible = visible; this.mode = mode;
+      if (!visible) this.page = null;
+      const kind = visible && mode ? 'airsea' as const : null;
+      const shown = mapPageShown(this.page, visible, kind, this.openSeq);
+      if (!shown) { this.web = null; return; }
+      if (!this.web || this.web.key !== shown.id) { this.web = { key: shown.id, title: 'AVIATION & MARITIME', exit: 'CLOSE MAP' }; this.mounts++; this.pushed = { title: '', exit: '' }; }
+      // ★ the chrome effect: pushed when it differs from what the page last got (and on every new page)
+      const c = liveChrome('airsea', mode);
+      if (this.pushed.title !== c.title || this.pushed.exit !== c.exitLabel) { this.web.title = c.title; this.web.exit = c.exitLabel; this.pushed = { title: c.title, exit: c.exitLabel }; }
+    }
+    write() {
+      if (!this.visible || !this.mode) return;
+      this.page = mapPageWritten(this.page, 'file:///docs/vibemap.html', 'airsea', this.openSeq, () => ++this.ids);
+      this.render(this.visible, this.mode);
+    }
+    seen() { return this.web ? { title: this.web.title, exit: this.web.exit } : null; }
+  }
+  const AIS = { title: 'AVIATION & MARITIME · AIS 161.975 + 162.025 MHz', exit: 'EXIT AIS' };
+  const ADSB = { title: 'AVIATION & MARITIME · ADS-B 1090 MHz', exit: 'EXIT ADS-B' };
+  // ── under the open map (the shared dial): AIS → ADS-B → AIS ──
+  {
+    const o = new AirSea();
+    o.render(true, 'ais'); o.write(); eq('stage 6 AIS: its title and EXIT AIS', o.seen(), AIS);
+    const m = o.mounts, key = o.web?.key;
+    o.render(true, 'adsb'); eq('stage 6 AIS → ADS-B under the open map: re-titled at once, EXIT ADS-B', o.seen(), ADSB);
+    ok('stage 6 AIS → ADS-B: the SAME page (no reload, no blank)', o.mounts === m && o.web?.key === key);
+    o.render(true, 'ais'); eq('stage 6 ADS-B → AIS under the open map: back to AIS\'s chrome', o.seen(), AIS);
+    ok('stage 6 ADS-B → AIS: still the same page', o.mounts === m && o.web?.key === key);
+  }
+  // ── Mac Ha's path: AIS → EXIT → ADS-B, and back ──
+  {
+    const o = new AirSea();
+    o.render(true, 'ais'); o.write();
+    const key = o.web?.key;
+    o.render(false, null);
+    o.render(true, 'adsb'); eq('stage 6 exit → ADS-B, before the page is written: nothing (never AIS\'s page)', o.seen(), null);
+    o.write(); eq('stage 6 exit → ADS-B: ADS-B\'s chrome on a fresh page', o.seen(), ADSB);
+    ok('stage 6 exit → ADS-B: a new opening = a new WebView', o.web?.key !== key);
+    o.render(false, null); o.render(true, 'ais'); o.write(); eq('stage 6 exit → AIS again: AIS\'s chrome', o.seen(), AIS);
+  }
+  // ── the only mode: CLOSE MAP, never EXIT ──
+  eq('stage 6 ADS-B the only mode: CLOSE MAP', liveChrome('airsea', 'adsb', true).exitLabel, 'CLOSE MAP');
 }
 
 /* ── the wiring ──────────────────────────────────────────────────────────────────────────────────────────────── */
@@ -183,7 +249,11 @@ for (const [from, to] of [['ais', 'adsb'], ['adsb', 'ais']] as [K, K][]) {
   ok('MapOverlay: a page written goes through mapPageWritten', /setPage\(\(p\) => mapPageWritten\(p, uri, kind, open,/.test(mo));
   ok('MapOverlay: the page is dropped when the overlay closes', /useEffect\(\(\) => \{ if \(!visible\) setPage\(null\); \}, \[visible\]\)/.test(mo));
   ok('MapOverlay: the WebView is keyed by the page id', /<WebView[\s\S]{0,200}key=\{shownPage\?\.id \?\? 0\}/.test(mo));
-  ok('MapOverlay: the ADS-B selection does not outlive its map', /if \(!visible \|\| kind !== 'adsb'\) setAdsbSel\(null\)/.test(mo));
+  ok('★ stage 6 MapOverlay: kind \'adsb\' is retired (no page, no list of its own)', !/'adsb' \| 'ais'/.test(mo) && !/kind === 'adsb'/.test(mo) && !/KIND==='adsb'/.test(mo) && !/<AdsbLiveList/.test(mo));
+  ok('★ stage 6 MapOverlay: the AIR & SEA page is re-titled from the current mode on every change and every new page',
+     /pageCall\('__trkChrome', trk\.title, trk\.exitLabel \?\? 'CLOSE MAP'\); \}, \[visible, kind, trk\?\.title, trk\?\.exitLabel, pageUri\]\)/.test(mo));
+  ok('★ stage 6 MapOverlay: the ADS-B list body heads the AIRCRAFT tab while ADS-B is live', /adsb=\{adsbLive && trk\.tab === 'aircraft' \?/.test(mo));
+  ok('★ stage 6 SDRScreen: ADS-B live is the AIR & SEA map\'s mode, EXIT ADS-B leaves it', /const airSeaMode: LiveMode = adsbLiveHere \? 'adsb'/.test(sdr) && /exitLabel === 'EXIT ADS-B'\) \{ exitAdsb\(\); return; \}/.test(sdr));
   ok('SDRScreen: the map shown comes from shownMapOf', /const shownMap: MapKind \| null = shownMapOf\(\{/.test(sdr));
   for (const [k, fn] of [['adsb', 'adsbOnRef'], ['ais', 'aisOnRef'], ['ndb', 'ndbOnRef'], ['sondes', 'sdOnRef'], ['vormap', 'vmOnRef']] as const) {
     ok(`SDRScreen: a ${k} report arriving puts the other map modes away`, new RegExp(`if \\(!${fn}\\.current\\) \\{\\s*wholeMapYield\\('${k}'\\)`).test(sdr));
