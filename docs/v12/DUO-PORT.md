@@ -5,12 +5,61 @@ for the next store update.
 
 ## RESUME HERE
 
-- Everything below is committed on `b95-duo`; nothing pushed or merged.
-- Owed: a look on the Duo simulator / a real Duo at the half-open BIG boxes for the V12-only decoders (they stay one box
-  below the fold, BIG not offered — see "Not split"), and at the FM-DX screen in every pose with a live FM-DX server
-  (no simulator shots were possible — see "How it was tested").
+- **beta96 (branch `b96-duolists`, off v12-experimental = beta95):** every V12 list decoder now has the half-open two-panel
+  BIG layout — see "beta96: the list decoders across the crease" below. Committed step by step; nothing pushed or merged.
+- Owed: a look on a real Duo (no simulator build is possible — see "How it was tested") at the half-open BIG boxes for
+  every decoder, especially DSC's linked scrolling (drag in either panel; let go mid-row; a pad walking across the fold)
+  and the scanner's lower half (typing in LO / HI, which is drawn through PanelSlot); and at the FM-DX screen in every
+  pose with a live FM-DX server.
 - Not done on either branch (pre-existing, from the 11.0.17 notes): the band-label overprint rule in the WEB client
   (`web/client/src/main.ts` drawBandBar). The app's rule (WaterfallView, 35459577a) is ported.
+
+## beta96: the list decoders across the crease
+
+Stuart (11-26): "the duo needs the layout we just built with decoder list split across the crease". The coordinator's rule
+the same day: when ONE list spans both panels it is one continuous list (scrolling either scrolls both, the lower showing
+the rows after the upper's last); the panels scroll on their own only when they hold separate data.
+
+| Decoder | Upper panel (with the header) | Lower panel | Scrolling |
+|---|---|---|---|
+| CW / PSK / RTTY (incl. the skimmers) | ONE SIGNAL's text, the signals being decoded (RTTY card opens from here) | SPOTS | independent |
+| JT-TTY | the stations being decoded | SPOTS | independent |
+| DSC | the tune offer + channel keys, then the calls … | … the calls continuing | **linked** (one list) |
+| NCDXF | the beacon grid (takes the pad's arrows) | the heard log | independent |
+| Balloons | the payloads heard | SSDV pictures + report log (takes the arrows) | independent |
+| APRS | the stations (the pad's rows) | MESSAGES, PACKETS, FRAMES | independent |
+| Scanner | status, banners, START · HOLD · SKIP · IGNORE (· TAG) | source (band / bookmarks / manual), FOUND, settings, saved scans | independent |
+
+The plan lives in `src/utils/decoderShellLayout.ts` `LIST_DECODER_SPLIT`; BIG is offered wherever the split is
+(`bigOffered`; elsewhere the old 40 pt rule, unchanged). DecoderPanel's beta95 `noSplitBody` is gone.
+
+How each is drawn:
+- **Independent** (CwView, JttyView, NcdxfView, BalloonView, AprsView): the view is rendered twice with `part="upper"` /
+  `part="lower"`; each draws only its half. The pad's list index runs on across the fold (signals 0…n-1 above, spots n…
+  below — `independentRowPanel`); each half brings into view only the rows it draws (`useSpotsPin(…, owns)`). The upper
+  half has its own scroll ref (`upperListRef`), the lower keeps `outputRef` (NCDXF swaps them so the arrows move the grid).
+- **Scanner**: its two halves share state (typed LO / HI, undo, the open sections), so it is ONE instance: it draws its
+  upper half in place and hands the lower half to the lower panel through `PanelSlot` (DecoderShell `usePanelSlot` /
+  `PanelSlotOutlet`, a useSyncExternalStore hand-over — only the outlet re-renders, no loop). Its nav list is built in
+  the same order as the one box, so the pad walks from IGNORE into the band fields. (Pre-existing: the scanner has no
+  scroll-to-focus, in the one box or now.)
+- **Linked** (DSC; `src/utils/linkedListScroll.ts` pure + `src/components/LinkedList.tsx`): the column is drawn in both
+  panels at ONE offset. The upper is a ScrollView `seam` tall — the last row boundary that fits the panel, so a sliver
+  of blank sits above the fold rather than a cut row — clipped at `maxY + seam`; the lower's column is pulled up by
+  `seam` (plus `endPad` under the last row). Whichever panel the finger is on drives; the other follows with scrollTo.
+  Both snap (`snapToOffsets`) to offsets with the fold on a row boundary, the end included (`linkedMaxY` snaps), so
+  nothing comes to rest cut by the fold; mid-drag a row may straddle and settles whole on one side. Pad focus:
+  `linkedReveal` — unmoved while the row is whole in either panel (so focus steps from the upper's last row to the
+  lower's first with no scroll), else the nearest rest offset that shows it whole. `dscBlocks` maps the pad's index
+  (keys first, then calls) to the column's blocks.
+- Minimised: header only, as before. Toggling BIG remounts the body (as it does for every split body), so the scanner's
+  open sections reset on the toggle.
+
+Tests (beta96): test_decoder_shell_layout 132/0 (new §5: every list decoder splits half-open with nothing on the crease,
+BIG offered, unchanged on 11 hinge-less windows; §6: the linked list — seam, continuity at every rest offset, no row cut at
+the fold, uneven panels 480/160 and 140/520, a too-tall first row, a short list, pad focus down and back up across the
+fold); test_nav_coverage (new: every row-bearing half gets the pad's focus, the scanner keeps one nav list, the box's
+pad entry stays in the upper panel); test_duo_layout unchanged, passes; `tsc --noEmit` clean on src.
 
 ## What was ported (main 18e95a09c..037f84650, the 11.0.17 release)
 
@@ -32,10 +81,10 @@ Cherry-picked in order with `-x` (so each V12 commit names its main original), c
 | About V11.0.17 note (f686ed136, 2424fb81e) | ported as the V11 history entry; a V12 beta95 note added |
 | Version bump / iOS DSP lib (2424fb81e, 037f84650) | not applicable |
 
-### Not split (V12-only bodies)
-CW / PSK / RTTY rows, JT-TTY, DSC, NCDXF, balloons, APRS and the scanner have no two-panel layout. In half-open they stay
-one box below the fold and BIG is not offered (DecoderPanel `noSplitBody`). Plain text decoders (TRANSCRIBE, RTTY text,
-Morse) flow across the two panels as on V11.
+### Not split (V12-only bodies) — beta95 only
+In beta95 CW / PSK / RTTY rows, JT-TTY, DSC, NCDXF, balloons, APRS and the scanner had no two-panel layout (DecoderPanel
+`noSplitBody`: one box below the fold, BIG not offered). **beta96 split them all — see above.** Plain text decoders
+(TRANSCRIBE, RTTY text, Morse) flow across the two panels as on V11.
 
 ## FM-DX screen on the Duo (TunerScreen.tsx)
 
