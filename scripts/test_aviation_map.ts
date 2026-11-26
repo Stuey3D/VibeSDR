@@ -85,7 +85,7 @@ yes('…and carries the number of sources (2)', />2<\/text>/.test(items.find((i)
 yes('a 15-minute-old position is faded', items.find((i) => i.key === 'a:406D4D')!._ic.html.includes('opacity=".45"'));
 const card = avPlaneCard(ei[0], { lat: 52, lon: -1 });
 yes('the card: heard on ADS-B and VDL2, with when', /Heard on<\/span><span class="v">ADS-B now · VDL2/.test(card) || /Heard on.*ADS-B.*VDL2/.test(card));
-yes('the card: from ADS-B, the range from here', card.includes('from ADS-B') && card.includes('km'));
+yes('the card: from ADS-B, the range from here', card.includes('from ADS-B') && card.includes(' NM '));   // ★ beta95 NM on the aviation map
 yes('★ never a message body (the live row\'s owner-only text)', !card.includes('OWNER ONLY TEXT') && !JSON.stringify(items).includes('OWNER ONLY TEXT') && !JSON.stringify(avPlaneRows(planes, null)).includes('OWNER ONLY TEXT'));
 yes('a hostile key is escaped in the card', !avPlaneCard(planes.find((p) => p.key === '<script>')!, null).includes('<script>'));
 const rows = avPlaneRows(planes, { lat: 52, lon: -1 });

@@ -345,7 +345,7 @@ export function parseAdsbRange(j: unknown): AdsbRangeInfo | null {
 }
 export function adsbRangeLine(d: AdsbRangeInfo | null, nowSec: number): string {
   const day = (t: number) => { const x = new Date(t * 1000); return `${x.getUTCDate()} ${RANGE_MONTHS[x.getUTCMonth()]}`; };
-  const c = (o: AdsbRangeCatch | null) => (o ? `${Math.round(o.km)} km at ${Math.round(o.brg)}\u00b0, ${day(o.at)}` : '');
+  const c = (o: AdsbRangeCatch | null) => (o ? `${Math.round(o.km / 1.852)} NM at ${Math.round(o.brg)}\u00b0, ${day(o.at)}` : '');
   if (!d || !d.record) return 'Nothing heard yet \u2014 it builds as aircraft are heard in ADS-B.';
   const days = d.since > 0 ? Math.max(1, Math.ceil((nowSec - d.since) / 86400)) : 0;
   const parts = [days ? `Built over ${days} ${days === 1 ? 'day' : 'days'}` : 'Built'];

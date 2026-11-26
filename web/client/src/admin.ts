@@ -1095,7 +1095,7 @@ async function renderAfc(): Promise<void> {
 const RANGE_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export function adsbRangeLine(d: any, nowSec: number): string {
   const day = (t: number) => { const x = new Date(t * 1000); return `${x.getUTCDate()} ${RANGE_MONTHS[x.getUTCMonth()]}`; };
-  const c = (o: any) => (o && Number(o.km) > 0 ? `${Math.round(Number(o.km))} km at ${Math.round(Number(o.brg))}\u00b0, ${day(Number(o.at))}` : '');
+  const c = (o: any) => (o && Number(o.km) > 0 ? `${Math.round(Number(o.km) / 1.852)} NM at ${Math.round(Number(o.brg))}\u00b0, ${day(Number(o.at))}` : '');
   if (!d || !d.record) return 'Nothing heard yet \u2014 it builds as aircraft are heard in ADS-B.';
   const since = Number(d.since) || 0;
   const days = since > 0 ? Math.max(1, Math.ceil((nowSec - since) / 86400)) : 0;

@@ -1460,7 +1460,7 @@ if(KIND==='hfdl'){
     //   or bad one") — the SAME sigBars thresholds as the ground-station popups, so the two never disagree.
     var sig=sl?sigMeterHTML(sl)+' <span style="margin-left:4px;">'+sl.toFixed(1)+' dBFS</span>':'';
     var tk=numOr(a.tracked_km,0);
-    var tracked=tk?Math.round(tk).toLocaleString()+' km'+(spd?' &bull; '+spd:''):spd;
+    var tracked=tk?Math.round(tk/1.852).toLocaleString()+' NM'+(spd?' &bull; '+spd:''):spd;   // ★ beta95 NM on the aviation map
     var row=function(label,val){return val?'<tr><td style="color:rgba(${T.x},0.65);padding-right:8px;white-space:nowrap;">'+label+'</td><td style="color:rgba(${T.x},0.95);">'+val+'</td></tr>':'';};
     return '<div style="font-size:13px;letter-spacing:0.8px;">'
       +'<div style="font-size:15px;font-weight:600;color:rgba(${T.x},1);margin-bottom:6px;">'+esc(fl)+(a.icao&&a.icao!==fl?' <span style="font-size:12px;color:rgba(${T.x},0.65);">'+esc(a.icao)+'</span>':'')+'</div>'
@@ -1468,7 +1468,7 @@ if(KIND==='hfdl'){
       +row('Freq',freq)
       +row('Via',gsN)
       +row('Signal',sig)
-      +row('Distance',dist?dist+' km':'')
+      +row('Distance',dist?Math.round(dist/1.852)+' NM':'')
       +row('Tracked',tracked)
       +row('Msgs',numOr(a.msg_count,0)||'')
       +row('Seen',age(numOr(a.last_seen,0)*1000))
@@ -1503,7 +1503,7 @@ if(KIND==='hfdl'){
           +'<div style="margin-top:4px;display:flex;align-items:center;gap:6px;">'
           +'<span style="font-size:12px;color:rgba(${T.x},0.70);">Signal:</span>'+sigLine+'</div>';
         var d=distKm(s.lat,s.lon);
-        if(d)ph+='<div style="margin-top:3px;font-size:12px;color:rgba(${T.x},0.65);">'+d+' km from receiver</div>';
+        if(d)ph+='<div style="margin-top:3px;font-size:12px;color:rgba(${T.x},0.65);">'+Math.round(d/1.852)+' NM from receiver</div>';
         if(freqs.length){
           ph+='<div style="margin-top:6px;">';
           freqs.forEach(function(f){

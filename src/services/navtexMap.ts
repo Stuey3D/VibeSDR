@@ -85,7 +85,8 @@ export function navSince(range: string): number { return NAV_RANGES.find((r) => 
 /** The band's colour: 518 kHz (international, English) cyan, 490 kHz (national language) violet, 4209.5 kHz (HF) amber. */
 export const NAV_BAND_COLOURS: Record<string, string> = { '518': '#4fc3f7', '490': '#c792ea', '4209.5': '#ffb74d', '424': '#9fe870' };
 export function navColour(s: NavStation): string { return NAV_BAND_COLOURS[String(s.khz[0] ?? 518)] || '#4fc3f7'; }
-const kmTxt = (km: number) => (km < 10 ? km.toFixed(1) : Math.round(km).toLocaleString('en-GB'));
+/** ★ beta95 NM on the shipping maps (Stuart 11-25) — the server sends km. "4.2 NM" / "1,204 NM". */
+const nmTxt = (km: number) => { const nm = km / 1.852; return `${nm < 10 ? nm.toFixed(1) : Math.round(nm).toLocaleString('en-GB')} NM`; };
 function escN(v: string): string { return v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 /** ★ Fades over a week since last heard (to 0.45) — a station heard last month is still drawn, quieter. */
 export function navAgeOpacity(seen: number): number {
@@ -144,7 +145,7 @@ export function navIcon(g: NavSite): { html: string; w: number; h: number } {
 export function navName(name: string, conf: string): string { return conf === 'likely' ? `Suspected ${name}` : conf === 'ambiguous' ? `${name}?` : name; }
 /** "Niton · E K I T · 195 km" */
 export function navLabel(g: NavSite): string {
-  return `${navName(g.name, g.conf)} · ${lettersOf(g)}${g.km !== undefined ? ` · ${kmTxt(g.km)} km` : ''}`;
+  return `${navName(g.name, g.conf)} · ${lettersOf(g)}${g.km !== undefined ? ` · ${nmTxt(g.km)}` : ''}`;
 }
 /** Who keeps its name when labels collide: the most different messages, then the most recent. */
 export function navRank(g: NavSite): number { return g.uniq * 1e6 - Math.min(g.seen, 999999); }
@@ -187,10 +188,10 @@ export function navWhy(s: NavStation): string[] {
   if (s.ev.dx) out.push(`The only station on letter ${s.b1}, ${band} kHz, within night-time reach: ${of(s.ev.dx)}`);
   if (s.ev.night) out.push(`The other candidate was out of reach in daylight: ${of(s.ev.night)}`);
   if (s.n) out.push(`Ended inside ${s.b1}’s schedule slot (${navSlot(s.b1)} UTC, every 4 h): ${of(s.inSlot)}`);
-  if (s.near.length) out.push(`Nearest ${s.b1} station on ${band} kHz: ${s.near[0].name}, ${kmTxt(s.near[0].km)} km`
-    + (s.near[1] ? ` (next ${s.near[1].name}, ${kmTxt(s.near[1].km)} km)` : '') + (s.share > 1 ? ` — ${s.share} stations share this letter` : ''));
+  if (s.near.length) out.push(`Nearest ${s.b1} station on ${band} kHz: ${s.near[0].name}, ${nmTxt(s.near[0].km)}`
+    + (s.near[1] ? ` (next ${s.near[1].name}, ${nmTxt(s.near[1].km)})` : '') + (s.share > 1 ? ` — ${s.share} stations share this letter` : ''));
   if (s.night) out.push(`Heard with the path in darkness: ${of(s.night)}`);
-  if (s.cands && s.cands.length > 1) out.push('Could be ' + s.cands.map((c) => `${c.name}${c.km !== undefined ? ` (${kmTxt(c.km)} km)` : ''}`).join(' or '));
+  if (s.cands && s.cands.length > 1) out.push('Could be ' + s.cands.map((c) => `${c.name}${c.km !== undefined ? ` (${nmTxt(c.km)})` : ''}`).join(' or '));
   return out;
 }
 /** ★★ The card (Stuart, 2026-11-01: tidied — it was a wall of text). THE ESSENTIALS FIRST: the name, its letters and
@@ -201,7 +202,7 @@ export function navCard(g: NavSite, wrap: 'web' | 'app' = 'web'): string {
   const lines: string[] = [];
   const bands = g.khz.map((k) => `${k}`).join(' + ');
   lines.push(`<div class="t"><b>${escN(navName(g.name, g.conf))}</b>${g.country ? `, ${escN(g.country)}` : ''}</div>`);
-  lines.push(`<div>${escN(lettersOf(g))} · ${escN(bands)} kHz${g.km !== undefined ? ` · ${escN(kmTxt(g.km))} km` : ''}</div>`);
+  lines.push(`<div>${escN(lettersOf(g))} · ${escN(bands)} kHz${g.km !== undefined ? ` · ${escN(nmTxt(g.km))}` : ''}</div>`);
   lines.push(`<div>Last heard ${navAgo(g.seen)} · ${g.n} ${g.n === 1 ? 'message' : 'messages'}${g.uniq !== g.n ? ` (${g.uniq} different)` : ''}</div>`);
   // ★ the top reasons — the busiest letter's strongest evidence (navWhy is strongest first)
   const top = g.letters[0] ? navWhy(g.letters[0]).slice(0, 3) : [];
@@ -226,7 +227,7 @@ export function navCard(g: NavSite, wrap: 'web' | 'app' = 'web'): string {
 /** The list (the web's TrackView rows / the app's TrackLiveList rows): nearest first, one row a site. */
 export function navRows(r: NavReport): Array<{ g: NavSite; second: string; range: string }> {
   return navSites(r).sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9)).map((g) => ({
-    g, range: g.km !== undefined ? `${kmTxt(g.km)} km` : '',
+    g, range: g.km !== undefined ? `${nmTxt(g.km)}` : '',
     second: [`${lettersOf(g)} · ${g.khz.join('+')} kHz`, `${g.uniq} msg${g.uniq === 1 ? '' : 's'}`, g.conf === 'confident' ? '' : g.conf].filter(Boolean).join(' · '),
   }));
 }
@@ -235,7 +236,7 @@ export function navStatus(r: NavReport | null): string {
   const sites = navSites(r);
   const far = sites.reduce<NavSite | null>((b, s) => (s.km !== undefined && (!b || s.km > (b.km ?? 0)) ? s : b), null);
   return `${sites.length} ${sites.length === 1 ? 'site' : 'sites'} · ${r.stations.length} ${r.stations.length === 1 ? 'station' : 'stations'} · ${r.messages} messages`
-    + (far ? ` · furthest ${far.name} ${kmTxt(far.km!)} km` : '') + (r.unplaced ? ` · ${r.unplaced} not placed` : '');
+    + (far ? ` · furthest ${far.name} ${nmTxt(far.km!)}` : '') + (r.unplaced ? ` · ${r.unplaced} not placed` : '');
 }
 export const NAV_EMPTY = 'No NAVTEX message in the gallery for this time — the map fills as messages arrive (a listener’s decoder or background decoding).';
 

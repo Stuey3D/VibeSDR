@@ -221,18 +221,20 @@ export function vorFix(r: VorMapReport | null, maxKm = 600): VorFix | null {
   const km = Math.max(formal, spread, 0.5);
   const angle = Math.max(...pts.map((q) => q.angle));
   const stations = [...used].sort();
-  const near = km < 10 ? km.toFixed(1) : String(Math.round(km));
+  const near = fixNm(km);   // ★ beta95 NM on the aviation maps (Stuart 11-25)
   let words = pts.length === 1
-    ? `Your position from the ${stations.join(' and ')} radials: within about ${near} km (they cross at ${Math.round(angle)}°).`
-    : `Your position from ${stations.length} VORs (${stations.join(', ')}): within about ${near} km — ${pts.length} crossings, their centre.`;
+    ? `Your position from the ${stations.join(' and ')} radials: within about ${near} (they cross at ${Math.round(angle)}°).`
+    : `Your position from ${stations.length} VORs (${stations.join(', ')}): within about ${near} — ${pts.length} crossings, their centre.`;
   if (angle < 20) words += ' The radials cross at a shallow angle, so this fix is poor along their line.';
-  else if (km > 25) words += ' The stations are far off, so a degree of radial is several km here.';
+  else if (km > 25) words += ' The stations are far off, so a degree of radial is a mile or more here.';
   return { lat: fix.lat, lon: fix.lon, km, stations, crossings: pts.length, angle, words };
 }
+/** "0.8 NM" / "14 NM" — the fix's uncertainty (kept in km inside). */
+const fixNm = (km: number) => { const nm = km / 1.852; return `${nm < 10 ? nm.toFixed(1) : Math.round(nm)} NM`; };
 /** The fix in one line for the status / list head; '' with one radial or none. */
 export function vorFixLine(r: VorMapReport | null): string {
   const f = vorFix(r);
-  if (f) return `FIX ±${f.km < 10 ? f.km.toFixed(1) : Math.round(f.km)} km from ${f.stations.join(' + ')}`;
+  if (f) return `FIX ±${fixNm(f.km)} from ${f.stations.join(' + ')}`;
   const n = fixRadials(r).length;
   return n === 1 ? 'One radial so far — a second station is needed for a fix' : '';
 }
@@ -301,7 +303,7 @@ export function vorCard(b: VorMapBeacon, nowS: number): string {
 }
 export function vorFixCard(f: VorFix): string {
   return `<div class="t"><b>FIX</b> — where the radials cross</div>${row('Position', `${f.lat.toFixed(3)}, ${f.lon.toFixed(3)}`)}`
-    + row('Within', `about ${f.km < 10 ? f.km.toFixed(1) : Math.round(f.km)} km`) + row('From', f.stations.join(', '))
+    + row('Within', `about ${fixNm(f.km)}`) + row('From', f.stations.join(', '))
     + `<div class="raw">${esc(f.words)}</div>`;
 }
 /** ★ The map's items (the shared track layer): every NAMED beacon at its published position — a VOR with its radial drawn

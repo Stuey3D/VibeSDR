@@ -93,14 +93,14 @@ export default function AircraftPanel({ aircraft, scrollRef }: {
 
               <View style={s.distCol}>
                 <Text style={s.dist} numberOfLines={1}>
-                  {a.distKm != null ? `${Math.round(a.distKm)} km` : '—'}
+                  {a.distKm != null ? `${Math.round(a.distKm / 1.852)} NM` : '—'}
                 </Text>
                 <Text style={s.sub} numberOfLines={1}>
                   {a.bearing != null ? COMPASS[Math.round(a.bearing / 45) % 8] : ''}
                   {a.rssi != null ? `  ${a.rssi.toFixed(0)}dB` : ''}
                 </Text>
                 {a.trackedKm != null && (
-                  <Text style={s.sub} numberOfLines={1}>{`tracked ${a.trackedKm} km`}</Text>
+                  <Text style={s.sub} numberOfLines={1}>{`tracked ${Math.round(a.trackedKm / 1.852)} NM`}</Text>
                 )}
               </View>
             </View>

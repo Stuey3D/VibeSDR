@@ -288,7 +288,7 @@ export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' =
     if (p.alt != null) add('Altitude', p.ground ? 'on the ground' : `${Math.round(p.alt).toLocaleString('en-GB')} ft`);
     if (p.gs != null) add('Speed', `${Math.round(p.gs)} kt${p.trk != null ? ` · track ${Math.round(p.trk)}°` : ''}`);
     if (p.posTime) add('Fix time', p.posTime.startsWith(':') ? `${p.posTime} past the hour (as reported)` : `${p.posTime} UTC (as reported)`);
-    if (rx) { const rb = rangeBearing(rx, p.lat, p.lon); add('From here', `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km ${compass8(rb.brg)}`); }
+    if (rx) { const rb = rangeBearing(rx, p.lat, p.lon); add('From here', `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM ${compass8(rb.brg)}`); }
   }
   add('Heard on', heardLine(p));
   if (p.labelName || p.label) add('Last message', p.labelName ? `${p.labelName}${p.label ? ` (label ${p.label})` : ''}` : `label ${p.label}`);
@@ -363,7 +363,8 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
       second: [who, p.src.join(' + '), avRoute(p as unknown as AvAircraft) || dbRoute,
                p.lastSeen ? `ADS-B last seen ${p.lastSeen} UTC` : avFix({ ...p, posSrc: p.posApp ?? p.posSrc } as unknown as AvAircraft), p.labelName ?? ''].filter(Boolean).join(' · '),
       sp: p.alt != null ? (p.ground ? 'GND' : `FL${String(Math.max(0, Math.round(p.alt / 100))).padStart(3, '0')}`) : '', trend: 0 as const,
-      range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : p.lat == null ? 'no position' : '',
+      // ★ beta95 NM on the aviation map — the list, the card and the rings agree
+      range: rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM` : p.lat == null ? 'no position' : '',
       brg: rb ? compass8(rb.brg) : '', noPos: p.lat == null, age: ago(Math.min(p.age, ...Object.values(p.srcAge))), em: false,
     };
   });

@@ -101,7 +101,7 @@ ok(tr.length === 5 && tr[0].noPos && tr.find((x) => x.name === 'DTY')?.range ===
 // ── the FIX ──
 const f2 = vorFix(vorMapSanitise(report([beacon('DTY'), beacon('HON')])));
 ok(!!f2 && dist(f2!, RX) < 0.5, `★ two radials cross at the receiver: ${f2 && dist(f2, RX).toFixed(3)} km off`);
-ok(!!f2 && f2.km > 0.5 && f2.km < 5 && f2.stations.join() === 'DTY,HON' && /within about [0-9.]+ km \(they cross at \d+°\)/.test(f2.words),
+ok(!!f2 && f2.km > 0.5 && f2.km < 5 && f2.stations.join() === 'DTY,HON' && /within about [0-9.]+ NM \(they cross at \d+°\)/.test(f2.words),
    `…said in plain words: "${f2?.words}"`);
 const f3 = vorFix(vorMapSanitise(report([beacon('DTY'), beacon('HON'), beacon('BNN')])));
 ok(!!f3 && f3.crossings === 3 && dist(f3!, RX) < 0.5 && /3 VORs \(BNN, DTY, HON\)/.test(f3.words), `three: a cluster, its centre (${f3?.words})`);
@@ -122,7 +122,7 @@ ok(!!fs && fs.angle < 20 && /shallow angle/.test(fs.words), `nearly in line (${f
 const items2 = vorMapItems(vorMapSanitise(report([beacon('DTY'), beacon('HON')])));
 const fixIt = items2.find((i) => i.key === 'fix');
 ok(!!fixIt && (fixIt._sh as any).kind === 'area' && /where the radials cross/.test(fixIt._cd), 'the map: the FIX and its circle of uncertainty');
-ok(/^FIX ±[0-9.]+ km from DTY \+ HON$/.test(vorFixLine(vorMapSanitise(report([beacon('DTY'), beacon('HON')])))), 'the fix line');
+ok(/^FIX ±[0-9.]+ NM from DTY \+ HON$/.test(vorFixLine(vorMapSanitise(report([beacon('DTY'), beacon('HON')])))), 'the fix line');
 ok(vorRadialPath({ ...beacon('DTY'), kind: 'loc' } as any).length === 0, 'a localiser has no radial');
 
 // ── the wiring: both clients, the server's words, both setup screens ──

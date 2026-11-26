@@ -19974,7 +19974,7 @@ async function renderGallery(page = galPage) {
         const n = document.createElement('span'); n.className = 'n';
         const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
         n.appendChild(document.createTextNode(`SHIPPING MAP · NAVTEX stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
-          + (far ? ` · furthest ${far.name} ${Math.round(far.km!).toLocaleString('en-GB')} km` : '')));
+          + (far ? ` · furthest ${far.name} ${Math.round(far.km! / 1.852).toLocaleString('en-GB')} NM` : '')   // ★ beta95 NM on the shipping map));
         n.appendChild(document.createElement('br'));
         const src = document.createElement('span'); src.className = 'src';
         src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';

@@ -93,7 +93,7 @@ eq('prefs from before beta94: the range outline on, its all-time line off', pars
 {
   const T0 = 1762128000;   // 3 Nov 2025 00:00 UTC
   const d = parseAdsbRange({ ok: 1, window: 30, since: T0, km: [], far: { km: 412.3, brg: 152, at: T0 + 5 * 86400 }, record: { km: 512, brg: 160, at: T0 + 3600 } });
-  eq('range line', adsbRangeLine(d, T0 + 22.5 * 86400), 'Built over 23 days \u00b7 furthest 412 km at 152\u00b0, 8 Nov \u00b7 furthest ever 512 km at 160\u00b0, 3 Nov');
+  eq('range line', adsbRangeLine(d, T0 + 22.5 * 86400), 'Built over 23 days \u00b7 furthest 223 NM at 152\u00b0, 8 Nov \u00b7 furthest ever 276 NM at 160\u00b0, 3 Nov');
   eq('range line: nothing yet', adsbRangeLine(parseAdsbRange({ ok: 1, window: 30, since: 0, km: [], far: null, record: null }), T0), 'Nothing heard yet \u2014 it builds as aircraft are heard in ADS-B.');
   eq('range: an older server', parseAdsbRange({ error: 'x' }), null);
 }
