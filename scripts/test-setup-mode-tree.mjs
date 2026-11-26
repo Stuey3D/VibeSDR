@@ -121,6 +121,9 @@ async function openSetup() {
   //    config draws the list — for an RTL named "RTL" that is a tuner-only dongle (no HF); the fake rtl_tcp has no model,
   //    so the running radio keeps its whole table (DRM, time signals …).
   ok(await until(async () => await js(`!!(HW_CAPS && HW_CAPS.caps)`), 15000), "…and the radio's own caps have arrived");
+  // ★ beta96 b96-setupux: the page's sections start CLOSED (docs/v12/SETUP-UX.md), so "greyed, still SHOWN" is judged with
+  //   this tab's sections open — OPEN ALL, as an owner would.
+  ok(await js(`(() => { const b = document.getElementById("secOpenAll"); if (!b) return false; b.click(); return true; })()`), 'OPEN ALL on the radio tab');
 }
 
 try {
