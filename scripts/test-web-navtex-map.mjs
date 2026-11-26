@@ -262,7 +262,9 @@ try {
     ok(Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => (e.getAttribute('aria-label') || '').startsWith('Warning ${w.id}')).length`)) >= 1, `${name} on the map: ${w.id} (${kinds})`);
     console.log('   screenshot', await shot(`navtex-map-${name}.png`));
   }
+  // ★ beta96 a row chosen pauses the auto fit (mapAutoFit's rule), so FIT RESUMES it and GLIDES out — wait for it to settle
   await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
+  if (clusters) await until(`[...document.querySelectorAll('.vtl-mk')].some(x => { const b = x.querySelector('.vtl-cl'); return b && !b.hidden; })`, 6000);
   // a cluster: Enter zooms in to it
   if (clusters) {
     const z0 = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk')].find(x => { const b = x.querySelector('.vtl-cl'); return b && !b.hidden; }); if (!e) return ''; e.focus(); return e.getAttribute('aria-label'); })()`);
