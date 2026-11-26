@@ -278,12 +278,48 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
         <input type="password" id="pass" autocomplete="current-password" autofocus></label>
       <div class="err" id="signinErr"></div>
       <p style="margin-top:16px"><button id="signinBtn">Continue</button></p>
+      <p style="margin-top:14px"><button type="button" class="ghost" id="codeOpen">Setting up a TV or phone for the first time? Use its one-time code</button></p>
+    </div>
+    <!-- ★★★ beta96 "SET UP ON ANOTHER DEVICE" — FIRST-TIME ONLY (vibe_setup_code.h). The TV shows a one-time code; it opens
+         ONE step here: choosing the admin password. Nothing else on this page is reachable until that is done, and from
+         then on this is the ordinary sign-in with that password. -->
+    <div class="card hide" id="codeCard">
+      <h2>One-time setup code</h2>
+      <p class="why">Type the code the TV (or phone) is showing. It works once, for five minutes, and only on this network.</p>
+      <label><span class="lbl">Code</span>
+        <input type="text" id="setupCode" autocomplete="off" autocapitalize="characters" maxlength="12" placeholder="ABCD-EFGH"></label>
+      <div class="err" id="codeErr"></div>
+      <p style="margin-top:16px"><button id="codeBtn">Continue</button></p>
+    </div>
+    <div class="card hide" id="codePwCard">
+      <h2>First: choose the admin password</h2>
+      <p class="why">It protects this server&rsquo;s settings and the things that can harm a radio. You will need it every
+         time you change a setting from another device. Type it twice; at least 8 characters. The setup code is not a
+         password and stops working now.</p>
+      <label><span class="lbl">Admin password</span>
+        <input type="password" id="codePw" autocomplete="new-password" maxlength="128"></label>
+      <label><span class="lbl">Type it again</span>
+        <input type="password" id="codePw2" autocomplete="new-password" maxlength="128"></label>
+      <div class="err" id="codePwErr"></div>
+      <p style="margin-top:16px"><button id="codePwBtn">Set the admin password</button></p>
     </div>
   </div>
 
   <!-- ── 2. SETUP ────────────────────────────────────────────────────────── -->
   <div id="setup" class="hide">
     <p class="sub">Set this receiver up. You can change any of it later from Admin.</p>
+
+    <!-- ★★★ beta96 the end of a first-time REMOTE SETUP: Finish hands the TV back to its status screen. Remote access to
+         these settings later is the owner's explicit choice here — never switched on by itself. -->
+    <div class="card hide" id="codeFinishCard">
+      <h2>Finish first-time setup</h2>
+      <p class="why">When you have saved your settings below, finish here &mdash; the TV goes back to its own status screen.</p>
+      <label style="display:flex;gap:10px;align-items:center"><input type="checkbox" id="codeRemote" style="width:18px;height:18px">
+        <span>Allow changing settings from other devices later (remote access to server settings &mdash; with this admin
+        password). Only the device itself can turn this off again.</span></label>
+      <div class="err" id="codeFinishErr"></div>
+      <p style="margin-top:14px"><button id="codeFinishBtn">Finish setup</button></p>
+    </div>
 
     <!-- ★★★ A NEW CARD'S ONE UPDATE CHECK (Stuart, 2026-10-28). A card carries the VibeServer it was built with, so it can
          be weeks old; once the network is set up, the box looks ONCE for a newer VibeServer and installs it, here, in
@@ -10964,6 +11000,72 @@ $("claimBtn").onclick = async () => {
   }
 };
 $("claimPass2").addEventListener("keydown", e => { if (e.key === "Enter") $("claimBtn").click(); });
+
+/* ★★★ beta96 FIRST-TIME SETUP FROM ANOTHER DEVICE (vibe_setup_code.h, docs/v12/SERVER-CHOICE.md). The code opens one step:
+ *  SET the admin password. Then PASS is that password and this page signs in the ordinary way (nonce + HMAC). */
+let CODE_SESSION = "", CODE_SETUP = false;
+const CODE_WHY = {
+  wrong: "That is not the code on the screen.", too_many_wrong: "Too many wrong codes — the code was cancelled. Ask the TV for a new one.",
+  expired: "The code ran out (five minutes). Ask the TV for a new one.", cancelled: "The code was cancelled on the TV.",
+  used: "That code has been used.", no_code: "No code is showing on the TV.", not_local: "Setup codes work only on the same network as the TV.",
+  password_exists: "This server already has an admin password — sign in with it above.",
+  mismatch: "The two passwords are not the same.", too_short: "At least 8 characters.", too_long: "At most 128 characters.",
+  bad_characters: "No control characters.", no_session: "The setup session ended — ask the TV for a new code.",
+};
+$("codeOpen").onclick = () => {
+  $("signinCard").classList.add("hide"); $("codeCard").classList.remove("hide");
+  setTimeout(() => $("setupCode").focus(), 50);
+};
+$("codeBtn").onclick = async () => {
+  $("codeErr").textContent = "";
+  try {
+    const r = await fetch("/vibeserver/setup-code", {method: "POST", cache: "no-store",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: "code=" + encodeURIComponent($("setupCode").value)});
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) {
+      $("codeErr").textContent = (CODE_WHY[j.why] || ("Refused (" + r.status + ")."))
+        + (j.why === "wrong" && j.triesLeft ? " " + j.triesLeft + " tries left." : "");
+      if (j.why === "password_exists") { $("codeCard").classList.add("hide"); $("signinCard").classList.remove("hide"); }
+      return;
+    }
+    CODE_SESSION = j.session;
+    $("codeCard").classList.add("hide"); $("codePwCard").classList.remove("hide");
+    setTimeout(() => $("codePw").focus(), 50);
+  } catch (e) { $("codeErr").textContent = "Could not reach the server."; }
+};
+$("setupCode").addEventListener("keydown", e => { if (e.key === "Enter") $("codeBtn").click(); });
+$("codePwBtn").onclick = async () => {
+  const a = $("codePw").value, b = $("codePw2").value;
+  $("codePwErr").textContent = "";
+  if (a !== b) { $("codePwErr").textContent = CODE_WHY.mismatch; return; }
+  if (a.length < 8) { $("codePwErr").textContent = CODE_WHY.too_short; return; }
+  try {
+    const r = await fetch("/vibeserver/setup-code/password", {method: "POST", cache: "no-store",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      body: "session=" + encodeURIComponent(CODE_SESSION) + "&password=" + encodeURIComponent(a) + "&password2=" + encodeURIComponent(b)});
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) { $("codePwErr").textContent = CODE_WHY[j.why] || j.message || ("Refused (" + r.status + ")."); return; }
+    CODE_SESSION = ""; PASS = a; CODE_SETUP = true;
+    $("codePwCard").classList.add("hide");
+    await signIn(true);
+    $("codeFinishCard").classList.remove("hide");
+  } catch (e) { $("codePwErr").textContent = "Could not reach the server."; }
+};
+$("codePw2").addEventListener("keydown", e => { if (e.key === "Enter") $("codePwBtn").click(); });
+$("codeFinishBtn").onclick = async () => {
+  $("codeFinishErr").textContent = "";
+  try {
+    const r = await fetch("/vibeserver/setup-code/finish?" + await authQuery(), {method: "POST", cache: "no-store",
+      headers: {"Content-Type": "application/x-www-form-urlencoded"}, body: "remote=" + ($("codeRemote").checked ? "1" : "0")});
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) { $("codeFinishErr").textContent = "Refused (" + (j.why || r.status) + ")."; return; }
+    $("codeFinishCard").innerHTML = "<h2>Done</h2><p class=\"why\">The TV is back on its status screen. "
+      + ($("codeRemote").checked ? "You can change settings from here later by signing in with the admin password."
+                                  : "Remote access is off: to change settings later, use the device itself (or switch remote access on there).")
+      + (j.note ? " " + j.note : "") + "</p>";
+  } catch (e) { $("codeFinishErr").textContent = "Could not reach the server."; }
+};
 
 /** ★★★ WI-FI FIRST ONLY WHERE IT ALWAYS WAS (Stuart, 2026-10-13: "we are keeping the setup as it stands now as it works,
  *  but we are adding this as a secondary setup method"). On the open setup hotspot the page is Wi-Fi-only, exactly as
