@@ -119,6 +119,12 @@ int main() {
         CHECK(p2 + 1 <= 101, "the report's track thinned to %zu points", p2 + 1);
         CHECK(has(m, "120040]"), "…still ending on the newest");
         CHECK(u.json(1e9, 3600).find("S7777777") == std::string::npos, "a sonde unheard for hours leaves the report");
+        // ★★★ beta96 maps2 the gallery's day card (vibe_posgal.h) is fed from heardSondes: the newest position, the highest
+        const auto hs = u.heardSondes(7000, 120, 10);
+        CHECK(hs.size() == 1 && hs[0].serial == "S7777777" && std::fabs(hs[0].alt - (100 + 60.0 * 1999)) < 1 && std::fabs(hs[0].maxAlt - hs[0].alt) < 1
+              && std::fabs(hs[0].last - 6999) < 1e-6 && std::fabs(hs[0].first - 5000) < 1e-6, "heardSondes: its serial, newest altitude, highest, first / last heard");
+        CHECK(u.heardSondes(1e9, 120, 10).empty(), "heardSondes: nothing heard in the last 2 minutes");
+        CHECK(t.heardSondes(1100, 1e9, 5).size() == 5 && t.heardSondes(1100, 1e9, 5)[0].serial == "S0000099", "heardSondes: bounded, newest first");
     }
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

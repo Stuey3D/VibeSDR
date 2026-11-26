@@ -249,6 +249,12 @@ static void testGeometry() {
     // ★ and once named it stays named (the station does not move): a later wild second does not un-name it
     s.bearingForTest(DTY, 200.0);
     ok(s.seenForTest(DTY).ident == "DTY", "① …and stays named when a later second reads wild");
+    // ★★★ beta96 maps2 the gallery's day card (vibe_posgal.h) is fed from heardStations: an identified station, its published site
+    { const auto hs = s.heardStations(0, 10);
+      bool one = hs.size() == 1 && hs[0].ident == "DTY" && hs[0].hz == DTY && std::fabs(hs[0].lat - dty->lat) < 1e-4 && std::fabs(hs[0].lon - dty->lon) < 1e-4
+                 && hs[0].kind == "vor" && !hs[0].name.empty();
+      ok(one, "① heardStations (the gallery's VOR card): DTY at its published site, its channel, a VOR");
+      ok(s.heardStations(INT64_MAX / 2, 10).empty(), "① …and nothing heard since a later time"); }
 
     // ① the other order: the read first, the bearing a second later; IO92nh's centre too
     fresh(true, nhLat, nhLon);
