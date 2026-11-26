@@ -1343,7 +1343,7 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #adsbStat { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.5px; color: var(--text-dim); white-space: nowrap; }
 /* ★ GAIN in ADS-B (Stuart, 2026-10-24: "there is no way of accessing the gain control when ADSB is enabled"): the key
  *   says what the radio is at; its card holds AUTO and the radio's own gain steps */
-#adsbTop #adsbGain { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#adsbGain { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #adsbGain .k { opacity: 0.6; letter-spacing: 1.5px; }
 #adsbGain .tr { margin-left: 4px; padding: 1px 5px; border-radius: 4px; font-size: 10px; letter-spacing: 1.2px;
   color: #0b0b0b; background: rgba(255, 184, 51, 0.85); animation: adsbTrain 1.6s ease-in-out infinite; }
@@ -1444,6 +1444,18 @@ body.adsbMap #srvHealth { right: 0 !important; }
   padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
 #adsbList .adsbRow:hover, #adsbList .adsbRow:focus-visible { background: var(--btn-active-bg); }
 #adsbList .adsbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
+/* ★★ beta96 ADS-B's live list inside the AIR & SEA map's AIRCRAFT tab (TrackView scrolls it — no list of its own in it) */
+.trkView #adsbList { max-height: none; overflow: visible; border-top: 0; padding: 0; }
+.trkView #adsbList .adsbRow { border-bottom: 1px solid #151f29; border-radius: 0; }
+.trkView #adsbList .adsbRow.sel { background: #1a2632; border-left-color: #ffd34d; box-shadow: none; }
+.trkView #adsbList .adsbRow.em { background: #4a1515; }
+.trkView .slot-head #adsbChips { padding: 6px 10px 4px; }
+.trkView .slot-top { display: contents; }
+.trkView .scr .slot-top > * { flex: 0 0 auto; white-space: nowrap; }
+.trkView .slot-over > * { pointer-events: auto; }
+.trkView .slot-over { position: absolute; inset: 0; pointer-events: none; z-index: 8; }
+.trkView #adsbGainPop { top: 8px; }
+.trkView #adsbFeedWarn { top: 8px; }
 #adsbList .adsbRow .id { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
 #adsbList .adsbRow .id .l1 { display: flex; align-items: center; min-width: 0; }
 #adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
@@ -5001,45 +5013,26 @@ select.btn { padding: 6px 8px; }
         from the top bar), the pills, the owner's notice, the tour, the START / idle / busy screens.
      ★ data-navscope: while it is up the keyboard / controller highlight moves only within it (gamepad.ts);
        back leaves ADS-B, as the HFDL map's back closes it. The list is a [data-navbox], like the DAB list. -->
-<div id="adsbView" data-navscope hidden>
-  <div id="adsbTop">
-    <button type="button" id="adsbExit" title="Leave ADS-B and give the receiver back as it was">EXIT ADS-B</button>
-    <!-- ★★ EVERYTHING BUT EXIT SCROLLS (Stuart, 2026-10-25: the bar crowded on a portrait iPhone 17 Pro Max — "the top bar
-         then needs to be scrollable like the header of the decoder box, the only thing that must stay anchored is the
-         Exit ADS-B button"). The way out never scrolls away; the stats sit beside the gain. -->
-    <div id="adsbTopScroll">
-    <div id="adsbTitle">ADS-B <span class="w">AIRCRAFT MAP</span></div>
-    <!-- ★ V12 2026-11-16 the AVIATION MAP: drawn only when another source (a second radio's ACARS / VDL2, HFDL) has aircraft -->
-    <button type="button" id="adsbAvMap" class="btn" hidden title="The AVIATION MAP: these aircraft with what this server's other radios hear (ACARS, VDL2, HFDL, ADS-C) — each aircraft once">AVIATION MAP</button>
-    <div id="adsbCntWrap" title="Aircraft on the map"><svg width="16" height="16" viewBox="0 0 26 26" aria-hidden="true"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="currentColor"/></svg><span id="adsbCnt">…</span></div>
-    <span id="adsbStat"></span>
-    <span id="adsbCapture" hidden></span>
-    <button type="button" id="adsbGain" hidden title="The receiver's gain in ADS-B — automatic, or set it yourself"></button>
-    <button type="button" id="adsbChat" title="Chat">CHAT<span class="unread" id="adsbChatUnread" hidden></span></button>
-    </div>
+<!-- ★★★ beta96 ADS-B MODE IS THE AIR & SEA MAP's ADS-B-LIVE STATE (docs/v12/ONE-MAP.md stage 4): #adsbView is retired. Its
+     own chrome waits here, hidden, and main.ts adsbChromeMount moves it into the map (TrackView slots) while ADS-B is live:
+     the capture warning, GAIN and CHAT in the top bar; NEWEST / FURTHEST / LONGEST TRACKED under the list's header; the
+     antenna warning and the gain pop-over over the map. EXIT ADS-B is the map's own exit key. -->
+<div id="adsbChrome" hidden>
+  <span id="adsbCapture" hidden></span>
+  <button type="button" id="adsbGain" class="btn" hidden title="The receiver's gain in ADS-B — automatic, or set it yourself"></button>
+  <button type="button" id="adsbChat" class="btn" title="Chat">CHAT<span class="unread" id="adsbChatUnread" hidden></span></button>
+  <!-- ★ The list header's chips (Stuart, 2026-10-25): NEWEST, FURTHEST, LONGEST TRACKED. Tap = show it on the map. -->
+  <div id="adsbChips">
+    <button type="button" id="adsbNew" class="adsbChip" hidden title="The newest aircraft heard — tap to show it on the map"></button>
+    <button type="button" id="adsbFar" class="adsbChip" hidden title="The furthest aircraft from this receiver — tap to show it on the map"></button>
+    <button type="button" id="adsbLong" class="adsbChip" hidden title="The aircraft followed the furthest — tap to show it on the map"></button>
   </div>
-  <div id="adsbMain">
-    <div id="adsbMapHost"></div>
-    <div id="adsbNote" hidden></div>
-    <div id="adsbFeedWarn" hidden role="alert"><b>CHECK THE ANTENNA</b><span id="adsbFeedWarnTx"></span><button type="button" id="adsbFeedWarnX" title="Hide this until it changes" aria-label="Hide">×</button></div>
-    <div id="adsbGainPop" hidden role="dialog" aria-label="ADS-B gain">
-        <div class="hd">GAIN <span id="adsbGainNow"></span></div>
-        <button type="button" id="adsbGainAuto" title="Let the server find the gain that decodes the most">AUTO</button>
-        <input type="range" id="adsbGainSl" min="0" max="0" step="1" aria-label="Gain">
-        <div class="nt" id="adsbGainNote"></div>
-      </div>
-    <div id="adsbLive" data-navbox data-navstart=".adsbRow">
-      <button type="button" id="adsbLegendBtn" title="What the colours mean" aria-label="What the colours mean">i</button>
-      <button type="button" id="adsbLiveHead" aria-expanded="true" title="Hide the list"><span id="adsbLiveTtl">AIRCRAFT</span><span id="adsbLiveN"></span><span class="chev" aria-hidden="true"></span></button>
-      <!-- ★ The list header's chips (Stuart, 2026-10-25): NEWEST, FURTHEST (moved down from the bar), FURTHEST TRACKED.
-           Tap = show it on the map. They scroll sideways if the list is narrow; hidden with the list. -->
-      <div id="adsbChips">
-        <button type="button" id="adsbNew" class="adsbChip" hidden title="The newest aircraft heard — tap to show it on the map"></button>
-        <button type="button" id="adsbFar" class="adsbChip" hidden title="The furthest aircraft from this receiver — tap to show it on the map"></button>
-        <button type="button" id="adsbLong" class="adsbChip" hidden title="The aircraft followed the furthest — tap to show it on the map"></button>
-      </div>
-      <div id="adsbList" data-navscroll></div>
-    </div>
+  <div id="adsbFeedWarn" hidden role="alert"><b>CHECK THE ANTENNA</b><span id="adsbFeedWarnTx"></span><button type="button" id="adsbFeedWarnX" title="Hide this until it changes" aria-label="Hide">×</button></div>
+  <div id="adsbGainPop" hidden role="dialog" aria-label="ADS-B gain">
+    <div class="hd">GAIN <span id="adsbGainNow"></span></div>
+    <button type="button" id="adsbGainAuto" title="Let the server find the gain that decodes the most">AUTO</button>
+    <input type="range" id="adsbGainSl" min="0" max="0" step="1" aria-label="Gain">
+    <div class="nt" id="adsbGainNote"></div>
   </div>
 </div>
 

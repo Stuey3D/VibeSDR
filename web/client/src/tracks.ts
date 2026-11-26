@@ -14,6 +14,7 @@
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { dataUrl } from './origin';
+import { padRehighlight } from './gamepad';
 import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
@@ -388,6 +389,7 @@ const CSS = `
 .trkTop .btn.exit{background:#5a1f1f;border-color:#8a3434}
 .trkTop .ttl{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkTop .st{color:#9fb0c2;font-size:12px;flex:1 1 200px;min-width:0}
+.trkTop .scr{display:contents}
 .trkKey{position:absolute;right:10px;bottom:30px;z-index:900;background:rgba(11,20,32,.92);border:1px solid #2c3e52;border-radius:8px;color:#d7dee6;font:12px/1.3 inherit;max-height:60%;overflow:auto}
 .trkKey>summary{cursor:pointer;padding:6px 10px;font-weight:600;letter-spacing:.08em;list-style:none}
 .trkKey>summary::-webkit-details-marker{display:none}
@@ -466,6 +468,12 @@ const CSS = `
 .trkView .avCredit a{color:#9ccfff}
 .trkView .cc{font:700 10px/1 ui-monospace,monospace;background:#2a3a4a;border-radius:3px;padding:1px 3px}
 @media (max-width:520px){
+  .trkTop .scr{display:flex;align-items:center;gap:8px;flex:1 1 0;min-width:0;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;
+    -webkit-mask-image:linear-gradient(to right,#000 calc(100% - 14px),transparent 100%);mask-image:linear-gradient(to right,#000 calc(100% - 14px),transparent 100%)}
+  .trkTop .scr::-webkit-scrollbar{display:none}
+  .trkTop .scr>*{flex:0 0 auto}
+  .trkTop .scr .ttl{white-space:nowrap}
+  .trkTop .st{flex:1 0 100%}
   .trkList{left:6px;right:6px;width:auto;max-height:34%}
   .trkRow{grid-template-columns:minmax(0,1fr) auto auto}
   .trkRow .ag{display:none}
@@ -541,6 +549,9 @@ export interface TrackViewOpts {
   imageBase?: string | null;
   /** ★★ beta96 THE AIR & SEA MAP: aircraft AND other layers on one map — both cameras made, setCamera picks one. */
   mixed?: boolean;
+  /** ★★ beta96 elements (by id) the view leaves reachable while it covers the page, raised above it while it is shown —
+   *  ADS-B mode's CHAT panel, its key being in this view's top bar now. */
+  liveIds?: string[];
 }
 /** ★★ beta96 an AREA-class item (the click order's last tier): a sea area, an area-shaped NAVTEX warning, a forecast arrow. */
 export function isAreaItem(it: any): boolean {
@@ -573,13 +584,16 @@ export class TrackView {
     const r = document.createElement('div');
     r.className = 'trkView'; r.hidden = true;
     r.setAttribute('role', 'dialog'); r.setAttribute('aria-label', o.title + ' map');
-    r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
+    // ★ beta96 everything but EXIT and the status line sits in .scr: in the row as before on a wide window, ONE row that
+    //   scrolls sideways on a phone (ADS-B's own bar did, Stuart 2026-10-25: "the only thing that must stay anchored is the
+    //   Exit ADS-B button") — the AIR & SEA map's chips, ranges, GAIN and CHAT no longer stack four rows deep
+    r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="scr"><span class="ttl">${esc(o.title)}</span>`
       + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
          + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
       // ★ V12 2026-11-02 the SHIPPING MAP: the layer row is always in the page (hidden when empty) — setToggles() redraws it
       //   as layers gain or lose data on this server (a layer with nothing is absent, never an empty toggle)
       + `<span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span>`
-      + `<span class="st"></span><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></div>`
+      + `<button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></span><span class="st"></span></div>`
       + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
       + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
       + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
@@ -609,8 +623,17 @@ export class TrackView {
     const toggle = () => this.setMin(!this.list.classList.contains('min'));
     hd.onclick = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; toggle(); };
     hd.onkeydown = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+    this.rowsEl.addEventListener('pointerdown', (e) => {
+      const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
+      this.down = { key: row?.dataset.key || '', at: performance.now(), x: e.clientX, y: e.clientY };
+    });
     this.rowsEl.addEventListener('click', (e) => this.rowPick(e));
-    this.rowsEl.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') this.rowPick(e); });
+    this.rowsEl.addEventListener('keydown', (e) => {
+      const k = (e as KeyboardEvent).key;
+      if (k !== 'Enter' && !(k === ' ' && (e.target as HTMLElement).closest('.trkRow'))) return;
+      if (k === ' ') e.preventDefault();
+      this.rowPick(e);
+    });
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     r.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (this.sel) this.select(''); else o.onExit(); } });
     document.body.appendChild(r);
@@ -618,6 +641,20 @@ export class TrackView {
     this.setMin(min, false);
   }
   get open() { return !this.root.hidden; }
+  /** ★★ beta96 a host's own chrome in this view (ADS-B mode's GAIN, CHAT, capture warning; its list chips; its feed
+   *  warning and gain pop-over): 'top' = in the top bar before the status line, 'head' = under the list's header, 'over' =
+   *  over the map. Made on first use; the host moves its elements in and hides them when they do not apply. */
+  slot(where: 'top' | 'head' | 'over'): HTMLElement {
+    const cls = `slot-${where}`;
+    let el = this.root.querySelector(`.${cls}`) as HTMLElement | null;
+    if (el) return el;
+    el = document.createElement(where === 'top' ? 'span' : 'div');
+    el.className = `trkSlot ${cls}`;
+    if (where === 'top') this.fitBtn.before(el);
+    else if (where === 'head') this.rowsEl.before(el);
+    else this.mapHost.appendChild(el);
+    return el;
+  }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
   setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean }>, toggled: Record<string, boolean>) {
@@ -765,8 +802,21 @@ export class TrackView {
     (this.list.querySelector('.mn') as HTMLElement).textContent = min ? '▴' : '▾';
     if (save) try { localStorage.setItem(MIN_KEY, min ? '1' : '0'); } catch { /* private window */ }
   }
+  /** ★ the row under the last press — a list redrawn every second (ADS-B's live report) can replace it between the press
+   *  and its click: found again by its key (the ADS-B view's rule, adsbDown, carried over in beta96). */
+  private down = { key: '', at: 0, x: 0, y: 0 };
+  private rowOf(e: Event): HTMLElement | null {
+    let row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
+    const me = e as MouseEvent;
+    if (!row && e.type === 'click' && this.down.key && performance.now() - this.down.at < 1000
+        && Math.abs(me.clientX - this.down.x) < 12 && Math.abs(me.clientY - this.down.y) < 12) {
+      const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
+      row = this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(this.down.key) : this.down.key.replace(/["\\]/g, '')}"]`);
+    }
+    return row;
+  }
   private rowPick(e: Event) {
-    const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
+    const row = this.rowOf(e);
     if (!row) return;
     const k = row.dataset.focus || row.dataset.key || '';
     try { this.onRow?.(row.dataset.key || ''); } catch (e) { console.error('[tracks] onRow', e); }
@@ -829,8 +879,10 @@ export class TrackView {
     for (const el of Array.from(document.body.children) as HTMLElement[]) {
       if (el === this.root || el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.inert) continue;
       if (el.classList.contains('trkView') || el.id === 'pill' || el.id === 'toast') continue;
+      if (this.o.liveIds?.includes(el.id)) continue;
       el.inert = true; this.inerted.push(el);
     }
+    for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = '700'; }
     (this.root.querySelector('.exit') as HTMLElement).focus();
     this.boot(++this.gen).catch((e) => { console.error('[tracks] the map could not load', e); this.note('The map did not finish loading — the list still updates.'); });
   }
@@ -840,6 +892,7 @@ export class TrackView {
     this.attribObs?.disconnect(); this.attribObs = null; this.list.style.bottom = '';
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
+    for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = ''; }
     this.gen++;
     try { this.af?.destroy(); } catch (e) { console.error('[tracks] auto fit destroy', e); }
     this.af = null;
@@ -853,7 +906,7 @@ export class TrackView {
     this.lmap = null; this.vmL = null;
     // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
     //   again had no KEY (and setLegend found nothing to fill)
-    for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey')) el.remove();
+    for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey') && !el.classList.contains('trkSlot')) el.remove();
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null;
   }
@@ -972,7 +1025,8 @@ export class TrackView {
     if (this.acLayer || !map || !w.VibeAdsbLayer) return;
     try {
       let prefs: any = null;
-      try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || 'null'); } catch { /* private */ }
+      // ★ beta96 ADS-B mode's own map is this one now: its toggles (RANGE, RINGS, AUTO …) carry over until set here
+      try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || localStorage.getItem('vibesdr.adsbMapPrefs') || 'null'); } catch { /* private */ }
       this.acLayer = w.VibeAdsbLayer.create(map, {
         receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
         imageBase: this.o.imageBase ?? null,
@@ -1043,9 +1097,18 @@ export class TrackView {
     else this.pending = items;
     if (rowsHtml !== this.lastRows) {
       const top = this.rowsEl.scrollTop;
+      /* ★ beta96 (ADS-B's live list, redrawn every second) the controller's highlight and the keyboard's focus are on an
+       *  element about to be replaced: found again by its key */
+      const hiKey = (this.rowsEl.querySelector('.trkRow.gpFocus') as HTMLElement | null)?.dataset.key || '';
+      const act = document.activeElement as HTMLElement | null;
+      const focusKey = act && this.rowsEl.contains(act) ? (act.closest('.trkRow') as HTMLElement | null)?.dataset.key || '' : '';
       this.rowsEl.innerHTML = rowsHtml; this.lastRows = rowsHtml;
       this.rowsEl.scrollTop = top;
       if (this.sel) this.markSel(this.sel);
+      const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
+      const byKey = (k: string) => this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(k) : k.replace(/["\\]/g, '')}"]`) as HTMLElement | null;
+      if (hiKey) { const r2 = byKey(hiKey); if (r2) padRehighlight(r2); }
+      if (focusKey) byKey(focusKey)?.focus({ preventScroll: true });
     }
     if (this.statEl.textContent !== status) this.statEl.textContent = status;
     this.countEl.textContent = String(count);

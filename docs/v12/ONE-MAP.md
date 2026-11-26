@@ -139,6 +139,23 @@ outline), and an area answers only when nothing else is under the finger.
 - Test: `test-web-avmap` drops an aircraft onto a sea area's marker and presses it, expecting the aircraft's card and no
   area card.
 
+### 5c. The ADS-B RANGE outline's shape (Stuart 11-26: "still a STAR" on the Sony and Almere)
+`adsblayer.js rangeShape` replaced beta95's ±2° lend (`rangeSmooth`, kept for reference). One rule for the live-grown and
+the stored outline (`rangeGeo`); the server's store (vibe_adsb_range.h) is unchanged. Named constants:
+`RANGE_GAP_DEG` 10, `RANGE_CLOSE_DEG` 4, `RANGE_TAPER` 0.03, `RANGE_SPREAD_DEG` 8.
+1. **Gaps stay empty**: a run of ≥ 10° with nothing heard invents no range; the outline closes across it with a chord
+   from the last heard bearing on each side (never a spoke to the receiver).
+2. **Dips filled**: a morphological CLOSE (dilate then erode, ±4°, wrapping, gaps ignored).
+3. **Needles softened**: each bearing lends its neighbours its range less 3 % of it per degree, out to ±8°; the max wins.
+Nothing is ever lowered, so every true furthest point stays on the outline (the FURTHEST chip's aircraft is a vertex).
+Tests: test_adsb_layer (a starry synthetic set: worst vertex ≤ 1.25 × both 4°-away neighbours, raw > 2; the 40° gap
+draws nothing; dips closed; no spoke; a lone far bearing is a −3 %/° bump), test-web-adsb-range 37/0.
+Before / after (rendered from the layer's own functions, `docs/v12/img/adsb-range-shape.svg`):
+![rangeShape before/after](img/adsb-range-shape.png)
+Note: with only ±8° of spread, an aircraft 3–4× the core's range still makes a petal (a broad bump with a step back to
+the core at ±9°) — honest, but a FLOWER rather than a star. A longer spread (until the taper meets the core) would make
+triangles instead; that invents range ±25° around one aircraft, so it is Stuart's call (Decisions).
+
 ### 6. Menus: nobody loses their way
 Each existing entry opens the right map, layer and tab:
 
@@ -165,21 +182,32 @@ existing `viewsProbe` rule.
 
 ✓ = on the new map and tested · ◐ = on the new map, not yet tested · ☐ = not yet carried over · ✗ = dropped (with reason)
 
-### ADS-B aircraft map (web `adsb.ts`/#adsbView, app MapOverlay 'adsb' + AdsbLiveList) — STAGE 4/6, NOT YET MOVED
-ADS-B mode still opens its own map (web `#adsbView`, app kind 'adsb'), unchanged. On the AIR & SEA map the ADS-B
-aircraft from the shared table (`aircraft.json`, every radio) are already drawn by the same ADS-B layer. Everything
-below is therefore still in place, on the ADS-B mode's own map:
-- ◐ The map is the mode; EXIT ADS-B leaves it; Back leaves it (unchanged)
-- ◐ Range outline (`prefs.range` / `rangeAll`), drawn on the AIR & SEA map too, wherever the ADS-B layer is made (its RANGE key). The "ADS-B RANGE" label is b96-fixes' work
+### ADS-B aircraft map — WEB DONE (stage 4: `#adsbView` and `AdsbMap` retired); APP STILL ITS OWN (stage 6: MapOverlay 'adsb' + AdsbLiveList)
+On the web ADS-B mode IS the AIR & SEA map's ADS-B-live state (`adsbUiOn` → `asOpen({ by: 'mode', tab: 'aircraft' })`).
+Its own chrome waits hidden in `#adsbChrome` and `adsbChromeMount` moves it into the map's TrackView slots while ADS-B is
+live (`slot('top' | 'head' | 'over')`); `adsbChromePark` puts it back. The app's ADS-B mode keeps its own map until stage 6.
+- ✓ The map is the mode; EXIT ADS-B leaves it (`asExit` → `adsbSetMode(false)`); Back with nothing open leaves it; the only
+  mode draws no EXIT and the note (`onlyModeExits` 'adsb' → the map's exit key) — test-web-avmap ADS-B section, test-web-only-mode
+- ✓ Range outline (`prefs.range` / `rangeAll`) on the AIR & SEA map, labelled ADS-B RANGE, shaped by `rangeShape` (§5c)
 - ✓ Rings in NM, AUTO / FIT / RINGS, glide, dead reckoning, new-aircraft rings: the ADS-B layer on the AIR & SEA map (test-web-avmap: the controls `AUTO,FIT,RINGS,RANGE,LABELS,⌖`)
 - ✓ Airports + runways (`aero` / `airsea` profile), greyline, NM scale (test-web-avmap, test-web-shipping-map)
 - ✓ Silhouettes, operator logos (imageBase), flags, MIL, the card with its ODC-By credit (test-web-avmap beta91 rows)
-- ☐ ADS-B's own live list (squawk, climb), FURTHEST / NEWEST / LONGEST chips, capture and feed warnings, the GAIN key,
-  the ⓘ legend, CHAT in the top bar, the health pill's place: these move when ADS-B mode becomes the map's ADS-B-live
-  state (stage 4 web, stage 6 app)
+- ✓ (web) ADS-B's own live list in the AIRCRAFT tab (`adsbListHtml(…, 'adsb:')`: altitude + climb, speed, range, bars,
+  tracked NM, emergencies then military then nearest; each row a `.trkRow` keyed as its map item), the other sources'
+  aircraft after it with their badges; NEWEST / FURTHEST / LONGEST TRACKED under the list's header (AIRCRAFT only);
+  GAIN (+ its pop-over), the capture warning and CHAT in the top bar; the antenna (feed) warning over the map. No sort
+  chip while ADS-B is live (the list keeps its own order). The live report's raw rows are the map's `_adsb` items, so the
+  card has the squawk and the emergency, and they win over the shared table's row for the same aircraft
+- ✓ (web) a row pressed opens its card and stays lit across the once-a-second redraws (TrackView remembers the press
+  and re-finds the row, keeps the pad highlight and keyboard focus); CHAT's panel stays reachable over the map (`liveIds`)
+- ✓ (web) the top bar on a phone: EXIT anchored, everything else ONE row scrolling sideways (`.scr`), the status line
+  under it — every track map, as ADS-B's own bar did (Stuart 2026-10-25)
+- ✗ the ⓘ legend button: the map's KEY lists the aircraft tones (avLegendHtml) — one key, not two
+- ✗ the health pill's place under the bar (`body.adsbMap`): the AIR & SEA map covers it as every track map does
+- ☐ (app) all of the above for the app: stage 6
 - ✓ ADS-B only while heard (`avNowRule`, the in-use words): test-web-avmap beta88 checks, on the AIR & SEA map
-- ☐ Emergency pinned top of AIRCRAFT: the rule is built and tested (`aircraftOrder`, test_live_maps §6), but the shared
-  table carries no squawk, so only the ADS-B mode's live report can set it (stage 4). MILITARY is pinned now (`info.mil`)
+- ✓ (web) Emergency pinned top of AIRCRAFT while ADS-B is live (ADS-B's own list order, from the live report's squawk /
+  emergency). From the shared table alone (no squawk there) only MILITARY is pinned (`info.mil`)
 
 ### Aviation map (web avView/avMapView, app 'avdata') — NOW THE AIR & SEA MAP
 - ✓ Sources ADS-B · ACARS · VDL2 · HFDL · ADS-C as chips, absent when empty, the live / opened source first (test-web-avmap: `VDL2,ACARS,ADS-C,ADS-B,AIRPORTS`, HFDL box: `HFDL,HFDL STATIONS,…`)
@@ -244,40 +272,50 @@ below is therefore still in place, on the ADS-B mode's own map:
 
 ## RESUME HERE
 
-**State 2026-11-26 (branch `b96-onemap`, not merged, not pushed).**
+**State 2026-11-26 evening (branch `b96-onemap`, b96-integrate merged in, not pushed).**
 
 | Stage | State | Where |
 |---|---|---|
-| 1 rules | ✓ built, `test_live_maps` 63/0 | `src/services/liveMaps.ts`, `scripts/test_live_maps.ts` |
-| 2 TrackView | ✓ `setChrome`, `setTabs`, `setSort`, `setFilter`, grouped chips with a LIVE dot, `setRanges`, `setCamera`, `mixed` (ADS-B layer made with the first aircraft), `onSel` | `web/client/src/tracks.ts` |
-| 2b basemap | ✓ `airsea` / `airsea-plain` profiles (style + Leaflet renderer, regenerated sources; old packs fall back) | `web/mapkit/vibemap-style.json`, `vibemap.js`, `assets/mapgl/vibemap-style.json` |
-| 3 web AIR & SEA | ✓ one `asView` replaces navView + aisView + avView + avMapView; every opener routed | `web/client/src/main.ts` (`asOpen`, `asRender`, `asMode`, `asExit`) |
-| 5 app AIR & SEA | ✓ built, tsc clean, **not run on a device** | `MapOverlay.tsx` kind `'airsea'` (`__trkChrome`, `__trkCamera`), `TrackLiveList.tsx` tabs / sort / filter, `SDRScreen.tsx` `airSeaTrk` / `closeAirSea` |
-| copy | ✓ About beta96 note, app MODE tour card, web tutorial, gallery rows, VIEWS keys' titles | |
-| 4 web ADS-B mode → AIR & SEA live state | ☐ NOT STARTED | see the ADS-B checklist above |
-| 6 app ADS-B mode → 'airsea' | ☐ NOT STARTED | |
-| 7 AMATEUR map | ☐ NOT STARTED (the design is above; the DIGI MODES MAP already holds SPOTS + APRS) | web `spotsMapHtml` popup, app MapOverlay `'digi'` |
-| 8 NDB / VOR / SONDES as live states | ☐ NOT STARTED (they keep their own maps; NDB and VOR have heavy mode chrome) | |
+| 1 rules | ✓ `test_live_maps` 63/0 | `src/services/liveMaps.ts`, `scripts/test_live_maps.ts` |
+| 2 TrackView | ✓ chrome, tabs, sort, filter, grouped chips + LIVE, ranges, camera, mixed, onSel; beta96 stage 4 adds `slot()`, `liveIds`, the press remembered across a redraw, the pad highlight / focus kept, the phone top bar scrolling (`.scr`) | `web/client/src/tracks.ts` |
+| 2b basemap | ✓ `airsea` / `airsea-plain` | `web/mapkit/vibemap-style.json`, `vibemap.js` |
+| 3 web AIR & SEA | ✓ one `asView` | `web/client/src/main.ts` (`asOpen`, `asRender`, `asMode`, `asExit`) |
+| 5b click order | ✓ GPU and (now) the Leaflet fallback (`pickAt`) | `adsblayer.js`, `tracklayer.js` |
+| 5c range shape | ✓ `rangeShape` | `adsblayer.js` |
+| merge b96-integrate | ✓ `shownMapOf` → 'airsea' for AIS / NAVTEX-shipping MAP / aviation MAP (DSC its own, ADS-B its own until stage 6), page-id-per-kind + wholeMapYield kept; SEA AREAS default = coastal AND maritime here | `src/utils/mapPage.ts`, `scripts/test_map_page_kind.ts` 57/0 |
+| 4 web ADS-B → AIR & SEA | ✓ `#adsbView` + `AdsbMap` retired | `main.ts` `adsbUiOn`/`adsbUiOff`, `adsbChromeMount`/`adsbChromePark`, `asRender` (live `_adsb` items, `adsbListHtml(…,'adsb:')`), `index.html #adsbChrome` |
+| 5 app AIR & SEA | ✓ built, tsc clean, **not run on a device** | `MapOverlay.tsx` 'airsea', `TrackLiveList.tsx`, `SDRScreen.tsx` `airSeaTrk` |
+| copy | ✓ About beta96 note (+ web ADS-B, + the range shape), web tutorial (ADS-B opens the same map) | |
+| 6 app ADS-B → 'airsea' | ☐ NOT STARTED | below |
+| 8 NDB / VOR / SONDES live states | ☐ NOT STARTED | |
+| 7 AMATEUR map | ☐ NOT STARTED | |
+
+**Fixed on the way (this session):** the UK declutter "regression" was the auto fit: on the AIR & SEA map it is poked on
+every feed, so a ROW chosen flew in and the next tick glided straight back out (the declutter was measured mid-glide). A
+row chosen now pauses it (mapAutoFit's own documented rule; the app already did). FIT resumes it with a glide.
 
 **Next, in order:**
-1. Stage 4 (web): in ADS-B mode, feed the live report's aircraft into `asView` as `_adsb` items (`raw` = the report row,
-   so squawk / emergency pins work) and move `#adsbView`'s top bar pieces (GAIN, FURTHEST/NEWEST/LONGEST, capture and
-   feed warnings, CHAT) into a top-bar slot on TrackView. Retire `#adsbView` / `AdsbMap`. Port `test-web-adsb-range`,
-   `test-web-adsb-card`, and the ADS-B parts of the nav and pad tests.
-2. Stage 6 (app): `shownMap` 'adsb' → 'airsea' with `adsbAircraft` pushed as items, and AdsbLiveList's features in the
-   AIRCRAFT tab (or AdsbLiveList shown as the AIRCRAFT tab's body while ADS-B is live).
-3. Stage 7: AMATEUR. Move the digi map out of its popup window into a TrackView-hosted page (or keep the window and add
-   MESH / BEACONS layers and tabs), app `'digi'` likewise.
-4. A device run of the app's `'airsea'` page: AIS → exit → ADS-B and back (Mac Ha's path), DATALINK MAP, NAVTEX MAP,
-   the chips scrolling on a 4" phone, the Duo.
+1. Stage 6 (app): `shownMapOf` 'adsb' → 'airsea' (adsbView), `adsbAircraft` pushed as `_adsb` items into the 'airsea'
+   page (MapOverlay: the 'adsb' page's live update path), AdsbLiveList as the AIRCRAFT tab's body while ADS-B is live (its
+   chips, the GAIN key, the capture / feed warnings), `EXIT ADS-B` via `liveChrome`, `only` note for 'adsb'; then retire
+   kind 'adsb'. test_map_page_kind: AIS ↔ ADS-B becomes the SAME kind ('airsea') — the page then stays and its chrome is
+   pushed (`__trkChrome`), which is the design; rewrite those cases. Copy: the app's MODE tour card + About ("the app follows").
+2. Stage 8: NDB / VOR MAP / SONDES as live states (web `NdbView`, `vmView`, `sdView`; app kinds 'ndb', 'vormap', 'sondes').
+   NDB's 3-bar meter list, Find, stats, owner confirm; VOR's radials, FIX words, KEY; sondes' band control and track.
+3. Stage 7: AMATEUR (spots map grown: MESH, BEACONS, tabs; CW/RTTY skimmer families).
+4. A device run of the app's 'airsea' page (AIS → exit → ADS-B and back, DATALINK MAP, NAVTEX MAP, 4" phone, the Duo).
+5. Polish seen in the Leaflet-fallback screenshots (pre-existing, not from this work): a Leaflet ADS-B card can sit
+   partly off a 390 px map's left edge under the zoom buttons; after a DPR change (device emulation) the Leaflet canvas
+   outline was drawn stale until the next move.
 
-**Tested how (this Mac, headless Edge `--mute-audio`, a server built from this worktree via the build lock):**
-`test-web-shipping-map` 42/1 (the 1 = Humber's arrow, failing on v12-experimental too), `test-web-avmap` 56/0,
-`test-web-avdata` 23/0, `test-web-navtex-map` (see the report), `test-web-ais-aprs` (see the report),
-`test_live_maps` 63/0, `test_aviation_map` 92/0, `test_shipping_map` 57/0, `test_navtex_map` 73/0, `test_sea_areas` 69/0,
-`test_ais_aprs_app` 181/0, `test_aviation_app` all, `test_nav_coverage` all, `test_map_autofit` 64/0,
-`test_adsb_layer` 180/0, `check-map-overlay` ok. `tsc` clean apart from the existing handheld-ui/test and wefax-world
-node-type errors. Synthetic clips and fixtures only; nothing on air.
+**Tested how (this Mac, headless Edge `--mute-audio`, a server built from this worktree via the build lock; synthetic
+clips and fixtures only, nothing on air):** see the end-of-session numbers in the commit messages; the stage-4 run:
+`test-web-avmap` (with its new ADS-B-mode section on radio A), `test-web-avdata`, `test-web-navtex-map`,
+`test-web-shipping-map` (42/1: Humber's arrow, failing on v12-experimental too), `test-web-ais-aprs`, `test-web-only-mode`,
+`test-web-adsb-range` 37/0, `test_adsb_layer` 202/0, `test-only-mode-clients` 96/0, `test_map_page_kind` 57/0, and the
+unit map suites (test_live_maps 63/0, test_aviation_map 92/0, test_shipping_map 57/0, test_navtex_map 73/0,
+test_sea_areas 77/0, test_ais_aprs_app 181/0, test_aviation_app, test_nav_coverage, test_map_autofit 64/0,
+check-map-overlay). `tsc` (4 GB): only the 45 existing node-type errors under scripts/ and handheld-ui/test.
 
 ## Decisions for Stuart
 - The datalink list's THIS RADIO / OTHER SOURCES sections were replaced by the MESSAGES tab and source badges. Keep it that way?
@@ -285,4 +323,5 @@ node-type errors. Synthetic clips and fixtures only; nothing on air.
 - A live layer's chip can be switched off like any other (it keeps its red dot). OK, or should the live layer be locked on?
 - Opened from a gallery row, a layer is put first but not called LIVE, because no decoder is running. OK?
 - VIEWS keeps both AVIATION and SHIPPING (each opens the one map on its tab). Merge them into one AIR & SEA key?
-- ADS-B mode joins the map in stage 4. Until then ADS-B keeps its own map, and its AVIATION MAP key opens the AIR & SEA map.
+- Web ADS-B mode is now the AIR & SEA map (its AVIATION MAP key is gone: the other sources are on it). Its list keeps ADS-B's own order (emergencies, military, nearest) with no NEAREST | LATEST chip. OK?
+- The range outline's spread: ±8° (as asked) leaves petals around a lone far aircraft; spread until the taper meets the core (triangles, range implied ±25°)?

@@ -36,7 +36,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
-import { rangeBearing as adsbRangeBearing, adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
+import { rangeBearing as adsbRangeBearing, adsbListHtml, adsbStatus, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
@@ -4178,7 +4178,7 @@ function renderFrame(frameTs: number) {
   if (!NO_WF && audio) w.setHoldMs(audio.jitterMs);
   /* ★ ADS-B's map covers the page as the START screen does (opaque, full-screen): nothing behind it is
    *  drawn, and rows still arrive (1 fps in ADS-B) so the picture is current the moment the map goes. */
-  const drawWf = !NO_WF && !startScreenUp && !adsbViewUp && !trackViewUp() && !ndbViewUp;
+  const drawWf = !NO_WF && !startScreenUp && !trackViewUp() && !ndbViewUp;
   if (drawWf) guard('web-render', 'waterfall-tick', () => w.tick(frameTs));   // synthesise any waterfall lines now due (see Waterfall.tick)
   const t1 = measuring ? performance.now() : 0;
   // ★★★ THE WATERFALL ALWAYS DRAWS once the radio is started — the START screen and ADS-B's full-screen map
@@ -4202,7 +4202,7 @@ function renderFrame(frameTs: number) {
   // stale span while the waterfall drew the new one (Stuart 2026-07-24 — "wrong but back"). Keep the
   // VFO/rf-centre terms so tuning still forces a redraw.
   const key = `${spec.frequency}|${spec.rfCenterHz()}|${wf.spanHz}|${wf.displayCenterHz()}|${window.innerWidth}`;
-  if (key !== lastViewKey && !startScreenUp && !adsbViewUp && !trackViewUp() && !ndbViewUp) {
+  if (key !== lastViewKey && !startScreenUp && !trackViewUp() && !ndbViewUp) {
     lastViewKey = key;
     guard('web-render', 'scale', drawScale);
     guard('web-render', 'bands', drawBands);
@@ -9414,22 +9414,11 @@ let adsbReport: AdsbReport | null = null;
  *  dial → a config), so the pick waits for that config, exactly as dabRestore does — a mode sent with
  *  the 1090 MHz readout would tune the radio straight back to 1090. */
 let adsbPendingMode: SDRMode | null = null;
-let adsbListLast = '';
-let adsbMap: AdsbMap | null = null;
 /** The furthest aircraft's address, for the top bar's FURTHEST key (adsbRender). */
 let adsbFarHex = '';
 /** ★ The list header's other two chips (adsb.ts adsbNewest / adsbLongestTracked) — the hex each one shows on a tap. */
 let adsbNewHex = '', adsbLongHex = '';
 const adsbFirstSeen = new Map<string, number>();
-/** ★ The map is covering the page: renderFrame skips the waterfall, trace, scale and band strip. */
-let adsbViewUp = false;
-/** The row last tapped — kept lit across the once-a-second redraws while it is still in the list. */
-let adsbSel = '';
-const ADSB_MIN_KEY = 'vibesdr.adsbListMin';
-/** ★ What #adsbView made inert, so leaving gives back exactly that (and nothing that was inert anyway). */
-let adsbInerted: HTMLElement[] = [];
-let adsbResizeObs: ResizeObserver | null = null;
-let adsbAttribObs: MutationObserver | null = null;
 
 /** Read the capability from a radio's own vibeserver.json (see loadAudioPolicy). */
 function adsbReadCap(j: any) {
@@ -9467,7 +9456,6 @@ function adsbUiOn() {
   wholeMapYield('adsb');   // ★★★ beta96 one whole-radio map at a time (wholeMapYield)
   adsbOn = true; setTimeout(drmBoxSync, 0);
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
-  avAdsbProbe(true);   // ★ V12 2026-11-16 the AVIATION MAP key, when another source has aircraft here
   syncAudioQuiet();
   if (spec) spec.adsbHeld = true;
   setTimeout(syncDialTips, 0);
@@ -9483,7 +9471,9 @@ function adsbUiOn() {
   wholeRadioLock(true, 'ADS-B');
   applyRateOptions();
   populateHw();                // ★ the rate picker is held — see populateHw
-  adsbViewShow();
+  // ★★★ beta96 THE MAP IS THE MODE, AND THE MAP IS THE AIR & SEA MAP (docs/v12/ONE-MAP.md stage 4): ADS-B live, on
+  //     AIRCRAFT, EXIT ADS-B — the ADS-B chrome (GAIN, CHAT, the chips, the warnings) moved into it (adsbChromeMount)
+  asOpen({ by: 'mode', tab: 'aircraft' });
   updateVts();
 }
 
@@ -9527,135 +9517,40 @@ function initWholeResume() {
 /** The UI half of leaving ADS-B — the map gone, every control given back. */
 function adsbUiOff() {
   adsbOn = false; setTimeout(drmBoxSync, 0);
-  avAdsbProbe(false);
   adsbReport = null;
   adsbFirstSeen.clear();   // ★ the next visit's first report is "already there", not new
-  adsbListLast = '';
-  adsbSel = '';
   if (spec) spec.adsbHeld = false;
   setTimeout(syncDialTips, 0);
   wholeRadioLock(false, 'ADS-B');
   syncAudioQuiet();
-  adsbViewHide();
+  adsbChromePark();
+  asModeEnded();   // ★ beta96 the map goes with the mode that brought it; opened from a key, it just stops being live
   applyRateOptions();
   populateHw();
   updateVts();
   if (!dabOn && decoders?.spotsEnabled) showDecBox('spots');
 }
 
-/* ── THE VIEW ─────────────────────────────────────────────────────────────────────────────────── */
+/* ── THE CHROME (beta96: the view is the AIR & SEA map's — docs/v12/ONE-MAP.md stage 4) ──────────────────────────── */
 
-function adsbViewShow() {
-  const v = $('adsbView');
-  if (!v.hidden) { adsbRender(); return; }
-  v.hidden = false;
-  adsbViewUp = true;
-  document.body.classList.add('adsbMap');
-  /* ★★ INERT UNDER THE MAP: what it covers can be neither tabbed to nor read out, and the controller's
-   *  highlight cannot wander under it (gamepad.ts also scopes to [data-navscope]). #app is the waterfall
-   *  AND the card. Panels, pills and the health pill live outside it and stay live. */
-  adsbInerted = [];
-  for (const id of ['app', 'vts']) {
+/** ★★ ADS-B's own chrome moved into the AIR & SEA map while ADS-B is live: the capture warning, GAIN and CHAT in its top
+ *  bar; NEWEST / FURTHEST / LONGEST TRACKED under the list's header (AIRCRAFT only); the antenna warning and the gain
+ *  pop-over over the map. Idempotent (every render). Parked back in #adsbChrome (hidden) when ADS-B ends. */
+function adsbChromeMount(v: TrackView, tab: string) {
+  const top = v.slot('top'), head = v.slot('head'), over = v.slot('over');
+  for (const id of ['adsbCapture', 'adsbGain', 'adsbChat']) { const el = $(id); if (el.parentElement !== top) top.appendChild(el); }
+  const chips = $('adsbChips'); if (chips.parentElement !== head) head.appendChild(chips);
+  chips.hidden = tab !== 'aircraft';
+  for (const id of ['adsbFeedWarn', 'adsbGainPop']) { const el = $(id); if (el.parentElement !== over) over.appendChild(el); }
+}
+function adsbChromePark() {
+  const park = document.getElementById('adsbChrome');
+  if (!park) return;
+  for (const id of ['adsbCapture', 'adsbGain', 'adsbChat', 'adsbChips', 'adsbFeedWarn', 'adsbGainPop']) {
     const el = document.getElementById(id);
-    if (el && !el.inert) { el.inert = true; adsbInerted.push(el); }
+    if (el && el.parentElement !== park) park.appendChild(el);
   }
-  let min = false;
-  try { min = localStorage.getItem(ADSB_MIN_KEY) === '1'; } catch { /* private window: open */ }
-  adsbSetListMin(min, false);
-  adsbLayout();
-  if (typeof ResizeObserver !== 'undefined') {
-    adsbResizeObs = new ResizeObserver(adsbLayout);
-    adsbResizeObs.observe($('adsbTop'));
-  }
-  if (!adsbMap) adsbMap = new AdsbMap($('adsbMapHost'), adsbNote);
-  // ★ an icon tapped on the map (or its card closed): the list's row follows — and is scrolled into view
-  adsbMap.onSelect = (h) => adsbMarkSel(h || '', true);
-  /* ★★ The live list's footprint, measured from the map's bottom-left corner, so auto-zoom and fit keep aircraft
-   *  out from under it (seen on the Pi 2, 2026-10-24). Folded to its pill it still counts, just smaller. */
-  if (!adsbListObs && typeof ResizeObserver !== 'undefined') {
-    const measure = () => {
-      if (!adsbMap) return;
-      const host = $('adsbMapHost').getBoundingClientRect(), box = $('adsbLive').getBoundingClientRect();
-      const visible = box.width > 0 && box.height > 0 && !$('adsbLive').hidden;
-      adsbMap.setObstacle(visible ? { corner: 'bottom-left', w: Math.round(box.right - host.left + 8), h: Math.round(host.bottom - box.top + 8) } : null);
-    };
-    adsbListObs = new ResizeObserver(measure);
-    adsbListObs.observe($('adsbLive'));
-    adsbListObs.observe($('adsbMapHost'));
-  }
-  adsbMap.open(myPos());
-  adsbWatchAttrib();
-  adsbSyncChat();
-  adsbRender();
-}
-
-function adsbViewHide() {
-  const v = $('adsbView');
-  if (v.hidden) return;
-  adsbMap?.close();
-  adsbResizeObs?.disconnect(); adsbResizeObs = null;
-  adsbAttribObs?.disconnect(); adsbAttribObs = null;
-  v.hidden = true;
-  adsbViewUp = false;
-  document.body.classList.remove('adsbMap');
-  for (const el of adsbInerted) el.inert = false;
-  adsbInerted = [];
-  adsbNote('');
-  $('adsbList').innerHTML = '';
-  $('adsbCnt').textContent = '…';
-  $('adsbStat').textContent = '';
-  $('adsbLiveN').textContent = '';
-  // ★ The scale and band strip were not drawn while the map was up; a resize meanwhile must not leave them stale.
-  lastViewKey = '';
-}
-
-/** ★ The bar's height, for the health pill's place under the map's toggles (index.html body.adsbMap). */
-function adsbLayout() {
-  const h = $('adsbTop').getBoundingClientRect().height;
-  if (h > 0) document.documentElement.style.setProperty('--adsbTopH', `${Math.round(h)}px`);
-}
-
-/** ★★ THE CREDITS STAY READABLE. MapLibre's compact credits open across the bottom of a phone-width map
- *  — under the list. Closed to their ⓘ at first on a narrow map; opened (by a tap on ⓘ), the list
- *  lifts above them, so neither covers the other. */
-function adsbWatchAttrib() {
-  let tries = 0;
-  const find = () => {
-    if (!adsbViewUp) return;
-    const at = document.querySelector<HTMLElement>('#adsbMapHost .maplibregl-ctrl-attrib, #adsbMapHost .leaflet-control-attribution');
-    if (!at) { if (++tries < 40) setTimeout(find, 250); return; }
-    const live = $('adsbLive');
-    const sync = () => {
-      const open = at.classList.contains('maplibregl-compact-show') || at.classList.contains('leaflet-control-attribution');
-      const r = at.getBoundingClientRect(), l = live.getBoundingClientRect();
-      // ★ Only when they would actually meet: on a wide map the credits are a short line in the other corner.
-      const clash = open && r.width > 0 && r.left < l.right + 8;
-      document.documentElement.style.setProperty('--adsbAttribH', `${Math.round(r.height)}px`);
-      live.classList.toggle('lift', clash);
-    };
-    if (at.classList.contains('maplibregl-compact-show') && $('adsbMapHost').clientWidth < 640) at.classList.remove('maplibregl-compact-show');
-    adsbAttribObs = new MutationObserver(sync);
-    adsbAttribObs.observe(at, { attributes: true, attributeFilter: ['class'] });
-    sync();
-  };
-  find();
-}
-
-function adsbNote(text: string) {
-  const n = $('adsbNote');
-  n.textContent = text;
-  n.hidden = !text;
-}
-
-/** The list's head: collapse to a pill, or open. Remembered on this device. */
-function adsbSetListMin(min: boolean, save = true) {
-  const live = $('adsbLive');
-  live.classList.toggle('min', min);
-  const h = $('adsbLiveHead');
-  h.setAttribute('aria-expanded', min ? 'false' : 'true');
-  h.title = min ? 'Show the aircraft list' : 'Hide the list';
-  if (save) { try { localStorage.setItem(ADSB_MIN_KEY, min ? '1' : '0'); } catch { /* private window: this visit only */ } }
-  adsbAttribObs?.takeRecords();
+  $('adsbGainPop').hidden = true;
 }
 
 /** ★ CHAT IS IN THE BAR: its key on the card is under the map. The same panel, the same unread count,
@@ -9703,9 +9598,8 @@ function onAdsbReport(r: AdsbReport | null) {
    *  the heal judged the silence a fault and reopened the audio socket every 6 s for the whole session.
    *  Renewed each report (once a second), so it lapses on its own a few seconds after ADS-B ends. */
   audio?.holdHealing(8000);
-  adsbMap?.update(r.aircraft, myPos());
   adsbSyncChat();
-  adsbRender();
+  asRender();   // ★ beta96 the AIR & SEA map draws the report (ADS-B live) — and adsbRender, its chrome
 }
 
 /* ★★★ ISM MODE (V12, docs/v12/ISM-DECODER.md) — DAB's shape on the page: the waterfall stays live (the bursts on it are
@@ -10489,21 +10383,6 @@ function avMapOpen(focus: AvFocus) {
   // ★★ beta96 the AIR & SEA map: HFDL's MAP on its messages (HFDL live while open from the box), the others on AIRCRAFT
   asOpen(focus === 'hfdl' ? { box: 'hfdl', tab: 'messages', sort: 'latest' } : { box: '', tab: focus === 'datalink' ? 'messages' : 'aircraft' });
 }
-/** ★ ADS-B's AVIATION MAP key: drawn only when another source (a second radio's datalink, HFDL) has aircraft here — the
- *  map would otherwise be the ADS-B map again (AGENTS.md: no dead controls). Asked every 20 s while ADS-B is on. */
-let avAdsbProbeT: ReturnType<typeof setInterval> | null = null;
-function avAdsbProbe(on: boolean) {
-  const b = document.getElementById('adsbAvMap') as HTMLElement | null;
-  if (avAdsbProbeT) { clearInterval(avAdsbProbeT); avAdsbProbeT = null; }
-  if (!on) { if (b) b.hidden = true; return; }
-  const ask = async () => {
-    const got = await avSharedFetch();
-    if (got) avShared = got;
-    if (b) b.hidden = !got || !got.aircraft.some((a) => a.src.some((x) => x !== 'ADS-B'));
-  };
-  void ask();
-  avAdsbProbeT = setInterval(() => { void ask(); }, 20_000);
-}
 /* ★★★ V12 beta96 THE AIR & SEA MAP (docs/v12/ONE-MAP.md, src/services/liveMaps.ts) — ONE view for everything aviation and
  *  maritime this server holds: the aviation map (aircraft.json — ADS-B, ACARS, VDL2, HFDL, ADS-C, the ground stations,
  *  airports) and the shipping map (ships, DSC, NAVTEX stations / warnings / weather, sea areas) together, with the lists
@@ -10550,6 +10429,7 @@ function asViewOpts() {
     //   ADS-B layer's, with its own label rules)
     labelZoom: 3, focusZoom: 6, nautical: true, profile: 'airsea',
     aircraft: true, mixed: true, imageBase: adsbImageBase() || null,
+    liveIds: ['chatPanel'],   // ★ ADS-B mode's CHAT key is in this map's top bar: its panel stays reachable, over the map
     labelRank: (it: any) => it._rk ?? 0,
     onRange: (id: string) => {
       // ★ one segmented control, two meanings: the DATALINK's band while that mode is on, else the maritime time filter
@@ -10582,10 +10462,15 @@ function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; 
   void navPoll(true);
   if (o.key) asView.focus(o.key);
 }
+/** ★ beta96 ADS-B's chips (NEWEST / FURTHEST / LONGEST TRACKED): that aircraft on the map, its row lit. */
+function asFocusAircraft(hex: string) {
+  if (!asView?.focus(`adsb:${cleanHex(hex)}`)) showPill('No position heard from that aircraft yet — it is not on the map', 3500);
+}
 /** EXIT <MODE> leaves the mode (the map goes with it); CLOSE MAP puts the map away and the mode carries on. */
 function asExit() {
   const c = liveChrome('airsea', asMode());
   if (c.exitLeavesMode && asBy === 'mode') {
+    if (adsbOn) { adsbSetMode(false); return; }
     if (aisOn) { aisSetMode(false); return; }
     if (avOn) { avSetMode(false); return; }
   }
@@ -10642,25 +10527,39 @@ function asRender() {
   const shipPresent = present.map((id) => shipLayerOf(id)).filter((x): x is ShipLayerId => !!x);
   const shipOnF = (id: ShipLayerId) => on(SHIP_ID[id]);
   const sc = shipCompose(mode === 'navtex' ? 'navtex' : mode === 'dsc' ? 'dsc' : 'ships', aisOn, { present: shipPresent, on: shipOnF, many: true });
+  /* ★★★ beta96 ADS-B LIVE (stage 4): the report's own aircraft — raw rows, so the card has the squawk, the emergency, the
+   *  climb — and they WIN over the shared table's row for the same aircraft (which lags 3 s and carries less). */
+  const liveHex = new Set<string>();
+  const adsbItems: any[] = [];
+  if (adsbOn && adsbReport && on('adsb')) for (const a of adsbReport.aircraft) {
+    const hex = cleanHex(a.hex); if (!hex) continue;
+    liveHex.add(hex);
+    const lat = Number(a.lat), lon = Number(a.lon);
+    if (a.lat != null && a.lon != null && Number.isFinite(lat) && Number.isFinite(lon)) adsbItems.push({ key: `adsb:${hex}`, lat, lon, _adsb: { ...a, hex }, _rk: 1e12 });
+  }
+  const isLiveAc = (hex: unknown) => liveHex.size > 0 && typeof hex === 'string' && liveHex.has(cleanHex(hex));
   const liveShips: any[] = aisOn && aisReport && shipOnF('ships') ? aisReport.vessels.filter((x) => x.lat != null && x.lon != null).map((x) => ({ ...x, key: String(x.mmsi), _rk: 1e12 })) : [];
   // ★ the live layer's names win the declutter
   const liveAv = live.layers.some((l) => AV_ID_SET.has(l));
-  const avItems = liveAv ? avc.items.map((it: any) => ({ ...it, _rk: (it._rk ?? 0) + 1e12 })) : avc.items;
-  const items = [...avItems, ...liveShips, ...sc.items];
+  const avItems = (liveAv ? avc.items.map((it: any) => ({ ...it, _rk: (it._rk ?? 0) + 1e12 })) : avc.items).filter((it: any) => !isLiveAc(it?._adsb?.hex));
+  const items = [...adsbItems, ...avItems, ...liveShips, ...sc.items];
+  const otherPlanes = liveHex.size ? avc.planes.filter((p) => !isLiveAc(p.icao)) : avc.planes;
   // ── the MESSAGES feed (every aircraft's last message as it changes; the owner's text where the server sent it) ──
   const bodies = new Map<string, string>();
   if (avOn && avReport) for (const a of avReport.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
   asMsgs = msgFeedUpdate(asMsgs, asMsgSeen, planesAll.map((p) => ({ key: `a:${p.key}`, who: avName(p), src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age,
     label: p.label, labelName: p.labelName, text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || '') })), Date.now());
   // ── the tabs ──
-  const aircraftN = avc.planes.length;
+  const aircraftN = liveHex.size + otherPlanes.length;
   const shipsN = (on('ships') ? sh.ships : 0) + (on('dsc') ? sh.dsc : 0);
   const navN = (on('navst') ? sh.stations : 0) + (on('warnings') ? sh.warnings : 0) + (on('weather') ? sh.weather : 0);
   const tabHave: Partial<Record<LiveTab, number>> = { aircraft: aircraftN, messages: asMsgs.length, ships: shipsN || (aisOn ? 1 : 0), navtex: navN };
   const tabs = liveTabs('airsea', tabHave, live, asOpenedTab);
   const tab = liveTabPick(tabs, asPicked, live, asOpenedTab) ?? 'aircraft';
   v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
-  v.setSort(tab === 'aircraft' ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
+  // ★ ADS-B live: its list keeps its own order (emergencies, military, then the nearest) — no sort chip
+  if (adsbOn) { adsbChromeMount(v, tab); adsbRender(); }
+  v.setSort(tab === 'aircraft' && !adsbOn ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
   const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
   // ── the ranges: the DATALINK's bands while it is on, else the time filter where a maritime layer is drawn ──
@@ -10671,12 +10570,15 @@ function asRender() {
   let rows = '';
   if (tab === 'aircraft') {
     const byKey = new Map(avc.rows.map((r) => [r.key, r]));
-    const sorted = aircraftOrder(avc.planes.map((p) => {
+    // ★ ADS-B live: its own list first (squawk, climb, bars, tracked NM — adsb.ts adsbListHtml, keyed as the map's items)
+    const liveList = adsbOn && on('adsb') ? `<div id="adsbList">${adsbListHtml(adsbReport, rx, adsbImageBase(), 'adsb:')}</div>` : '';
+    const sorted = aircraftOrder(otherPlanes.map((p) => {
       const nm = rx && p.lat != null && p.lon != null ? adsbRangeBearing(rx, p.lat, p.lon).nm : null;
       return { key: `a:${p.key}`, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
     }), asSort).slice(0, LIVE_ROW_CAP);
     rows = sorted.map((x) => byKey.get(x.key)).filter(Boolean).map((r) => trkRowHtml(r!)).join('');
-    if (rows && avc.credit) rows += `<div class="avCredit">${avCreditHtml()}</div>`;
+    if (rows && avc.credit && !liveList.includes('adsbCredit')) rows += `<div class="avCredit">${avCreditHtml()}</div>`;
+    rows = liveList + rows;
     if (!rows) rows = `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : avOn && !avReport ? 'Taking the receiver to the aircraft datalink…' : AV_EMPTY)}</div>`;
   } else if (tab === 'messages') {
     const list = msgFilter(asMsgs, asMsgKey).slice(0, LIVE_ROW_CAP);
@@ -10693,7 +10595,7 @@ function asRender() {
   // ── the KEY: the aircraft's, the ships' and NAVTEX's for the layers present ──
   const avPresent = present.map((id) => avLayerOf(id)).filter((x): x is AvLayerId => !!x);
   v.setLegend((avPresent.length ? avLegendHtml(avPresent, true) : '') + (shipPresent.length ? shipKeyHtml(shipPresent) : ''));
-  const status = [aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', aviationAny ? avc.status : '', sc.status].filter(Boolean).join(' · ');
+  const status = [adsbOn ? adsbStatus(adsbReport) : '', aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', aviationAny ? avc.status : '', sc.status].filter(Boolean).join(' · ');
   v.update(items, rows, status, aircraftN + shipsN, rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
   v.note(sc.building);
   if (avOn && avReport) for (const b of Array.from(v.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === avReport.band));
@@ -11220,12 +11122,10 @@ function adsbGainRender() {
   else key.title = 'The receiver\'s gain in ADS-B — automatic, or set it yourself';
 }
 
-/** The bar's count and rate, and the list. */
-let adsbListObs: ResizeObserver | null = null;
+/** ★ beta96 ADS-B's chrome on the AIR & SEA map (called from asRender while ADS-B is live): the chips, GAIN, the warnings.
+ *  The list and the count are the map's (asRender). */
 function adsbRender() {
   if (!adsbOn) return;
-  $('adsbCnt').textContent = adsbReport ? String(adsbOnMap(adsbReport)) : '…';
-  $('adsbStat').textContent = adsbStatus(adsbReport);
   {
     // ★ the list header's chips — written only when their text changes, so a tap or a highlight is not lost to a redraw
     const put = (id: string, h: string) => { const b = $(id) as HTMLButtonElement; if (b.innerHTML !== h) b.innerHTML = h; b.hidden = !h; };
@@ -11266,46 +11166,6 @@ function adsbRender() {
       }
     }
   }
-  $('adsbLiveN').textContent = adsbReport ? String(adsbReport.aircraft.length) : '';
-  const el = $('adsbList');
-  const html = adsbListHtml(adsbReport, myPos(), adsbImageBase());
-  if (html === adsbListLast) return;       // ★ nothing changed — leave the DOM (and a hovered row) alone
-  adsbListLast = html;
-  /* ★ The highlighted row survives the redraw: the controller's highlight is a class on an element, and
-   *  the element is about to be replaced. Found again by its aircraft. */
-  const hiHex = (el.querySelector('.adsbRow.gpFocus') as HTMLElement | null)?.dataset.hex || '';
-  const focusHex = (document.activeElement as HTMLElement | null)?.closest?.('#adsbList .adsbRow') ? (document.activeElement as HTMLElement).dataset.hex || '' : '';
-  const top = el.scrollTop;
-  el.innerHTML = html;
-  el.scrollTop = top;
-  if (adsbSel) el.querySelector(`.adsbRow[data-hex="${adsbSel}"]`)?.classList.add('sel');
-  if (hiHex) { const r = el.querySelector<HTMLElement>(`.adsbRow[data-hex="${cleanHex(hiHex)}"]`); if (r) padRehighlight(r); }
-  if (focusHex) (el.querySelector(`.adsbRow[data-hex="${cleanHex(focusHex)}"]`) as HTMLElement | null)?.focus({ preventScroll: true });
-}
-
-/** A row tapped, clicked or entered: that aircraft on the map. */
-function adsbPick(row: HTMLElement) {
-  const hex = cleanHex(row.dataset.hex);
-  if (!hex) return;
-  if (!adsbMap?.focus(hex)) {
-    showPill(row.classList.contains('nopos') ? 'No position heard from that aircraft yet — it is not on the map'
-                                             : 'The map is still loading', 3500);
-    return;
-  }
-  adsbMarkSel(hex, false);
-}
-/** ★ The list's highlighted row = the map's selected aircraft, whichever was tapped (Stuart, 2026-10-24: "when I select
- *  an aircraft by clicking the icon on the map the line in the list doesnt update"). `reveal`: scroll it into the
- *  list's view if it is not — only when the MAP chose it; a row the listener tapped is already where they are looking. */
-function adsbMarkSel(hex: string, reveal: boolean) {
-  adsbSel = hex;
-  const list = $('adsbList');
-  for (const r of Array.from(list.querySelectorAll('.adsbRow.sel'))) r.classList.remove('sel');
-  if (!hex) return;
-  const row = list.querySelector<HTMLElement>(`.adsbRow[data-hex="${cleanHex(hex)}"]`);
-  if (!row) return;
-  row.classList.add('sel');
-  if (reveal) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 /** ★★★ ZOOM AND TUNING ARE HELD IN A WHOLE-RADIO MODE — DISABLED, not merely ignored (AGENTS.md: a control
@@ -11666,13 +11526,11 @@ function buildControls() {
    *  server, and gives back the zoom, the arrows, the IF filter and the frequency entry. */
   { const xb = document.getElementById('dabExit');
     if (xb) (xb as HTMLElement).onclick = () => { if (dabOnlyNow()) { showPill(DAB_ONLY_WHY, 6000); return; } dabSetMode(false); }; }
-  /* ★ ADS-B's map view: EXIT ADS-B (the whole way out, as EXIT DAB), CHAT (the card's key is under the map),
-   *  the list's head (collapse / open) and its rows (that aircraft on the map). */
-  $('adsbExit').onclick = () => adsbSetMode(false);
-  $('adsbAvMap').onclick = () => avMapOpen('adsb');   // ★ V12 2026-11-16 the AVIATION MAP, ADS-B first
-  $('adsbFar').onclick = () => { if (adsbFarHex) adsbMap?.focus(adsbFarHex); };
-  $('adsbNew').onclick = () => { if (adsbNewHex) adsbMap?.focus(adsbNewHex); };
-  $('adsbLong').onclick = () => { if (adsbLongHex) adsbMap?.focus(adsbLongHex); };
+  /* ★ ADS-B's chrome on the AIR & SEA map (beta96): the chips show their aircraft on the map, GAIN, CHAT (the card's key
+   *  is under the map). EXIT ADS-B is the map's exit key (asExit); the rows are the map's (TrackView). */
+  $('adsbFar').onclick = () => { if (adsbFarHex) asFocusAircraft(adsbFarHex); };
+  $('adsbNew').onclick = () => { if (adsbNewHex) asFocusAircraft(adsbNewHex); };
+  $('adsbLong').onclick = () => { if (adsbLongHex) asFocusAircraft(adsbLongHex); };
   $('adsbGain').onclick = () => { const p = $('adsbGainPop'); p.hidden = !p.hidden; adsbGainRender(); };
   $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
   $('adsbFeedWarnX').onclick = () => {
@@ -11686,31 +11544,6 @@ function buildControls() {
     spec?.setHwGain(hwGains[i] ?? 0, false);
   };
   $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
-  $('adsbLiveHead').onclick = () => adsbSetListMin(!$('adsbLive').classList.contains('min'));
-  $('adsbLegendBtn').onclick = () => { const on = !!adsbMap?.toggleLegend(); $('adsbLegendBtn').classList.toggle('on', on); };
-  /* ★★ THE LIST IS REDRAWN EVERY REPORT (a busy sky changes it every second), so a press and its release can land
-   *  either side of a redraw: the row pressed is gone, the click lands on the list, and nothing happened — the headless
-   *  check missed one in one. The row is remembered at the PRESS and found again by its aircraft. */
-  let adsbDown = { hex: '', at: 0, x: 0, y: 0 };
-  $('adsbList').addEventListener('pointerdown', (e) => {
-    const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
-    adsbDown = { hex: row?.dataset.hex || '', at: performance.now(), x: e.clientX, y: e.clientY };
-  });
-  $('adsbList').addEventListener('click', (e) => {
-    let row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
-    if (!row && adsbDown.hex && performance.now() - adsbDown.at < 1000
-        && Math.abs(e.clientX - adsbDown.x) < 12 && Math.abs(e.clientY - adsbDown.y) < 12)
-      row = $('adsbList').querySelector<HTMLElement>(`.adsbRow[data-hex="${cleanHex(adsbDown.hex)}"]`);
-    if (row) adsbPick(row);
-  });
-  // ★ Tab users: Enter or Space on a focused row (a div — the browser gives it no Enter of its own).
-  $('adsbList').addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    const row = (e.target as HTMLElement).closest('.adsbRow') as HTMLElement | null;
-    if (!row) return;
-    e.preventDefault(); e.stopPropagation();
-    adsbPick(row);
-  });
   initBookmarks();
   buildMenu();
 
@@ -13701,7 +13534,7 @@ function initPanels() {
     //     ★ The popups are exempt too: #stepMenu and #mModeMenu are anchored menus rather than
     //     PANELS members, so a click on one of their options counted as "outside".
     if (!PANELS.some(id => $(id).contains(t))
-        && !t.closest('#mcard') && !t.closest('#mCentreFloat') && !t.closest('#adsbTop')
+        && !t.closest('#mcard') && !t.closest('#mCentreFloat') && !t.closest('#adsbChat') && !t.closest('#adsbGain')
         && !t.closest('#stepMenu') && !t.closest('#mModeMenu')) closePanels();
   });
 }
@@ -24040,7 +23873,7 @@ function onlyModeRefuses(m: string): boolean {
 /** Each mode's EXIT key, wherever its view drew it. */
 function onlyModeExits(): Array<[string, HTMLElement | null]> {
   const trk = (v: TrackView | null) => (v?.root.querySelector('.exit') as HTMLElement | null) ?? null;
-  return [['adsb', document.getElementById('adsbExit')], ['ndb', document.getElementById('ndbExit')], ['ism', document.getElementById('ismExit')],
+  return [['adsb', adsbOn ? trk(asView) : null], ['ndb', document.getElementById('ndbExit')], ['ism', document.getElementById('ismExit')],
           // ★ beta96 AIS and the DATALINK share the AIR & SEA map's one EXIT key — whichever is live owns it
           ['ais', aisOn ? trk(asView) : null], ['avdata', avOn ? trk(asView) : null], ['sondes', trk(sdView)], ['vormap', trk(vmView)]];
 }
@@ -24668,7 +24501,7 @@ function initKeyboard() {
       closePanels();
       /* ★★ ADS-B: back with nothing else open LEAVES IT — the map is the mode, and its back closes it, as the
        *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
-      if (!anyOpen && adsbOn && adsbViewUp) { adsbSetMode(false); return true; }
+      if (!anyOpen && adsbOn && asView?.open && asBy === 'mode') { adsbSetMode(false); return true; }
       if (!anyOpen && ndbOn && ndbViewUp) { ndbSetMode(false); return true; }
       if (!anyOpen && vmOn && vmView?.root && !vmView.root.hidden) { vmSetMode(false); return true; }   // ★ V12 the VOR map, as NDB's
       return anyOpen;

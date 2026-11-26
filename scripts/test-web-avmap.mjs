@@ -49,7 +49,7 @@ async function radioA() {
   await sleep(1500);
   send({ type: 'adsb', on: 1 });
   const keep = setInterval(() => { try { send({ type: 'ping' }); } catch {} }, 10000);   // ★ 30 s silent drop
-  return { adsb: (on) => send({ type: 'adsb', on: on ? 1 : 0 }), stop: () => { clearInterval(keep); try { s.end(); } catch {} srv.kill('SIGTERM'); rtl.kill('SIGTERM'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
+  return { port, adsb: (on) => send({ type: 'adsb', on: on ? 1 : 0 }), stop: () => { clearInterval(keep); try { s.end(); } catch {} srv.kill('SIGTERM'); rtl.kill('SIGTERM'); try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} } };
 }
 
 async function session(tag, clip, centre, freq, mode, run, runDir) {
@@ -60,15 +60,27 @@ async function session(tag, clip, centre, freq, mode, run, runDir) {
   for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Datalink web test', locator: 'IO90bs', adminPass: 'avdata-web-admin',
     radios: [{ serial: `${tag}-web`, label: 'Test radio', enabled: true, configured: true, users: 1 }] }));
-  const rtlPort = await freePort(), port = await freePort(), dbg = await freePort();
+  const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', clip, '--hf-centre', String(centre)], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: runDir || path.join(dir, 'run') };
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', String(freq), '--mode', mode, '--users', '1'],
                     { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), 'ignore'] });
+  const failBefore = fail;
+  try { await browse(tag, port, dir, run); }
+  finally {
+    srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+    await sleep(600);
+    if (fail === failBefore) fs.rmSync(dir, { recursive: true, force: true }); else console.log(`   (kept ${dir})`);
+  }
+}
+/** ★ beta96 a page in headless Edge on a server already running (`dir` holds its profile): START, the audio gate, run. */
+async function browse(tag, port, dir, run) {
+  fs.mkdirSync(path.join(dir, 'edge'), { recursive: true });
+  const dbg = await freePort();
   const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg}`, '--no-first-run', '--no-default-browser-check',
     `--user-data-dir=${path.join(dir, 'edge')}`, '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
-  let wsC; const failBefore = fail;
+  let wsC;
   try {
     await sleep(3000);
     const list = await (await fetch(`http://127.0.0.1:${dbg}/json/list`)).json();
@@ -92,15 +104,15 @@ async function session(tag, clip, centre, freq, mode, run, runDir) {
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
     }
-    ok(await until(`!document.getElementById('audioGate') || document.getElementById('audioGate').style.display === 'none' || !document.getElementById('audioGate').isConnected`, 8000), `${tag}: START RADIO pressed`);
+    // ★ beta96 a page joining a radio in ADS-B gets the map at once (the mode's screen, nothing to hear): the gate waits under it
+    ok(await until(`!document.getElementById('audioGate') || document.getElementById('audioGate').style.display === 'none' || !document.getElementById('audioGate').isConnected || [...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 8000), `${tag}: START RADIO pressed (or the mode's map is up)`);
     await sleep(2500);
     await run({ ev, send, shot, until });
   } catch (e) { ok(false, `${tag} driver: ${e}`); }
   finally {
     try { wsC?.close(); } catch {}
-    edge.kill(); srv.kill('SIGTERM'); rtl.kill('SIGTERM');
-    await sleep(600);
-    if (fail === failBefore) fs.rmSync(dir, { recursive: true, force: true }); else console.log(`   (kept ${dir})`);
+    edge.kill();
+    await sleep(300);
   }
 }
 
@@ -279,6 +291,60 @@ try {
     await ev(`${V}.querySelector('.exit').click()`);
     ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), 'CLOSE MAP closes it');
   }, RUN);
+  // ★★★ beta96 STAGE 4: ADS-B MODE IS THE AIR & SEA MAP's ADS-B-LIVE STATE (#adsbView retired) — a page on radio A, which
+  //     another listener has put in ADS-B: the map is the mode's screen, its list ADS-B's own, its chrome moved in
+  {
+    const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webavmA-'));
+    process.on('exit', () => { try { fs.rmSync(path.join(dirA, 'edge'), { recursive: true, force: true }); } catch {} });
+    const failA = fail;
+    A.adsb(true);   // ★ radio A back in ADS-B (the datalink session took it out for its beta88 checks)
+    await sleep(6000);
+    await browse('adsb', A.port, dirA, async ({ ev, send, shot, until }) => {
+      const V = `document.querySelector('.trkView:not([hidden])')`;
+      ok(await until(`/ADS-B/.test(${V}?.querySelector('.ttl')?.textContent || '')`, 20000), `ADS-B mode opens the AIR & SEA map (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
+      ok(await ev(`${V}.querySelector('.ttl').textContent`) === 'AVIATION & MARITIME · ADS-B 1090 MHz', '…titled AVIATION & MARITIME · ADS-B 1090 MHz');
+      ok(await ev(`${V}.querySelector('.exit').textContent`) === 'EXIT ADS-B', '…EXIT ADS-B (the map is the mode)');
+      ok(await ev(`!document.getElementById('adsbView')`), '#adsbView is retired');
+      ok(await until(`${V}.querySelectorAll('#adsbList .adsbRow.trkRow').length >= 3`, 30000), `AIRCRAFT is ADS-B's own live list (${await ev(`${V}.querySelectorAll('#adsbList .adsbRow').length`)} rows: altitude, speed, range, bars)`);
+      ok(await ev(`(${V}.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab || ${V}.querySelector('.trkList .hd .lt')?.textContent || '').toLowerCase()`) === 'aircraft', 'on AIRCRAFT');
+      ok(await ev(`[...${V}.querySelectorAll('#adsbList .adsbRow')].every(r => r.dataset.key === 'adsb:' + r.dataset.hex)`), '…each row keyed as its aircraft on the map');
+      ok(await ev(`${V}.querySelector('.trkList .hd .srt').hidden`), '…in its own order (emergencies, military, nearest): no sort chip');
+      ok(await until(`[...${V}.querySelectorAll('[data-tgl].live')].map(b => b.textContent.trim()).join(',') === 'ADS-B' || (!${V}.querySelector('[data-tgl]'))`, 8000),
+         `the ADS-B key is LIVE (or the only layer: no chip row) (${await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => b.textContent.trim() + (b.classList.contains('live') ? '*' : '')).join(',')`)})`);
+      ok(await ev(`!!${V}.querySelector('.trkTop #adsbChat') && !!${V}.querySelector('.trkTop #adsbGain') && !!${V}.querySelector('.trkTop #adsbCapture')`), 'CHAT, GAIN and the capture warning are in the map\'s top bar');
+      ok(await until(`(() => { const c = ${V}.querySelector('.slot-head #adsbChips'); return !!c && !c.hidden && [...c.querySelectorAll('.adsbChip')].some(b => !b.hidden); })()`, 20000),
+         `NEWEST / FURTHEST / LONGEST under the list's header (${await ev(`[...document.querySelectorAll('#adsbChips .adsbChip')].filter(b => !b.hidden).map(b => b.textContent).join(' | ')`)})`);
+      ok(await ev(`!!${V}.querySelector('.slot-over #adsbFeedWarn') && !!${V}.querySelector('.slot-over #adsbGainPop')`), 'the antenna warning and the gain pop-over are over the map');
+      ok(await until(`(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : 0) >= 3`, 15000), `the live aircraft on the map (${await ev(`window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1`)})`);
+      ok(await ev(`${V}.querySelectorAll('.vtl-mk[data-key^="adsb:"]').length === 0`), '…drawn by the ADS-B layer only, never twice');
+      ok((await ev(`${V}.querySelector('.trkTop .st').textContent`) || '').length > 3, `the status line is ADS-B's (${await ev(`${V}.querySelector('.trkTop .st').textContent`)})`);
+      // a row pressed: that aircraft's card on the map, the row lit across the redraws
+      const hex = await ev(`(() => { const r = [...${V}.querySelectorAll('#adsbList .adsbRow')].find(x => !x.classList.contains('nopos')); r && r.click(); return r ? r.dataset.hex : ''; })()`);
+      ok(!!hex && await until(`!!document.querySelector('.vsadsb-pop-dark') && /${String(hex)}/i.test(document.querySelector('.vsadsb-pop-dark').textContent)`, 5000), `a row pressed opens its aircraft's card (${hex})`);
+      ok(await until(`!!${V}.querySelector('#adsbList .adsbRow.sel[data-hex="${hex}"]')`, 3000), '…and its row is lit');
+      await sleep(2500);
+      ok(await ev(`!!${V}.querySelector('#adsbList .adsbRow.sel[data-hex="${hex}"]')`), '…still lit after more reports');
+      await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button').forEach(b => b.click())`);
+      if (await ev(`!document.getElementById('adsbFar').hidden`)) {
+        await ev(`document.getElementById('adsbFar').click()`);
+        ok(await until(`!!document.querySelector('.vsadsb-pop-dark')`, 4000), 'FURTHEST shows its aircraft on the map');
+      }
+      await ev(`document.getElementById('adsbChat').click()`);
+      ok(await until(`document.getElementById('chatPanel').classList.contains('open') && !document.getElementById('chatPanel').inert && getComputedStyle(document.getElementById('chatPanel')).zIndex === '700'`, 3000), 'CHAT opens its panel over the map');
+      await ev(`document.getElementById('adsbChat').click()`);
+      console.log('   screenshot', await shot('adsb-mode'));
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+      await sleep(1500);
+      ok(await ev(`document.documentElement.scrollWidth <= 390`), `no sideways scroll at 390 px (${await ev('document.documentElement.scrollWidth')})`);
+      console.log('   screenshot', await shot('adsb-mode-phone'));
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(800);
+      await ev(`${V}.querySelector('.exit').click()`);
+      ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 8000), 'EXIT ADS-B: the map goes with the mode');
+      ok(await ev(`document.getElementById('adsbChat').parentElement.id === 'adsbChrome' && document.getElementById('adsbChrome').hidden`), '…its chrome parked again');
+    });
+    if (fail === failA) fs.rmSync(dirA, { recursive: true, force: true }); else console.log(`   (kept ${dirA})`);
+  }
 } finally { A.stop(); }
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -12,10 +12,7 @@
  *   HTML, and the callsign is cut to the characters a callsign has.
  */
 import type { AdsbAircraft, AdsbReport } from './spectrum';
-import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
-import { loadLeafletInto } from './leafletAsset';
 import { dataUrl } from './origin';
-import { loadVibemapSource } from './chunkCache';
 import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
 
 export type LatLon = { lat: number; lon: number };
@@ -257,7 +254,9 @@ export function adsbSecondLine(a: AdsbAircraft, hex: string, sq: string, imgBase
   return `${head}${head && rest ? ' ' : ''}${rest}${sq ? ` · ${esc(sq)}` : ''}`;
 }
 
-export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = ''): string {
+/** ★ beta96 `keyPrefix`: the rows are the AIR & SEA map's (TrackView) — each a .trkRow too, keyed `${keyPrefix}${hex}`
+ *  (the map item's key), so the view's own press, highlight and focus rules apply. */
+export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = '', keyPrefix = ''): string {
   if (!r) return '<div class="adsbEmpty">Listening on 1090 MHz — aircraft appear here as they are heard.</div>';
   const rows = adsbRows(r, rx);
   if (!rows.length) return '<div class="adsbEmpty">No aircraft heard yet. Each one appears as its transponder is decoded.</div>';
@@ -279,7 +278,8 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
     const em = emergency(a);
     const bars = barsHtml(adsbBars(a.rssi));
     const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
-    return `<div class="adsbRow${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
+    return `<div class="adsbRow${keyPrefix ? ' trkRow' : ''}${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
+      + (keyPrefix ? ` data-key="${esc(keyPrefix + hex)}"` : '')
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
       // ★★ beta95 (Stuart 11-25: rows with an operator logo lost their bars): ONLY the name ellipsises; the bars and the
       //    MIL/emergency tag sit beside it in a span that never shrinks, so a squeezed row loses letters, never the bars.
@@ -296,152 +296,6 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
 }
 
 /* ══ THE MAP ══════════════════════════════════════════════════════════════════════════════════════
- * ★★ IN THE PAGE, NOT A WINDOW. The GPU map (MapLibre + our packs, every file from THIS server's /mapgl/ —
- *    mapgl.ts) in the 'aero' profile, the airports and runways of the HFDL map; the Leaflet map (from the
- *    receiver's own /vs/, SRI-checked) where there is no WebGL 2 or no /mapgl/. The aircraft are the shared
- *    layer (adsblayer.js), carried as a STRING in the bundle so the map never depends on a file an older
- *    install might lack; CSP allows the inline script it becomes ('unsafe-inline', no eval).
- * ★★ MADE ON ENTRY, DESTROYED ON EXIT. A MapLibre map holds a WebGL context and tens of MB of tiles; a
- *    listener who leaves ADS-B for the rest of the evening must not carry it (the 1 GB phones — memory
- *    android_potato_phone_users). Every async step checks `gen`, so an exit while it is still loading
- *    leaves nothing behind.
- * ★ The toggles' prefs live in this page's localStorage (vibesdr.adsbMapPrefs — the popup's key, kept so a
- *   listener's AUTO / FIT / RINGS carry over). */
-const PREFS_KEY = 'vibesdr.adsbMapPrefs';
-function loadPrefs(): Record<string, boolean> | null {
-  try { const v = JSON.parse(localStorage.getItem(PREFS_KEY) || 'null'); return v && typeof v === 'object' ? v : null; } catch { return null; }
-}
-function savePrefs(p: unknown) {
-  try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch { /* private window: the toggles still work for this visit */ }
-}
-function runSource(src: string) {
-  const el = document.createElement('script');
-  el.textContent = src;          // ★ runs synchronously on append — the global exists on the next line
-  document.head.appendChild(el);
-}
-
-export class AdsbMap {
-  private gen = 0;
-  private vm: any = null;
-  private lmap: any = null;
-  private layer: any = null;
-  private pending: AdsbAircraft[] | null = null;
-  private rx: LatLon | null = null;
-  private booting = false;
-
-  constructor(private host: HTMLElement, private note: (text: string) => void) {}
-
-  /** Make the map, if it is not made or being made. The host must be on screen (MapLibre sizes from it). */
-  open(rx: LatLon | null) {
-    this.rx = rx;
-    if (this.layer || this.booting) return;
-    this.booting = true;
-    const my = ++this.gen;
-    void this.boot(my).catch((e) => {
-      console.error('[adsb] the map could not load', e);
-      if (my === this.gen) this.note('The map did not finish loading — the list still updates.');
-    }).finally(() => { if (my === this.gen) this.booting = false; });
-  }
-
-  private async boot(my: number) {
-    const w = window as any;
-    const kit = await probeMapGL();
-    if (my !== this.gen) return;
-    const { ADSB_LAYER_JS } = await import('./generated/adsbLayerSource');
-    if (my !== this.gen) return;
-    if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);
-    if (!w.VibeAdsbLayer) { this.note('The aircraft layer did not load.'); return; }
-    const rx = this.rx;
-    if (kit && await loadMapGLScripts(kit.base)) {
-      if (my !== this.gen) return;
-      try {
-        const vm = w.VibeMapGL.createNow(this.host, {
-          style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail, profile: 'aero', scale: 'nautical',
-          center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 6 : 1.5,
-        });
-        if (vm) {
-          this.vm = vm;
-          vm.ready.catch((e: unknown) => console.error('ADS-B GPU map: the style did not load', e));
-          vm.setNight(true);          // ★ the greyline on every map, as on the HFDL map
-          vm.map.addControl(new w.maplibregl.NavigationControl({ showCompass: false }), 'top-left');
-          this.attach(vm.map);
-          return;
-        }
-      } catch (e) {
-        console.error('ADS-B GPU map failed — using the Leaflet map', e);
-        try { this.vm?.destroy(); } catch (e2) { console.error('ADS-B GPU map: tidy-up failed', e2); }
-        this.vm = null;
-        this.host.innerHTML = '';
-      }
-    }
-    if (!await loadLeafletInto(document)) { if (my === this.gen) this.note('The map could not be loaded on this server — the list still updates.'); return; }
-    if (my !== this.gen) return;
-    if (!w.VibeMap) { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); }
-    const L = w.L;
-    this.lmap = L.map(this.host, { worldCopyJump: true, preferCanvas: true });
-    this.lmap.setView(rx ? [rx.lat, rx.lon] : [30, 0], rx ? 7 : 2);
-    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), profile: 'aero', scale: 'nautical' });
-    this.attach(this.lmap);
-  }
-
-  private attach(map: any) {
-    const w = window as any;
-    // ★ imageBase: the owner's logos/silhouettes (named by the server only when they exist). photos: OFF until the
-    //   Planespotters terms are read at first hand — see the TODO in adsblayer.js.
-    this.layer = w.VibeAdsbLayer.create(map, { receiver: this.rx, prefs: loadPrefs(), onPrefs: savePrefs, theme: 'dark',
-                                                imageBase: adsbImageBase() || null,
-                                                // ★ an icon tapped on the map: the list's row follows (main.ts adsbMarkSel)
-                                                onSelect: (h: string | null) => { try { this.onSelect?.(h); } catch (e) { console.error('[adsb] onSelect', e); } } });
-    if (this.pending) { this.layer.update(this.pending); this.pending = null; }
-    if (this.obstacle) { try { this.layer.setObstacle?.(this.obstacle); } catch (e) { console.error('[adsb] setObstacle', e); } }
-  }
-
-  /** Every report: the whole aircraft list, and the receiver if it has arrived or moved since. */
-  update(list: AdsbAircraft[], rx: LatLon | null) {
-    if (rx && (!this.rx || rx.lat !== this.rx.lat || rx.lon !== this.rx.lon)) {
-      this.rx = rx;
-      try { this.layer?.setReceiver(rx.lat, rx.lon); } catch (e) { console.error('[adsb] setReceiver', e); }
-    }
-    if (this.layer) {
-      try { this.layer.update(list); } catch (e) { console.error('[adsb] layer.update', e); }
-    } else this.pending = list;
-  }
-
-  /** The live list's corner of the map, { corner, w, h } in CSS px or null: the layer keeps aircraft clear of it. */
-  setObstacle(o: { corner: string; w: number; h: number } | null) {
-    this.obstacle = o;
-    try { this.layer?.setObstacle?.(o); } catch (e) { console.error('[adsb] setObstacle', e); }
-  }
-  private obstacle: { corner: string; w: number; h: number } | null = null;
-
-  /** The colour key (the list's (i) button). Returns whether it is now shown. */
-  toggleLegend(): boolean {
-    try { return !!this.layer?.toggleLegend?.(); } catch (e) { console.error('[adsb] toggleLegend', e); return false; }
-  }
-
-  /** The selection changed on the map (an icon tapped, its card closed): null = none. */
-  onSelect: ((hex: string | null) => void) | null = null;
-
-  /** A list row: select it and open its card. False = not on the map (no position, or no map yet). */
-  focus(hex: string): boolean {
-    try { return !!this.layer?.focus(cleanHex(hex)); } catch (e) { console.error('[adsb] focus', e); return false; }
-  }
-
-  /** The MapLibre map (for its container's controls), or null. */
-  glMap(): any { return this.vm?.map ?? null; }
-
-  /** Unmake everything — the layer, the map, its WebGL context, its tiles. */
-  close() {
-    this.gen++;
-    this.booting = false;
-    this.pending = null;
-    try { this.layer?.destroy(); } catch (e) { console.error('[adsb] layer.destroy', e); }
-    this.layer = null;
-    try { this.vm?.destroy(); } catch (e) { console.error('[adsb] map destroy', e); }
-    this.vm = null;
-    try { this.lmap?.remove(); } catch (e) { console.error('[adsb] Leaflet remove', e); }
-    this.lmap = null;
-    this.host.innerHTML = '';
-    this.host.className = '';        // ★ MapLibre / Leaflet leave their container classes behind
-  }
-}
+ * ★★★ beta96 RETIRED: ADS-B mode's map is the AIR & SEA map's ADS-B-live state (docs/v12/ONE-MAP.md stage 4). The view
+ *     (TrackView, tracks.ts) makes the GPU or Leaflet map and the shared aircraft layer (adsblayer.js), reads this mode's
+ *     old toggles (vibesdr.adsbMapPrefs) until it has its own, and is made on entry and destroyed on exit, as AdsbMap was. */

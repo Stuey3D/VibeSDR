@@ -56,8 +56,9 @@ const main = read('web/client/src/main.ts'), spec = read('web/client/src/spectru
 ok(/if \(typeof msg\.onlyMode === 'string'\) this\.cb\.onOnlyMode\?\.\(msg\.onlyMode\);/.test(spec) && /onOnlyMode: \(m\) => \{ hwOnlyMode = m; syncOnlyMode\(\); \}/.test(main),
    '★ web: the server word only when sent (an older server is read from its list)');
 ok(/return onlyModeFrom\(hwOnlyMode, blockedModes, adminUnlocked, offered\);/.test(main), 'web: the rule from the server word, the blocked list, the admin and the offer');
-for (const [id, k] of [['adsb', "document.getElementById('adsbExit')"], ['ndb', "document.getElementById('ndbExit')"], ['ism', "document.getElementById('ismExit')"],
-                       ['ais', 'trk(aisView)'], ['avdata', 'trk(avView)'], ['sondes', 'trk(sdView)'], ['vormap', 'trk(vmView)']])
+// ★ beta96 ADS-B, AIS and the DATALINK share the AIR & SEA map's one EXIT key — whichever is live owns it
+for (const [id, k] of [['adsb', 'adsbOn ? trk(asView) : null'], ['ndb', "document.getElementById('ndbExit')"], ['ism', "document.getElementById('ismExit')"],
+                       ['ais', 'aisOn ? trk(asView) : null'], ['avdata', 'avOn ? trk(asView) : null'], ['sondes', 'trk(sdView)'], ['vormap', 'trk(vmView)']])
   ok(main.includes(`['${id}', ${k}]`), `web: EXIT for ${id} is one the rule removes`);
 ok(/ex\.style\.display = here \? 'none' : '';/.test(main) && /note\.textContent = onlyModeNote\(m\);/.test(main), '★ web: EXIT not drawn, the note in its place');
 for (const [f, k] of [['adsbSetMode', 'adsb'], ['ismSetMode', 'ism'], ['ndbSetMode', 'ndb'], ['aisSetMode', 'ais'], ['avSetMode', 'avdata'], ['sdSetMode', 'sondes'], ['vmSetMode', 'vormap']])
@@ -79,7 +80,8 @@ for (const f of ['AdsbPanel', 'IsmPanel', 'AvdataPanel', 'SondesPanel']) {
   ok(/label=\{p\.on && !p\.only \? '[^']*' : 'CLOSE'\}/.test(t) && /\{!!p\.only && <Text/.test(t), `app: ${f} draws CLOSE with the note in place of EXIT`);
 }
 for (const k of ['adsb', 'ism', 'sondes', 'avdata']) ok(scr.includes(`only={onlyModeHere === '${k}' ? onlyModeNote('${k}') : undefined}`), `app: the ${k} box is told`);
-ok(/only=\{shownMap && onlyModeHere === shownMap \? onlyModeNote\(shownMap\) : undefined\}/.test(scr), 'app: the map is told');
+// ★ beta96 the AIR & SEA map ('airsea') is told for the whole-radio mode it is the screen of (AIS now; ADS-B at stage 6)
+ok(/only=\{shownMap === 'airsea' \? \(aisViewOpen && onlyModeHere === 'ais' \? onlyModeNote\('ais'\) : undefined\) : shownMap && onlyModeHere === shownMap \? onlyModeNote\(shownMap\) : undefined\}/.test(scr), 'app: the map is told');
 ok(/\$\{opts\?\.only\s*\? `<button id="back"[^`]*>CLOSE MAP<\/button>`/.test(mo), '★ app: the map\'s EXIT becomes CLOSE MAP');
 
 // ── the R36S ──
