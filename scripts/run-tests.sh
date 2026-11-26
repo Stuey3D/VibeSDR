@@ -2813,6 +2813,39 @@ printf '\n\033[1m── tunnel address, Android (VibeQuickTunnelUrl) ──\033[
 bash scripts/test-tunnel-url-android.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ beta96 SUITES THE BRANCHES' DOCS NAME BUT NOBODY REGISTERED (beta96 prep, 11-26) — each runs alone as its doc says;
+#     exit 3 = not run (no VIBESERVER_BIN / no Edge / no CMake target built).
+printf '\n\033[1m── beta96: the two live maps\x27 rules (test_live_maps, ONE-MAP.md) ──\033[0m\n'
+npx tsx scripts/test_live_maps.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: Setup order (test-setup-order, SETUP-UX.md) ──\033[0m\n'
+node scripts/test-setup-order.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: map packs read straight out of the APK (test-apk-pack, VibeApkPack.kt) ──\033[0m\n'
+bash scripts/test-apk-pack.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: ADS-B kept running survives an in-process restart (test-adsb-restart, ADSB-RESTART-RATE.md) ──\033[0m\n'
+BUILD="$(dirname "${VIBESERVER_BIN:-vibeserver/build/x}")" bash scripts/test-adsb-restart.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: the Linux daemon enters ADS-B on every start (test-adsb-restart-linux) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" bash scripts/test-adsb-restart-linux.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: kept-running modes survive a restart (test-keep-restart, KEEP-RUNNING.md) ──\033[0m\n'
+BUILD="$(dirname "${VIBESERVER_BIN:-vibeserver/build/x}")" bash scripts/test-keep-restart.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: keep running a whole-radio mode (test-server-keep-run) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-keep-run.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: background decoding split from the landing (test-server-bg-split) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-bg-split.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: the Netherlands\x27 water + rivers on a server\x27s GPU map (test-server-map-water-nl, BASIC-MAP-WATER.md) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-map-water-nl.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── ADS-B RANGE outline on the web map (test-web-adsb-range) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-web-adsb-range.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this
 #     project deliberately never runs — so the App Store shipped 10.2 while the app's own About
