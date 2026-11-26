@@ -1460,6 +1460,8 @@ body.adsbMap #srvHealth { right: 0 !important; }
 #adsbList .adsbRow .id .l1 { display: flex; align-items: center; min-width: 0; }
 #adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
 #adsbList .adsbRow .id .ex { flex: 0 0 auto; display: inline-flex; align-items: center; white-space: nowrap; }
+/* ★ the chip's gap from the name (the TrackView's .trkRow .snrChip margin — 5 px on its RIGHT — glued it to the callsign) */
+#adsbList .adsbRow .id .ex .snrChip { margin: 0 0 0 5px; }
 /* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
 /* ★ The (i) beside the list's header: the map layer's colour key (toggleLegend), opened above the list. */
 #adsbLegendBtn { all: unset; box-sizing: border-box; position: absolute; top: 5px; right: 30px; width: 24px; height: 24px; border-radius: 50%;
@@ -1497,6 +1499,39 @@ body.adsbMap #srvHealth { right: 0 !important; }
 #adsbList .adsbRow .tag.mil { background: rgba(90, 170, 255, 0.85); color: #06121f; }
 @media (prefers-reduced-motion: reduce) { #adsbList .adsbRow.em { animation: none; background: rgba(224, 64, 64, 0.22); } }
 #adsbList .adsbEmpty { padding: 10px 9px; opacity: .6; font-size: 11.5px; line-height: 1.5; }
+/* ★★★ beta96 THE LIST SIZES BY ITS OWN WIDTH, NEVER THE WINDOW'S (Stuart 11-26, a ~232 px panel on a wide Safari window:
+ *  "the signal hides the aircraft details" — the fixed columns took the row, the chip beside the name never shrinks, so the
+ *  callsign ellipsised to nothing; the only narrow rule was a viewport @media, which never fires for a narrow PANEL).
+ *  A container query on the list itself; as it narrows, in this order, and the callsign is never what gives:
+ *   ≥ 420 px  every column (the desktop panel, 430 px);
+ *   < 420     the speed goes;
+ *   < 360     the SNR chip (and a MIL / emergency tag) moves UNDER the callsign, to the head of the second line;
+ *   < 320     altitude over range in one column at the end, "tracked" goes (a 320 px phone's panel is 308);
+ *   < 210     the bearing word goes.
+ *  scripts/test-web-adsb-list-width.mjs holds it (real page, real server: 232 / 300 / 400 / 600 px and two phones). */
+#adsbList { container-type: inline-size; container-name: adsblist; }
+@container adsblist (max-width: 419.98px) {
+  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em 7.6em; }
+  #adsbList .adsbRow .spd { display: none; }
+}
+@container adsblist (max-width: 359.98px) {
+  #adsbList .adsbRow .id { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+  #adsbList .adsbRow .id .l1 { display: contents; }
+  #adsbList .adsbRow .id b { grid-column: 1 / -1; }
+  #adsbList .adsbRow .id .ex { grid-column: 1; grid-row: 2; margin-right: 5px; }
+  #adsbList .adsbRow .id .ex .snrChip { margin: 0; }
+  #adsbList .adsbRow .id small { grid-column: 2; grid-row: 2; min-width: 0; }
+}
+@container adsblist (max-width: 319.98px) {
+  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em; grid-template-rows: auto auto; }
+  #adsbList .adsbRow .id { grid-row: 1 / span 2; }
+  #adsbList .adsbRow .alt { grid-column: 2; grid-row: 1; }
+  #adsbList .adsbRow .rng { grid-column: 2; grid-row: 2; font-size: 10.5px; }
+  #adsbList .adsbRow .rng .trk { display: none; }
+}
+@container adsblist (max-width: 209.98px) {
+  #adsbList .adsbRow .rng .brg { display: none; }
+}
 /* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
      ellipsis; the message rate goes too (the count is what matters at a glance). */
 @media (max-width: 560px) {
@@ -1509,9 +1544,14 @@ body.adsbMap #srvHealth { right: 0 !important; }
     mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); padding-left: 6px; padding-right: 14px; }
   #adsbTop { gap: 6px; }
   #adsbTop button { padding: 6px 9px; font-size: 12px; }
-  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em 7.6em; }
-  #adsbList .adsbRow .spd { display: none; }
   #adsbList { max-height: 222px; max-height: min(6 * 37px, 30vh); }
+}
+/* ★ only a browser without container queries (before Safari 16) falls back to the window's width */
+@supports not (container-type: inline-size) {
+  @media (max-width: 560px) {
+    #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em 7.6em; }
+    #adsbList .adsbRow .spd { display: none; }
+  }
 }
 
 /* ── NDB: #adsbView's rules for #ndbView ── */

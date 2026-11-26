@@ -123,6 +123,9 @@ try {
       const cross = r.cells.some((c, i) => r.cells.some((d, j) => j > i && overlap(c, d)));
       ok(!cut.length && !cross, `${tag}: ${r.call}: altitude / range whole, inside the row, not over each other${cut.length ? ' (' + cut.join(', ') + ')' : ''}`);
       ok(!r.chip || (r.chip.l >= r.row.l - 0.5 && r.chip.r <= r.row.r + 0.5), `${tag}: ${r.call}: the SNR chip is inside the row`);
+      // ★ beside the name it keeps a gap (the TrackView's .trkRow .snrChip margin had glued it to the last letter)
+      const beside = r.chip && Math.min(r.chip.b, r.b.b) - Math.max(r.chip.t, r.b.t) > 2;
+      ok(!beside || r.chip.l - r.b.r >= 3, `${tag}: ${r.call}: ${beside ? `the chip sits ${(r.chip.l - r.b.r).toFixed(1)} px clear of the callsign` : 'the chip is under the callsign'}`);
     }
   };
   // ── the panel forced to each width on the 1280 px window (Stuart's case: a narrow PANEL, a wide window) ──
