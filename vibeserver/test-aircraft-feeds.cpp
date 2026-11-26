@@ -18,6 +18,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -237,6 +238,33 @@ static void testListen() {
     vibeavshare::Row w = rowFor(0xAB12CD);
     CHECK(w.used && w.srcMask == (1u << vibeavshare::kHfdl) && w.posSrc == vibeavshare::kHfdl && w.flight == "BAW123", "the shared table: HFDL only, an HFDL position, the callsign (mask %u)", w.srcMask);
     CHECK(!vibeavshare::adsbHeardNow(w, vibeavshare::wallMs(), vibeavshare::wallMs()), "never counted as ADS-B heard now");
+    // ★★ beta96 (coordinator, b96-mapchat's OTHER RADIOS switch): a feed's aircraft are written AS the radio "feed", in a write of
+    //    their own — never mixed into this process's own radio's updates
+    {
+        std::vector<std::pair<std::string, std::vector<uint32_t>>> calls;
+        vibeavshare::sharer().writerForTest([&](const std::vector<vibeavshare::Update>& u, const std::vector<vibeavshare::GsHeard>& g, int64_t now2, bool live, const std::string& as) {
+            std::vector<uint32_t> ids; for (const auto& x : u) ids.push_back(x.icao);
+            calls.push_back({ as, ids });
+            vibeavshare::table().write(u, g, now2, live, as);   // ★ and on into the table, so the rest of the test is unchanged
+        });
+        sendAll(c, "MSG,3,1,1,AB12CF,1,,,,,EZY77,,,,50.0,-25.0,,0,,,,0\n");
+        waitFor([&] { return field(fs.statusJson(), "aircraft") == "3"; }, 3);
+        vibeavshare::sharer().provide("testown", [](int64_t, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>&) {
+            vibeavshare::Update x; x.icao = 0x777777; x.srcMask = 1u << vibeavshare::kAdsb; x.heardMs = x.srcMs[vibeavshare::kAdsb] = vibeavshare::wallMs(); out.push_back(x); });
+        vibeavshare::sharer().flushNow();
+        vibeavshare::sharer().remove("testown");
+        vibeavshare::sharer().writerForTest(nullptr);
+        bool feedTagged = false, ownMixed = false, ownSeparate = false;
+        for (const auto& cl : calls) {
+            const bool hasFeed = std::find(cl.second.begin(), cl.second.end(), 0xAB12CFu) != cl.second.end();
+            const bool hasOwn = std::find(cl.second.begin(), cl.second.end(), 0x777777u) != cl.second.end();
+            if (hasFeed && cl.first == feeds::kFeedRadioId) feedTagged = true;
+            if (hasFeed && hasOwn) ownMixed = true;
+            if (hasOwn && cl.first.empty()) ownSeparate = true;
+        }
+        CHECK(feedTagged && std::string(feeds::kFeedRadioId) == "feed", "a feed's aircraft are written as the radio \"feed\" (%zu writes)", calls.size());
+        CHECK(!ownMixed && ownSeparate, "…in a write of their own: this process's own radio's aircraft go untagged, never mixed with the feed's");
+    }
     CHECK(fs.publicJson().find("127.0.0.1") == std::string::npos && fs.publicJson().find("\"label\":\"HFDL\"") != std::string::npos, "the public status has the label and no address");
     // the sender goes away → after the stall time the banner names it
     ::close(c);

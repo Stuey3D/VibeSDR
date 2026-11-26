@@ -53,6 +53,9 @@ namespace vibe {
 namespace feeds {
 
 constexpr int kMaxSources = 8;
+/** ★★ beta96 the "radio" every feed source's aircraft are written as in the shared table (vibeavshare::Table::write's asId —
+ *  b96-mapchat's registry, radios.idx): a map's OTHER RADIOS switch can hide them; they never count as a radio's own. */
+inline constexpr const char* kFeedRadioId = "feed";
 constexpr int kMaxClients = 4;
 constexpr int kSbsPort = 32010;                       ///< the port Stuart's dumphfdl sends to (any free port works)
 constexpr const char* kStatusFile = "aircraft-feeds.json";
@@ -563,7 +566,7 @@ public:
             vibeavshare::sharer().provide("feeds", [this](int64_t since, std::vector<vibeavshare::Update>& out, std::vector<vibeavshare::GsHeard>&) {
                 std::lock_guard<std::mutex> lk(m_);
                 for (auto& s : src_) { std::vector<vibeavshare::Update> u; s->shareSince(since, u); out.insert(out.end(), u.begin(), u.end()); if (out.size() >= vibeavshare::kCap) break; }
-            });
+            }, kFeedRadioId);   // ★★ beta96 written as the radio "feed" (b96-mapchat's per-client OTHER RADIOS switch hides them)
             vibeavshare::sharer().adsbLiveExtra("feeds", [this] { return adsbLive(); });
             startHousekeeping();
         } else {
