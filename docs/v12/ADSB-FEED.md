@@ -14,41 +14,50 @@ Stuart, 2026-11-26, in steps:
 
 ## RESUME HERE
 
-- **Built, tested, committed on `b96-sbsfeed`:**
+- **Built, tested, committed on `b96-sbsfeed` (the 11-26 evening's work is marked ★ evening):**
   - `vibe_sbs.h`: the BaseStation parser (MSG 1–8; junk, partial lines, over-long lines, binary bytes), a per-source
     table tagged by label, positions absolute, the fix's own time, impossible jumps refused.
   - `vibe_feeds.h`: server-level sources (Beast | SBS × connect | listen × ADS-B | HFDL | VDL2 | ACARS), the LAN-only
-    listener (refused peers logged once per address, then once per 10 min), down/stall rules, the banner text, the status
-    file other processes read, the shared-table provider ("feeds"), the loopback ingest for the radios' own ADS-B.
-  - The hub (`vibe_beast.h Hub`) as a middle man: foreign frames byte-faithful (`frameRaw`), de-duplication across
-    inputs, "only my own radios" per destination and for the Beast output, loop guards from every source host.
-  - Config: `ServerConfig::aircraftFeeds` + `ServerConfig::adsbShare`; `migrateAircraftFeeds` on every read (a feed
-    radio → a source, its entry dropped; per-radio `adsbFeed` → the server-level hub, duplicates once).
-  - Server wiring (`main.cpp applyAircraftFeeds`): the front door / a Simple server owns sources and hub; radios behind
-    the door forward their own ADS-B to the door's loopback ingest; `aircraft.json` (served by the door now too) carries
-    `feeds` (labels, never addresses) and `feedWarn`; `admin/adsbfeed` at the door lists the sources; `addbeast` adds a
-    source; a left-over `beast-N` radio process exits 0 saying why; `--beast-in host:port` keeps the old ADS-B-only process
-    as a diagnostic (test-server-adsb-delta uses it).
-  - Setup page SERVER tab: "Aircraft feeds from other receivers" and "Share ADS-B with flight trackers" (moved there).
-    Admin page: one server-level row. The AIR & SEA map's banner (web + app) from `aircraft.json feedWarn`.
-  - The standalone AIR & SEA map on the web landing page: **`openAirSeaViewer()`** (also `window.openAirSeaViewer`).
+    listener, down/stall rules, the banner text, the status file, the shared-table provider ("feeds").
+  - The hub (`vibe_beast.h Hub`) as a middle man: byte-faithful foreign frames, de-duplication across inputs, own-only
+    destinations, loop guards from every source host.
+  - Config: `ServerConfig::aircraftFeeds` + `adsbShare`, `migrateAircraftFeeds`; ★ evening: `mapViewers` (default 20) +
+    `mapTimeMin` (default 0).
+  - Server wiring (`main.cpp applyAircraftFeeds`), `aircraft.json` with `feeds` / `feedWarn` at the door and through each
+    radio, `admin/adsbfeed`, `addbeast`, `--beast-in` (diagnostic + tests).
+  - Setup page SERVER tab: ★ evening **"Air & sea map"** (Map viewers, Map time limit, the cost hint), "Aircraft feeds from
+    other receivers", "Share ADS-B with flight trackers". Admin page: the feeds row and ★ evening **AIR & SEA MAP (NO RADIO)**
+    (viewers now of the limit, who; today's visits counted in VISITORS / TYPICAL VISIT).
+  - ★ evening **The aircraft table as deltas** (`vibe_aircraft_delta.h`): `aircraft.json?d=<cursor>` answers only what changed;
+    gzip on every aircraft.json answer. **Every AIR & SEA map polls it** — a radio's map (web `avSharedFetch`, app SDRScreen
+    `avDelta`) and the standalone viewer. The socket subscription (`acd=1` → `{"type":"acs"}`) is built and tested but **the
+    clients do not use it**: WebSocket frames are not compressed, so it measured 5× the gzipped poll (see Measured).
+  - ★ evening **The standalone map's tickets and limits** (`vibe_airsea_viewers.h`): `/vibeserver/airsea/join` · `leave`,
+    `vt=` on each poll, 30 s idle, the time limit per address, the owner (admin credential) counted never refused.
+  - ★ evening **The landing gate and landing** (`src/services/airSeaViewer.ts airSeaOffer`, shared by the web and the app):
+    the button when the server has aircraft, ships, sondes / VOR or a feed; the map opens on the most populated layer; the
+    button says what there is ("2 HFDL aircraft · 12 ships").
+  - ★ evening **The app's standalone map**: `src/screens/AirSeaScreen.tsx`, nav target **`AirSea`**, opener
+    **`openAirSeaScreen(navigation, { baseUrl, name, authSuffix, tab })`** (for the menu entry beside GALLERY — b96-mapchat);
+    composition `src/services/airSeaStandalone.ts`; the landing's AIR & SEA MAP key under the radios (pad item `airsea` in
+    `radioChooserNav.ts`). The web's entry point stays **`openAirSeaViewer()`** (`window.openAirSeaViewer`), now async (it
+    asks for a ticket first; a full map shows a pill and opens nothing).
+  - ★ evening **Android phone server**: SERVER SETTINGS → AIR & SEA MAP and AIRCRAFT FEEDS FROM OTHER RECEIVERS
+    (`AircraftFeedsSetup.tsx`, `utils/aircraftFeeds.ts`), VibeServerBoot → `setAircraftFeeds` / `setAirSeaViewers` (JNI),
+    the remote Setup page's mapping (`vibe_android_setup.h`, incl. the server-level flight-tracker card → the phone's
+    `adsbFeed`). Simple keeps feeds off.
 - **Not done (honest):**
-  - **The app**: no AIR & SEA button on the app's server landing and no navigation target yet (the app's map lives inside
-    SDRScreen, bound to a connected radio). The web entry point is `openAirSeaViewer()`; the app needs a screen that hosts
-    `MapOverlay kind="airsea"` fed by `aircraft.json` polls with no `VibeServerClient`.
-  - **The map's own limits** ("Map viewers", "Map time limit", the admin count, the visitor stats) — not built. The viewer
-    is plain HTTP polling today, so there is no viewer session to count yet (see Open questions).
-  - **Ships in the button's gate**: the landing button is shown when the server has aircraft or an aircraft feed; a
-    ships-only server does not get it yet.
-  - **The landing on the HFDL layer**: the standalone map opens on AIRCRAFT with every layer; no per-source landing.
-  - **Android**: the phone server keeps its own per-radio flight-tracker card (`AdsbFeedSetup`); server-level SOURCES are
-    not wired on the phone (`LocalSdrShim::setAircraftFeeds` exists; Kotlin/JNI/RN settings do not call it). The new
-    headers compile with the NDK (aarch64, armv7); Gradle was not run.
-  - **Feed aircraft use aircraft.json, not the delta stream**: a feed's aircraft reach a radio's AIR & SEA map through the
-    3-second `aircraft.json` poll (the full list), not the ADS-B delta protocol, which carries only a radio's own decode.
-  - **"Other" as a label** is not offered: the shared table, the clients and the community feed know five sources
-    (ADS-B, ACARS, VDL2, HFDL, ADS-C); an "Other" aircraft would be drawn by no map. VDL2 and ACARS were offered instead
-    (dumpvdl2 and acarsdec-family tools also write BaseStation). Open question below.
+  - **Gradle was not run** (no Android build via the lock this session); the JNI additions follow the existing pattern and
+    the C++ they call is built in the vibeserver binary. The NDK compile of the new headers is unverified.
+  - **The app's AIR & SEA screen was not run on a device or simulator** — tsc-clean, its composition tested in node
+    (test_airsea_standalone), the landing key pad-tested in node (test_radio_chooser_nav), nothing more.
+  - **The app's owner bypass**: the web sends the admin ticket on join; the app's AirSeaScreen does not (an owner using the
+    app is counted and can be turned away like anyone).
+  - **"Only this server's own radios"** (the hub's own-only switches) are still not on the phone's card.
+  - **A ticketless poller is not refused**: an older client, a radio's own map and anyone polling aircraft.json by hand are
+    not counted. The limit is for the map, not a lock on the data (the data is public read API anyway).
+  - **The standalone map's ships / NAVTEX / sondes reads are not ticketed** (they are 30 s / 2 min polls and small).
+  - The directory/community "receiver offline" flag for a down feed (unchanged from before).
 - **Never connected to a real receiver or aggregator** (by the rules). Everything ran on 127.0.0.1.
 
 ## What is sent (Beast)
@@ -291,13 +300,71 @@ Stuart's Lenovo, all at once:
 
 ## The standalone AIR & SEA map
 
-**One entry point: `openAirSeaViewer()`** in `web/client/src/main.ts` (also on `window`), for the landing page's AIR & SEA
-MAP button (`#splashAirSea`) and the menu entry beside GALLERY (b96-mapchat). It opens the same AIR & SEA map (`asOpen`)
-with no radio: no WebSocket, no tuner — only this server's HTTP reads, which the map already makes (`aircraft.json`
-every 3 s, the ship store, the gallery's remembered sondes and VOR), so it is **live** and keeps working when every radio
-is busy or there are none. It controls nothing (CLOSE MAP goes back to the landing). The door serves `aircraft.json`
-itself. The button is drawn only when the server has aircraft or an aircraft feed (one read when the landing draws its
-radios, never polled). Not yet: the app, ships in the gate, and the viewer limits (Open questions).
+**Entry points.** Web: **`openAirSeaViewer()`** in `web/client/src/main.ts` (also on `window`) — the landing's AIR & SEA MAP
+(`#splashAirSea`) and the menu entry beside GALLERY (b96-mapchat). App: the nav target **`AirSea`** (`AirSeaScreen.tsx`) through
+**`openAirSeaScreen(navigation, params)`** — the landing's key under the radios, and the menu. Both open the same AIR & SEA map
+with no radio: no WebSocket, no tuner, only this server's HTTP reads, live, with the SHOW chips and the normal time windows
+(the maritime filter where ships / NAVTEX are drawn; aircraft keep the table's hour). No TUNE, no "this session", no other radios.
+
+**The gate** (`airSeaOffer`, one read of each when the landing draws, never polled): aircraft (`aircraft.json?since=3600`), ships
+(`gallery/ais-ships.json?since=21600&limit=1`), remembered sondes / VOR stations (`gallery.json?kind=sondes|vormap`, a card
+within its keep: 24 h / 7 days), or any aircraft feed. Nothing anywhere: no button. **The landing**: the most populated of
+AIRCRAFT / SHIPS / SONDES / NAVAIDS; when every aircraft comes from feeds of one label, that label names them ("2 HFDL
+aircraft") and the list opens sorted LATEST.
+
+**What it polls**: the aircraft as deltas every 3 s with its ticket (`aircraft.json?d=<cursor>&vt=<ticket>`); ships, DSC and
+NAVTEX every 30 s (2 s while the warnings index builds); sondes / VOR every 2 minutes. At the time limit's end every poll stops.
+
+### The standalone map's limits
+
+Stuart: "so people on limited or sketchy connections can host it". `vibe_airsea_viewers.h`:
+
+- **Map viewers** (`mapViewers`, default **20**, 0 = no limit, ≤ 1000; at most 2000 tickets whatever it says). Counted by
+  **ticket**: the viewer asks `/vibeserver/airsea/join` when it opens and sends `vt=` with every aircraft poll; a ticket not
+  seen for **30 s** has gone; CLOSE MAP and the page going away (`pagehide`, keepalive) end it at once. Two people behind one
+  router are two viewers. Over the limit: `{"ok":false,"full":true,"n","max"}` → "The map is full (N/N) — try again shortly"
+  (web: a pill on the landing; app: a card with BACK), nothing opens.
+- **Map time limit** (`mapTimeMin`, default **0** = none, ≤ 1440). Per **address** (memory: soft_session_limits — a session id
+  is born with the page, so a reload would buy a fresh turn); a turn lapses after an absence as long as the limit. The status
+  line reads "Map time ends in 29:39"; in the last minute (`warn`, 60 s) the banner over the map says so (label TIME LIMIT);
+  at the end the poll answers `{"viewer":"ended"}`, the map stops polling and says "Your time on the map is up — the owner
+  allows N minutes each…"; joining again is refused with how long until the turn lapses.
+- **The owner** (the admin credential on the join — the web sends its admin ticket) is counted and never refused or timed.
+  Not "loopback": a tunnel's visitors and any web page on the host arrive from 127.0.0.1 (the 2026-10-03 audit's rule).
+- **Admin page**: AIR & SEA MAP (NO RADIO) — viewers now of the limit, the time limit, each address and how long it has been
+  open (`admin/adsbfeed` → `mapViewers`); today's visits are merged into the connection rows that VISITORS / TYPICAL VISIT count.
+- **A ticketless poll** (an older page or app, a radio's own map) is not refused and not counted: a radio's listener is counted
+  as a listener already. `{"viewer":"unknown"}` for a ticket the server does not know (restart, a long sleep): the viewer joins
+  again (a full map then refuses honestly).
+
+## Feed aircraft as deltas (and why the maps poll, not subscribe)
+
+`vibe_aircraft_delta.h`. Each row is split into **s** (what the aircraft is: icao, reg, flight, type, the aircraft data's
+fields, route, from/to, label, app, via) and **y** (where it is: lat, lon, alt, trk, gs, ground, posTime, src, and **absolute**
+times `pt`, `st`, `lt`). A delta carries the rows whose s changed (s + y), whose y changed (y), the keys gone, and the small
+header, stations and feeds whole. One store per process, rebuilt at most once a second whoever asks; a cursor is
+"<epoch>.<seq>" — nothing per viewer. A cursor from another process life or older than the gone list's 10 minutes gets the
+whole table. The client store (`src/services/aircraftDelta.ts`) rebuilds aircraft.json's own object (times back to ages), so
+`sharedSanitise` and every map read exactly what they did. `aircraft.json` is gzipped wherever the client accepts it.
+
+**Measured** (the real binary, `--beast-in`, the synthetic 150-aircraft sky, 3 s polls for 60 s — test-server-aircraft-delta):
+
+| | per viewer |
+|---|---|
+| aircraft.json, the whole table (before) | **9.82 KB/s** |
+| …gzipped | 1.81 KB/s |
+| the delta | 7.13 KB/s |
+| **the delta, gzipped (what the maps use now)** | **1.41 KB/s** |
+| the socket's `acs` (acd=1) — uncompressed WebSocket frames | 7.06 KB/s |
+
+With the aircraft data's fields on each row (operator, logo, country, description — test-aircraft-delta's in-process sky):
+whole 16.5 → gzipped 2.2 → delta gzipped 1.35 KB/s. **Decision**: gzip does most of the work; the delta takes another ~22 %.
+Over the socket the delta is not compressed (no permessage-deflate here, and React Native has no inflate for a compressed
+payload), so it would cost 5× the gzipped poll: **every map polls `aircraft.json?d=`** (3 s, as before). `acd=1` stays as a
+tested server capability. One table build per second serves every poller (≈ 150 µs at 150 aircraft on the M5 Pro).
+
+**One viewer, whole page** (headless Edge, test-web-airsea-standalone, ~150 aircraft from a Beast feed): the landing page **706 KB** (first visit; cached after), the map opening **154 KB**, then **1.82 KB/s** at ~141 aircraft (every byte on the wire, compressed as sent; the aircraft deltas, the ship / NAVTEX reads and anything else the page asked for).
+The Setup page's hint (`AS_MAP_KBS` etc. in vibe_setup_page.h; `MAP_KBS_PER_VIEWER` in utils/aircraftFeeds.ts) quotes these.
 
 ## Running VibeServer beside PiAware
 
@@ -401,7 +468,14 @@ The Setup page's "How many users" hint quotes the new figure: about 2.5 KB/s per
 | `scripts/test-server-adsb-delta.ts` | **11/11** | Now on `--beast-in`: older 32.12 KB/s vs delta 2.41 KB/s at 155 aircraft. |
 | `scripts/test-setup-adsb-feed.mjs` | **68/68** | The server-tab cards: placement, the old boxes gone, own-only switches and blob, the gate (a radio that could run ADS-B or an ADS-B feed; HFDL-only not), afRender, the feeds form (defaults, Stuart's two sources, refusals, round trip, the label only for SBS, dumphfdl's option). |
 | `scripts/test_adsb_feed.ts` | **19/19** | The app's copy on the shared fixture; the admin rows (a source line). |
-| Checks | | `check-setup-page` green. Not run here: `scripts/run-tests.sh` (the coordinator's). |
+| `vibeserver/test-aircraft-delta.cpp` | **37/37** | ★ evening: rowParts rebuilds every toJson row field for field; cursors (quiet = nothing, a moved aircraft's y only, a renamed one's s, gone keys, another epoch / future / junk / too old → whole); the 150-aircraft bytes in process (16.5 / 2.2 / 7.4 / 1.35 KB/s); one build ≈ 150 µs; the gate (20 by ticket, the 21st full, owner, 30 s idle, leave, no limit, the time limit per address, a reload buys nothing, lapse after an absence, the owner untimed). |
+| `scripts/test-server-aircraft-delta.mts` | **20/20** | ★ evening, the REAL binary: tickets 3/3 full, leave, unknown, ticketless poll, owner past the limit; 60 s of the four polls side by side (whole 9.82, gz 1.81, delta 7.13, delta gz 1.41 KB/s), the delta viewer's table equals the whole (152/152, same position and age); the socket's acs (7.06 KB/s, every 3 s, one whole, none unasked, acs_resync); the 1-minute limit ENDED and a re-join refused for 58 s. |
+| `scripts/test_airsea_viewer.ts` | **37/37** | ★ evening: the client delta store (whole, deltas, ages, order, gone, renamed, an older server's whole table, junk, bounded, off); the landing gate (nothing, ships only, sondes in / out of their keep, VOR, HFDL from a feed labelled, a feed with no aircraft yet, the most populated tab, aircraft and AIS off); the viewer session (ticket, cursor, clock, last-minute banner, ENDED stops, full, used-up turn, forgotten ticket re-joins, older server, leave, the words). |
+| `scripts/test_airsea_standalone.ts` | **19/19** | ★ evening: the app's composition with no radio (CLOSE MAP, no live chip, no TUNE, HFDL only → no SHIPS/ADS-B chip and SEA AREAS off, ships → SHIPS tab + time windows, remembered sondes, chips off remove items, the clock leads the status line, the handlers). |
+| `scripts/test_aircraft_feeds_app.ts` | **15/15** | ★ evening: the phone's feeds card (defaults, Stuart's two sources, refusals, round trip, titles, status lines) and the map-limit words. |
+| `scripts/test_radio_chooser_nav.ts` | **21/21** | ★ evening: + the landing's AIR & SEA MAP key (under the radios, Enter opens it, the start stays on a free radio, the PIN path past it). |
+| `scripts/test-web-airsea-standalone.mjs` | **19/19** | ★ evening: + the ticket and the delta polls, the full map's pill (nothing opens), and the measured cost of one viewer at ~150 aircraft. |
+| Checks | | `check-setup-page` green; `check-android-settings-parity` 223/0; `check-remote-keys` 520/0; `test-android-setup` all passed; `test-setup-order` 15/0; `test_setup_sections` 72/0; `test_server_choice` 70/0; `test_nav_coverage` green; tsc clean (src + web). Not run here: `scripts/run-tests.sh` (the coordinator's), Gradle. |
 
 ## Live checks (a person, not an agent)
 
@@ -426,13 +500,14 @@ The Setup page's "How many users" hint quotes the new figure: about 2.5 KB/s per
 
 ## Open questions for Stuart
 
-4. "Other" as a feed label: offer it (needs a sixth source bit in the shared table, a file version bump, and a badge in
-   every map) or keep ADS-B / HFDL / VDL2 / ACARS?
-5. The standalone map's limits ("Map viewers", "Map time limit"): count viewers by a lightweight session (a ticket from a
-   `/vibeserver/airsea/join` the polls carry), or by distinct addresses polling `aircraft.json` in the last 10 s? The
-   second needs no client change but miscounts shared NAT.
-6. Feed aircraft on a radio's live ADS-B layer (the delta stream) instead of the 3-second aircraft.json: worth it for a
-   server that is mainly feeds?
+4. ~~"Other" as a feed label~~ — decided (coordinator, 11-26): not needed; VDL2 / ACARS offered instead. Left as is.
+5. ~~The standalone map's limits: ticket or address?~~ Built by ticket (accurate behind one router), the time limit per address.
+6. ~~Feed aircraft on the delta stream?~~ Built as an HTTP delta; measured; the maps poll it (the socket path is 5× without
+   compression). See "Feed aircraft as deltas".
+7. Defaults: 20 viewers, no time limit — at the measured ~1.9 KB/s each that is ~38 KB/s (0.3 Mbit/s) of upload at 150
+   aircraft. Lower for a 4G host?
+8. Should the standalone map's ships / NAVTEX / sondes reads carry the ticket too (they are small, 30 s / 2 min)?
+9. The app's owner bypass on the standalone map (the web sends the admin ticket; the app does not yet).
 
 1. ~~Offer ADS-B Exchange as a preset?~~ Done 11-26 (Stuart): a preset, with MLAT and stats left to their client.
 2. Put the push feeds on the phone's server screen too? They are there now. Is that wanted for phones on mobile data?

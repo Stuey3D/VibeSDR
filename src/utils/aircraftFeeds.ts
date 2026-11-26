@@ -99,9 +99,9 @@ export const MAP_VIEWERS_DEFAULT = 20;
 export function mapViewersOf(v: string | null | undefined): number { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) ? Math.max(0, Math.min(1000, n)) : MAP_VIEWERS_DEFAULT; }
 export function mapTimeMinOf(v: string | null | undefined): number { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) ? Math.max(0, Math.min(1440, n)) : 0; }
 /** ★ The measured cost per viewer (docs/v12/ADSB-FEED.md — the Setup page's AS_MAP_KBS): KB/s at ~150 aircraft. */
-export const MAP_KBS_PER_VIEWER = 1.6;
+export const MAP_KBS_PER_VIEWER = 1.9;   // ★ test-web-airsea-standalone: 1.82 KB/s at ~141 aircraft
 export function mapCostLine(viewers: number): string {
-  const base = `Each viewer uses about ${MAP_KBS_PER_VIEWER} KB/s with 150 aircraft on the map, plus a one-off download as the map opens.`;
+  const base = `Each viewer uses about ${MAP_KBS_PER_VIEWER} KB/s with 150 aircraft on the map (less with fewer), plus about 150 KB as the map opens.`;
   if (!viewers) return `${base} With no limit, every extra viewer adds that much.`;
   const kbs = viewers * MAP_KBS_PER_VIEWER;
   return `${base} At ${viewers} viewers that is about ${Math.round(kbs)} KB/s (${(kbs * 8 / 1000).toFixed(1)} Mbit/s) of upload — on mobile data, about ${Math.round(kbs * 3600 / 1024)} MB an hour if all ${viewers} stay.`;

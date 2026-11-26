@@ -9630,17 +9630,17 @@ function feedsDraw() {
   });
 }
 /* ★★ V12 beta96 THE AIR & SEA MAP's LIMITS — the fields' values (clamped as the server clamps them) and the cost hint.
- *  ★★★ The per-viewer figures are MEASURED (docs/v12/ADSB-FEED.md §The standalone map's limits — test-web-airsea-standalone
- *      and test-aircraft-delta on a synthetic 150-aircraft sky, M5 Pro): AS_MAP_KBS at ~150 aircraft, AS_MAP_KBS_QUIET at ~30,
- *      AS_MAP_OPEN_KB once when the map opens (the page's map data). Update them with the measurement. */
-const AS_MAP_KBS = 1.6, AS_MAP_KBS_QUIET = 0.4, AS_MAP_OPEN_KB = 900;
+ *  ★★★ The per-viewer figures are MEASURED (docs/v12/ADSB-FEED.md §Feed aircraft as deltas — test-web-airsea-standalone,
+ *      headless Edge, one viewer of a ~150-aircraft Beast feed, every byte on the wire): AS_MAP_KBS steady, AS_MAP_OPEN_KB once
+ *      when the map opens, AS_MAP_PAGE_KB the landing page itself on a first visit (cached after). Update them with a new run. */
+const AS_MAP_KBS = 1.9, AS_MAP_OPEN_KB = 150, AS_MAP_PAGE_KB = 700;
 function asMapNum(id, def, max) { const el = $(id); if (!el) return def; const v = parseInt(el.value, 10); return Number.isFinite(v) ? Math.max(0, Math.min(max, v)) : def; }
 function asMapCost() {
   const el = $("mapCostHint"); if (!el) return;
   const n = asMapNum("mapViewers", 20, 1000);
   const mbit = (kbs) => (kbs * 8 / 1000).toFixed(kbs * 8 >= 10000 ? 0 : 1);
-  el.innerHTML = "Measured: each viewer uses about <b>" + AS_MAP_KBS + " KB/s</b> with 150 aircraft on the map (about " + AS_MAP_KBS_QUIET
-    + " KB/s with 30), plus about " + AS_MAP_OPEN_KB + " KB once as the map opens. "
+  el.innerHTML = "Measured: each viewer uses about <b>" + AS_MAP_KBS + " KB/s</b> with 150 aircraft on the map (less with fewer), plus about "
+    + AS_MAP_OPEN_KB + " KB as the map opens (and about " + AS_MAP_PAGE_KB + " KB for the page itself on a first visit). "
     + (n ? "At " + n + " viewers that is about <b>" + Math.round(n * AS_MAP_KBS) + " KB/s</b> (" + mbit(n * AS_MAP_KBS) + " Mbit/s) of upload at 150 aircraft."
          : "With no limit, every extra viewer adds that much.");
 }

@@ -21,7 +21,7 @@ ok(parseFeeds('junk').length === 0 && parseFeeds('[{"fmt":"beast","dir":"connect
 ok(feedTitle(pi.src!) === 'PiAware' && feedTitle({ fmt: 'sbs', dir: 'listen', port: 32010, label: 'hfdl' }) === 'HFDL feed on port 32010', 'titles (the Setup page\'s)');
 ok(feedStatusLines({ sources: [{ title: 'PiAware', label: 'ADS-B', line: 'connected, 1500 messages a second' }] })[0] === 'PiAware (ADS-B): connected, 1500 messages a second', 'the running server\'s line per source');
 ok(mapViewersOf('') === 20 && mapViewersOf('0') === 0 && mapViewersOf('5000') === 1000 && mapTimeMinOf('x') === 0 && mapTimeMinOf('30') === 30, 'the map limits: 20 by default, 0 = none, clamped');
-ok(/At 20 viewers that is about 32 KB\/s/.test(mapCostLine(20)) && /no limit/.test(mapCostLine(0)), `the cost line ("${mapCostLine(20).slice(0, 90)}…")`);
+ok(/At 20 viewers that is about 38 KB\/s/.test(mapCostLine(20)) && /no limit/.test(mapCostLine(0)), `the cost line ("${mapCostLine(20).slice(0, 90)}…")`);
 ok(mapViewersLine({ mapViewers: { now: 2, max: 20 } }) === '2 viewers on the map now of 20' && mapViewersLine({}) === '', 'the viewers-now line');
 console.log(`\ntest_aircraft_feeds_app: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
