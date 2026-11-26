@@ -222,6 +222,11 @@ int main(int argc, char** argv) {
         for (auto& kv : pj.o) {
             const J* was = sj.get(kv.first);
             if (kv.first == "batteryResumeAt" || kv.first == "publicListed") continue;
+            if (kv.first == "bgMode" && !was) {   // ★★★ b96-bgsplit derived on the first save from the phone's keep words (migration)
+                if (kv.second.t != J::Str || kv.second.s != (sj.get("adsbKeepRunning") && sj.get("adsbKeepRunning")->b && sj.get("landingAdsb") && sj.get("landingAdsb")->b ? "adsb" : ""))
+                    differs += "bgMode(derived)=" + dump(kv.second) + " ";
+                continue;
+            }
             if (!was || !same(*was, kv.second)) differs += kv.first + "=" + dump(kv.second) + " ";
         }
         ok(differs.empty(), (std::string(c.driver) + ": every key the save carries equals the phone's value").c_str(), differs);
@@ -392,6 +397,8 @@ int main(int argc, char** argv) {
             {"blockPick","r:blockRanges"},{"blockLo","r:blockRanges"},{"blockHi","r:blockRanges"},
             {"dabLandOn","r:landingDabChannel"},{"dabLandBlock","r:landingDabChannel"},{"dabLandStation","r:landingDabSid"},
             {"adsbLandOn","r:landingAdsb"},{"adsbKeep","r:adsbKeepRunning"},{"mapLandOn","r:landingMap"},{"mapLandWhich","r:landingMap"},{"mapModeList","r:landingModes"},
+            {"landKindPlain","r:landingMap"},{"landKindDab","r:landingDabChannel"},{"landKindMap","r:landingMap"},   // ★★★ b96-bgsplit
+            {"bgKindManual","r:bgMode"},{"bgKindWhole","r:bgMode"},{"bgModeList","r:bgMode"},{"singleWindow","r:mode"},{"modeSingleUse","r:singleMode"},
             {"afServe","r:adsbFeed"},{"afPort","r:adsbFeed"},{"afOpen","r:adsbFeed"},{"afPush","r:adsbFeed"},   // ★★ beta96
             {"fmDeemph","r:fmDeemph"},{"fmStereo","r:fmStereo"},{"fmNr","r:fmNr"},{"fmIms","r:fmIms"},{"fmCeq","r:fmCeq"},
             {"fmAutoBw","r:fmAutoBw"},{"fmNb","r:fmNb"},{"fmReturn","r:fmRemember"},{"fmRemember","r:fmRemember"},

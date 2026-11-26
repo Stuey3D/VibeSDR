@@ -864,13 +864,13 @@ inline bool settingsPatch(const std::string& body, const std::string& current, s
             /* ★★★ beta96 THE LANDING MAP: the page's words win; the ADS-B pair is mirrored from them (vibekeep::migrate), so the
              *  boot's setVibeServerLandingAdsb and the engine's map (read off this same config) can never disagree. */
             const J* lm = r->get("landingMap"); const J* lmo = r->get("landingModes"); const J* mk = r->get("mapKeep");
-            const J* bm = r->get("bgMode");   // ★★★ b96-bgsplit
-            if ((lm && lm->t == J::Str) || (lmo && lmo->t == J::Str) || (bm && bm->t == J::Str)) {
+            const J* bgm = r->get("bgMode");   // ★★★ b96-bgsplit
+            if ((lm && lm->t == J::Str) || (lmo && lmo->t == J::Str) || (bgm && bgm->t == J::Str)) {
                 vibekeep::Stored ks;
                 ks.landingAdsb = boolOr(r->get("landingAdsb"), false); ks.adsbKeepRunning = boolOr(r->get("adsbKeepRunning"), false);
                 ks.landingMap = strOr(lm, "").substr(0, 16); ks.landingModes = strOr(lmo, "").substr(0, 64); ks.mapKeep = boolOr(mk, false);
-                ks.bgMode = strOr(bm, "").substr(0, 64); ks.bgSet = false;
-                vibekeep::applyRead(ks, false, true, bm && bm->t == J::Str);
+                ks.bgMode = strOr(bgm, "").substr(0, 64); ks.bgSet = false;
+                vibekeep::applyRead(ks, false, true, bgm && bgm->t == J::Str);
                 p.set("landingMap", J::str(ks.landingMap)); p.set("landingModes", J::str(ks.landingModes)); p.set("mapKeep", J::boolean(ks.mapKeep));
                 p.set("bgMode", J::str(ks.bgMode));
                 p.set("landingAdsb", J::boolean(ks.landingAdsb)); p.set("adsbKeepRunning", J::boolean(ks.adsbKeepRunning));

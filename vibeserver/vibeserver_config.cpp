@@ -362,9 +362,15 @@ std::string toJson(const Config& c) {
     // ★ The DAB landing station — see Config::landingDabChannel.
     N("landingDabChannel", c.landingDabChannel); N("landingDabSid", c.landingDabSid);
     S("landingDabService", c.landingDabService);
-    B("landingAdsb", c.landingAdsb); B("adsbKeepRunning", c.adsbKeepRunning);   // ★ V12 — see Config::landingAdsb
-    S("landingMap", c.landingMap); S("landingModes", c.landingModes); B("mapKeep", c.mapKeep);   // ★★★ beta96 — see Config::landingMap
-    S("bgMode", c.bgMode);   // ★★★ b96-bgsplit — see Config::bgMode
+    {   // ★★★ b96-bgsplit written as ONE migrated set (vibekeep::migrate): a struct built in code with only the old keep words
+        //     (beta95's pair, b96-keeprun's mapKeep) gets its background derived, and the mirrors always agree with bgMode
+        vibekeep::Stored ks{ c.landingAdsb, c.adsbKeepRunning, c.landingMap, c.landingModes, c.mapKeep, c.bgMode,
+                             !(c.bgMode.empty() && (c.mapKeep || c.adsbKeepRunning)) };
+        vibekeep::migrate(ks);
+        B("landingAdsb", ks.landingAdsb); B("adsbKeepRunning", ks.adsbKeepRunning);
+        S("landingMap", ks.landingMap); S("landingModes", ks.landingModes); B("mapKeep", ks.mapKeep);
+        S("bgMode", ks.bgMode);
+    }
     S("singleMode", c.singleMode);   // ★★★ beta96 — see Config::singleMode
     j += "  " + vibefm::toJson(c.fm) + ",\n";   // ★ Broadcast FM defaults — see Config::fm
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
@@ -775,9 +781,15 @@ std::string radioToJson(const RadioConfig& r) {
     N("dabSid", r.dabSid);
     N("landingDabChannel", r.landingDabChannel); N("landingDabSid", r.landingDabSid);
     S("landingDabService", r.landingDabService);
-    B("landingAdsb", r.landingAdsb); B("adsbKeepRunning", r.adsbKeepRunning);   // ★ V12 — see the reader
-    S("landingMap", r.landingMap); S("landingModes", r.landingModes); B("mapKeep", r.mapKeep);   // ★★★ beta96 — see the reader
-    S("bgMode", r.bgMode);   // ★★★ b96-bgsplit
+    {   // ★★★ b96-bgsplit written as ONE migrated set (vibekeep::migrate): a struct built in code with only the old keep words
+        //     (beta95's pair, b96-keeprun's mapKeep) gets its background derived, and the mirrors always agree with bgMode
+        vibekeep::Stored ks{ r.landingAdsb, r.adsbKeepRunning, r.landingMap, r.landingModes, r.mapKeep, r.bgMode,
+                             !(r.bgMode.empty() && (r.mapKeep || r.adsbKeepRunning)) };
+        vibekeep::migrate(ks);
+        B("landingAdsb", ks.landingAdsb); B("adsbKeepRunning", ks.adsbKeepRunning);
+        S("landingMap", ks.landingMap); S("landingModes", ks.landingModes); B("mapKeep", ks.mapKeep);
+        S("bgMode", ks.bgMode);
+    }
     S("singleMode", r.singleMode);
     o += vibefm::toJson(r.fm) + ",";   // ★ Broadcast FM defaults — see the reader
     // ★★★ THE BAND LISTS MUST TRAVEL. There are TWO radio writers — one for the file and one for

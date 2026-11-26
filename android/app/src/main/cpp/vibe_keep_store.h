@@ -206,10 +206,9 @@ inline void applyRead(Stored& s, bool sawOld, bool sawNew, bool sawBg = false) {
     if (sawOld && !sawNew) {
         if (s.landingAdsb) { s.landingMap = kMapAvMar; s.landingModes = "adsb"; s.mapKeep = s.adsbKeepRunning; }
         else if (s.landingModes == "adsb") { s.landingMap.clear(); s.landingModes.clear(); s.mapKeep = false; }
-        if (!sawBg) {
-            if (s.landingAdsb && s.adsbKeepRunning) s.bgMode = "adsb";
-            else if (s.bgMode == "adsb" && (priorModes == "adsb" || !s.bgSet)) s.bgMode.clear();   // ★ the ADS-B they knew, switched off
-            s.bgSet = true;
+        if (!sawBg) {   // ★ only what they say changes the background; otherwise it stands (or is derived, if never set)
+            if (s.landingAdsb && s.adsbKeepRunning) { s.bgMode = "adsb"; s.bgSet = true; }
+            else if (s.bgMode == "adsb" && (priorModes == "adsb" || !s.bgSet)) { s.bgMode.clear(); s.bgSet = true; }   // ★ the ADS-B they knew, switched off
         }
     } else if (sawNew && !sawBg) s.bgSet = false;   // ★ b96-keeprun's words: the background follows mapKeep
     migrate(s);
