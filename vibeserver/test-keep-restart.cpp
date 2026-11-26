@@ -1,4 +1,5 @@
-// test-keep-restart.cpp — KEPT VDL2 AND KEPT ISM 868 MUST COME BACK AFTER AN IN-PROCESS RESTART (b96-keeprun, after b96-adsbstart).
+// test-keep-restart.cpp — KEPT VDL2, KEPT ISM 868 AND KEPT AIS + DSC (beta96 b96-maritime) MUST COME BACK AFTER AN IN-PROCESS
+// RESTART (b96-keeprun, after b96-adsbstart).
 //
 // ★★★ Android's Setup save (and the Mac app) restart the engine IN THE SAME PROCESS; before endWholeRadioModesForStop the
 //     stop left the whole-radio mode flags set, so a kept mode read as "already on" and was never re-entered — the radio sat
@@ -65,15 +66,20 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLanding(96.1e6, "wfm");
     LocalSdrShim::setVibeServerIdleGrace(0.0);
     int good = 0, total = 0;
-    struct Phase { const char* map; const char* modes; const char* tune; const char* name; };
-    const Phase phases[] = { { "avmar", "vdl2", "tune 136.8", "kept VDL2" }, { "amateur", "ism:868", "tune 868.", "kept ISM 868" } };
+    struct Phase { const char* map; const char* modes; const char* tune; const char* name; double rate = 2.4e6; };
+    /* ★★★ beta96 + the MARITIME combination kept (AIS + DSC, b96-maritime) on a radio listing 8 MS/s (the fake rtl_tcp given an
+     *  RSP's rate list — VIBE_TEST_TCP_RATES, tests only) and started at 8 MS/s: every start back between channel 70 and AIS. */
+    const Phase phases[] = { { "avmar", "vdl2", "tune 136.8", "kept VDL2" }, { "amateur", "ism:868", "tune 868.", "kept ISM 868" },
+                             { "avmar", "aisdsc", "tune 159.", "kept AIS + DSC (8 MS/s)", 8.0e6 } };
     for (const Phase& ph : phases) {
         LocalSdrShim::setVibeServerMap(ph.map, ph.modes, true);   // ★ set once per phase, as the boot does; the statics outlive every start
         const int n0 = std::string(ph.modes) == "vdl2" ? starts : 2;
+        if (ph.rate > 3e6) ::setenv("VIBE_TEST_TCP_RATES", "8000000,6000000,5000000,4000000,3000000,2048000,2000000", 1);
+        else ::unsetenv("VIBE_TEST_TCP_RATES");
         for (int n = 1; n <= n0; ++n, ++total) {
             const std::streamoff mark = fileSize(fakeLog);
             std::string err;
-            const int port = LocalSdrShim::instance().startTcp("127.0.0.1", fakePort, 96.1e6, 2.4e6, -1, 1024, 10.0, "wfm", err);
+            const int port = LocalSdrShim::instance().startTcp("127.0.0.1", fakePort, 96.1e6, ph.rate, -1, 1024, 10.0, "wfm", err);
             if (port <= 0) { ok(false, std::string(ph.name) + " start " + std::to_string(n) + ": " + err); break; }
             bool tuned = false;
             const auto t0 = std::chrono::steady_clock::now();

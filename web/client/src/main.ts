@@ -10367,12 +10367,18 @@ function ismMapRender() {
  *  arrows, zoom and filter are held, and the server ignores them. ★ Offered only where vibeserver.json says so: `ais` true
  *  (live) / false (greyed, `aisWhy` on a tap) / absent (a radio that cannot reach 162 MHz, an Icom — no control at all; the HF+ has it since 2026-11-24). */
 let aisCap: { ok: boolean; why: string } | null = null;
+/* ★★★ beta96 THE MARITIME COMBINATION (docs/v12/MARITIME-COMBO.md): AIS + DSC channel 70 from one wide capture — vibeserver.json
+ *  `aisDsc` true only where the radio's capture holds both (an RSP at 8 MS/s, an R2 at 10, a HackRF, a USRP); absent elsewhere,
+ *  so no MARITIME key is drawn (AGENTS.md). The same AIS mode and map; the report's `combo` says which runs. */
+let aisDscCap = false;
+function aisDscOn(): boolean { return aisOn && aisReport?.combo === 'ais+dsc'; }
 let aisOn = false;
 let aisReport: AisReport | null = null;
 let aisView: TrackView | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
 function trackViewUp(): boolean { return !!aisView?.open || !!vmView?.open; }   // ★ V12 + the VOR map: nothing drawn behind it, as NDB
 function aisReadCap(j: any) {
+  aisDscCap = j?.aisDsc === true;
   if (j?.ais === true) aisCap = { ok: true, why: '' };
   else if (j?.ais === false) {
     const why = typeof j.aisWhy === 'string' ? j.aisWhy.trim().slice(0, 200) : '';
@@ -10406,15 +10412,15 @@ function aisUiOff() {
   aisTrailWait.clear();
   renderFreq();
 }
-function aisSetMode(on: boolean) {
+function aisSetMode(on: boolean, band?: string) {
   if (!on && onlyModeRefuses('ais')) return;   // ★★ V12 the only mode: no way out (the server refuses too)
   if (on) {
     if (aisCap && !aisCap.ok) { showPill(aisCap.why, 7000); return; }
-    if (spec?.isTuneLocked()) { spec.ais(true); return; }   // ★ ask before tuning: spec says why
+    if (spec?.isTuneLocked()) { spec.ais(true, band); return; }   // ★ ask before tuning: spec says why
     if (dabOn) { dabRestore = null; dabOn = false; dabState = null; syncStereoLight(); wf?.applySettings({ minRangeDb: 30 }); dabUiOff(); dabSetPane(dabPane); }
     audio?.holdHealing(6000);
     aisUiOn();
-    spec?.ais(true);
+    spec?.ais(true, band);
   } else {
     audio?.holdHealing(6000);
     spec?.ais(false);
@@ -11445,7 +11451,7 @@ function buildControls() {
      *  SDRMode. A readout naming a demodulator that is not running is the same fault as the
      *  decoder box saying RTTY: the panel describing the receiver has to describe THIS one. */
     // ★ An Icom shows the RADIO's own mode name ("USB-D", "RTTY"), not our client vocabulary.
-    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? 'AIS' : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : vmOn ? 'VOR MAP' : (spec?.mode ?? ''),
+    mode:       () => icomR ? icomModeLabel(icomR.modeNow) : dabOn ? 'DAB' : adsbOn ? 'ADS-B' : ismOn ? 'ISM' : aisOn ? (aisDscOn() ? 'MARITIME' : 'AIS') : ndbOn ? 'NDB' : avOn ? 'DATALINK' : sdOn ? 'SONDES' : vmOn ? 'VOR MAP' : (spec?.mode ?? ''),
     stepLabel:  () => formatStep(step),
     openStepMenu: (anchor) => openStepMenu(anchor),
     // sigSmooth is the meter's smoothed 0..1, and the three readings come from the same figures.
@@ -11514,6 +11520,9 @@ function buildControls() {
     ismOn:         () => ismOn,
     toggleIsm:     toggleIsmMode,
     aisCap:        () => aisCap,
+    marCap:        () => (aisDscCap ? aisCap : null),   // ★★★ beta96 MARITIME (AIS + DSC) — absent where the capture cannot hold it
+    marOn:         () => aisDscOn(),
+    toggleMar:     toggleMarMode,
     aisOn:         () => aisOn,
     toggleAis:     toggleAisMode,
     avCap:         () => avCap,          // ★ V12 the aircraft datalink
@@ -16253,7 +16262,16 @@ function anyDecoderLeft(): boolean {
 function toggleDabMode() { satModeOff(); if (vmOn && !dabOn) vmUiOff(); if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
 function toggleAdsbMode() { satModeOff(); if (vmOn && !adsbOn) vmUiOff(); if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
 function toggleIsmMode() { satModeOff(); if (vmOn && !ismOn) vmUiOff(); if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
-function toggleAisMode() { satModeOff(); if (vmOn && !aisOn) vmUiOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleAisMode() {
+  if (aisDscOn()) { spec?.ais(true); return; }   // ★★★ beta96 from AIS + DSC to AIS alone: the same mode, the radio moves
+  satModeOff(); if (vmOn && !aisOn) vmUiOff(); if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn);
+}
+/** ★★★ beta96 MARITIME: AIS + DSC channel 70 together (only where the server offers `aisDsc`). Lit = on; pressed lit = leave. */
+function toggleMarMode() {
+  if (aisDscOn()) { aisSetMode(false); return; }
+  if (aisOn) { spec?.ais(true, 'ais+dsc'); return; }   // ★ from AIS alone: the same mode, wider
+  satModeOff(); if (vmOn) vmUiOff(); if (adsbOn) adsbUiOff(); if (ismOn) ismUiOff(); if (ndbOn) ndbUiOff(); aisSetMode(true, 'ais+dsc');
+}
 function toggleAvMode() { satModeOff(); if (vmOn && !avOn) vmUiOff(); if (adsbOn && !avOn) adsbUiOff(); if (ismOn && !avOn) ismUiOff(); if (ndbOn && !avOn) ndbUiOff(); if (aisOn && !avOn) aisUiOff(); if (sdOn && !avOn) sdUiOff(); avSetMode(!avOn); }
 function toggleSdMode() { satModeOff(); if (vmOn && !sdOn) vmUiOff(); if (adsbOn && !sdOn) adsbUiOff(); if (ismOn && !sdOn) ismUiOff(); if (ndbOn && !sdOn) ndbUiOff(); if (aisOn && !sdOn) aisUiOff(); if (avOn && !sdOn) avUiOff(); sdSetMode(!sdOn); }
 function toggleNdbMode() { satModeOff(); if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); if (vmOn && !ndbOn) vmUiOff(); ndbSetMode(!ndbOn); }
@@ -16268,7 +16286,8 @@ setWholeRadioKeys(() => {
                 press: () => { toggle(); closePanels(); } });
   };
   add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
-  add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  add('ais', 'AIS', aisCap, aisOn && !aisDscOn(), toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  if (aisDscCap) add('maritime', 'MARITIME', aisCap, aisDscOn(), toggleMarMode, 'Maritime — AIS ships and DSC calls on channel 70 together, from one wide capture, with a map');
   add('avdata', 'DATALINK', avCap, avOn, toggleAvMode, 'Aircraft datalink — ACARS and VDL2 messages from aircraft on 131 and 136 MHz');
   add('sondes', 'SONDES', sdCap, sdOn, toggleSdMode, 'Radiosondes — RS41, DFM, M10 and M20 weather balloons on 400–406 MHz, with a map (the arrows step bands)');
   if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB — digital radio, Band III',

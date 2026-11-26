@@ -47,6 +47,7 @@
 #include "vibe_ndb_service.h"
 #include "vibe_dxscan_fm.h"          // ★★★ V12 the idle DX scanner's FM hop (the dec_dxscan row)
 #include "vibe_ais_service.h"
+#include "vibe_maritime_combo.h"   // ★★★ beta96 the dec_aisdsc row (AIS + DSC channel 70 at 8 MS/s)
 #include "vibe_avi_service.h"   // ★ V12 aviation: the datalink rows (dec_vdl2, dec_acars)
 #include "vibe_rs41_service.h"  // ★ V12 RS41 radiosondes: the SONDES row (dec_rs41)
 #include "vibe_vormap_service.h" // ★ V12 the VOR / ILS map: one window of the sweep (dec_vormap)
@@ -811,6 +812,8 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_aprs9600", { "aprs",   false, true  } },
         { "dec_paging",   { "",       false, true  } },   // ★ the phone's own app on its own radio: no owner switch
         { "dec_ndb",      { "ndb",    true,  false } }, { "dec_ais",      { "ais",    true,  false } },
+        // ★★★ beta96 AIS + DSC together (8 MS/s): shown beside AIS's row; AIS's own row keeps the default — never hides anything
+        { "dec_aisdsc",   { "ais",    false, false } },
         // ★ V12 aviation: VDL2 (12 channels, the heavier band) sets the datalink mode's default; ACARS is shown beside it
         { "dec_vdl2",     { "avdata", true,  false } }, { "dec_acars",    { "avdata", false, false } },
         /* ★★ V12 2026-11-24 ACARS + VDL2 TOGETHER at 8 MS/s — the owner's "avdata+8m", an option UNDER the datalink, with
@@ -1301,6 +1304,86 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
         const std::string j = svc.report();
         if (const char* p = std::strstr(j.c_str(), "\"msgs\":")) r.decoded = std::atoi(p + 7);
+        if (svc.droppedBlocks()) r.label += " (fell behind)";
+        svc.stop();
+        return r;
+    });
+    /* ★★★ beta96 THE MARITIME COMBINATION (vibe_maritime_combo.h): AIS + DSC channel 70 from one 8 MS/s capture, as the server
+     *  runs it — vibeais::Service with the combination's pre-front on its own thread, fed IN REAL TIME, SCORED BY THE HOTTEST
+     *  THREAD (as AIS). Four AIS bursts (both channels) and a DSC distress alert in noise, looped (the buffer is the call's
+     *  length plus a little, not a whole second: 8 MS/s is 64 MB a second). It never hides anything: shown beside AIS. */
+    run("dec_aisdsc", "Decoder: AIS + DSC", [&] {
+        Row r; r.id = "dec_aisdsc"; r.label = "Decoder: AIS + DSC channel 70 together @ 8 MS/s";
+        const double fs = 8.0e6, hw = vibemar::centreHz();
+        std::vector<float> audio;
+        {
+            using namespace vibe::dsc::build;
+            std::vector<int> sy{ 112 }; mmsi(sy, "235012345"); sy.push_back(105); position(sy, 50.2, -4.1667); time(sy, 14, 32); sy.push_back(109); sy.push_back(127);
+            audio = modulate(transmission(sy, {}, 20), true, 48000);
+        }
+        const size_t dscAt = size_t(0.02 * fs), dscLen = size_t(double(audio.size()) * fs / 48000.0);
+        std::vector<std::complex<float>> x(dscAt + dscLen + size_t(0.06 * fs));
+        { std::mt19937 g(10); std::normal_distribution<float> d(0.f, 0.02f); for (auto& v : x) v = { d(g), d(g) }; }
+        double ph = 0;
+        for (size_t i = 0; i < dscLen && dscAt + i < x.size(); ++i) {
+            ph += 2 * M_PI * (vibemar::kDscHz - hw + 3500.0 * audio[std::min(audio.size() - 1, size_t(double(i) * 48000.0 / fs))]) / fs;
+            if (ph > 1e4) ph = std::fmod(ph, 2 * M_PI);
+            x[dscAt + i] += std::complex<float>(0.05f * (float)std::cos(ph), 0.05f * (float)std::sin(ph));
+        }
+        for (int k = 0; k < 4; ++k) {   // ★ the dec_ais row's type 1 reports, on both channels, inside the call's span
+            std::vector<int> bits;
+            auto u = [&](uint64_t v, int len) { for (int i = len - 1; i >= 0; --i) bits.push_back(int((v >> i) & 1)); };
+            auto sg = [&](int64_t v, int len) { u(uint64_t(v) & ((1ull << len) - 1), len); };
+            u(1, 6); u(0, 2); u(235012345u + (uint32_t)k, 30); u(0, 4); sg(0, 8); u(123, 10); u(1, 1);
+            sg(std::lround(-1.31 * 600000), 28); sg(std::lround(50.81 * 600000), 27); u(2456, 12); u(247, 9); u(30, 6); u(0, 2); u(0, 3); u(0, 1); u(0x1234, 19);
+            std::vector<uint8_t> msg((bits.size() + 7) / 8, 0);
+            for (size_t i = 0; i < bits.size(); ++i) if (bits[i]) msg[i / 8] |= uint8_t(1 << (7 - i % 8));
+            vibehdlc::appendFcs(msg);
+            std::vector<int> air;
+            for (int i = 0; i < 24; ++i) air.push_back(i & 1);
+            vibehdlc::flagBits(air); vibehdlc::stuffBits(msg, air); vibehdlc::flagBits(air);
+            for (int i = 0; i < 8; ++i) air.push_back(1);
+            std::vector<int> lv; int level = 0; vibehdlc::nrzi(air, lv, level);
+            const double sps = fs / 9600.0, BT = 0.4, sgm = std::sqrt(std::log(2.0)) / (2 * M_PI * BT), kk = std::sqrt(2.0) * sgm;
+            const double off = (k % 2 ? 162.025e6 : 161.975e6) - hw;
+            const size_t s0 = (size_t)((0.03 + 0.07 * k) * fs), len = (size_t)((lv.size() + 6) * sps);
+            double p2 = 0;
+            for (size_t i = 0; i < len && s0 + i < x.size(); ++i) {
+                const double t = i / sps - 3.0;
+                double f = 0;
+                const long kc = (long)std::floor(t);
+                for (long j = kc - 3; j <= kc + 3; ++j) {
+                    if (j < 0 || j >= (long)lv.size()) continue;
+                    const double tt = t - (double)j - 0.5;
+                    f += (lv[(size_t)j] ? 1.0 : -1.0) * 0.5 * (std::erf((tt + 0.5) / kk) - std::erf((tt - 0.5) / kk));
+                }
+                p2 += 2 * M_PI * (off + 2400.0 * f) / fs;
+                if (p2 > 1e4) p2 = std::fmod(p2, 2 * M_PI);
+                x[s0 + i] += std::complex<float>(0.1f * (float)std::cos(p2), 0.1f * (float)std::sin(p2));
+            }
+        }
+        std::atomic<int> calls{0};
+        vibemar::Combo::Hooks h;
+        h.call = [&calls](const vibe::dsc::Call&, const std::string&, const std::string&, bool) { ++calls; };
+        vibeais::Service svc;
+        svc.start(hw, fs, false, nullptr, std::unique_ptr<vibeais::PreFront>(new vibemar::ComboFront(fs, hw, std::move(h))));
+        const size_t blk = (size_t)(fs / 100);
+        const double t0 = wallNow(); double fed = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        std::map<uint64_t, ThreadTime> th0;
+        std::vector<std::complex<float>> tmp(blk);
+        while (fed < kRtWarmSec + kRtSec) {
+            if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); th0 = threadTimes(); measuring = true; }
+            for (size_t i = 0; i < blk; ++i) tmp[i] = x[(pos + i) % x.size()];   // ★ looped across the buffer's end
+            svc.feed(tmp.data(), blk);
+            pos = (pos + blk) % x.size(); fed += blk / fs;
+            const double ahead = fed - (wallNow() - t0);
+            if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
+        const std::string j = svc.report();
+        if (const char* p = std::strstr(j.c_str(), "\"msgs\":")) r.decoded = std::atoi(p + 7);
+        r.decoded += calls.load();
         if (svc.droppedBlocks()) r.label += " (fell behind)";
         svc.stop();
         return r;

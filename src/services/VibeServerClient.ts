@@ -312,7 +312,7 @@ export class VibeServerClient extends VibeServerWsClient {
   private aisHealHeldAt = 0;
   static readonly AIS_HOLD_MS = 8_000;
 
-  ais(on: boolean) {
+  ais(on: boolean, band?: string) {
     if (this.askBlocked()) return;   // ★★ ask before tuning — it takes everybody's radio to 162 MHz
     holdNativeHealing(VibeServerClient.AIS_HOLD_MS, on ? 'AIS on' : 'AIS off');
     if (on) { this.aisExit.entered(); this.cancelPacedTune(); }
@@ -321,7 +321,7 @@ export class VibeServerClient extends VibeServerWsClient {
     this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ais = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     if (on) this.wholeAskAt.ais = Date.now();
-    this.sendSpectrum({ type: 'ais', on: on ? 1 : 0 });
+    this.sendSpectrum(on && band ? { type: 'ais', on: 1, band } : { type: 'ais', on: on ? 1 : 0 });   // ★★★ beta96 'ais+dsc' 
   }
   /* ── V12 AIRCRAFT DATALINK (docs/v12/AVIATION.md) — AIS's pattern with ISM's bands: the server puts the radio on the
    *  band (ACARS 131.675 / VDL2 136.8625 MHz), decodes every channel, ignores tune / zoom / mode while it runs. ── */

@@ -2674,14 +2674,15 @@ export class SpectrumClient {
   /** ★★ AIS HOLDS THE DIAL AND THE VIEW as ISM does — two fixed channels, nothing to step. */
   aisHeld = false;
   private aisQuietUntil = 0;
-  ais(on: boolean) {
+  /** ★★★ beta96 `band` 'ais+dsc' = the maritime combination (vibeserver.json aisDsc) — AIS + DSC channel 70 together. */
+  ais(on: boolean, band?: string) {
     if (this.askBlocked()) return;     // ★★ ask before tuning — AIS takes the whole shared radio
     if (on) this.tunePacer.cancel();
     this.aisQuietUntil = on ? 0 : Date.now() + 5000;
     this.aisHeld = on;
     this.serverTakesDial();   // ★ the dial that follows is the server's — see serverTakesDial
     if (on) this.wholeLastAt.ais = Date.now();
-    this._send({ type: 'ais', on: on ? 1 : 0 });
+    this._send(on && band ? { type: 'ais', on: 1, band } : { type: 'ais', on: on ? 1 : 0 });
   }
   /* ★★ V12 AIRCRAFT DATALINK: `band` 'acars' | 'vdl2' (vibeserver.json avdataBands); omitted = where it last was. */
   avHeld = false;

@@ -104,8 +104,10 @@ top, so the gate follows edits before they are saved.
   detected: one mode at a time, or ACARS & VDL2 together"*.
 - Beneath: *"Keep VDL2 running when nobody is connected"* (never ticked by default) and a note with the CPU cost and the
   satellites rule.
-- ✗ **AIS + DSC is not offered.** DSC is a VFO decoder (background decoding's), not a whole-radio mode, so a combined tick
-  could only half-work (AGENTS.md). The model takes a combination only where one whole-radio mode decodes both.
+- ★★★ **AIS + DSC (beta96, b96-maritime — docs/v12/MARITIME-COMBO.md):** offered as ONE choice, "AIS + DSC (channel 70)"
+  under MARITIME, only where the radio's capture holds both (~6.17 MS/s usable: an RSP at 8, an R2 at 10, a HackRF, a USRP) —
+  the AIS mode with the maritime combination's pre-front decodes both. Not drawn elsewhere (hwinfo mapModes `hw` false).
+  Never a tick of AIS plus a tick of DSC (DSC alone stays a VFO decoder).
 - The beta95 ADS-B controls are still in the page, hidden; their rule (`adsbLandOffer`) still decides the ADS-B row.
 
 Picking VDL2 is the whole setup: the radio goes to `vibeavi::bands()` "vdl2", 136.8625 MHz, every 25 kHz channel
@@ -189,8 +191,7 @@ Not tested here: a real pass (orbit data), the ORBCOMM rider running, the narrow
 
 ## Open decisions for Stuart
 
-- AIS + DSC "together": DSC is background decoding's VFO, not a whole-radio mode — not offered. Make a combined AIS + DSC
-  whole-radio mode later, or leave DSC in background decoding (it cannot run while a mode is kept)?
+- ~~AIS + DSC "together"~~ — built in beta96 as one whole-radio choice on wide radios (docs/v12/MARITIME-COMBO.md).
 - Kept VDL2's narrow IF filter applies on RTLs only, and only while KEPT (a listener-entered VDL2 keeps the whole capture).
 - The Amateur map offers ISM only; MeshCore/LoRa follow ISM's own settings. Other Amateur modes (APRS, spots) are VFO decoders, not whole-radio modes — not offered.
 - Landing without keep-running for VDL2 / AIS works like ADS-B's (a new listener lands in it); OK, or keep-only?

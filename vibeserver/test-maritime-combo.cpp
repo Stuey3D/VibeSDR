@@ -136,7 +136,37 @@ static Got runDirect(Scene& sc, double secs, vibemar::Combo** keep = nullptr) {
 
 static double cpuNow() { return double(std::clock()) / CLOCKS_PER_SEC; }
 
-int main() {
+/** ★ --write-clip FILE [rate]: one second of the scene as unsigned 8-bit IQ (rtl_tcp's), centred on 159.2625 MHz, for
+ *  scripts/test-server-maritime.mjs (fake-rtl-tcp --hf FILE --hf-centre 159262500). The DSC call first, then the four ships. */
+static int writeClip(const char* path, double fs) {
+    Scene sc; sc.fs = fs;
+    const double offA = vibeais::kChanHz[0] - sc.hw, offB = vibeais::kChanHz[1] - sc.hw;
+    for (int k = 0; k < 4; ++k)
+        sc.bursts.push_back({ size_t((0.55 + 0.1 * k) * fs), aisBurst(kMmsi[k], 50.81234 + 0.01 * k, -1.30567 - 0.01 * k, fs, k % 2 ? offB : offA, 0.12f) });
+    const auto cs = dscsynth::calls();
+    sc.dscAudio = vibe::dsc::build::modulate(vibe::dsc::build::transmission(cs[0].syms, cs[0].exp, 20), true, 48000);
+    sc.dscAt = size_t(0.02 * fs); sc.dscAmp = 0.12f; sc.noise = 0.03f;
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 2;
+    std::vector<cf32> x;
+    std::vector<uint8_t> u;
+    const size_t total = size_t(fs), blk = size_t(fs / 50);
+    for (size_t at = 0; at < total; at += blk) {
+        sc.fill(at, std::min(blk, total - at), x);
+        u.resize(x.size() * 2);
+        for (size_t i = 0; i < x.size(); ++i) {
+            u[2 * i] = uint8_t(std::max(0.f, std::min(255.f, std::round(127.4f + 128.f * x[i].real()))));
+            u[2 * i + 1] = uint8_t(std::max(0.f, std::min(255.f, std::round(127.4f + 128.f * x[i].imag()))));
+        }
+        std::fwrite(u.data(), 1, u.size(), f);
+    }
+    std::fclose(f);
+    std::printf("wrote %s: 1 s at %.0f S/s centred on %.0f Hz (DSC distress 235012345 + AIS %u %u %u %u)\n", path, fs, sc.hw, kMmsi[0], kMmsi[1], kMmsi[2], kMmsi[3]);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 3 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], argc >= 4 ? std::atof(argv[3]) : 8e6);
     std::printf("── 1. the geometry and the rule per radio\n");
     {
         const double c = vibemar::centreHz(), need = vibemar::minRateHz();

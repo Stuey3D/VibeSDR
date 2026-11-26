@@ -28,7 +28,7 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
 {
   const base = { driver: 'rtlsdr', isIcom: false, blockedModes: '', rate: 2_400_000, dabRateBoost: false, lockedOwnVfos: false };
   let f = keepAvailLocal(base);
-  ok(f.avail.filter((a) => a.id !== 'ism').every((a) => a.hw && !a.why) && !f.comboOk, 'RTL at 2.4: every aviation & maritime mode, no pair (ISM needs its bands)');
+  ok(f.avail.filter((a) => a.id !== 'ism' && a.id !== 'aisdsc').every((a) => a.hw && !a.why) && !f.comboOk, 'RTL at 2.4: every aviation & maritime mode, no pair (ISM needs its bands; AIS + DSC its 6.2 MS/s)');
   f = keepAvailLocal({ ...base, rate: 2_048_000 });
   ok(/2\.4 MS\/s/.test(f.avail[0].why), 'RTL at 2.048: ADS-B says the rate');
   f = keepAvailLocal({ ...base, rate: 2_048_000, dabRateBoost: true });
@@ -78,6 +78,26 @@ const find = (v: ReturnType<typeof keepGate>, id: string) => v.find((o) => o.id 
   const hf = keepAvailLocal({ ...base, driver: 'airspyhf', ismBands: [] });
   ok(!singleOptionsLocal({ avail: hf.avail, ismBands: [], dab: false, ndb: true, shown: () => true, sat: true }).some((o) => o.tok === 'adsb' || o.tok.startsWith('ism')), 'HF+: no ADS-B, no ISM');
   ok(singleWords('vdl2') === 'VDL2' && singleWords('sat') === 'SATELLITES' && singleWords('ism:868', { '868': '868 MHz SRD' }) === 'ISM 868 MHz SRD', 'the words');
+}
+// ★★★ beta96 the MARITIME combination (AIS + DSC channel 70): drawn only on a wide radio whose rate holds both
+{
+  const base = { driver: 'rtlsdr', isIcom: false, blockedModes: '', rate: 2_400_000, dabRateBoost: false, lockedOwnVfos: false, ismBands: ['868'] };
+  const hwOf = (f: ReturnType<typeof keepAvailLocal>) => f.avail.find((a) => a.id === 'aisdsc')!;
+  ok(!hwOf(keepAvailLocal(base)).hw, 'RTL 2.4: AIS + DSC not drawn');
+  ok(!hwOf(keepAvailLocal({ ...base, driver: 'sdrplay', rate: 6_000_000 })).hw, 'RSP 6 MS/s: not drawn (6.17 needed)');
+  ok(!hwOf(keepAvailLocal({ ...base, driver: 'airspy', rate: 6_000_000 })).hw, 'Airspy Mini 6: not drawn');
+  ok(hwOf(keepAvailLocal({ ...base, driver: 'sdrplay', rate: 8_000_000 })).hw, 'RSP 8 MS/s: drawn');
+  ok(hwOf(keepAvailLocal({ ...base, driver: 'hackrf', rate: 20_000_000 })).hw && hwOf(keepAvailLocal({ ...base, driver: 'airspy', rate: 10_000_000 })).hw, 'HackRF 20, Airspy R2 10: drawn');
+  ok(/DSC is switched off/.test(hwOf(keepAvailLocal({ ...base, driver: 'usrp', rate: 8_000_000, blockedModes: 'dsc' })).why), 'DSC switched off: greyed with the reason');
+  const rsp = keepAvailLocal({ ...base, driver: 'sdrplay', rate: 8_000_000 });
+  let g = keepGate(rsp.avail, rsp.comboOk, rsp.comboWhy, 8_000_000, ['aisdsc']);
+  ok(find(g, 'aisdsc').on && !find(g, 'ais').enabled && /AIS \+ DSC \(channel 70\) is ticked/.test(find(g, 'ais').why), 'ticked: AIS greyed — ' + find(g, 'ais').why);
+  g = keepGate(keepAvailLocal(base).avail, false, '', 2_400_000, []);
+  ok(!find(g, 'aisdsc').drawn && find(g, 'ais').drawn, 'RTL: AIS drawn, AIS + DSC not');
+  const opts = singleOptionsLocal({ avail: rsp.avail, ismBands: [], dab: false, ndb: false, shown: () => false, sat: false });
+  ok(opts.some((o) => o.tok === 'aisdsc' && /MARITIME/.test(o.label)) && !singleOptionsLocal({ avail: keepAvailLocal(base).avail, ismBands: [], dab: false, ndb: false, shown: () => false, sat: false }).some((o) => o.tok === 'aisdsc'),
+     'single mode lists MARITIME on the RSP at 8 only');
+  ok(keepParse('aisdsc').join() === 'aisdsc' && singleWords('aisdsc') === 'MARITIME (AIS + DSC)', 'the token and its words');
 }
 console.log(`keep run (app): ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
