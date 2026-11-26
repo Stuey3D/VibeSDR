@@ -208,8 +208,9 @@ const tour = src('src/screens/SDRScreen.tsx');
 // ★ 2026-11-02: AIS opens the SHIPPING MAP (the ships beside the NAVTEX / DSC / sea-area layers) — the card says so.
 // ★ 2026-11-16 the mode card is an overview (Stuart): the AIS / APRS details live on their keys and in About, not the tour
 // ★ beta90: the shipping map moved into VIEWS (DIGI MODES · AVIATION · SHIPPING) — the card names it there.
-ok('Tour: the Mode card is the overview and names whole-receiver views', /whole-receiver views such as DAB, ADS-B and SATELLITE/.test(tour)
-   && /VIEWS holds the maps: AMATEUR[\s\S]{0,1200}AVIATION[\s\S]{0,120}SHIPPING/.test(tour));   // ★ beta96 maps2: AMATEUR's own description (tabs, layers, window) grew past 400
+// ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): AIR & SEA LIVE in TUNES THE RADIO ITSELF; VIEWS' AVIATION + SHIPPING → ONE AIR & SEA beside GALLERY
+ok('Tour: the Mode card is the overview and names whole-receiver views', /whole-receiver views such as DAB, AIR & SEA LIVE, ISM and SATELLITE/.test(tour)
+   && /VIEWS holds the maps: AMATEUR[\s\S]{0,1200}AIR & SEA beside GALLERY/.test(tour) && /TUNE chip/.test(tour) && /SHARED TUNER/.test(tour));   // ★ beta96 maps2: AMATEUR's own description (tabs, layers, window) grew past 400
 ok('About: EXIT AIS is described', /EXIT AIS/.test(about));
 
 // ── ★★ beta95 DX / unconfirmed / implausible (aisDx.ts — the server's vibe_ais_service.h kDxNm) and the APRS altitude ──
