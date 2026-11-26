@@ -150,7 +150,7 @@ import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, gallery
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { bodyTextBase, fileBodyStart, fileTextBase, navtexQualityDetail, navtexQualityLine, navtexSnrLine, snrColour, snrOfItem, snrRanges, splitOfItem,
          type NavtexQualityFields } from '../../../src/utils/navtexQuality';
-import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
+import { snrChipHtml, spotSnrMode } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { paintSnrStrip, qualityBar, snrHBar, watchSnrStrip } from './navtexSnrDom';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../../../src/services/squelchNeighbours';
@@ -18910,7 +18910,10 @@ function renderSpotsRowsInto(host: HTMLElement) {
       // ★ V12: the MODE, in its map colour and letter (src/utils/digiModes.ts) — Band mode lists several at once.
       `<span class="mode" style="color:${ms.colour}"><i style="background:${ms.colour};color:${ms.ink}">${escapeHtml(ms.letter)}</i>${escapeHtml(sp.mode)}</span>` +
       `<span class="band">${escapeHtml(sp.band)}</span>` +
-      `<span class="snr ${Number(sp.snr) >= 0 ? 'pos' : 'neg'}">${Number(sp.snr) || 0}</span>` +
+      // ★ beta96 FT8/FT4/FT2/JS8/WSPR/JTTY: the shared chip, coloured by the margin over THAT mode's threshold (−15 is a
+      //   healthy FT8 decode); CW/PSK/RTTY keep the plain number (no threshold sourced on their scales yet)
+      (spotSnrMode(sp.mode) && Number.isFinite(Number(sp.snr)) ? `<span class="snr">${snrChipHtml(spotSnrMode(sp.mode), Number(sp.snr), true)}</span>`
+        : `<span class="snr ${Number(sp.snr) >= 0 ? 'pos' : 'neg'}">${Number(sp.snr) || 0}</span>`) +
       `<span class="call">${callHtml(sp.callsign, escapeHtml)}</span>` +
       `<span class="cty">${escapeHtml(abbrCountry(country) || '')}</span>` +
       `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>` +

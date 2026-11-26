@@ -49,6 +49,10 @@ export const SNR_SCALES = {
   ft2: { thr: -13, signed: true, what: WSJT, src: 'docs/v12/FTX-SENSITIVITY.md: 50 % at −13.3 dB' },
   /** JS8 normal speed (the common one); its faster sub-modes stop ~2–4 dB earlier. */
   js8: { thr: -20, signed: true, what: WSJT, src: 'docs/v12/FTX-SENSITIVITY.md: Normal 8/8 at −20 dB (4/8 before the second look)' },
+  /** WSPR: ★ the PUBLISHED limit (WSJT-X guide, 2500 Hz) — not yet benched on our decoder; the reported SNR is WSJT's scale. */
+  wspr: { thr: -28, signed: true, what: WSJT, src: 'published (WSJT-X): about −28 dB in 2500 Hz — not benched here yet' },
+  /** JTTY: the decoder's own SNR in 2500 Hz. */
+  jtty: { thr: -15, signed: true, what: WSJT, src: 'docs/v12/JTTY.md: 50 % at about −15.3 dB for a single frame' },
   /** Mode S: the reply's preamble pulse power over the 1090 MHz floor (vibe_adsb.h Frame::snr). */
   adsb: { thr: 10, what: 'reply pulse power over the 1090 MHz noise floor',
           src: 'test-adsb: the preamble gate is 9 dB; at the 50 % point (2.4 MS/s) decoded replies report ~10 dB' },
@@ -136,11 +140,19 @@ export function snrChip(mode: SnrMode | string | null | undefined, db: unknown):
   const band = snrBandFor(k, db);
   return { text: snrText(k, db), bg: SNR_COLOURS[band], fg: SNR_CHIP_TEXT, title: snrTitle(k, db), band };
 }
+/** ★ A digital spot's scale by its mode name ("FT8", "FT4", "FT2", "JS8", "WSPR", "JTTY"), or null — CW, PSK and RTTY
+ *  skimmer spots report their own figures (a 47 Hz bin, Es/N0, tone SNR) with no threshold sourced on those scales yet,
+ *  so they keep a plain number (docs/v12/MESSAGE-SNR.md "not yet"). */
+export function spotSnrMode(mode: unknown): SnrMode | null {
+  const m = String(mode ?? '').toUpperCase();
+  return m === 'FT8' ? 'ft8' : m === 'FT4' ? 'ft4' : m === 'FT2' ? 'ft2' : m.startsWith('JS8') ? 'js8' : m === 'WSPR' ? 'wspr' : m === 'JTTY' ? 'jtty' : null;
+}
 const escAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 /** The web's chip as HTML: <span class="snrChip red|amber|green" title="…">12 dB</span>. '' without a number. The CSS
  *  (web/client/index.html .snrChip) sets the colours from the class — the same three as SNR_COLOURS. */
-export function snrChipHtml(mode: SnrMode | string | null | undefined, db: unknown): string {
+export function snrChipHtml(mode: SnrMode | string | null | undefined, db: unknown, bare = false): string {
   const c = snrChip(mode, db);
   if (!c) return '';
-  return `<span class="snrChip ${c.band}" role="img" aria-label="${escAttr(c.title)}" title="${escAttr(c.title)}">${escAttr(c.text)}</span>`;
+  // ★ `bare`: the number alone ("−15"), for a table whose column is already headed SNR (the digital spots)
+  return `<span class="snrChip ${c.band}" role="img" aria-label="${escAttr(c.title)}" title="${escAttr(c.title)}">${escAttr(bare ? c.text.replace(/ dB$/, '') : c.text)}</span>`;
 }

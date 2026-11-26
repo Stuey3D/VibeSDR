@@ -2,7 +2,7 @@
 // mode's rows use (web + app). The colour is the MARGIN over that mode's decode threshold — "if a mode only needs a weak
 // signal to work great no point listing all as red". docs/v12/MESSAGE-SNR.md is the table these numbers come from.
 //   node --no-warnings scripts/test_snr_colour.ts
-import { SNR_SCALES, SNR_COLOURS, SNR_CHIP_TEXT, loraSnrMode, ismSnrMode, snrBandFor, snrChip, snrChipHtml, snrModeOf, snrText, snrTitle, type SnrMode }
+import { SNR_SCALES, SNR_COLOURS, SNR_CHIP_TEXT, spotSnrMode, loraSnrMode, ismSnrMode, snrBandFor, snrChip, snrChipHtml, snrModeOf, snrText, snrTitle, type SnrMode }
   from '../src/utils/snrColour.ts';
 import { SNR_RED_DB, SNR_GREEN_DB, snrBand } from '../src/utils/navtexQuality.ts';
 import fs from 'node:fs';
@@ -31,6 +31,8 @@ const typical: Record<SnrMode, { good: number; edge: number; some: number }> = {
   m10: { good: 12, edge: 2, some: 5 },
   m20: { good: 10, edge: 1, some: 4 },
   ism: { good: 25, edge: 7, some: 10 },
+  wspr: { good: -18, edge: -27, some: -24 },
+  jtty: { good: -6, edge: -14, some: -11 },
   lora7: { good: -2, edge: -8, some: -5.5 },      // Pi 500 recordings 10-27: −12.8 … 0 dB (below the noise, as LoRa is)
   lora8: { good: -4, edge: -11, some: -8 },
   lora9: { good: -6, edge: -13, some: -10.5 },
@@ -57,6 +59,10 @@ ok(loraSnrMode(9) === 'lora9' && loraSnrMode(6) === null && loraSnrMode(9.5) ===
 ok(ismSnrMode('meshtastic', 11) === 'lora11' && ismSnrMode('meshcore', undefined) === null && ismSnrMode('acurite', 7) === 'ism' && ismSnrMode(undefined) === 'ism',
    'ISM rows: LoRa kinds by SF, sensors and meters the burst scale');
 ok(snrBandFor('lora12', -15) === 'green' && snrBandFor('lora7', -15) === 'red', 'the same −15 dB is solid at SF12 and lost at SF7');
+
+ok(spotSnrMode('FT8') === 'ft8' && spotSnrMode('ft4') === 'ft4' && spotSnrMode('JS8') === 'js8' && spotSnrMode('WSPR') === 'wspr' && spotSnrMode('CW') === null && spotSnrMode('PSK31') === null && spotSnrMode(undefined) === null,
+   'spots: the FT8 family by mode; CW / PSK / RTTY keep a plain number');
+ok(snrChipHtml('ft8', -15, true).includes('>\u221215</span>'), 'a bare chip (the spot table) is the number alone');
 
 // 2. The number is the real dB (rounded), signed where negatives are normal; nothing for no number.
 ok(snrText('ft8', -15.4) === '−15 dB' && snrText('ft8', 3) === '+3 dB' && snrText('ais', 12.6) === '13 dB' && snrText('ais', 0) === '0 dB', 'the text');
