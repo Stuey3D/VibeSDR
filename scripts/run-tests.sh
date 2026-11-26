@@ -331,6 +331,7 @@ flags_for() {
     test-pll-iq)           echo "-O2" ;;
     # ★ V12 aviation: -O2 — each test times its receiver against real time (CPU per capture second).
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "-O2 -lpthread" ;;
+    test-maritime-combo)   echo "-O2 -lpthread" ;;   # ★ beta96 AIS + DSC ch 70 from one wide capture (vibe_maritime_combo.h)
     # ★ V12 RS41 radiosondes (docs/v12/RS41.md): -O2, the receiver timed against real time.
     test-rs41|test-rs41-service|test-sondes-types) echo "-O2 -lpthread" ;;
     # ★ V12 satellite engine (docs/v12/SATELLITE-ENGINE.md): SGP4 vectors, passes vs Skyfield, the catalogue, the lock.
@@ -561,6 +562,7 @@ deps_for() {
     # ★ V12 AVIATION DATALINK (docs/v12/AVIATION.md): ACARS, VDL2, HFDL and the service that runs them share one front end
     #   (vibe_avi_front.h — the channeliser, FFT and decimators); pffft + kiss_fft from cobjs_for.
     test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
+    test-maritime-combo) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/dsc_decoder.cpp" ;;
     # ★ V12 RS41: the same channeliser / FFT / half-bands (vibe_rs41_rx.h); pffft + kiss_fft from cobjs_for.
     test-rs41|test-rs41-service|test-sondes-types) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;
     *)                  echo "" ;;
@@ -581,7 +583,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-vormap|test-ndb|test-ndb-suspect|test-community|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr)
+    test-vormap|test-ndb|test-ndb-suspect|test-community|test-drm|test-drm-faad|test-drm-signal|test-drm-constellation|test-tone-id|test-textmodes|test-varatag|test-feld-hell|test-dxscan-fm|test-acars|test-acars-apps|test-vdl2|test-hfdl|test-avi-service|test-aircraft-share|test-rs41|test-rs41-service|test-sondes-types|test-dab-bank|test-orbcomm-slice|test-xpdr|test-maritime-combo)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"

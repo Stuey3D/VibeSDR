@@ -12,6 +12,7 @@
 #include "vibe_ais_asm.h"     // ★ V12 2026-11-16 binary messages 6/8: met/hydro, area notices, text
 #include "vibe_station_sink.h"
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B and ISM
+#include "vibe_thread.h"          // ★ beta96 the worker at decoder priority (vibeDecoderThread)
 
 #include <atomic>
 #include <chrono>
@@ -151,6 +152,19 @@ inline std::string readable(const Vessel& v) {
 
 struct Health { double noiseDb = -120; double clipFrac = 0; uint64_t msgs = 0; bool valid = false; };
 
+/** ★★★ V12 beta96 A WIDER CAPTURE CUT DOWN BEFORE AIS'S FRONT — the MARITIME combination (vibe_maritime_combo.h: AIS +
+ *  DSC channel 70 from one ~6.2 MS/s capture). The service hands each block to it on its own thread; it gives back AIS's
+ *  slice (at aisRate(), centred on 162.000 MHz) and decodes whatever else it holds itself. Type-erased so a build with
+ *  AIS alone carries nothing of DSC. */
+struct PreFront {
+    virtual ~PreFront() = default;
+    virtual double aisRate() const = 0;
+    virtual void feed(const cf* iq, size_t n, const std::function<void(const cf*, int)>& ais) = 0;
+    virtual void tick() {}                                     ///< once a second, on the service's thread
+    virtual void finish() {}                                   ///< the service stopped (its thread joined)
+    virtual std::string reportFields(double hwCentreHz) const = 0;   ///< appended to the report (starts with ',')
+};
+
 class Service {
 public:
     static constexpr size_t kMaxVessels = 1000;
@@ -168,19 +182,24 @@ public:
 
     /** Start with the radio tuned to `hwCentreHz` at `rateHz`. `keepList`: a restart on the same channels (the rate
      *  changed underneath) keeps the ships; entering the mode clears. `sink`: the gallery's day log (or null). */
-    void start(double hwCentreHz, double rateHz, bool keepList = false, std::shared_ptr<vibestation::Sink> sink = nullptr) {
+    void start(double hwCentreHz, double rateHz, bool keepList = false, std::shared_ptr<vibestation::Sink> sink = nullptr,
+               std::unique_ptr<PreFront> pre = nullptr) {
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
         sink_ = std::move(sink);
         hwCentre_ = hwCentreHz; rate_ = rateHz;
-        fe_.reset(new Front(rateHz, hwCentreHz));
+        pre_ = std::move(pre);
+        // ★★ beta96 the maritime combination: AIS's Front on the pre-front's slice (centred on 162.000 MHz)
+        fe_.reset(pre_ ? new Front(pre_->aisRate(), kCentreHz) : new Front(rateHz, hwCentreHz));
         fe_->seedAfc(afcHz_);   // ★ the crystal's error from the last run (Front::afcStep_): no settling again
         queue_.clear(); queued_ = 0; dropped_ = 0;
         if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; fakePos_ = held_ = relocated_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); notices_.clear(); binary_ = 0; rateWin_.clear(); }
         cap_.reset(rateHz, now());
         storeLast_ = now();
         run_ = true;
-        worker_ = std::thread([this] { loop(); });
+        // ★★ beta96 DECODER PRIORITY (vibe_thread.h) — it had none: with the maritime combination's channeliser at 6–20 MS/s
+        //    this thread is the heavy one, and it must lose to Network > Audio > Spectrum (it drops its oldest block instead)
+        worker_ = std::thread([this] { vibeDecoderThread(pre_ ? "vibe-maritime" : "vibe-ais"); loop(); });
     }
     /** ★★ V12 2026-11-02 THE SHIP STORE (vibe_ais_store.h): every kStoreEverySec, and when AIS stops, the ships that
      *  changed since the last hand-over are COPIED out (the state and the trail points since) and given to `fn` with
@@ -196,11 +215,14 @@ public:
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
         flushStore_();
+        if (pre_) pre_->finish();   // ★ beta96 the combination's DSC gallery written
         std::shared_ptr<vibestation::Sink> s;
         { std::lock_guard<std::mutex> lk(mtx_); s.swap(sink_); }
         if (s) s->finish();
     }
     bool running() const { return run_.load(std::memory_order_relaxed); }
+    /** ★ beta96 the maritime combination (AIS + DSC) is what runs. */
+    bool combined() { std::lock_guard<std::mutex> lk(mtx_); return pre_ != nullptr; }
     uint64_t droppedBlocks() { std::lock_guard<std::mutex> lk(mtx_); return dropped_; }
     size_t vesselCount() { std::lock_guard<std::mutex> lk(mtx_); return ships_.size(); }
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
@@ -214,7 +236,8 @@ public:
             cap_.add(n, now());
             queued_ += n;
             queue_.push_back(std::move(b));
-            while (queued_ > size_t(rate_ * 0.5) && queue_.size() > 1) { queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_; }
+            // ★ half a second, and never over 4 M samples (32 MB) whatever the rate (beta96: a 20 MS/s HackRF)
+            while (queued_ > size_t(std::min(rate_ * 0.5, 4.0e6)) && queue_.size() > 1) { queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_; }
         }
         cv_.notify_one();
     }
@@ -272,8 +295,10 @@ public:
             if (n.n.to) o += ",\"to\":" + std::to_string(n.n.to);
             o += "}";
         }
-        char bb[64]; std::snprintf(bb, sizeof bb, "],\"binary\":%llu}", (unsigned long long)binary_);
-        return o + bb;
+        char bb[64]; std::snprintf(bb, sizeof bb, "],\"binary\":%llu", (unsigned long long)binary_);
+        o += bb;
+        if (pre_) o += pre_->reportFields(hwCentre_);   // ★ beta96 ,"combo":"ais+dsc","hw":…,"dsc":{…}
+        return o + "}";
     }
     /** {"type":"ais_trail","mmsi":N,"pts":[[lat,lon,ageSec],…]} — oldest first. Empty pts for an unknown ship. */
     std::string trailJson(uint32_t mmsi) {
@@ -304,12 +329,16 @@ private:
                 queue_.pop_front();
                 queued_ -= blk.size();
                 Front* fe = fe_.get();
+                PreFront* pre = pre_.get();
                 lk.unlock();
                 std::vector<std::pair<int, RawFrame>> got;
                 // ★ near full scale, on every 4th sample: the gain rule's input (ISM's vibeism::GainRule)
                 size_t clip = 0, seen = 0;
                 for (size_t i = 0; i < blk.size(); i += 4, ++seen) if (std::fabs(blk[i].real()) > 0.93f || std::fabs(blk[i].imag()) > 0.93f) ++clip;
-                fe->feed(blk.data(), blk.size(), [&](int c, const RawFrame& f) { got.emplace_back(c, f); });
+                if (pre) pre->feed(blk.data(), blk.size(), [&](const cf* z, int k) {   // ★ beta96 the combination: AIS's slice
+                    fe->feed(z, size_t(k), [&](int c, const RawFrame& f) { got.emplace_back(c, f); });
+                });
+                else fe->feed(blk.data(), blk.size(), [&](int c, const RawFrame& f) { got.emplace_back(c, f); });
                 const double afc = fe->afcHz();
                 lk.lock();
                 afcHz_ = afc;
@@ -323,6 +352,7 @@ private:
             if (t - winStart >= 1.0) {
                 winStart = t;
                 if (sink_) { auto s = sink_; lk.unlock(); s->tick(); lk.lock(); }
+                if (pre_) { PreFront* p = pre_.get(); lk.unlock(); p->tick(); lk.lock(); }   // ★ beta96 the DSC gallery's flush
                 if (fe_) {
                     health_.noiseDb = std::min(fe_->noiseDb(0), fe_->noiseDb(1)); health_.msgs = msgs_; health_.valid = true;
                     health_.clipFrac = clipSeen_ ? double(clipN_) / double(clipSeen_) : 0; clipN_ = clipSeen_ = 0;
@@ -587,6 +617,7 @@ private:
     double hwCentre_ = 0, rate_ = 0;
     double afcHz_ = 0;   ///< ★ the radio's crystal error at 162 MHz as the AFC found it (Hz; kept across restarts)
     std::unique_ptr<Front> fe_;
+    std::unique_ptr<PreFront> pre_;   ///< ★ beta96 the maritime combination (null = AIS alone)
     std::deque<std::vector<cf>> queue_;
     size_t queued_ = 0;
     uint64_t clipN_ = 0, clipSeen_ = 0, repairUnknown_ = 0;
