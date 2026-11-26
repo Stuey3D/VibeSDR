@@ -14,6 +14,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
@@ -88,8 +89,11 @@ try {
   const shown = async () => JSON.parse(await ev('JSON.stringify(layer.rangeShown())'));
   const feats = async () => JSON.parse(await ev(`JSON.stringify(map.querySourceFeatures('vsadsb-range').map(f => f.properties.k + ':' + f.geometry.type))`));
   const btn = `[...document.querySelectorAll('.vsadsb-ctl button')].find(b => b.textContent === 'RANGE')`;
-  // ★ beta95 rangeSmooth: a heard bearing lends its ±2° neighbours (no needles), so the unheard gap's two edges are drawn too
-  const lends = (a) => a.filter((v, i) => v > 0 || [1, 2].some((d) => a[(i + d) % 360] > 0 || a[(i - d + 360) % 360] > 0)).length;
+  // ★★★ beta96 rangeShape (gaps kept, dips closed, needles softened): the vertices drawn are the bearings it leaves > 0 —
+  //   the layer's own rule, run here from the same file
+  const mctx = { console, Math, Number, String, Set, Map, Array, Object, JSON, isFinite, setTimeout, clearTimeout }; mctx.globalThis = mctx;
+  vm.createContext(mctx); vm.runInContext(fs.readFileSync(path.join(root, 'web/mapkit/adsblayer.js'), 'utf8'), mctx);
+  const lends = (a) => mctx.VibeAdsbLayer.maths.rangeShape(a).filter((v) => v > 0).length;
   const heard = lends(km), heardAll = lends(allKm);
 
   // an older server: no /adsb/range → no button, nothing drawn

@@ -308,6 +308,63 @@
     }
     return out;
   }
+  /* ★★★ beta96 THE OUTLINE'S SHAPE (Stuart 11-26: "still a STAR" on the Sony and Almere — per-1° max plus beta95's ±2°
+   *  lend gives long thin needles to 150+ NM and deep dips between them where the data is sparse). Three steps, on the
+   *  merged per-bearing maxima (the live-grown outline and the server's stored one go through the SAME rule):
+   *  1. EMPTY SECTORS stay empty: a run of RANGE_GAP_DEG or more bearings with nothing heard (the sea, a hill) is a GAP —
+   *     no range is invented there; the outline closes across it from the last heard bearing on each side (a chord,
+   *     never a spoke to the receiver).
+   *  2. FILL DIPS: a morphological CLOSE over the bearings (dilate, then erode, window ±RANGE_CLOSE_DEG, wrapping at 360°,
+   *     gaps ignored), so a bearing that just saw fewer aircraft between two well-heard ones is lifted to their level.
+   *  3. SOFTEN NEEDLES: each bearing lends its neighbours its range less RANGE_TAPER of it per degree, out to
+   *     ±RANGE_SPREAD_DEG, and the outline is the max of those — one far aircraft makes a broad bump, not a needle.
+   *  Every step only raises a bearing, so each bearing's true furthest point (the FURTHEST chip's aircraft) stays ON the
+   *  outline. Gap bearings stay 0. */
+  const RANGE_GAP_DEG = 10, RANGE_CLOSE_DEG = 4, RANGE_TAPER = 0.03, RANGE_SPREAD_DEG = 8;
+  function rangeShape(km) {
+    if (!Array.isArray(km)) return km;
+    const n = km.length, v = km.map((x) => Math.max(0, Number(x) || 0));
+    if (!v.some((x) => x > 0)) return v;
+    const per = n / 360, gapN = Math.max(1, Math.round(RANGE_GAP_DEG * per));
+    const cw = Math.max(1, Math.round(RANGE_CLOSE_DEG * per)), sw = Math.max(1, Math.round(RANGE_SPREAD_DEG * per));
+    // 1. the gaps: runs of ≥ gapN empty bearings (found around the circle, starting just after a heard one)
+    const gap = new Array(n).fill(false);
+    let start = v.findIndex((x) => x > 0);
+    for (let k = 1, run = []; k <= n; k++) {
+      const i = (start + k) % n;
+      if (v[i] > 0) { if (run.length >= gapN) for (const j of run) gap[j] = true; run = []; }
+      else run.push(i);
+    }
+    // 2. CLOSE: dilate over the heard (and short-dip) bearings, then erode — both ignoring the gaps
+    const dil = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (gap[i]) continue;
+      let m = 0;
+      for (let d = -cw; d <= cw; d++) { const j = (i + d + n) % n; if (!gap[j] && v[j] > m) m = v[j]; }
+      dil[i] = m;
+    }
+    const clo = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      if (gap[i]) continue;
+      let m = Infinity;
+      for (let d = -cw; d <= cw; d++) { const j = (i + d + n) % n; if (!gap[j] && dil[j] < m) m = dil[j]; }
+      clo[i] = Math.max(v[i], m === Infinity ? 0 : m);
+    }
+    // 3. SOFTEN: the max of every bearing's tapered lend (never into a gap)
+    const out = clo.slice();
+    for (let i = 0; i < n; i++) {
+      const r = clo[i];
+      if (!(r > 0)) continue;
+      for (let d = 1; d <= sw; d++) {
+        const w = r * (1 - RANGE_TAPER * d / per);
+        if (!(w > 0)) break;
+        const a = (i + d) % n, b = (i - d + n) % n;
+        if (!gap[a] && out[a] < w) out[a] = w;
+        if (!gap[b] && out[b] < w) out[b] = w;
+      }
+    }
+    return out;
+  }
   /** Put rings (or none: null) on the GPU map's ring sources. */
   function setRingData(gl, idp, rings) {
     const s1 = gl.getSource(idp + 'rings'), s2 = gl.getSource(idp + 'ringlbl');
@@ -624,7 +681,7 @@
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
-                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
+                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, rangeShape, RANGE_GAP_DEG, RANGE_CLOSE_DEG, RANGE_TAPER, RANGE_SPREAD_DEG, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
@@ -1116,14 +1173,15 @@
       if (!e.target || !e.target.classList || !e.target.classList.contains('vsadsb-rg-all')) return;
       setPref('rangeAll', !!e.target.checked); drawRange();
     });
-    /** The outline drawn: the server's (if any) merged with the live one, smoothed (rangeSmooth), and its all-time line. */
+    /** The outline drawn: the server's (if any) merged with the live one, shaped (rangeShape), and its all-time line. */
     function rangeGeo() {
       const c = drawCentre();
       if (!c || (!rangeData && !liveHas())) return { w: null, a: null };
       const live = liveC && distNm(liveC.lat, liveC.lon, c.lat, c.lon) * NM_M <= 5000 ? liveKm : null;
-      return { w: prefs.range ? rangeRing(c.lat, c.lon, rangeSmooth(rangeMerge(rangeData && rangeData.km, live))) : null,
+      // ★★★ beta96 rangeShape (gaps kept, dips closed, needles softened) — the live and the stored outline alike
+      return { w: prefs.range ? rangeRing(c.lat, c.lon, rangeShape(rangeMerge(rangeData && rangeData.km, live))) : null,
                a: prefs.range && prefs.rangeAll && rangeData && rangeData.window !== 0
-                 ? rangeRing(c.lat, c.lon, rangeSmooth(rangeMerge(rangeData.allKm, live))) : null };
+                 ? rangeRing(c.lat, c.lon, rangeShape(rangeMerge(rangeData.allKm, live))) : null };
     }
     function drawRange() {
       if (destroyed) return;
