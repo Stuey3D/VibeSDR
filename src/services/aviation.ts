@@ -35,7 +35,7 @@ export interface AvAircraft {
   level: number; n: number; age: number; via: string;
 }
 /** A band the server's datalink mode steps through (hwinfo / vibeserver.json avdataBands). */
-export interface AvBand { id: string; name: string; region: string; hz: number; channels: number }
+export interface AvBand { id: string; name: string; region: string; hz: number; channels: number; chLo?: number; chHi?: number }   // ★ beta96 chLo/chHi: first / last channel (Hz)
 /** {"type":"avdata", band, bandName, hz, msgs, aircraft, dropped, gain?, gainAuto?, gainNote?, rateNote?}
  *  ★ V12 2026-11-24 `gainNote`: on a radio the mode sets no gain on (the Airspy HF+) what its front end IS doing, in place
  *    of a dB figure ("HF+ AGC · attenuator 12 dB"); `rateNote`: the capture was raised for ACARS + VDL2 (the owner's 8 MS/s
@@ -88,7 +88,10 @@ export function parseAvBands(v: unknown): AvBand[] {
   for (const b0 of v.slice(0, 8)) {
     const b = b0 as Record<string, unknown>;
     const id = str(b?.id, 10), name = str(b?.name, 20);
-    if (id && name) out.push({ id, name, region: str(b.region, 80) ?? '', hz: num(b.hz) ?? 0, channels: num(b.channels) ?? 0 });
+    if (id && name) {
+      const lo = num(b.chLo), hi = num(b.chHi);
+      out.push({ id, name, region: str(b.region, 80) ?? '', hz: num(b.hz) ?? 0, channels: num(b.channels) ?? 0, ...(lo && hi ? { chLo: lo, chHi: hi } : {}) });
+    }
   }
   return out;
 }

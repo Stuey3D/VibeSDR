@@ -54,7 +54,9 @@ export interface TrackLiveListProps {
   /** What ALL (or the ranges offered) mean here — said to a screen reader on each key. */
   rangeHint?: string;
   /** ★★ V12 2026-11-01 THE NAVTEX MAP's layers (STATIONS · WARNINGS · WEATHER): on/off keys under the ranges. */
-  toggles?: Array<{ id: string; label: string; words: string }>;
+  /** ★★★ beta96 SHOW (Stuart 11-26, as the web's): each chip may carry its count `n` and a colour dot — this viewer's own
+   *  filter, never sent to the server. */
+  toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string }>;
   toggled?: Record<string, boolean>;
   onToggle?: (id: string, on: boolean) => void;
   /** ★★ V12 beta91 the aviation map: a row shows the Mictronics aircraft data — ODC-By 1.0 §4.3's notice, one small line at
@@ -180,7 +182,9 @@ export default function TrackLiveList(p: TrackLiveListProps) {
           <NavRow>
             {/* ★ beta96 the AIR & SEA map's chips can be many: they scroll sideways (never off the edge) */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={s.ranges} keyboardShouldPersistTaps="handled">
-              {p.toggles.map((x) => <ToggleKey key={x.id} s={s} label={x.label} words={x.words}
+              {/* ★★★ beta96 SHOW: labelled — what this map shows YOU; nothing here moves the radio */}
+              <Text style={s.showLbl} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">SHOW</Text>
+              {p.toggles.map((x) => <ToggleKey key={x.id} s={s} label={x.label} words={x.words} n={x.n} colour={x.colour}
                                                on={p.toggled?.[x.id] !== false} onPress={() => p.onToggle?.(x.id, p.toggled?.[x.id] === false)} />)}
             </ScrollView>
           </NavRow>
@@ -241,13 +245,14 @@ function RangeKey({ s, label, words, on, onPress }: { s: S; label: string; words
   );
 }
 
-function ToggleKey({ s, label, words, on, onPress }: { s: S; label: string; words: string; on: boolean; onPress: () => void }) {
+function ToggleKey({ s, label, words, on, onPress, n, colour }: { s: S; label: string; words: string; on: boolean; onPress: () => void; n?: number; colour?: string }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
   return (
-    <TouchableOpacity ref={viewRef as never} style={[s.rKey, on && s.tKeyOn]} onPress={onPress} activeOpacity={0.7}
-                      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={words}>
-      <Text style={[s.rTxt, on && s.rTxtOn]}>{label}</Text>
+    <TouchableOpacity ref={viewRef as never} style={[s.rKey, s.tKeyRow, on && s.tKeyOn]} onPress={onPress} activeOpacity={0.7}
+                      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={n != null ? `${words}, ${n}` : words}>
+      {!!colour && <View style={[s.tDot, { backgroundColor: colour }]} />}
+      <Text style={[s.rTxt, on && s.rTxtOn]}>{label}{n != null ? <Text style={s.tN}>{` ${n}`}</Text> : null}</Text>
       <NavRing on={focused} color={ring} radius={5} />
     </TouchableOpacity>
   );
@@ -327,6 +332,10 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   rKey:   { height: 22, justifyContent: 'center', paddingHorizontal: 7, borderRadius: 5, borderWidth: 1, borderColor: `rgba(${ink.k},0.35)` },
   rKeyOn: { backgroundColor: '#ffd34d', borderColor: '#ffd34d' },
   tKeyOn: { backgroundColor: '#7fc8ff', borderColor: '#7fc8ff' },
+  tKeyRow: { flexDirection: 'row', alignItems: 'center' },
+  tDot:   { width: 7, height: 7, borderRadius: 4, marginRight: 5, borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.5)' },
+  tN:     { opacity: 0.8 },
+  showLbl: { fontFamily: F, fontSize: 9, letterSpacing: 0.9, color: `rgba(${ink.x},0.6)`, marginRight: 2 },
   rTxt:   { fontFamily: F, fontSize: 10, letterSpacing: 0.8, color: `rgba(${ink.x},0.85)` },
   rTxtOn: { color: '#111' },
   empty:  { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.60)`, padding: 10, lineHeight: 17 },

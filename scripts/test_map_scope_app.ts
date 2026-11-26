@@ -1,0 +1,70 @@
+// test_map_scope_app.ts — beta96 (Stuart 11-26 via the coordinator) the app's half of THE MAPS' SCOPE: OTHER RADIOS ON THIS
+// SERVER and THIS SESSION on the AIR & SEA map, the ISM mesh map and the AMATEUR map; the SHOW counts + colour dots on the
+// chips (TrackLiveList, DigiMapKeys); AIR & SEA LIVE pressed while lit reopens the map. Source checks — the rules themselves
+// are test_map_scope.ts (pure), the pad order test_nav_coverage.
+//   npx tsx scripts/test_map_scope_app.ts
+import { readFileSync } from 'node:fs';
+let pass = 0, fail = 0;
+const ok = (c: unknown, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
+const rd = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+const sc = rd('src/screens/SDRScreen.tsx'), mo = rd('src/components/MapOverlay.tsx'), tl = rd('src/components/TrackLiveList.tsx');
+const dk = rd('src/components/DigiMapKeys.tsx'), ty = rd('src/services/sdrTypes.ts'), lm = rd('src/services/liveMaps.ts');
+
+console.log('── the server\'s answer ──');
+ok(/radioId:\s+typeof j\.radioId === 'string' && \/\^\[0-9a-z\]\{1,16\}\$\/\.test\(j\.radioId\)/.test(ty) && /radioCount: typeof j\.radioCount === 'number'/.test(ty),
+   'vibeserver.json radioId (a whole id or nothing) and radioCount are parsed');
+ok(/setMapRadio\(\{ mine: o\?\.radioId \?\? '', count: o\?\.radioCount \?\? 0 \}\)/.test(sc) && /setMapRadio\(\{ mine: '', count: 0 \}\)/.test(sc), 'SDRScreen takes them per radio (reset on a new connection)');
+
+console.log('── AIR & SEA: the data through the scope first ──');
+ok(/const asSrcS = useMemo\(\(\) => airSeaScope\(\{ shared: avShared,/.test(sc), 'the sources go through airSeaScope before anything is composed');
+const region = sc.slice(sc.indexOf('const aisTrk = useMemo'), sc.indexOf('/** ★ CLOSE MAP puts every opener'));
+ok(region.length > 1000 && !/(?<![A-Za-z0-9_.$])(avShared|shipStore|navReport|navWarnRep|navMetRep|dscGal|aisReport|avReport|sdReport|vmReport|sdStored|vmStored|ndbReport)(?![A-Za-z0-9_$S])/.test(
+  region.replace(/setNav[A-Za-z]+|setShipStore|setDscGal|setAvShared|setSdStored|setVmStored/g, '').replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')),
+   'the map\'s compositions read only the scoped sources (*S) — never a raw store');
+ok(/useState\(true\);\n  useEffect\(\(\) => \{ AsyncStorage\.getItem\(OTHER_RADIOS_KEY_APP\)\.then\(\(v\) => setMapOthers\(otherRadiosOf\(v\)\)\)/.test(sc), 'OTHER RADIOS: ON by default, remembered in AsyncStorage');
+ok(/on \? AsyncStorage\.removeItem\(OTHER_RADIOS_KEY_APP\) : AsyncStorage\.setItem\(OTHER_RADIOS_KEY_APP, '0'\)/.test(sc), '…written per client, never sent to the server');
+ok(/otherRadiosOffered\(\{ mine: mapRadio\.mine, radioCount: mapRadio\.count, viewer: asViewer,/.test(sc), 'the switch: only with 2+ sources, never on the viewer');
+ok(/const asSessOk = sessionOffered\(\{ viewer: asViewer, onRadio: true \}\)/.test(sc), 'THIS SESSION: never on the viewer');
+ok(/n: c\.id === 'airports' \|\| c\.id === 'areas' \? undefined : showN\[c\.id\] \?\? undefined, colour: LIVE_CHIP_COLOUR\[c\.id\]/.test(sc), 'SHOW: every chip carries its count and colour (the web\'s)');
+ok(/\.\.\.\(asOthersOffered \? \[\{ id: OTHER_RADIOS_CHIP, label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS \}\] : \[\]\)/.test(sc) && /if \(id === OTHER_RADIOS_CHIP\) \{ mapOthersSet\(v\); return; \}/.test(sc),
+   'the OTHER RADIOS ON THIS SERVER chip after the layer chips, its own handler');
+ok(/withSession\(navWin \? \(ship\.ranges \?\? \[\]\) : \[\], asSessOk\)/.test(sc) && /if \(id === SESSION_ID\) \{ setAsSess\(true\); return; \}/.test(sc), 'THIS SESSION beside the maritime window (ALL | THIS SESSION where none)');
+ok(/const rng = asSess && asSessSt \? sessionWindow\(asSessSt\.t0, Math\.floor\(Date\.now\(\) \/ 1000\)\) : navRange;/.test(sc), 'the ship polls ask the window that covers the session');
+ok(/setAsSessSt\(\(p\) => sessionStart\(p, airSeaMode, Math\.floor\(Date\.now\(\) \/ 1000\), !p\)\)/.test(sc) && /if \(!airSeaUp\) \{ setAsSess\(false\); setAsSessSt\(null\); asFirst\.current\.clear\(\); return; \}/.test(sc),
+   'the session restarts on re-entry (the map up, a new live mode) and is forgotten when the map goes');
+ok(/adsbAircraft=\{shownMap === 'airsea' && adsbLiveHere \? adsbReportS\?\.aircraft/.test(sc) && /\? adsbListS : undefined/.test(sc) && /report: ndbReportS,/.test(sc), 'ADS-B\'s layer and list and the NDB report follow the session');
+ok(/'Only this radio\\u2019s own decodes' : '',   \/\/ ★★★ beta96 what the scope hides, first/.test(sc), 'the status line says what the scope hides');
+ok(/asOthersOffered, mapOthers, mapOthersSet, asSc, asSess, asSessOk, dscCalls, aisOn\]\);/.test(sc), 'the map\'s memo follows the scope (its dependencies)');
+ok(/export const LIVE_CHIP_COLOUR/.test(lm), 'one colour table for the web and the app (liveMaps.ts)');
+
+console.log('── AIR & SEA LIVE pressed while lit ──');
+const tog = sc.slice(sc.indexOf('const toggleAirSeaLive = useCallback'), sc.indexOf('const rows = airSeaRows.filter((r) => !r.why);'));
+ok(/if \(adsbOnRef\.current\) \{ setAsViewer\(false\); setAdsbViewOpen\(true\); return; \}/.test(tog) && /setAvMapOpen\(true\); return; \}/.test(tog), 'lit: the map comes back (every air / sea mode)');
+ok(!/exitAdsb\(\)|exitAis\(\)|exitSondes\(\)|exitVormap\(\)|exitNdb\(\)|avUiOff\(\)/.test(tog), 'lit: never leaves the mode (EXIT in the map does)');
+
+console.log('── TrackLiveList: SHOW counts and dots ──');
+ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string \}>/.test(tl), 'a chip may carry n and colour');
+ok(/>SHOW<\/Text>/.test(tl) && /\{!!colour && <View style=\{\[s\.tDot, \{ backgroundColor: colour \}\]\} \/>\}/.test(tl) && /n != null \? <Text style=\{s\.tN\}>\{` \$\{n\}`\}<\/Text> : null/.test(tl),
+   'labelled SHOW, a colour dot, the count');
+ok(/accessibilityLabel=\{n != null \? `\$\{words\}, \$\{n\}` : words\}/.test(tl), 'a screen reader hears the count');
+ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string \}>; toggled\?/.test(mo), 'MapOverlay passes them through');
+
+console.log('── the ISM mesh map ──');
+const ism = sc.slice(sc.indexOf('const ismTrk = useMemo'), sc.indexOf('const ismMapUp ='));
+ok(/scopeRadioOk\(n\.radios, isc\)/.test(ism) && /nowC - d\.age >= isc\.t0 - 2/.test(ism), 'remembered nodes by their card\'s radios; THIS SESSION by first heard');
+ok(/ranges: withSession\(ISM_LIVE_RANGES, true\)/.test(ism) && /toggles: othersOk \? \[\{ id: OTHER_RADIOS_CHIP/.test(ism), 'THIS SESSION beside its window; the switch where 2+ sources');
+ok(/const ri = radiosOf\(c\.ri\);   \/\/ ★★★ beta96 the card's radios on its nodes/.test(sc), 'the stored nodes carry their card\'s radios');
+
+console.log('── the AMATEUR map ──');
+ok(/session\?: \{ on: boolean; words: string; onPress: \(\) => void \}/.test(dk) && /label="THIS SESSION"/.test(dk), 'DigiMapKeys: THIS SESSION beside the window keys');
+ok(/show\?: Array<\{ id: string; label: string; n: number; colour: string; on: boolean; live: boolean \}>/.test(dk) && />SHOW<\/Text>/.test(dk) && /dot=\{x\.colour\}/.test(dk),
+   'DigiMapKeys: SHOW chips with counts and colour dots (pad keys)');
+ok(/scope\?: \{ label: string; words: string; on: boolean; onPress: \(\) => void \}/.test(dk), 'DigiMapKeys: the OTHER RADIOS key');
+ok(/const amData = useMemo\(/.test(mo) && /const d = \{ spots: amData\.spots, aprs: amData\.aprs, mesh: amData\.mesh, beacons: amData\.beacons \};/.test(mo), 'the list, its tabs and the counts come through the scope');
+ok(/window\.__amScope=function\(json\)/.test(mo) && /if\(!spotsOn\|\|!amScR\(s\.radios\)\|\|\(amSc\.t0&&!amSesOk\(sf\)\)\)return false;/.test(mo), 'the page draws through the same rule (spots, APRS, MESH, BEACONS)');
+ok(/kb\.hidden=rnShow\|\|/.test(mo) && /mk\.hidden=rnShow\|\|/.test(mo) && /bk\.hidden=rnShow\|\|/.test(mo), 'the page\'s own APRS / MESH / BEACONS keys give way to React Native\'s SHOW');
+ok(/amScope=\{shownMap === 'digi' \? \{ mine: mapRadio\.mine, others: mapOthers, onOthers: mapOthersSet,/.test(sc), 'SDRScreen hands the switch to the AMATEUR map (one remembered state)');
+ok(!/TUNE/.test(dk.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').replace(/nothing here tunes the radio/g, '')), 'no TUNE on the AMATEUR map: nothing there retunes the radio');
+
+console.log(`test_map_scope_app: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

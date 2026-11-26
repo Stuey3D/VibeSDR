@@ -323,6 +323,54 @@ export function sharedBannerWords(st: { said?: string | null; alone?: boolean; y
     : sharedTunerText(false, st.listeners, st.max, false, !!st.dabOwn);
 }
 
+/* ★★★ beta96 THE SHARED TUNER ON A FULL-SCREEN MAP (Stuart 11-26, "big issue": Listen-Amateur-VLD's SHIPPING MAP on a
+ *  shared dial hid the controls bar — no shared-tuner state, no CHAT). Every map that holds the radio (AIR & SEA in each
+ *  live state, the AMATEUR map, the ISM mesh map, the satellite watch) draws this line and a CHAT key in its top bar.
+ *  ★★ THE SAME INPUTS AS THE BAR'S BANNER (sharedBannerWords: the server's dial / ask / count) — only the VERB changes:
+ *    while the map is a whole-radio mode's own screen, what moves the shared dial is EXIT (leaving the mode retunes the
+ *    radio), so it says FREE TO EXIT / ASK BEFORE EXITING / LOCKED · ASK IN CHAT TO EXIT. A map opened from a key (CLOSE
+ *    MAP leaves the radio alone) says the bar's own words.
+ *  ★★ `dialLocked` is the server's answer (askLocked) or the owner's scan: the map greys EXIT and every in-map control
+ *    that moves the radio (band keys, gain) with `why`. NEVER the map itself — pan, zoom, FIT, chips, tabs, sort, cards,
+ *    KEY and labels are each listener's own view (Stuart 11-26). */
+export type MapSharedState = {
+  /** The receiver shares one dial (the bar's banner is up). */
+  shared: boolean;
+  /** No radio behind the map (the standalone landing map) — nothing to share, nothing shown. */
+  standalone?: boolean;
+  listeners: number; max: number; youPlus?: boolean;
+  ask?: AskState | null;
+  /** The owner's scan holds the radio (its line comes in `said`). */
+  scanLocked?: boolean;
+  /** A line that takes the banner over (a tuning line in chat, the scan's) — shown as the bar shows it. */
+  said?: string | null;
+  /** EXIT on this map leaves a whole-radio mode (it retunes the shared radio). */
+  exitMoves: boolean;
+  dabOwn?: boolean;
+};
+export type MapSharedLine = { show: boolean; text: string; dialLocked: boolean; why: string };
+export function mapSharedLine(st: MapSharedState, clock?: (ms: number) => string): MapSharedLine {
+  // ★ a receiver that can only ever have one listener has nobody to share with
+  if (!st.shared || st.standalone || st.max === 1) return { show: false, text: '', dialLocked: false, why: '' };
+  const locked = askLocked(st.ask) || !!st.scanLocked;
+  const why = st.scanLocked ? 'The owner is scanning this receiver — the controls come back when the scan ends'
+    : locked ? (st.exitMoves ? 'Ask in the chat before leaving — leaving this mode retunes the shared radio for everybody listening'
+                             : 'Ask in the chat before changing the radio — everybody listening shares this dial') : '';
+  const alone = st.listeners > 0 && st.listeners <= 1;
+  if (st.said) return { show: true, text: st.said, dialLocked: locked, why };
+  if (!st.exitMoves) return { show: true, text: sharedBannerWords({ alone, youPlus: st.youPlus, listeners: st.listeners, max: st.max, ask: st.ask, dabOwn: st.dabOwn }, false, clock), dialLocked: locked, why };
+  const pre = `${chatT('bannerShared')} · `;
+  const n = alone ? '' : bannerCount(st);
+  const tail = n ? (st.youPlus ? ` ${n}` : ` · ${n}`) : '';
+  let words: string;
+  if (askLocked(st.ask)) {
+    // ★ waiting for a reply / told to wait: the bar's own words (they are about the dial, not the verb); else LOCKED
+    words = st.ask!.askState === 'open' || (st.ask!.askState === 'no' && st.ask!.askUntil) ? askBannerText(st.ask!, true, clock)! : chatT('bannerLockedExit');
+  } else if (st.listeners <= 0) return { show: true, text: `${pre}${chatT('bannerAskExit')}`, dialLocked: locked, why };
+  else words = alone ? chatT('bannerFreeExit') : chatT('bannerAskExit');
+  return { show: true, text: `${pre}${words}${tail}`, dialLocked: locked, why };
+}
+
 /** ★★ The SHARED TUNER banner's standing words when the ask lock is not in force — one copy for the app's bar and the
  *  browser's: FREE TO TUNE alone, ASK TO TUNE · 3/5 👤 with company, ASK BEFORE TUNING before the count is known
  *  (listeners < 0). `tight` drops the prefix (SE in Display Zoom), never the words that matter. */

@@ -304,7 +304,17 @@ export class NdbView {
   }
   private note(t: string) { this.host?.note(t); }
 
-  update(r: NdbReport) {
+  /** ★★★ beta96 THIS SESSION on the AIR & SEA map (mapScope.ts): which beacons are drawn and listed — null = every one. */
+  private keep: ((b: NdbBeacon) => boolean) | null = null;
+  private raw: NdbReport | null = null;
+  setKeep(fn: ((b: NdbBeacon) => boolean) | null) {
+    if (!fn && !this.keep) return;
+    this.keep = fn;
+    if (this.raw) { this.last = fn ? { ...this.raw, beacons: this.raw.beacons.filter(fn) } : this.raw; }
+  }
+  update(r0: NdbReport) {
+    this.raw = r0;
+    const r = this.keep ? { ...r0, beacons: r0.beacons.filter(this.keep) } : r0;
     this.last = r;
     const nowS = r.now || Date.now() / 1000;
     for (const c of r.copy) {

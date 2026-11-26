@@ -197,6 +197,8 @@ export interface SpotRow {
   /** ★★★ beta96 maps2 a stored station's ORIGIN bits (vibe_station_store.h: 1 background decoding · 2 a listener's decoder ·
    *  4 a satellite pass) — the AMATEUR map's row says who heard it (amateurMap.ts amSrcWords). Absent = not from the store. */
   src?: number;
+  /** ★★★ beta96 a stored station's first heard (epoch ms) — the maps' THIS SESSION (mapScope.ts). */
+  first?: number;
 }
 
 /** A finite number, or undefined. Accepts the numeric-string form some servers send. */

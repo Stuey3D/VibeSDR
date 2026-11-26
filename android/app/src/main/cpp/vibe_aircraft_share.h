@@ -50,6 +50,7 @@
 #include <vector>
 
 #include "vibe_thread.h"
+#include "vibe_log_radio.h"
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -97,6 +98,7 @@ struct Update {
     bool hasGs = false; float gs = 0;
     bool ground = false;
     uint32_t count = 0;                 ///< messages since this writer's last update (added)
+    uint32_t radios = 0;                ///< ★ beta96 the writer's radio bit(s) — Table::write sets this process's own
 };
 struct GsHeard { int id = -1; int64_t ms = 0; double khz = 0; };
 
@@ -111,6 +113,10 @@ struct Rec {
     float trk, gs;
     uint32_t count;
     char reg[12], flight[12], type[8], from[8], to[8], label[4], app[8], posTime[12], via[40];
+    /** ★★★ beta96 WHICH RADIOS HEARD IT (the maps' "OTHER RADIOS ON THIS SERVER" switch, docs/v12/MAP-SHARED.md): bit n =
+     *  line n of <runtime dir>/radios.idx (vibe_log_radio.h's registry, kept beside this file). In what was padding: a
+     *  record an older build wrote reads 0 = unknown (shown under every radio, the logs' rule); same layout, same version. */
+    uint32_t radios;
 };
 #pragma pack(pop)
 static_assert(sizeof(Rec) <= kRecSize, "an aircraft record is 256 bytes");
@@ -158,6 +164,7 @@ struct Row {
     double lat = NAN, lon = NAN; int altFt = 0; float trk = 0, gs = 0;
     uint32_t count = 0;
     std::string reg, flight, type, from, to, label, app, posTime, via;
+    uint32_t radios = 0;   ///< ★ beta96 the radios that heard it (Rec::radios); 0 = unknown
 };
 inline Row fromRec(const Rec& r) {
     Row w;
@@ -166,7 +173,7 @@ inline Row fromRec(const Rec& r) {
     w.firstMs = r.firstMs; w.lastMs = r.lastMs; w.posMs = r.posMs;
     for (int s = 0; s < kNSrc; ++s) w.srcMs[s] = r.srcMs[s];
     w.lat = (r.flags & 1) ? r.lat / 1e7 : NAN; w.lon = (r.flags & 1) ? r.lon / 1e7 : NAN;
-    w.altFt = r.altFt; w.trk = r.trk; w.gs = r.gs; w.count = r.count;
+    w.altFt = r.altFt; w.trk = r.trk; w.gs = r.gs; w.count = r.count; w.radios = r.radios;
     w.reg = getStr(r.reg, sizeof r.reg); w.flight = getStr(r.flight, sizeof r.flight); w.type = getStr(r.type, sizeof r.type);
     w.from = getStr(r.from, sizeof r.from); w.to = getStr(r.to, sizeof r.to); w.label = getStr(r.label, sizeof r.label);
     w.app = getStr(r.app, sizeof r.app); w.posTime = getStr(r.posTime, sizeof r.posTime); w.via = getStr(r.via, sizeof r.via);
@@ -182,7 +189,7 @@ inline Rec toRec(const Row& w) {
     r.firstMs = w.firstMs; r.lastMs = w.lastMs; r.posMs = w.posMs;
     for (int s = 0; s < kNSrc; ++s) r.srcMs[s] = w.srcMs[s];
     if (w.flags & 1) { r.lat = (int32_t)std::lround(w.lat * 1e7); r.lon = (int32_t)std::lround(w.lon * 1e7); }
-    r.altFt = w.altFt; r.trk = w.trk; r.gs = w.gs; r.count = w.count;
+    r.altFt = w.altFt; r.trk = w.trk; r.gs = w.gs; r.count = w.count; r.radios = w.radios;
     putStr(r.reg, sizeof r.reg, w.reg); putStr(r.flight, sizeof r.flight, w.flight); putStr(r.type, sizeof r.type, w.type);
     putStr(r.from, sizeof r.from, w.from); putStr(r.to, sizeof r.to, w.to); putStr(r.label, sizeof r.label, w.label);
     putStr(r.app, sizeof r.app, w.app); putStr(r.posTime, sizeof r.posTime, w.posTime); putStr(r.via, sizeof r.via, w.via);
@@ -199,6 +206,7 @@ inline void apply(Row& w, const Update& u) {
     take(w.label, u.label, 3); take(w.app, u.app, 7); take(w.via, u.via, 39);
     if (!u.from.empty() || !u.to.empty()) { if (newer || w.from.empty()) { w.from = clean(u.from, 7); w.to = clean(u.to, 7); } }
     w.srcMask |= u.srcMask;
+    w.radios |= u.radios;   // ★ beta96 every radio that heard it
     for (int s = 0; s < kNSrc; ++s) if ((u.srcMask >> s) & 1) w.srcMs[s] = std::max(w.srcMs[s], u.srcMs[s] ? u.srcMs[s] : u.heardMs);
     w.lastMs = std::max(w.lastMs, u.heardMs);
     if (!w.firstMs || u.heardMs < w.firstMs) w.firstMs = std::min(w.firstMs ? w.firstMs : u.heardMs, u.heardMs);
@@ -219,6 +227,7 @@ inline void absorb(Row& a, const Row& b) {
     fill(a.reg, b.reg); fill(a.flight, b.flight); fill(a.type, b.type); fill(a.label, b.label); fill(a.app, b.app); fill(a.via, b.via);
     if (!b.from.empty() && (a.from.empty() || bNewer)) { a.from = b.from; a.to = b.to; }
     a.srcMask |= b.srcMask;
+    a.radios |= b.radios;   // ★ beta96
     for (int s = 0; s < kNSrc; ++s) a.srcMs[s] = std::max(a.srcMs[s], b.srcMs[s]);
     a.firstMs = std::min(a.firstMs ? a.firstMs : b.firstMs, b.firstMs ? b.firstMs : a.firstMs);
     a.lastMs = std::max(a.lastMs, b.lastMs);
@@ -295,7 +304,15 @@ public:
 
     /** Merge one writer's updates and the ground stations it heard. Returns the rows changed. `adsbLive`: this writer's
      *  ADS-B decoder is running now — the header's stamp (kAdsbLiveSec) says so to every reader. */
-    size_t write(const std::vector<Update>& ups, const std::vector<GsHeard>& gs, int64_t nowMs, bool adsbLive = false) {
+    size_t write(const std::vector<Update>& ups0, const std::vector<GsHeard>& gs, int64_t nowMs, bool adsbLive = false, const std::string& asId = std::string()) {
+        // ★★★ beta96 every update carries the radio that heard it: this process's radio (vibe_log_radio.h mine()), or `asId`
+        //     for a writer that is not this radio (a feed: give it its own id, e.g. "feed", so the maps' OTHER RADIOS switch
+        //     hides it on a radio). No id (the Android app's own radio, a test) = untagged = unknown.
+        const uint32_t bit = radioBit(asId.empty() ? vibe::logradio::mine() : asId);
+        std::vector<Update> tagged;
+        const std::vector<Update>* upsP = &ups0;
+        if (bit && !ups0.empty()) { tagged = ups0; for (Update& u : tagged) u.radios |= bit; upsP = &tagged; }
+        const std::vector<Update>& ups = *upsP;
         Io io(*this, false);
         if (!io.ok()) return 0;
         if (adsbLive) io.write(kAdsbLiveAt, &nowMs, sizeof nowMs);
@@ -337,9 +354,12 @@ public:
         }
         return out;
     }
+    /** ★ beta96 the registry beside the file (bit n = line n): the ids a row's radios mask names. Empty without a directory. */
+    std::vector<std::string> radioRegistry() { return vibe::logradio::readRegistry(dir()); }
     /** Forget everything (tests). */
     void reset() {
         std::lock_guard<std::mutex> lk(m_);
+        bitId_.clear(); bit_ = 0;
         mem_.clear();
         if (!dir_.empty()) ::unlink((dir_ + "/" + kFile).c_str());
     }
@@ -391,9 +411,23 @@ private:
             while (put < n) { const ssize_t k = ::pwrite(fd, c + put, n - put, (off_t)(at + put)); if (k <= 0) break; put += (size_t)k; }
         }
     };
+    /** ★ beta96 the mask bit for `id` in this table's registry (resolved once per id, appended under its flock the first
+     *  time); 0 = none (no id, no directory, the registry full). */
+    uint32_t radioBit(const std::string& id) {
+        if (id.empty()) return 0;
+        std::string d;
+        { std::lock_guard<std::mutex> lk(m_); if (id == bitId_) return bit_; d = dir_; }
+        const int b = d.empty() ? -1 : vibe::logradio::bitFor(d, id);
+        std::lock_guard<std::mutex> lk(m_);
+        if (id != vibe::logradio::mine()) return b >= 0 ? (1u << b) : 0u;   // ★ a feed's id: not cached over our own
+        bitId_ = id; bit_ = b >= 0 ? (1u << b) : 0u;
+        return bit_;
+    }
     std::mutex m_;
     std::string dir_;
     std::vector<char> mem_;
+    std::string bitId_;
+    uint32_t bit_ = 0;
 };
 inline Table& table() { static Table t; return t; }
 
@@ -436,7 +470,8 @@ using ExtraFn = std::function<void(const Row&, Extra&)>;
 inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHeard>& gs, int64_t nowMs,
                           const std::function<std::string(const std::string&)>& labelName = nullptr,
                           const std::function<bool(int, std::string&, double&, double&)>& gsInfo = nullptr,
-                          int64_t adsbLiveMs = -1, bool adsbOff = false, const ExtraFn& extra = nullptr) {
+                          int64_t adsbLiveMs = -1, bool adsbOff = false, const ExtraFn& extra = nullptr,
+                          const std::vector<std::string>& radioReg = {}) {
     char b[256];
     std::snprintf(b, sizeof b, "{\"now\":%lld,\"count\":%zu", (long long)(nowMs / 1000), rows.size());
     std::string o = b;
@@ -484,8 +519,16 @@ inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHear
             std::snprintf(b, sizeof b, "%s\"%s\":%lld", f1 ? "" : ",", srcName(s), (long long)std::max<int64_t>(0, (nowMs - w.srcMs[s]) / 1000));
             o += b; f1 = false;
         }
-        std::snprintf(b, sizeof b, "},\"age\":%lld,\"n\":%u}", (long long)std::max<int64_t>(0, (nowMs - w.lastMs) / 1000), w.count);
+        // ★★★ beta96 "first": seconds since ANY radio here first heard it (the maps' THIS SESSION); "radios": the radios that
+        //     heard it (absent = unknown — the maps show it under every radio)
+        std::snprintf(b, sizeof b, "},\"age\":%lld,\"first\":%lld,\"n\":%u", (long long)std::max<int64_t>(0, (nowMs - w.lastMs) / 1000),
+                      (long long)std::max<int64_t>(0, (nowMs - (w.firstMs ? w.firstMs : w.lastMs)) / 1000), w.count);
         o += b;
+        if (w.radios && !radioReg.empty()) {
+            const std::vector<std::string> ids = vibe::logradio::idsOf(radioReg, w.radios);
+            if (!ids.empty()) { o += ",\"radios\":["; for (size_t i = 0; i < ids.size(); ++i) { if (i) o += ','; o += '"'; o += ids[i]; o += '"'; } o += ']'; }
+        }
+        o += '}';
     }
     o += "],\"stations\":[";
     first = true;

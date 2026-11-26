@@ -9,6 +9,7 @@
 //    (a "?" here, its candidates in the card).
 // ★ Everything in a report came off the air or the gallery: every string is escaped where it meets HTML.
 import { navtexSubject } from '../utils/navtex';
+import { radiosOf } from './mapScope';
 
 export interface NavCand { name: string; iso: string; lat: number; lon: number; km?: number }
 export interface NavRecent { t: number; id: string; f: string }
@@ -24,6 +25,8 @@ export interface NavStation {
   ev: Record<string, number>;
   /** seconds since last heard (from the report's `now`) */
   seen: number;
+  /** ★★★ beta96 (mapScope.ts) the radios its messages came from (absent = only older, untagged messages) */
+  radios?: string[];
 }
 export interface NavReport { rx: { lat: number; lon: number } | null; now: number; messages: number; unplaced: number; oldest: number; stations: NavStation[] }
 
@@ -57,6 +60,7 @@ export function navSanitise(j: any): NavReport | null {
       outright: num(s.outright) ?? 0, inSlot: num(s.inSlot) ?? 0, share: num(s.share) ?? 0,
       ev: (() => { const o: Record<string, number> = {}; if (s.ev && typeof s.ev === 'object') for (const k of ['text', 'series', 'link', 'run', 'neighbour', 'dx', 'night']) if (num(s.ev[k])) o[k] = s.ev[k]; return o; })(),
       near: Array.isArray(s.near) ? s.near.slice(0, 3).filter((x: any) => x && num(x.km) !== undefined).map((x: any) => ({ name: str(x.name, 40), iso: str(x.iso, 2), km: x.km })) : [],
+      ...(Array.isArray(s.radios) && radiosOf(s.radios).length ? { radios: radiosOf(s.radios) } : {}),
     });
   }
   const rx = j.rx && okLat(j.rx.lat) && okLon(j.rx.lon) ? { lat: j.rx.lat, lon: j.rx.lon } : null;

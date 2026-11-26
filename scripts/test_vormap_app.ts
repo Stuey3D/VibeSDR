@@ -132,11 +132,13 @@ ok(/vormap\(on: boolean\) \{\n    if \(this\.askBlocked\(\)\) return;/.test(spec
 ok((spec.match(/this\.ndbHeld \|\| this\.vorHeld\)/g) || []).length >= 6, 'web: every hold NDB has, the VOR map has (tune, mode, passband, zoom, rate, IF filter)');
 ok(/function vmSetMode\(on: boolean\) \{\n  if \(!on && onlyModeRefuses\('vormap'\)\) return;/.test(web) && /if \(spec\?\.isTuneLocked\(\)\) \{ spec\.vormap\(true\); return; \}/.test(web),
    'web: the only mode and ask before tuning guard it');
-ok(/add\('vormap', 'VOR MAP', vmCap, vmOn, toggleVmMode,/.test(web) && /deps\.toggleVm/.test(mob) && /setModeLabel\(vmRow, 'vormap', 'VOR MAP'\)/.test(mob),
-   'web: in the decoder panel\'s TUNES THE RADIO ITSELF and the mode menu, beside NDB');
+// ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): VOR MAP is a TUNE row of AIR & SEA LIVE (the one key) — not a key of its own
+ok(/add\('airsea', 'AIR & SEA LIVE', airSeaCap\(\), airSeaOn\(\), toggleAirSeaLive,/.test(web) && /if \(asAllowed\('vormap'\)\) out\.push\('vormap'\)/.test(web)
+   && /if \(id === 'vormap'\) \{ if \(!vmOn\) toggleVmMode\(\); return; \}/.test(web) && /setModeLabel\(asRow, 'adsb', 'AIR & SEA LIVE'\)/.test(mob),
+   'web: under AIR & SEA LIVE (TUNES THE RADIO ITSELF and the mode menu) — the map\'s TUNE list enters it');
 ok(/if \(j\?\.vormap === true\) vmCap = \{ ok: true, why: '' \};/.test(web) && /\} else vmCap = null;/.test(web), 'web: three states — live, greyed with why, absent (no control at all)');
 // ★★★ beta96 stage 8: the VOR map is a live state of the AIR & SEA map (EXIT VOR MAP from liveChrome; its items keep _sh)
-ok(/asOpen\(\{ by: 'mode', tab: 'navaids'/.test(web) && /if \(vmOn\) \{ vmSetMode\(false\); return; \}/.test(web) && /vorMapItems\(vmReport\)\.map\(\(it: any\) => \(\{ \.\.\.it, key: `vor:\$\{it\.key\}`/.test(web) && /shape: \(it: any\) => it\._sh/.test(web),
+ok(/asOpen\(\{ by: 'mode', tab: 'navaids'/.test(web) && /if \(vmOn\) \{ vmSetMode\(false\); return; \}/.test(web) && /vorMapItems\(vmR\)\.map\(\(it: any\) => \(\{ \.\.\.it, key: `vor:\$\{it\.key\}`/.test(web) && /shape: \(it: any\) => it\._sh/.test(web),
    'web: its map — the AIR & SEA map, EXIT VOR MAP, the radials and the fix drawn');
 ok(/!anyOpen && \(vmOn \|\| sdOn( \|\| ndbOn)?\) && asView\?\.open && asBy === 'mode'/.test(web), 'web: a gamepad / TV Back leaves it, as NDB\'s');   // ★ beta96 stage 8: NDB shares the line
 const app = read('src/screens/SDRScreen.tsx'), ms = read('src/components/ModeSelector.tsx'), mo = read('src/components/MapOverlay.tsx');
@@ -144,7 +146,8 @@ const vsc = read('src/services/VibeServerClient.ts'), wsc = read('src/services/V
 ok(/vormap\(on: boolean\) \{\n    if \(this\.askBlocked\(\)\) return;/.test(vsc) && /case 'vormap': \{/.test(vsc) && /case 'vormap_error':/.test(vsc), 'app: sent behind ask-before-tuning; report, off, refusal');
 ok((wsc.match(/this\.ndbHeld \|\| this\.vormapHeld/g) || []).length >= 5, 'app: every hold NDB has');
 ok(/vormap:    j\.vormap === true \|\| j\.vormap === false/.test(types), 'app: the capability\'s three states from vibeserver.json');
-ok(/vormapAvail: \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\.current as any\)\?\.isVibe && !IS_APPLE_TV,/.test(app), 'app: the key only where it can run; none on the Apple TV (no maps), as NDB');
+ok(/vormapAvail: !asMenuOne && \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\.current as any\)\?\.isVibe && !IS_APPLE_TV,/.test(app) && /const asMenuOne = !IS_APPLE_TV && /.test(app),
+   'app: its own key only where AIR & SEA LIVE does not stand in (never), and never on the Apple TV (no maps), as NDB — beta96 a TUNE row');
 ok((app.match(/onlyRefuses\('vormap'/g) || []).length >= 2 && /askLocked\(dialStateRef\.current\)\) \{ setVmMapOpen\(false\); askGate\(\); return; \}/.test(app),
    'app: EXIT and the Mode key refuse to leave the only mode; ask before tuning');
 ok(/case 'vormap': return \{ id, node: vmShown \? vmKey\(\) : null \};/.test(ms) && /addLegend\('VOR MAP', 'vormap'\)/.test(ms), 'app: the VOR MAP key in TUNES THE RADIO ITSELF, beside NDB');

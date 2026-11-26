@@ -120,13 +120,13 @@ const runAll = async () => {
   /* ── both pages wired ── */
   {
     const main = readFileSync('web/client/src/main.ts', 'utf8');
-    ok(/vor: vmOn \? \(vmReport \? vmReport\.heard : 0\) : vmStored\.length, sondes: sdOn \? \(sdReport \? sdReport\.sondes\.length : 0\) : sdStored\.length,/.test(main), 'web: the layers are present from the store while the mode is off');
-    ok(/if \(!vmOn && on\('vor'\)\) vorItems\.push\(\.\.\.storedVorItems\(vmStored, nowStored\)\);/.test(main) && /if \(!sdOn && on\('sondes'\)\) sondeIts\.push\(\.\.\.storedSondeItems\(sdStored, nowStored\)\);/.test(main), 'web: drawn when the mode is off and the chip on');
+    ok(/vor: vmOn \? \(vmR \? \(sc\.t0 \? vmR\.beacons\.length : vmR\.heard\) : 0\) : vmSt\.length, sondes: sdOn \? \(sdR \? sdR\.sondes\.length : 0\) : sdSt\.length,/.test(main), 'web: the layers are present from the store while the mode is off');
+    ok(/if \(!vmOn && on\('vor'\)\) vorItems\.push\(\.\.\.storedVorItems\(vmSt, nowStored\)\);/.test(main) && /if \(!sdOn && on\('sondes'\)\) sondeIts\.push\(\.\.\.storedSondeItems\(sdSt, nowStored\)\);/.test(main), 'web: drawn when the mode is off and the chip on');
     ok(/asStoredStart\(\);/.test(main) && /setInterval\(\(\) => \{ void asStoredPoll\(\); \}, 120_000\)/.test(main) && /document\.visibilityState !== 'visible'/.test(main.slice(main.indexOf('async function asStoredPoll'))), 'web: read on opening and every 2 min while visible');
     ok(/if \(asStoredT\) \{ clearInterval\(asStoredT\); asStoredT = null; \}/.test(main), 'web: the poll stops with the map');
     const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
-    ok(/if \(vmMem\) have\.vor = vmStored\.length;/.test(sdr) && /if \(sdMem\) have\.sondes = sdStored\.length;/.test(sdr), 'app: the layers are present from the store while the mode is off');
-    ok(/storedVorItems\(vmStored, nowStored\)/.test(sdr) && /storedSondeItems\(sdStored, nowStored\)/.test(sdr) && /storedVorRows\(vmStored, nowStored, trkRx\)/.test(sdr), 'app: items and rows');
+    ok(/if \(vmMem\) have\.vor = vmStoredS\.length;/.test(sdr) && /if \(sdMem\) have\.sondes = sdStoredS\.length;/.test(sdr), 'app: the layers are present from the store while the mode is off');
+    ok(/storedVorItems\(vmStoredS, nowStored\)/.test(sdr) && /storedSondeItems\(sdStoredS, nowStored\)/.test(sdr) && /storedVorRows\(vmStoredS, nowStored, trkRx\)/.test(sdr), 'app: items and rows');
     ok(/if \(!airSeaUp \|\| !storedLoads\) return;/.test(sdr) && /setInterval\(\(\) => \{ void go\(\); \}, 120_000\)/.test(sdr), 'app: read while the map is up, every 2 min');
     const mo = readFileSync('src/components/MapOverlay.tsx', 'utf8');
     ok(/legShow\('vos',hvs\);legShow\('sds',hss\);/.test(mo), 'app: the KEY shows the remembered rows when they are on the map');

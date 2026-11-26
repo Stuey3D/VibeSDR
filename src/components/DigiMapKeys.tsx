@@ -30,6 +30,14 @@ export interface DigiMapKeysProps {
   ink: { x: string; k: string; kt: string };
   /** ★★★ beta96 maps2: the map's shared pad order (with the AMATEUR list, TrackLiveList) — absent = the keys' own. */
   navCtx?: React.ContextType<typeof NavCtx>;
+  /** ★★★ beta96 THIS SESSION beside the window keys (mapScope.ts) — absent = none (no store window, the viewer). */
+  session?: { on: boolean; words: string; onPress: () => void };
+  /** ★★★ beta96 SHOW (Stuart 11-26, the web window's): SPOTS · APRS · MESH · BEACONS with their counts and colour dots — this
+   *  viewer's own; nothing here tunes the radio (a spot is a station heard, not a frequency to go to). */
+  show?: Array<{ id: string; label: string; n: number; colour: string; on: boolean; live: boolean }>;
+  onShow?: (id: string, on: boolean) => void;
+  /** ★★★ beta96 OTHER RADIOS ON THIS SERVER (2+ sources only) */
+  scope?: { label: string; words: string; on: boolean; onPress: () => void };
 }
 
 export default function DigiMapKeys(p: DigiMapKeysProps) {
@@ -45,9 +53,24 @@ export default function DigiMapKeys(p: DigiMapKeysProps) {
             {p.windows && (
               <View style={s.group} accessibilityRole="radiogroup" accessibilityLabel="Time window">
                 {DIGI_WINDOWS.map((w) => (
-                  <Key key={w.id} s={s} label={w.label} words={`Stations heard in ${w.words}`} on={p.win === w.id} radio
-                       onPress={() => { if (p.win !== w.id) p.onWin(w.id); }} />
+                  <Key key={w.id} s={s} label={w.label} words={`Stations heard in ${w.words}`} on={p.win === w.id && !p.session?.on} radio
+                       onPress={() => { if (p.win !== w.id || p.session?.on) p.onWin(w.id); }} />
                 ))}
+                {!!p.session && <Key s={s} label="THIS SESSION" words={p.session.words} on={p.session.on} radio onPress={p.session.onPress} />}
+              </View>
+            )}
+            {!!p.show && p.show.length >= 2 && (
+              <View style={s.group} accessibilityLabel="Show">
+                <Text style={s.lbl} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">SHOW</Text>
+                {p.show.map((x) => (
+                  <Key key={x.id} s={s} label={`${x.live ? '\u25CF ' : ''}${x.label} ${x.n}`} words={`Show ${x.label.toLowerCase()} on the map, ${x.n}${x.live ? ', live now' : ''}`}
+                       on={x.on} dot={x.colour} onPress={() => p.onShow?.(x.id, !x.on)} />
+                ))}
+              </View>
+            )}
+            {!!p.scope && (
+              <View style={s.group}>
+                <Key s={s} label={p.scope.label} words={p.scope.words} on={p.scope.on} onPress={p.scope.onPress} />
               </View>
             )}
             <View style={s.group}>
@@ -63,12 +86,13 @@ export default function DigiMapKeys(p: DigiMapKeysProps) {
 }
 
 type S = ReturnType<typeof makeStyles>;
-function Key({ s, label, words, on, radio, onPress }: { s: S; label: string; words: string; on: boolean; radio?: boolean; onPress: () => void }) {
+function Key({ s, label, words, on, radio, onPress, dot }: { s: S; label: string; words: string; on: boolean; radio?: boolean; onPress: () => void; dot?: string }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
   return (
-    <TouchableOpacity ref={viewRef as never} style={[s.key, on && (radio ? s.winOn : s.panOn)]} onPress={onPress} activeOpacity={0.7}
+    <TouchableOpacity ref={viewRef as never} style={[s.key, !!dot && s.keyRow, on && (radio ? s.winOn : s.panOn)]} onPress={onPress} activeOpacity={0.7}
                       accessibilityRole={radio ? 'radio' : 'switch'} accessibilityState={{ checked: on }} accessibilityLabel={words}>
+      {!!dot && <View style={[s.dot, { backgroundColor: dot }]} />}
       <Text style={[s.txt, on && s.txtOn]}>{label}</Text>
       <NavRing on={focused} color={ring} radius={5} />
     </TouchableOpacity>
@@ -89,4 +113,7 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   panOn: { backgroundColor: '#7fc8ff', borderColor: '#7fc8ff' },
   txt:   { fontFamily: F, fontSize: 11, letterSpacing: 0.8, color: `rgba(${ink.x},0.88)` },
   txtOn: { color: '#111' },
+  keyRow: { flexDirection: 'row' },
+  dot:   { width: 7, height: 7, borderRadius: 4, marginRight: 5, borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.5)' },
+  lbl:   { fontFamily: F, fontSize: 9, letterSpacing: 0.9, color: `rgba(${ink.x},0.6)`, alignSelf: 'center', marginHorizontal: 2 },
 });

@@ -186,7 +186,7 @@ const meshDone = (async () => {
 {
   const main = readFileSync('web/client/src/main.ts', 'utf8');
   ok(/<title>VibeSDR — Amateur Map<\/title>/.test(main) && /<span id="amTitle">AMATEUR MAP<\/span>/.test(main), 'web: the window is the AMATEUR MAP');
-  ok(/\$\{AMATEUR_JS\}/.test(main) && /function aprsIn\(\) \{ return aprs\.filter\(\(a\) => amKeep\(a\.age, win\)\); \}/.test(main), 'web: APRS through the window rule');
+  ok(/\$\{AMATEUR_JS\}/.test(main) && /function aprsIn\(\) \{ return aprs\.filter\(\(a\) => \{ const f = firstAt\('aprs:' \+ a\.key, null\); return sess \? sessOk\(f\) : amKeep\(a\.age, win\); \}\); \}/.test(main), 'web: APRS through the window rule');
   ok(/for \(const a of aprsIn\(\)\) \{/.test(main) && /const aw = aprsIn\(\);/.test(main), 'web: APRS drawn and counted from the window');
   ok(/amDrawMesh\(meshLayer, mesh, win/.test(main) && /amDrawBeacons\(beaconLayer, beacons, win/.test(main), 'web: MESH and BEACONS drawn through the window');
   ok(/ws\.hidden = !\(srvOk \|\| aprs\.length \|\| mesh\.length \|\| beacons\.length\);/.test(main), 'web: the window keys stand for every layer');
@@ -197,7 +197,7 @@ const meshDone = (async () => {
   // ★★★ beta96 maps2 the app's tabs: TrackLiveList (React Native — the pad walks it) over the 'digi' page, its rows amListRows
   ok(/<TrackLiveList title="STATIONS" rows=\{amList\.rows\}/.test(mo) && /amListRows\(tab, d, win, now/.test(mo), 'app: the AMATEUR list is TrackLiveList fed by amListRows');
   ok(/tabs=\{amList\.tabs\} tab=\{amList\.tab\} onTab=/.test(mo) && /amTabNow\(tabs, amPick, amateur\.live/.test(mo), 'app: the tabs and the tab rule');
-  ok(/const d = \{ spots: spots \?\? \[\], aprs:/.test(mo) && /amCountsOf\(d, win, now\)/.test(mo) && /const now = Date\.now\(\), win = digiWinShown;/.test(mo), 'app: the rows follow the HEARD IN window (the window keys)');
+  ok(/const d = \{ spots: amData\.spots, aprs: amData\.aprs,/.test(mo) && /amCountsOf\(d, win, now\)/.test(mo) && /const now = Date\.now\(\), win = amSc\.t0 \? 'all' : digiWinShown;/.test(mo), 'app: the rows follow the HEARD IN window (the window keys)');
   ok(/window\.__amFocus=function\(k\)/.test(mo) && /onFocus=\{amFocus\}/.test(mo), 'app: a row centres its station (__amFocus)');
   ok(/nav=\{\{ navCtx: amNav\.navCtx, scrollProps: amNav\.scrollProps \}\}/.test(mo) && /navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo),
      'app: the window keys and the list share ONE pad order (two owners would strand the keys)');
@@ -207,7 +207,7 @@ const meshDone = (async () => {
   const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
   ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored\?\.nodes \?\? \[\]/.test(sdr) && /amMeshLoad\(digiWin,/.test(sdr), 'app: MESH remembers every band, and follows the window');
   const sd = readFileSync('src/services/digiStations.ts', 'utf8');
-  ok(/src: s\.src \}\);/.test(sd), 'app: a stored station carries who heard it (src) to the row');
+  ok(/src: s\.src, \.\.\.\(s\.first \? \{ first: s\.first \* 1000 \} : \{\}\) \}\);/.test(sd), 'app: a stored station carries who heard it (src) to the row');
 }
 
 void meshDone.catch((e) => { fail++; console.log('FAIL the mesh loader threw', e); }).then(() => {

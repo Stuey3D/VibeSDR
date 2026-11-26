@@ -287,3 +287,10 @@ export function fadeOf(ageSec: number, live: boolean, fresh = 600, full = 6 * 36
   if (ageSec >= full) return 0.4;
   return Math.round((1 - 0.6 * (ageSec - fresh) / (full - fresh)) * 100) / 100;
 }
+
+/** ★★★ beta96 SHOW (Stuart 11-26): each layer chip's colour dot — the web's and the app's, the community map's colours. */
+export const LIVE_CHIP_COLOUR: Partial<Record<LiveLayerId, string>> = {
+  adsb: '#ffd34d', vdl2: '#7ee787', acars: '#79c0ff', hfdl: '#ffa657', adsc: '#d2a8ff', hfdlst: '#ffa657', airports: '#9fb0c2',
+  ships: '#4fc3f7', dsc: '#ff6b6b', navst: '#f0c674', warnings: '#ff8a65', weather: '#81c784', areas: '#e0a040',
+  vor: '#c792ea', ndb: '#ffb000', sondes: '#80deea',
+};

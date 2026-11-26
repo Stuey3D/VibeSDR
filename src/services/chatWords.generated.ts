@@ -4,7 +4,7 @@
 
 export type ChatLang = 'en' | 'de' | 'es' | 'fr' | 'it' | 'nl' | 'pl' | 'pt-BR';
 export type ChatChromeKey =
-  'you' | 'user' | 'admin' | 'userShort' | 'joined' | 'joinedYou' | 'listening' | 'ownerTunes' | 'youDecoding' | 'userDecoding' | 'askedWaiting' | 'askedToWait' | 'askBefore' | 'askBeforeBelow' | 'youTunedLast' | 'userTuning' | 'nobodyTuning' | 'listenOnly' | 'noDab' | 'chatTitle' | 'close' | 'say' | 'webHint' | 'checkOut' | 'bookmark' | 'manual' | 'send' | 'pickAnother' | 'cancel' | 'discard' | 'freqHint' | 'freqPlaceholder' | 'sharedLine' | 'tuneKey' | 'decodeKey' | 'askToTune' | 'othersOne' | 'othersMany' | 'askButton' | 'tuneNow' | 'bannerShared' | 'bannerShort' | 'bannerFree' | 'bannerAsk' | 'bannerAskDab' | 'bannerAnyStation' | 'bannerAskBefore' | 'bannerAskInChat' | 'bannerAwaiting' | 'bannerYoursAt' | 'askNudge' | 'langDefault';
+  'you' | 'user' | 'admin' | 'userShort' | 'joined' | 'joinedYou' | 'listening' | 'ownerTunes' | 'youDecoding' | 'userDecoding' | 'askedWaiting' | 'askedToWait' | 'askBefore' | 'askBeforeBelow' | 'youTunedLast' | 'userTuning' | 'nobodyTuning' | 'listenOnly' | 'noDab' | 'chatTitle' | 'close' | 'say' | 'webHint' | 'checkOut' | 'bookmark' | 'manual' | 'send' | 'pickAnother' | 'cancel' | 'discard' | 'freqHint' | 'freqPlaceholder' | 'sharedLine' | 'tuneKey' | 'decodeKey' | 'askToTune' | 'othersOne' | 'othersMany' | 'askButton' | 'tuneNow' | 'bannerShared' | 'bannerShort' | 'bannerFree' | 'bannerAsk' | 'bannerAskDab' | 'bannerAnyStation' | 'bannerAskBefore' | 'bannerAskInChat' | 'bannerFreeExit' | 'bannerAskExit' | 'bannerLockedExit' | 'bannerAwaiting' | 'bannerYoursAt' | 'askNudge' | 'langDefault';
 export type ChatPhraseMeta = { id: string; group?: string; band?: 'hf' | 'vhf'; wiki?: string;
                                decoder?: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'time' };
 export type ChatPhraseWords = { text: string; key?: string; banner?: string };
@@ -192,6 +192,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "ANY STATION IN THE LIST IS FREE TO CHOOSE",
       bannerAskBefore: "ASK BEFORE TUNING",
       bannerAskInChat: "ASK IN CHAT TO TUNE",
+      bannerFreeExit: "FREE TO EXIT",
+      bannerAskExit: "ASK BEFORE EXITING",
+      bannerLockedExit: "LOCKED · ASK IN CHAT TO EXIT",
       bannerAwaiting: "AWAITING A REPLY",
       bannerYoursAt: "YOURS TO TUNE {time}",
       askNudge: "ASK IN CHAT BEFORE TUNING",
@@ -309,6 +312,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "JEDER SENDER IN DER LISTE IST FREI WÄHLBAR",
       bannerAskBefore: "VOR DEM ABSTIMMEN FRAGEN",
       bannerAskInChat: "IM CHAT FRAGEN",
+      bannerFreeExit: "FREI ZUM BEENDEN",
+      bannerAskExit: "VOR DEM BEENDEN FRAGEN",
+      bannerLockedExit: "GESPERRT · IM CHAT FRAGEN",
       bannerAwaiting: "WARTE AUF ANTWORT",
       bannerYoursAt: "DU BIST AB {time} DRAN",
       askNudge: "ERST IM CHAT FRAGEN, DANN ABSTIMMEN",
@@ -426,6 +432,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "PUEDES ELEGIR CUALQUIER EMISORA DE LA LISTA",
       bannerAskBefore: "PREGUNTA ANTES",
       bannerAskInChat: "PIDE PERMISO EN EL CHAT",
+      bannerFreeExit: "LIBRE PARA SALIR",
+      bannerAskExit: "PIDE PERMISO PARA SALIR",
+      bannerLockedExit: "BLOQUEADO · PIDE PERMISO EN EL CHAT",
       bannerAwaiting: "ESPERANDO RESPUESTA",
       bannerYoursAt: "TU TURNO A LAS {time}",
       askNudge: "PIDE PERMISO EN EL CHAT ANTES",
@@ -543,6 +552,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "CHAQUE STATION DE LA LISTE SE CHOISIT LIBREMENT",
       bannerAskBefore: "DEMANDE AVANT",
       bannerAskInChat: "DEMANDE DANS LE CHAT",
+      bannerFreeExit: "TU PEUX QUITTER",
+      bannerAskExit: "DEMANDE AVANT DE QUITTER",
+      bannerLockedExit: "VERROUILLÉ · DEMANDE DANS LE CHAT",
       bannerAwaiting: "EN ATTENTE DE RÉPONSE",
       bannerYoursAt: "À TOI À {time}",
       askNudge: "DEMANDE LA MAIN DANS LE CHAT",
@@ -660,6 +672,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "OGNI STAZIONE IN ELENCO SI SCEGLIE LIBERAMENTE",
       bannerAskBefore: "CHIEDI PRIMA",
       bannerAskInChat: "CHIEDI IN CHAT",
+      bannerFreeExit: "LIBERO DI USCIRE",
+      bannerAskExit: "CHIEDI PRIMA DI USCIRE",
+      bannerLockedExit: "BLOCCATO · CHIEDI IN CHAT",
       bannerAwaiting: "IN ATTESA DI RISPOSTA",
       bannerYoursAt: "TUO DALLE {time}",
       askNudge: "CHIEDI IN CHAT PRIMA DI SINTONIZZARE",
@@ -777,6 +792,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "ELKE ZENDER IN DE LIJST IS VRIJ TE KIEZEN",
       bannerAskBefore: "VRAAG VOOR JE AFSTEMT",
       bannerAskInChat: "VRAAG HET IN DE CHAT",
+      bannerFreeExit: "VRIJ OM TE STOPPEN",
+      bannerAskExit: "VRAAG VOOR JE STOPT",
+      bannerLockedExit: "VERGRENDELD · VRAAG HET IN DE CHAT",
       bannerAwaiting: "WACHT OP ANTWOORD",
       bannerYoursAt: "VANAF {time} VAN JOU",
       askNudge: "VRAAG IN DE CHAT VOOR JE AFSTEMT",
@@ -894,6 +912,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "KAŻDĄ STACJĘ Z LISTY MOŻNA WYBRAĆ SWOBODNIE",
       bannerAskBefore: "ZAPYTAJ PRZED STROJENIEM",
       bannerAskInChat: "ZAPYTAJ NA CZACIE",
+      bannerFreeExit: "MOŻNA WYJŚĆ",
+      bannerAskExit: "ZAPYTAJ PRZED WYJŚCIEM",
+      bannerLockedExit: "ZABLOKOWANE · ZAPYTAJ NA CZACIE",
       bannerAwaiting: "CZEKAM NA ODPOWIEDŹ",
       bannerYoursAt: "TWÓJ OD {time}",
       askNudge: "ZAPYTAJ NA CZACIE PRZED STROJENIEM",
@@ -1011,6 +1032,9 @@ export const CHAT_WORDS: Readonly<Record<ChatLang, ChatWords>> = {
       bannerAnyStation: "QUALQUER ESTAÇÃO DA LISTA É LIVRE PARA ESCOLHER",
       bannerAskBefore: "PERGUNTE ANTES",
       bannerAskInChat: "PEÇA A VEZ NO CHAT",
+      bannerFreeExit: "PODE SAIR",
+      bannerAskExit: "PERGUNTE ANTES DE SAIR",
+      bannerLockedExit: "BLOQUEADO · PEÇA A VEZ NO CHAT",
       bannerAwaiting: "AGUARDANDO RESPOSTA",
       bannerYoursAt: "SUA VEZ ÀS {time}",
       askNudge: "PERGUNTE NO CHAT ANTES DE SINTONIZAR",

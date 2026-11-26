@@ -17,6 +17,7 @@
 //    body: the table never holds one (the owner's opt-in body stays on the DATALINK list, on the owner's own socket).
 import { esc, rangeBearing, compass8, ago, heardAgo, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { avFix, avRoute, type AvAircraft, type AvReport } from './aviation';
+import { radiosOf } from './mapScope';
 import { cleanAdsbInfo, flagEmoji, routeShort, ADSB_DATA_CREDIT, adsbCreditHtml, type AdsbInfo, type AdsbRoute } from './adsbInfo';
 
 export const AVIATION_TITLE = 'AVIATION MAP';
@@ -102,6 +103,9 @@ export interface AvPlane {
    *  (op, opName, logo, sil, country, countryName, mil, desc, route …), cleaned by adsbInfo.ts cleanAdsbInfo; the row's
    *  own reg / type stay in `reg` / `type`. */
   info?: AdsbInfo;
+  /** ★★★ beta96 (mapScope.ts) the radios on this server that heard it (aircraft.json "radios"; absent = unknown) and how
+   *  long ago ANY of them first did (s, "first") — the maps' OTHER RADIOS switch and THIS SESSION. */
+  radios?: string[]; first?: number;
 }
 export interface AvStation { id: number; name: string; lat: number; lon: number; khz: number; age: number }
 /** ★ beta88 the server's ADS-B state (vibe_aircraft_share.h toJson). `live` null = an older server that cannot say. */
@@ -143,6 +147,7 @@ export function sharedSanitise(j: any): SharedAircraft | null {
       label: str(a.label, 3), labelName: str(a.labelName, 60), app: str(a.app, 7), via: str(a.via, 40),
       src, srcAge, age: Math.max(0, num(a.age) ?? 0), n: Math.max(0, num(a.n) ?? 0),
       info: avInfoOf(a),
+      radios: Array.isArray(a.radios) ? radiosOf(a.radios) : undefined, first: num(a.first) != null ? Math.max(0, num(a.first) as number) : undefined,
     });
   }
   const stations: AvStation[] = [];

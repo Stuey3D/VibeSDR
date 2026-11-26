@@ -40,6 +40,8 @@ export interface AisVessel {
   met?: AisMet[];
   /** ★ beta95 believed or not (aisDx.ts — the server's rule): dx · unconf (uLat/uLon) · held · fakes */
   dx?: number; unconf?: number; uLat?: number; uLon?: number; held?: number; fakes?: number;
+  /** ★★★ beta96 (mapScope.ts) the ship store's: the radios on this server that heard it (absent = unknown / the live report) */
+  radios?: string[];
 }
 /** One met/hydro report (vibe_ais_asm.h metJson): every field optional — a station sends what its sensors have. */
 export interface AisMet {

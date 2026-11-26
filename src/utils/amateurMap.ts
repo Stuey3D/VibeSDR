@@ -13,6 +13,7 @@
  *    the tests (scripts/test_amateur_map.ts) — the TS functions here, and AMATEUR_JS, the same rules as page text
  *    (plain ES5, no backticks, no backslashes: it sits inside both pages' template literals).
  */
+import { radiosOf } from '../services/mapScope';
 
 /** ★ The HEARD IN window in seconds (0 = everything kept). The spots map's own ids — '7d' / '30d' are "today and the N
  *  days before" (the store's day rows), hence 8 and 31 days; the app's live-only ids ('2m' … ) too. */
@@ -60,11 +61,16 @@ export function amLiveOf(dec: string | null | undefined, ismOn = false): AmLayer
   }
 }
 
+/** ★★★ beta96 SHOW (Stuart 11-26): each layer chip's colour dot — the web window and the app alike. */
+export const AM_LAYER_COLOUR: Record<AmLayer, string> = { spots: '#ffb000', aprs: '#4fc3f7', mesh: '#7ee787', beacons: '#d2a8ff' };
 /** One MESH node as the map draws it (a MeshCore / Meshtastic node with a position). ★★ beta96 (docs/v12/MESH-ROUTE.md):
  *  `dist` its distance from the receiver in the ISM list's km / miles ('' when the receiver is not known); `rt` its route
  *  (meshRoute — MESH_ROUTE_JS draws it when the node is tapped) and `rw` the route card's lines. */
 export interface AmMeshPoint { key: string; name: string; net: string; lat: number; lon: number; age: number; approx: boolean; what: string; live: boolean;
-                               dist?: string; km?: number; rt?: MeshRoute | null; rw?: string[] }
+                               dist?: string; km?: number; rt?: MeshRoute | null; rw?: string[];
+  /** ★★★ beta96 (mapScope.ts) a remembered node's radios (its card's; absent = unknown / this radio's live report) and how long
+   *  ago it was first heard (s; null = not known) — the OTHER RADIOS switch and THIS SESSION */
+  radios?: string[]; fa?: number | null }
 /** ★★ beta96 a node's NAME is kept as it was advertised (meshName: printable text — "t::1" stays "t::1"); the pages
  *  escape it where it meets HTML. Other fields keep the old strict filter. */
 const okName = (v: unknown, n: number) => meshName(v, n);
@@ -77,7 +83,7 @@ export function amMeshPoints(live: readonly any[] | null | undefined, stored: re
                              opt: { rx?: { lat: number; lon: number } | null; miles?: boolean } = {}): AmMeshPoint[] {
   const rx = opt.rx && Number.isFinite(opt.rx.lat) && Number.isFinite(opt.rx.lon) ? opt.rx : null;
   const by = new Map<string, { p: AmMeshPoint; d: any }>();
-  const add = (d: any, age: number, isLive: boolean) => {
+  const add = (d: any, age: number, isLive: boolean, fa: number | null) => {
     if (!d || !MESH_KINDS.has(String(d.kind))) return;
     const lat = okNum(d.lat, -90, 90), lon = okNum(d.lon, -180, 180);
     if (lat == null || lon == null || (lat === 0 && lon === 0)) return;
@@ -87,13 +93,14 @@ export function amMeshPoints(live: readonly any[] | null | undefined, stored: re
     const km = rx ? meshKm(rx, lat, lon) : undefined;
     if (km !== undefined && !meshPlausible(km, meshHopsForRule(d))) return;
     const p: AmMeshPoint = { key: `mesh:${key}`, name: okName(d.long, 40) || okName(d.name, 40) || okName(d.short, 40) || okTxt(d.node || key, 40), net: d.kind === 'meshcore' ? 'MeshCore' : 'Meshtastic',
-      lat, lon, age: Math.max(0, age), approx: d.approx === 1 || d.approx === true, what: okTxt(d.ntype || d.role || d.hw || '', 40), live: isLive };
+      lat, lon, age: Math.max(0, age), approx: d.approx === 1 || d.approx === true, what: okTxt(d.ntype || d.role || d.hw || '', 40), live: isLive,
+      ...(Array.isArray(d.radios) && radiosOf(d.radios).length ? { radios: radiosOf(d.radios) } : {}), fa };
     if (km !== undefined) { p.km = km; p.dist = meshDist(km, !!opt.miles); }
     const was = by.get(p.key);
     if (!was || p.age < was.p.age) by.set(p.key, { p, d });
   };
-  for (const d of live ?? []) add(d, okNum(d?.age ?? d?.seen, 0, 1e9) ?? 0, true);
-  for (const d of stored ?? []) add(d, Math.max(0, nowSec - (okNum(d?.last, 0, 1e11) ?? 0)), false);
+  for (const d of live ?? []) add(d, okNum(d?.age ?? d?.seen, 0, 1e9) ?? 0, true, okNum(d?.age, 0, 1e9));
+  for (const d of stored ?? []) { const f = okNum(d?.first, 0, 1e11); add(d, Math.max(0, nowSec - (okNum(d?.last, 0, 1e11) ?? 0)), false, f ? Math.max(0, nowSec - f) : null); }
   const out = [...by.values()].sort((a, b) => a.p.age - b.p.age).slice(0, 1000);
   // ★★ beta96 THE ROUTES: each MeshCore node's relays, matched to the repeaters and room servers on this map (never a
   //   companion — a person's node is never a route's stop)
@@ -131,7 +138,7 @@ export function amMeshCardPick<T extends { s?: string; t: number; f: string }>(i
 /** ★ The loader (web and app alike): `list` = the gallery's ISM items, `card` = one card's nodes (ismNodesParse), `merge` =
  *  ismGalMerge. Returns null while a load is running or when the gallery did not answer (keep what is drawn). */
 export function amMeshLoader<N extends { last: number }>(o: {
-  list: () => Promise<ReadonlyArray<{ s?: string; t: number; f: string }> | null>;
+  list: () => Promise<ReadonlyArray<{ s?: string; t: number; f: string; ri?: string }> | null>;
   card: (f: string, t: number) => Promise<N[] | null>;
   merge: (per: N[][], nowSec: number) => N[];
 }): (win: string, nowSec: number) => Promise<N[] | null> {
@@ -148,7 +155,12 @@ export function amMeshLoader<N extends { last: number }>(o: {
       for (const c of cards) {
         want.add(c.f);
         let n = c.t >= fresh ? undefined : kept.get(c.f);
-        if (!n) { n = (await o.card(c.f, c.t)) ?? undefined; if (n && c.t < fresh) kept.set(c.f, n); }
+        if (!n) {
+          n = (await o.card(c.f, c.t)) ?? undefined;
+          const ri = radiosOf((c as { ri?: string }).ri);   // ★★★ beta96 the card's radios on each of its nodes (mapScope.ts)
+          if (n && ri.length) n = n.map((x) => ({ ...x, radios: ri }));
+          if (n && c.t < fresh) kept.set(c.f, n);
+        }
         if (n) per.push(n);
       }
       for (const k of [...kept.keys()]) if (!want.has(k)) kept.delete(k);

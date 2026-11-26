@@ -15,6 +15,7 @@
 //    their own fixed rules, below: a ship is drawn while it is recent (SHIP_KEEP_SEC; faded past an hour), a DSC call for
 //    a day (DSC_KEEP_SEC) — a distress or urgency call for a week (DSC_ALERT_KEEP_SEC). Latest-message-wins stays the
 //    NAVTEX layers' own rule; a ship is drawn as its latest report says (live wins over the store, per MMSI).
+import { radiosOf } from './mapScope';
 import { esc, rangeBearing, compass8, ago, aisIcon, aisName, aisLabel, aisCard, aisListRows, aisSanitise,
          type AisVessel, type AisReport, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { NAV_LAYERS } from './navtexWarn';
@@ -110,7 +111,11 @@ export function storeSanitise(j: any): StoredShips | null {
     if (p.length) pts.set(m, p);
   }
   const n = (x: unknown) => (isFinite(Number(x)) ? Number(x) : 0);
-  return { now: n(j.now), count: n(j.count), total: n(j.total), off: !!j.off, vessels: r ? r.vessels : [], pts };
+  // ★★★ beta96 the radios that heard each ship (mapScope.ts — the maps' OTHER RADIOS switch)
+  const rad = new Map<number, string[]>();
+  for (const v of j.vessels.slice(0, 2048)) { const m = Number(v?.mmsi); if (m > 0 && Array.isArray(v.radios)) { const ids = radiosOf(v.radios); if (ids.length) rad.set(m, ids); } }
+  const vessels = r ? r.vessels.map((v) => (rad.has(v.mmsi) ? { ...v, radios: rad.get(v.mmsi) } : v)) : [];
+  return { now: n(j.now), count: n(j.count), total: n(j.total), off: !!j.off, vessels, pts };
 }
 /** ★ Ships and DSC keep their OWN time rules — never the NAVTEX time filter (see the header). */
 export const SHIP_KEEP_SEC = 6 * 3600;
@@ -144,7 +149,9 @@ export function shipRows(vessels: AisVessel[], rx: LatLon | null): TrackRow[] {
 }
 
 // ── DSC: the box's calls and the gallery's pinned alerts ──────────────────────────────────────────────────────────
-export interface DscPin { key: string; lat: number; lon: number; level: number; line: string; t: number; who: string; from: 'live' | 'gallery'; f?: string }
+export interface DscPin { key: string; lat: number; lon: number; level: number; line: string; t: number; who: string; from: 'live' | 'gallery'; f?: string;
+  /** ★★★ beta96 a gallery alert's radios (its "ri"; absent = unknown / this listener's own box) */
+  radios?: string[] }
 /** The calls this listener's DSC box decoded that sent a position (utc is milliseconds). */
 export function dscPinsFromCalls(calls: readonly DscCall[]): DscPin[] {
   return calls.filter((c) => c.lat !== null && c.lon !== null).slice(0, 300).map((c) => ({
@@ -165,7 +172,8 @@ export function dscPinsFromGallery(j: any): DscPin[] {
     const title = String(it.title ?? '').slice(0, 200);
     const lv = Number(it.lv);
     const m = /\b(\d{9})\b/.exec(title);
-    out.push({ key: `d:g:${f || t}`, lat, lon, level: isFinite(lv) && lv >= 0 ? Math.min(3, lv) : 0, line: title, t, who: m ? m[1] : '', from: 'gallery', f });
+    const ri = radiosOf(it.ri);
+    out.push({ key: `d:g:${f || t}`, lat, lon, level: isFinite(lv) && lv >= 0 ? Math.min(3, lv) : 0, line: title, t, who: m ? m[1] : '', from: 'gallery', f, ...(ri.length ? { radios: ri } : {}) });
   }
   return out;
 }

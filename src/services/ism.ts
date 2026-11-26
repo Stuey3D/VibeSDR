@@ -617,7 +617,9 @@ export function ismPosSplit(line: string): { pre: string; pos: string; post: str
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ★★ V12 2026-11-01 THE GALLERY'S "STATIONS RECEIVED" (vibe_ism_gallery.h NodeRow; the web's ismNodesParse — the same rule).
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-export interface IsmGalNode extends IsmDevice { first: number; last: number; origin: string }
+export interface IsmGalNode extends IsmDevice { first: number; last: number; origin: string;
+  /** ★★★ beta96 (mapScope.ts) the radios whose cards held it (the card's "ri"; absent = unknown) */
+  radios?: string[] }
 export function ismIsNodeCard(it: { s?: string }): boolean { return typeof it.s === 'string' && it.s.startsWith('ismnodes-'); }
 export function ismNodesParse(body: string, dayUtc: number, nowSec: number): { nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null } {
   const out: IsmGalNode[] = [];
@@ -743,8 +745,10 @@ export function ismGalMerge(cards: IsmGalNode[][], nowSec: number): IsmGalNode[]
     const newer = n.last > had.last ? n : had;
     // ★ beta96 the FEWEST hops of the days (0 = heard first-hand), the newer day's route
     const hops = had.hops === undefined ? n.hops : n.hops === undefined ? had.hops : Math.min(had.hops, n.hops);
+    // ★★★ beta96 the radios: every card's (unknown if any card was untagged — the logs' rule)
+    const radios = had.radios && n.radios ? [...new Set([...had.radios, ...n.radios])] : undefined;
     by.set(k, { ...newer, first: Math.min(had.first, n.first), last: Math.max(had.last, n.last), count: had.count + n.count,
-                origin: had.origin === n.origin ? had.origin : 'both', hops, relays: newer.relays ?? (newer === n ? had.relays : n.relays) });
+                origin: had.origin === n.origin ? had.origin : 'both', hops, relays: newer.relays ?? (newer === n ? had.relays : n.relays), radios });
   }
   // ★ a STABLE key (network + id): a card fetched again must not move a marker to another node
   return [...by.entries()].map(([k, n]) => ({ ...n, key: `${n.kind === "meshcore" ? "c" : "t"}:${n.node || n.name}`.slice(0, 40), seen: Math.max(0, nowSec - n.last), age: Math.max(0, nowSec - n.first) }));
