@@ -141,6 +141,7 @@
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
+#include "vibe_posgal.h"        // ★★★ beta96 maps2: the day's sondes and VOR stations in the gallery (the AIR & SEA map's stored layers)
 #include "vibe_navtex_map.h"   // ★ V12 2026-11-01 the NAVTEX map: the stations received
 #include "vibe_navtex_warn.h"  // ★ V12 2026-11-01 the NAVTEX map: the warnings (navtex-warn.idx beside the gallery)
 #include "vibe_navtex_warm.h"  // ★ V12 2026-11-20 the shipping map kept built in the background (vsnav, above Impl)
@@ -7778,6 +7779,49 @@ static std::string communityLive(int i, int64_t now) {
     // ★★ beta95 every radio's rows (and this process's own twice: memory + its file) → ONE per key, the newest
     return vibecommunity::rowsDedupe(vibecommunity::rowsSince(rows, kTimeField[i], (double)(now - kWin[i]), kMax[i] * 4),
                                      0, kTimeField[i], kMax[i] * 2);
+}
+
+/* ── ★★★ beta96 maps2 THE DAY's SONDES AND VOR STATIONS IN THE GALLERY (vibe_posgal.h) — what the AIR & SEA map draws, faded by
+ *  age, when SONDES / the VOR map is not running (docs/v12/ONE-MAP.md). Fed every 20 s while the mode runs (what it heard
+ *  in the last 2 minutes); the card itself is rewritten at most every 5 minutes, and once more when the mode stops. The
+ *  owner's gallery rules as every listener decoder: the gallery on, listeners' decodes kept (g_gallerySaveLive). ── */
+static std::unique_ptr<vibe::posgal::DayCard> g_sdCard, g_vorCard;
+static std::mutex g_posGalMtx;   // ★ the housekeeping tick and a stop may meet
+static void posGalTick() {
+    static int64_t last = 0;
+    const int64_t now = vibeavshare::wallMs() / 1000;
+    if (now - last < 20) return;
+    last = now;
+    std::lock_guard<std::mutex> lk(g_posGalMtx);
+    auto& g = vibe::gallery::shared();
+    const bool keep = g.enabled() && g_gallerySaveLive.load();
+    if (keep && g_sd.running()) {
+        if (!g_sdCard) g_sdCard.reset(new vibe::posgal::DayCard(g, { vibe::posgal::sondesSpec(), {} }));
+        for (const auto& h : g_sd.tracker().heardSondes((double)now, 120, 64)) {
+            vibe::posgal::Row r;
+            r.id = h.serial; r.type = h.type; r.lat = h.lat; r.lon = h.lon; r.altM = h.alt; r.topM = h.maxAlt;
+            r.mhz = h.hz / 1e6; r.first = (int64_t)h.first; r.last = (int64_t)h.last;
+            g_sdCard->seen(r);
+        }
+        g_sdCard->tick();
+    } else if (g_sdCard) { g_sdCard->finish(); g_sdCard.reset(); }
+    if (keep && g_vormap.running()) {
+        if (!g_vorCard) g_vorCard.reset(new vibe::posgal::DayCard(g, { vibe::posgal::vorSpec(), {} }));
+        for (const auto& h : g_vormap.heardStations(now - 120, vibe::posgal::DayCard::kMaxRows)) {
+            vibe::posgal::Row r;
+            r.id = h.ident + "/" + std::to_string((long long)(h.hz / 1000));   // ★ an ident and its channel (two stations can share an ident)
+            r.name = h.name; r.type = h.kind; r.cc = h.cc; r.lat = h.lat; r.lon = h.lon; r.mhz = (double)h.hz / 1e6;
+            r.first = h.firstUtc; r.last = h.lastUtc;
+            g_vorCard->seen(r);
+        }
+        g_vorCard->tick();
+    } else if (g_vorCard) { g_vorCard->finish(); g_vorCard.reset(); }
+}
+/** A clean stop: both cards written once more and let go (the store outlives them). */
+static void posGalStop() {
+    std::lock_guard<std::mutex> lk(g_posGalMtx);
+    if (g_sdCard) { g_sdCard->finish(); g_sdCard.reset(); }
+    if (g_vorCard) { g_vorCard->finish(); g_vorCard.reset(); }
 }
 
 /* ── the sections ── */
@@ -43150,6 +43194,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 vsNavWarmTick();
                 // ── ★★ V12 beta94 the COMMUNITY MAP's remembered sondes / APRS / VOR rows (vibe_community.h writeLive) ──
                 communityLiveTick();
+                // ── ★★★ beta96 maps2 the day's sondes and VOR stations in the gallery (vibe_posgal.h) ──
+                posGalTick();
 
                 // ── Deferred idle park (see armIdlePark / g_vsIdleGraceSec) ──────────────
                 // ★ THE PARK IS RE-JUSTIFIED HERE, NOT MERELY REMEMBERED. Anything could have
@@ -50419,6 +50465,7 @@ void LocalSdrShim::stopLocked() {
     g_ais.stop();   // ★ AIS likewise (its day's log)
     g_av.stop();    // ★ …and the aircraft datalink's thread
     g_sd.stop();    // ★ …and the sondes'
+    posGalStop();   // ★★★ beta96 maps2 …and the day's sondes / VOR cards written once more (never left to a static destructor)
     impl->decoders_.shutdownAll();
     endWholeRadioModesForStop();
     /* ★★★ beta92 THE STATION STORE'S LAST ROWS ARE WRITTEN BY THE STOP (docs/v12/SHUTDOWN-HANG.md): its final flush used to

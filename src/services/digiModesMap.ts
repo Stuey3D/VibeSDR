@@ -6,7 +6,8 @@
 //     the map (setDigiModesMapOpener); anything else imports this module and calls openDigiModesMap — no SDRScreen import.
 import type { DigiMapOverlay } from '../utils/digiMapShared';
 
-export type DigiMapLayer = 'spots' | 'aprs';
+/** ★ beta96 the AMATEUR map's layers (amateurMap.ts AmLayer) — the tab it opens on; 'aprs' also switches the APRS stations on. */
+export type DigiMapLayer = 'spots' | 'aprs' | 'mesh' | 'beacons';
 export interface DigiMapOpts {
   /** The layer it opens on — 'aprs' shows the APRS box's stations (and centres on `focus`). Default 'spots'. */
   layer?: DigiMapLayer;

@@ -138,7 +138,7 @@ ok(/if \(j\?\.vormap === true\) vmCap = \{ ok: true, why: '' \};/.test(web) && /
 // ★★★ beta96 stage 8: the VOR map is a live state of the AIR & SEA map (EXIT VOR MAP from liveChrome; its items keep _sh)
 ok(/asOpen\(\{ by: 'mode', tab: 'navaids'/.test(web) && /if \(vmOn\) \{ vmSetMode\(false\); return; \}/.test(web) && /vorMapItems\(vmReport\)\.map\(\(it: any\) => \(\{ \.\.\.it, key: `vor:\$\{it\.key\}`/.test(web) && /shape: \(it: any\) => it\._sh/.test(web),
    'web: its map — the AIR & SEA map, EXIT VOR MAP, the radials and the fix drawn');
-ok(/!anyOpen && \(vmOn \|\| sdOn\) && asView\?\.open && asBy === 'mode'/.test(web), 'web: a gamepad / TV Back leaves it, as NDB\'s');
+ok(/!anyOpen && \(vmOn \|\| sdOn( \|\| ndbOn)?\) && asView\?\.open && asBy === 'mode'/.test(web), 'web: a gamepad / TV Back leaves it, as NDB\'s');   // ★ beta96 stage 8: NDB shares the line
 const app = read('src/screens/SDRScreen.tsx'), ms = read('src/components/ModeSelector.tsx'), mo = read('src/components/MapOverlay.tsx');
 const vsc = read('src/services/VibeServerClient.ts'), wsc = read('src/services/VibeServerWsClient.ts'), types = read('src/services/sdrTypes.ts');
 ok(/vormap\(on: boolean\) \{\n    if \(this\.askBlocked\(\)\) return;/.test(vsc) && /case 'vormap': \{/.test(vsc) && /case 'vormap_error':/.test(vsc), 'app: sent behind ask-before-tuning; report, off, refusal');

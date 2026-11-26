@@ -125,6 +125,23 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
   console.log('   screenshot', await shot('aprs-box'));
   // ★★★ beta90 APRS is a LAYER of the ONE DIGI MODES MAP (Stuart, 2026-11-21): MAP opens that map's window on its APRS
   //     layer — the stations with their symbols and cards, the weather station's report on its card
+  /* ★★★ beta96 maps2 MESH REMEMBERS EVERY ISM BAND (Stuart 11-26): the page's gallery answers stand in for two bands' "stations
+   *  received" day cards (433 and 868 — the server's format, vibe_ism_gallery.h) — the map window must get BOTH bands' nodes,
+   *  not only the band ISM last used (ISM never ran here at all). Only the page's own fetch of those two URLs is answered. */
+  await ev(`(() => {
+    const now = Math.floor(Date.now() / 1000), day = Math.floor(now / 86400) * 86400, at = Math.max(day + 1, now - 600);
+    const hms = (t) => new Date(t * 1000).toISOString().slice(11, 19);
+    const card = (band, name, id, lat, lon) => 'LoRa nodes heard · ' + band + ' MHz\\n\\nEach node, most recent first (…):\\n'
+      + [hms(at), hms(at), '3×', 'background', 'MeshCore', 'repeater', name, id, lat + ', ' + lon, '0', '7.5', band].join(' · ') + '\\n';
+    const date = new Date(day * 1000).toISOString().slice(0, 10);
+    const items = [{ s: 'ismnodes-433-' + date, t: day, f: 'm433.txt', k: 'ism' }, { s: 'ismnodes-868-' + date, t: day, f: 'm868.txt', k: 'ism' }];
+    const bodies = { 'm433.txt': card('433.920', 'Hill 433', 'aa11', '51.5100', '-1.2000'), 'm868.txt': card('869.525', 'Tower 868', 'bb22', '51.7000', '-0.9000') };
+    const real = window.fetch.bind(window);
+    window.fetch = (u, o) => { const s = String(u);
+      if (/\\/vibeserver\\/gallery\\.json\\?kind=ism&/.test(s)) return Promise.resolve(new Response(JSON.stringify({ items }), { headers: { 'content-type': 'application/json' } }));
+      const m = /\\/vibeserver\\/gallery\\/file\\/(m433|m868)\\.txt/.exec(s); if (m) return Promise.resolve(new Response(bodies[m[1] + '.txt']));
+      return real(u, o); };
+    return true; })()`);
   const before = new Set((await fetch(`http://127.0.0.1:${dbg}/json/list`).then((r) => r.json())).map((t) => t.id));
   await send('Runtime.evaluate', { expression: `document.getElementById('aprsMapBtn').click()`, userGesture: true });
   let mapT = null;
@@ -171,6 +188,11 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
     ok(Wj.out === '0 | aprs 0', `two hours later in 1 H: both spots gone, and APRS with them: ${Wj.out}`);
     ok(/^DL1LIS,G4BGD \| aprs [1-9]/.test(Wj.day || ''), `24 H: all back: ${Wj.day}`);
     ok(/APRS/.test(await mev(`document.getElementById('legend').textContent`) || ''), 'the legend has APRS');
+    // ★★★ maps2: MESH holds every band's remembered nodes (the page read both cards one at a time and pushed them)
+    let meshNames = '';
+    for (let i = 0; i < 40; i++) { meshNames = await mev(`mesh.map(m => m.name).sort().join(',')`) || ''; if (/Hill 433/.test(meshNames) && /Tower 868/.test(meshNames)) break; await sleep(250); }
+    ok(meshNames === 'Hill 433,Tower 868', `MESH: both bands' remembered nodes (433 and 868, ISM never ran): ${meshNames}`);
+    ok(await mev(`mesh.every(m => !m.live)`) && /MESH 2/.test(await mev(`document.getElementById('amTabs').textContent`) || ''), `…remembered, not live, and the MESH tab counts them: ${await mev(`document.getElementById('amTabs').textContent`)}`);
     const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
     ok(/km/.test(sc || ''), `a scale bar (${sc})`);
     const r = await msend('Page.captureScreenshot', { format: 'png' });

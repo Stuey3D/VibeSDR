@@ -10,7 +10,9 @@
  */
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import { amKeep, amWinSec, amLiveOf, amMeshPoints, amBeaconPoints, amTabs, amSrcWords, AMATEUR_JS, AM_SRC_BACKGROUND, AM_SRC_LIVE } from '../src/utils/amateurMap';
+import { amKeep, amWinSec, amLiveOf, amMeshPoints, amBeaconPoints, amTabs, amSrcWords, AMATEUR_JS, AM_SRC_BACKGROUND, AM_SRC_LIVE,
+         amTabNow, amListRows, amCountsOf, amSpotKey, amAgoShort, amEmptyWords, AM_ROWS_MAX,
+         amMeshCardPick, amMeshLoader, AM_MESH_CARDS_MAX, AM_MESH_NODES_MAX } from '../src/utils/amateurMap';
 
 let pass = 0, fail = 0;
 const ok = (c: unknown, what: string) => { if (c) pass++; else { fail++; console.log(`FAIL ${what}`); } };
@@ -83,6 +85,102 @@ eq(amLiveOf('aprs', true), 'mesh', 'ISM mode: MESH is live');
 eq(amTabs({ spots: 3, aprs: 0, mesh: 2 }, '', ''), ['spots', 'mesh'], 'tabs: those with something');
 eq(amTabs({}, 'beacons', 'aprs'), ['aprs', 'beacons'], 'tabs: the live one and the one opened on, even empty');
 
+/* ── ★★★ beta96 maps2: THE APP's LIST IN TABS (amListRows — the web window's amList rows, TrackLiveList draws them) ── */
+{
+  const nowMs = 1_764_000_000_000;
+  const col = (m: string) => (m.toUpperCase() === 'FT8' ? '#f00' : '#0f0');
+  const spots = [
+    { call: 'G4BGD', mode: 'ft8', band: '20m', time: nowMs - 1800e3, distKm: 512.4, country: 'England', src: AM_SRC_BACKGROUND },   // background decoding
+    { call: 'DL1LIS', mode: 'CW', band: '40m', time: nowMs - 2400e3, country: 'Germany', src: AM_SRC_LIVE },                        // a listener's skimmer
+    { call: 'G4BGD', mode: 'FT8', band: '20m', time: nowMs - 60e3, distKm: 512.4, country: 'England' },                             // the same, heard just now by this app
+    { call: 'OLD1', mode: 'FT8', band: '20m', time: nowMs - 7200e3, src: AM_SRC_BACKGROUND },                                      // outside 1 H
+  ];
+  const aprs = [{ key: 'G4ABC-9', call: 'G4ABC-9', age: 600, km: 12.2, symName: 'Car', comment: 'mobile' }, { key: 'MB7UH', call: 'MB7UH', age: 9000, km: null, symName: 'Digi', comment: '' }];
+  const mesh = amMeshPoints([{ kind: 'meshcore', node: 'ab12', name: 'Hill repeater', lat: 51.5, lon: -1.2, age: 30, ntype: 'repeater' }], [], 1_764_000_000);
+  const beacons = amBeaconPoints({ beacons: [{ call: 'OH2B', where: 'Lohja', lat: 60.32, lon: 24.13 }], cells: [{ beacon: 0, band: 0, heardAgo: 120, steps: 3 }] }, ['20 m']);
+  const d = { spots, aprs, mesh, beacons };
+  eq(amCountsOf(d, '1h', nowMs), { spots: 2, aprs: 1, mesh: 1, beacons: 1 }, 'counts in 1 H (a spot heard twice counts once; the 2-h-old spot and the 2.5-h APRS out)');
+  eq(amCountsOf(d, '24h', nowMs), { spots: 3, aprs: 2, mesh: 1, beacons: 1 }, 'counts in 24 H');
+  const sr = amListRows('spots', d, '1h', nowMs, col);
+  eq(sr.map((r) => r.key), [amSpotKey('G4BGD', '20m', 'FT8'), amSpotKey('DL1LIS', '40m', 'CW')], 'SPOTS rows: newest first, one per station-band-mode');
+  eq(sr[0].second, 'FT8 · 20m · England · Heard by this app’s decoder', 'a spot heard by this app says so (the newest copy wins)');
+  eq(sr[1].second, 'CW · 40m · Germany · Heard by a listener’s decoder', 'a listener\'s stored spot says who heard it');
+  eq([sr[0].range, sr[0].age, sr[0].colour], ['512 km', '60 s', '#f00'], 'range, age and the mode\'s colour');
+  const bgOnly = amListRows('spots', { spots: [spots[0]] }, '24h', nowMs, col);
+  eq(bgOnly[0].second, 'FT8 · 20m · England · Heard by background decoding', 'a background spot says background decoding');
+  eq(amSpotKey('G4BGD', '20m', 'ft8'), 'spot:G4BGD|20m|FT8', 'the spot key is the page\'s key(s) (call|band|MODE)');
+  const ar = amListRows('aprs', d, '1h', nowMs, col);
+  eq(ar.map((r) => [r.key, r.name, r.second, r.range, r.age]), [['aprs:G4ABC-9', 'G4ABC-9', 'Car · mobile', '12 km', '10 min']], 'APRS rows through the window');
+  eq(amListRows('mesh', d, '1h', nowMs, col).map((r) => [r.key, r.second]), [['mesh:ab12', 'MeshCore · repeater · heard now']], 'MESH rows');
+  eq(amListRows('beacons', d, '1h', nowMs, col).map((r) => [r.key, r.second]), [['bcn:OH2B', 'Lohja · 20 m']], 'BEACONS rows');
+  const many = Array.from({ length: 400 }, (_, i) => ({ call: `M${i}`, mode: 'FT8', band: '20m', time: nowMs - i * 1000 }));
+  eq(amListRows('spots', { spots: many }, 'all', nowMs, col).length, AM_ROWS_MAX, 'rows capped at 300 (the 1 GB phones)');
+  eq([amAgoShort(45), amAgoShort(720), amAgoShort(3 * 3600), amAgoShort(3 * 86400)], ['45 s', '12 min', '3 h', '3 days'], 'the row\'s age words');
+  ok(/ISM mode hears/.test(amEmptyWords('mesh')) && /NCDXF/.test(amEmptyWords('beacons')), 'an empty tab says why (the web\'s words)');
+  // the tab: the pick while offered, else the live layer's, else the one opened on, else the first
+  eq(amTabNow(['spots', 'aprs'], 'aprs', 'spots', ''), 'aprs', 'tab: the viewer\'s pick wins');
+  eq(amTabNow(['spots', 'aprs'], 'mesh', 'spots', 'aprs'), 'spots', 'tab: a pick no longer offered → the live layer');
+  eq(amTabNow(['spots', 'aprs'], '', '', 'aprs'), 'aprs', 'tab: nothing live → the one opened on');
+  eq(amTabNow([], '', '', ''), 'spots', 'tab: none at all → SPOTS');
+}
+
+/* ── ★★★ beta96 maps2: MESH REMEMBERS EVERY ISM BAND (Stuart 11-26) — every band's day cards over the window, bounded ── */
+const meshDone = (async () => {
+  const now = 1_764_000_000, day = Math.floor(now / 86400) * 86400;
+  const card = (band: string, d: number) => ({ s: `ismnodes-${band}-2026-11-${String(26 - d).padStart(2, '0')}`, t: day - d * 86400, f: `${band}-${d}.txt` });
+  const items = [card('433', 0), card('868', 0), card('868', 1), card('915', 3), card('868', 9),
+                 { s: 'ismsum-868-2026-11-26', t: day, f: 'sum.txt' }, { s: 'ismlog-433-2026-11-26', t: day, f: 'log.txt' }];
+  eq(amMeshCardPick(items, '24h', now).map((c) => c.f), ['433-0.txt', '868-0.txt', '868-1.txt'], '24 H: today\'s and yesterday\'s cards of EVERY band (not the summary or the log)');
+  eq(amMeshCardPick(items, '7d', now).map((c) => c.f), ['433-0.txt', '868-0.txt', '868-1.txt', '915-3.txt'], '7 D: back to the window\'s first day');
+  eq(amMeshCardPick(items, 'all', now).length, 5, 'ALL: the gallery\'s 31 days');
+  const lots = Array.from({ length: 40 }, (_, i) => card(String(400 + i), i % 5));
+  eq(amMeshCardPick(lots, '30d', now).length, AM_MESH_CARDS_MAX, 'at most 16 cards (bounded)');
+  // the loader: one fetch at a time, a card older than yesterday kept (never fetched twice), today's and yesterday's fetched again
+  const fetched: string[] = [];
+  const nodesOf: Record<string, Array<{ key: string; last: number }>> = {
+    '433-0.txt': [{ key: 'a433', last: now - 600 }], '868-0.txt': [{ key: 'b868', last: now - 60 }], '868-1.txt': [{ key: 'c868', last: now - 80000 }],
+    '915-3.txt': [{ key: 'd915', last: now - 3 * 86400 + 100 }],
+  };
+  let inFlight = 0, most = 0;
+  const load = amMeshLoader<{ key: string; last: number }>({
+    list: async () => items,
+    card: async (f) => { inFlight++; most = Math.max(most, inFlight); fetched.push(f); await new Promise((r) => setTimeout(r, 1)); inFlight--; return nodesOf[f] ?? null; },
+    merge: (per) => per.flat(),
+  });
+  const a = await load('7d', now);
+  eq(a?.map((n) => n.key), ['b868', 'a433', 'c868', 'd915'], 'every band\'s nodes, newest first');
+  eq(most, 1, 'one card at a time (a live server)');
+  fetched.length = 0;
+  await load('7d', now + 60);
+  eq(fetched, ['433-0.txt', '868-0.txt', '868-1.txt'], 'again: today\'s and yesterday\'s fetched, the older day kept');
+  const b = await load('1h', now);
+  eq(b?.map((n) => n.key), ['b868', 'a433'], 'the loader\'s answer follows the window');
+  const busy = load('7d', now), again = await load('7d', now);
+  eq(again, null, 'a second load while one runs answers null (keep what is drawn)');
+  await busy;
+  const big = amMeshLoader<{ key: string; last: number }>({ list: async () => [card('868', 0)], card: async () => Array.from({ length: 1500 }, (_, i) => ({ key: `n${i}`, last: now - i })), merge: (per) => per.flat() });
+  eq((await big('24h', now))?.length, AM_MESH_NODES_MAX, 'at most 1000 nodes');
+  const none = amMeshLoader({ list: async () => null, card: async () => null, merge: () => [] });
+  eq(await none('24h', now), null, 'no gallery: null (the band\'s remembered ones stay)');
+})();
+
+/* ── the page text keeps each MESH / BEACONS marker by its key (a row opens it) ── */
+{
+  const made: Array<{ ll: number[]; popup?: string }> = [];
+  const mk = (ll: number[]) => { const m: any = { ll, addTo: () => m, bindPopup: (h: string) => { m.popup = h; return m; } }; made.push(m); return m; };
+  const c2: Record<string, unknown> = { esc: (v: unknown) => String(v), RIM: '#111', L: { circleMarker: mk, polyline: () => ({ addTo: () => ({}) }) } };
+  vm.createContext(c2);
+  vm.runInContext(AMATEUR_JS, c2);
+  const group = { clearLayers: () => {} };
+  (c2.amDrawMesh as Function)(group, [{ key: 'mesh:ab12', name: 'Hill', net: 'MeshCore', lat: 51.5, lon: -1.2, age: 30, live: true, what: '', approx: false }], '1h', false);
+  (c2.amDrawBeacons as Function)(group, [{ key: 'bcn:OH2B', call: 'OH2B', where: 'Lohja', lat: 60, lon: 24, age: 9000, bands: ['20 m'], best: 2 }], '1h', false, null);
+  const AM = c2.AM_MK as Record<string, any>;
+  ok(!!AM['mesh:ab12'] && AM['mesh:ab12'].ll[0] === 51.5, 'page: the mesh marker is kept by its key');
+  ok(!AM['bcn:OH2B'], 'page: a beacon outside the window has no marker');
+  (c2.amDrawMesh as Function)(group, [], '1h', false);
+  ok(!AM['mesh:ab12'], 'page: a redraw forgets the markers it no longer draws');
+}
+
 /* ── the pages ── */
 {
   const main = readFileSync('web/client/src/main.ts', 'utf8');
@@ -95,7 +193,23 @@ eq(amTabs({}, 'beacons', 'aprs'), ['aprs', 'beacons'], 'tabs: the live one and t
   ok(/id="amTabs" role="tablist"/.test(main) && /function amList\(\)/.test(main), 'web: the tabs');
   const mo = readFileSync('src/components/MapOverlay.tsx', 'utf8');
   ok(/AMATEUR_JS/.test(mo), 'app: the page carries the same rules');
+  // ★★★ beta96 maps2 the app's tabs: TrackLiveList (React Native — the pad walks it) over the 'digi' page, its rows amListRows
+  ok(/<TrackLiveList title="STATIONS" rows=\{amList\.rows\}/.test(mo) && /amListRows\(tab, d, win, now/.test(mo), 'app: the AMATEUR list is TrackLiveList fed by amListRows');
+  ok(/tabs=\{amList\.tabs\} tab=\{amList\.tab\} onTab=/.test(mo) && /amTabNow\(tabs, amPick, amateur\.live/.test(mo), 'app: the tabs and the tab rule');
+  ok(/const d = \{ spots: spots \?\? \[\], aprs:/.test(mo) && /amCountsOf\(d, win, now\)/.test(mo) && /const now = Date\.now\(\), win = digiWinShown;/.test(mo), 'app: the rows follow the HEARD IN window (the window keys)');
+  ok(/window\.__amFocus=function\(k\)/.test(mo) && /onFocus=\{amFocus\}/.test(mo), 'app: a row centres its station (__amFocus)');
+  ok(/nav=\{\{ navCtx: amNav\.navCtx, scrollProps: amNav\.scrollProps \}\}/.test(mo) && /navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo),
+     'app: the window keys and the list share ONE pad order (two owners would strand the keys)');
+  ok(/window\.__amListWH=function/.test(mo) && /body\.amL:not\(\.dwide\) #dsum/.test(mo), 'app: the summary strip and the scale stand clear of the list');
+  ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored,/.test(main) && /savePref\('digiMapWindow', digiWindowOf\(ev\.data\.window\)\);\n  amMeshRefresh\(\);/.test(main),
+     'web: MESH remembers every band (amMeshLoader), and follows the window');
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored\?\.nodes \?\? \[\]/.test(sdr) && /amMeshLoad\(digiWin,/.test(sdr), 'app: MESH remembers every band, and follows the window');
+  const sd = readFileSync('src/services/digiStations.ts', 'utf8');
+  ok(/src: s\.src \}\);/.test(sd), 'app: a stored station carries who heard it (src) to the row');
 }
 
-console.log(`test_amateur_map: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+void meshDone.catch((e) => { fail++; console.log('FAIL the mesh loader threw', e); }).then(() => {
+  console.log(`test_amateur_map: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});

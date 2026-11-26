@@ -28,10 +28,13 @@ export interface DigiMapKeysProps {
   onPanel: (id: keyof DigiPanelsShown, on: boolean) => void;
   onHeight?: (h: number) => void;
   ink: { x: string; k: string; kt: string };
+  /** ★★★ beta96 maps2: the map's shared pad order (with the AMATEUR list, TrackLiveList) — absent = the keys' own. */
+  navCtx?: React.ContextType<typeof NavCtx>;
 }
 
 export default function DigiMapKeys(p: DigiMapKeysProps) {
-  const { navCtx } = usePanelNav(true, { flat: true });
+  const own = usePanelNav(!p.navCtx, { flat: true });
+  const navCtx = p.navCtx ?? own.navCtx;
   const s = useMemo(() => makeStyles(p.ink), [p.ink]);
   return (
     <NavCtx.Provider value={navCtx}>

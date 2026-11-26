@@ -1236,6 +1236,12 @@ target_include_directories(test-ndb-gallery-clean PRIVATE "${CPP_DIR}" "${CMAKE_
 vibe_sanitize(test-ndb-gallery-clean)
 target_link_libraries(test-ndb-gallery-clean PRIVATE Threads::Threads)
 add_test(NAME ndb-gallery-clean COMMAND test-ndb-gallery-clean "${CMAKE_CURRENT_SOURCE_DIR}/testdata-ndb-gallery")
+# ★★★ beta96 maps2 the day's sondes and VOR stations in the gallery (vibe_posgal.h — the AIR & SEA map's stored layers)
+add_executable(test-posgal "${CMAKE_CURRENT_SOURCE_DIR}/test-posgal.cpp")
+target_include_directories(test-posgal PRIVATE "${CPP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+vibe_sanitize(test-posgal)
+target_link_libraries(test-posgal PRIVATE Threads::Threads)
+add_test(NAME posgal COMMAND test-posgal)
 # ★ The mDNS responder's question parser (2026-10-17): compressed questions — Apple packs several lookups into one
 #   packet — were ignored, so <name>.local resolved only when ours happened to be the first, uncompressed question.
 #   ★ 2026-10-20: and respond() — whole query packets in, whole responses out: A+AAAA → A + NSEC, browse → PTR with

@@ -194,6 +194,9 @@ export interface SpotRow {
   bearing?: number;
   /** ★ V12 beta92 a VibeServer's stored station: the radio id(s) that heard it (src/utils/logRadio.ts); none = unknown. */
   radios?: string[];
+  /** ★★★ beta96 maps2 a stored station's ORIGIN bits (vibe_station_store.h: 1 background decoding · 2 a listener's decoder ·
+   *  4 a satellite pass) — the AMATEUR map's row says who heard it (amateurMap.ts amSrcWords). Absent = not from the store. */
+  src?: number;
 }
 
 /** A finite number, or undefined. Accepts the numeric-string form some servers send. */
