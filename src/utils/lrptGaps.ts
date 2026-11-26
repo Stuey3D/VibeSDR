@@ -150,27 +150,50 @@ export function drawBand(o: Uint8Array | Uint8ClampedArray, w: number, oy: numbe
 export function bandPixels(w: number, h: number, label: string[]): Uint8ClampedArray<ArrayBuffer> {
   const o = new Uint8ClampedArray(w * h * 4); drawBand(o, w, 0, h, label); return o;
 }
-/** The whole shown picture (the app): `src` RGBA, w wide, true rows → the squashed RGBA (plan.h rows). */
-export function renderSquashed(src: Uint8Array, w: number, plan: SquashPlan): Uint8Array {
+/* ★★★ beta96 NORTH UP (Stuart 11-26): a NORTHBOUND pass comes off the scanner south-up, east on the left; lrpt_status
+ * says "rot":180 and the shown picture is turned round — the picture's pixels turned, the bands and their labels placed
+ * at the turned place but drawn UPRIGHT (never turned text), the outline's points turned and its label TEXT left upright
+ * at the turned anchor. The newest rows are then at the TOP (follow = the top). The server's buffers stay as received;
+ * the gallery's pictures are turned once on the server (vibe_lrpt.h renderPictures). */
+/** A shown row's place once turned (rot) — where segment rows [dst0, dst0 + n) go: [H − dst0 − n, H − dst0). */
+export const turnedTop = (plan: SquashPlan, dst0: number, n: number) => plan.h - dst0 - n;
+/** The whole shown picture (the app): `src` RGBA, w wide, true rows → the squashed RGBA (plan.h rows), turned if `rot`. */
+export function renderSquashed(src: Uint8Array, w: number, plan: SquashPlan, rot = false): Uint8Array {
   const o = new Uint8Array(w * Math.max(1, plan.h) * 4);
   for (const s of plan.segs) {
-    if (s.gap) drawBand(o, w, s.dst0, s.dstH, s.label);
-    else o.set(src.subarray(s.src0 * w * 4, s.src1 * w * 4), s.dst0 * w * 4);
+    if (s.gap) { drawBand(o, w, rot ? turnedTop(plan, s.dst0, s.dstH) : s.dst0, s.dstH, s.label); continue; }
+    if (!rot) { o.set(src.subarray(s.src0 * w * 4, s.src1 * w * 4), s.dst0 * w * 4); continue; }
+    // turned: source row r, column x → shown row (H − 1 − (dst0 + r − src0)), column (w − 1 − x)
+    const u32s = new Uint32Array(src.buffer, src.byteOffset, (src.byteLength >> 2));
+    const u32o = new Uint32Array(o.buffer, o.byteOffset, o.byteLength >> 2);
+    for (let r = s.src0; r < s.src1; r++) {
+      const dy = plan.h - 1 - (s.dst0 + r - s.src0), si = r * w, di = dy * w + w - 1;
+      for (let x = 0; x < w; x++) u32o[di - x] = u32s[si + x];
+    }
   }
   return o;
 }
 
-/** The live MAP OUTLINE moved with the picture (its rows through the plan; a gap's lines run through its band). */
-export function mapOutline(o: Outline, plan: SquashPlan): Outline {
-  if (!plan.bands) return o;
-  const mapLines = (ls: number[][]) => ls.map((l) => { const m = l.slice(); for (let i = 1; i < m.length; i += 2) m[i] = Math.round(mapRow(plan, m[i]) * 10) / 10; return m; });
+/** The live MAP OUTLINE moved with the picture (its rows through the plan; a gap's lines run through its band), and
+ *  turned with it when `rot` — POINTS turned, label text upright at its turned anchor (kept inside the picture). */
+export function mapOutline(o: Outline, plan: SquashPlan, rot = false): Outline {
+  if (!plan.bands && !rot) return o;
+  const W = o.w, H = plan.h;
+  const px = (x: number) => (rot ? W - x : x);
+  const py = (y: number) => { const m = mapRow(plan, y); return rot ? H - m : m; };
+  const mapLines = (ls: number[][]) => ls.map((l) => { const m = l.slice(); for (let i = 0; i + 1 < m.length; i += 2) { m[i] = Math.round(px(m[i]) * 10) / 10; m[i + 1] = Math.round(py(m[i + 1]) * 10) / 10; } return m; });
   const lines = { coast: mapLines(o.lines.coast), lake: mapLines(o.lines.lake), border: mapLines(o.lines.border), grid: mapLines(o.lines.grid) };
   const path = (ls: number[][]) => ls.map((l) => { let d = `M${l[0]} ${l[1]}`; for (let i = 2; i + 1 < l.length; i += 2) d += `L${l[i]} ${l[i + 1]}`; return d; }).join('');
+  // a label's anchor is its text's top-left: turned, the anchor moves and the text still runs right and down from it —
+  // so it is pulled back inside (≈ 7 px a character at the preview's size, 12 down)
+  const label = (l: { x: number; y: number; text: string }) => (rot
+    ? { ...l, x: Math.max(0, Math.min(W - l.text.length * 7, px(l.x))), y: Math.max(0, Math.min(H - 12, py(l.y))) }
+    : { ...l, y: py(l.y) });
   return {
-    ...o, h: Math.max(1, Math.round(mapRow(plan, o.h))), lines,
+    ...o, h: rot ? Math.max(1, H) : Math.max(1, Math.round(mapRow(plan, o.h))), lines,
     coast: path(lines.coast), lake: path(lines.lake), border: path(lines.border), grid: path(lines.grid),
-    labels: o.labels.map((l) => ({ ...l, y: mapRow(plan, l.y) })),
-    centre: o.centre ? [o.centre[0], mapRow(plan, o.centre[1])] : null,
+    labels: o.labels.map(label),
+    centre: o.centre ? [px(o.centre[0]), py(o.centre[1])] : null,
   };
 }
 

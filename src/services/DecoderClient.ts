@@ -804,7 +804,7 @@ export class DecoderClient {
           } else if (m.type === 'lrpt_status' && m.data) {
             if (this.active !== 'lrpt') return;
             const st = parseLrptStatus(m.data);
-            if (st && this.outlineStore) setLiveGaps(st.gaps);   // ★★★ beta96 the live picture's gaps, squashed to bands
+            if (st && this.outlineStore) setLiveGaps(st.gaps, st.rot);   // ★★★ beta96 the live picture's gaps (bands) + north up
             this.cb.onStatus(lrptStatusText(st));
             if (st) this.cb.onDot(st.lines > 0 || st.sync ? 'active' : st.carrier ? 'sync' : 'idle');
           } else if (m.type === 'vor' && m.data) {

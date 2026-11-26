@@ -561,7 +561,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))} fullWidth
                     decoderName={p.picked!.decoder === 'lrpt' ? 'meteor' : 'sstv'}
                     outline={p.picked!.decoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
-                    gaps={p.picked!.decoder === 'lrpt' ? lrptOl.gaps : undefined}
+                    gaps={p.picked!.decoder === 'lrpt' ? lrptOl.gaps : undefined} rot180={p.picked!.decoder === 'lrpt' && lrptOl.rot === 180}
                     onInfo={() => {}} onStatus={() => {}} onPrevState={() => {}} />
                 </View>
               )}

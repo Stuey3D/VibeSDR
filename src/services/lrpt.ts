@@ -29,6 +29,9 @@ export interface LrptStatus {
   /** ★★★ beta96 the live preview's gaps, merged (vibe_lrpt_run.h gapart::mergeGaps) — the clients draw each as one short
    *  band (src/utils/lrptGaps.ts). [] from an older server or with none. */
   gaps: LrptGap[];
+  /** ★★★ beta96 NORTH UP: 180 = a northbound pass — the live preview is shown turned round (src/utils/lrptGaps.ts);
+   *  0 = southbound / not known yet / an older server. */
+  rot: 0 | 180;
   channels: string[];    // live MSU-MR channels ("1 visible", "2 near-IR", "5 thermal" …)
   why?: string;          // a reason it cannot run here (the IQ slice's rate)
 }
@@ -56,6 +59,7 @@ export function parseLrptStatus(d: unknown): LrptStatus | null {
     decoded: typeof o.decoded === 'number' && isFinite(o.decoded) ? Math.max(0, Math.round(o.decoded)) : undefined,
     gapLines: typeof o.gapLines === 'number' && isFinite(o.gapLines) ? Math.max(0, Math.round(o.gapLines)) : undefined,
     gaps: parseLrptGaps(o.gaps),
+    rot: o.rot === 180 ? 180 : 0,
     channels: Array.isArray(o.channels) ? (o.channels as unknown[]).filter((c) => typeof c === 'string').map((c) => (c as string).slice(0, 24)).slice(0, 6) : [],
     why: typeof o.why === 'string' && o.why ? (o.why as string).slice(0, 160) : undefined,
   };

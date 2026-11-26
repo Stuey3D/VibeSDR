@@ -151,6 +151,9 @@ export interface DecoderImageCanvasProps {
    *  SATELLITE box (fullWidth) it then shows the WHOLE pass when that fits (lrptFits), else follows the newest lines, and
    *  a tap flips between the two. undefined = any other picture, unchanged. The buffers (SAVE, PREV) stay true geometry. */
   gaps?: LrptGap[] | null;
+  /** ★★★ beta96 NORTH UP: a northbound METEOR pass — the live picture shown turned round (bands and label text upright),
+   *  the outline turned with it, follow = the TOP (the newest rows). PREV and SAVE stay as received. */
+  rot180?: boolean;
 }
 
 /** Row `y` of a WEFAX buffer from its kept raw line, moved per `a` (left by shift + slant·y, wrapping) — into `al`. */
@@ -210,9 +213,12 @@ function mkBuf(w: number, h: number): PixBuf {
 const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProps>(
   function DecoderImageCanvas({ maxHeight, fullWidth = false, onInfo, onStatus, onPrevState, decoderName, zoom = 1, align,
                                autoMargin = false, autoSlant = true, stationSlant = 0, stationFormat, onAutoAlign,
-                               alignPreview, onAlignDrag, raw = false, onNewChart, outline = null, gaps }, ref) {
+                               alignPreview, onAlignDrag, raw = false, onNewChart, outline = null, gaps, rot180 = false }, ref) {
     const gapsRef = useRef(gaps);
     gapsRef.current = gaps;
+    const rotRef = useRef(rot180);
+    rotRef.current = rot180;
+    const [planRot, setPlanRot] = useState(false);   // ★ beta96 the shown picture is turned (north up)
     const [plan, setPlan] = useState<SquashPlan | null>(null);   // ★ beta96 the shown picture's squash (null = row for row)
     const [lrptView, setLrptView] = useState<LrptView>('auto');
     const rawRef = useRef(raw);
@@ -318,11 +324,12 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       // ★★★ beta96 METEOR LRPT: the live picture's gaps as short bands (the buffer itself stays true geometry)
       const gs = gapsRef.current;
       let pl: SquashPlan | null = null;
-      if (gs && gs.length && buf === live.current) {
+      const rot = !!rotRef.current && gs !== undefined && buf === live.current;
+      if (gs && buf === live.current && (gs.length || rot)) {
         pl = squashPlan(gs, visH);
-        if (pl.bands) { slice = renderSquashed(slice, buf.w, pl); visH = pl.h; } else pl = null;
+        if (pl.bands || rot) { slice = renderSquashed(slice, buf.w, pl, rot); visH = pl.h; } else pl = null;
       }
-      setPlan(pl);
+      setPlan(pl); setPlanRot(!!pl && rot);
       const data = Skia.Data.fromBytes(slice);
       const sk = Skia.Image.MakeImage(
         { width: buf.w, height: visH, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque },
@@ -361,7 +368,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
       if (gaps === undefined || viewingPrev || !live.current) return;
       rebuild(live.current, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [gapsKey]);
+    }, [gapsKey, rot180]);
 
     const rollToPrev = useCallback(() => {
       if (live.current && live.current.maxLine > 0) live.current.complete = true;
@@ -687,7 +694,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
     // The shift as the listener reads it: px, signed, the short way round (−904…+904 on a 1809 px chart).
     // ★ V12 the MAP OUTLINE as Skia paths at the drawn scale (rebuilt only when the outline or the scale changes)
     // ★ beta96 the outline moved with the squashed picture (its rows through the same plan)
-    const shownOutline = useMemo(() => (outline && plan ? mapOutline(outline, plan) : outline), [outline, plan]);
+    const shownOutline = useMemo(() => (outline && plan ? mapOutline(outline, plan, planRot) : outline), [outline, plan, planRot]);
     const olPaths = useMemo(() => {
       const outline = shownOutline;
       if (!outline || viewingPrev) return null;
@@ -710,8 +717,9 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
                   showsVerticalScrollIndicator
                   ref={vScrollRef}
                   scrollEventThrottle={100}
-                  onScroll={fullWidth ? (e) => { const n = e.nativeEvent; followRef.current = n.contentOffset.y + n.layoutMeasurement.height >= n.contentSize.height - 24; } : undefined}
-                  onContentSizeChange={fullWidth ? () => { if (followRef.current) vScrollRef.current?.scrollToEnd({ animated: false }); } : undefined}
+                  // ★★★ beta96 a turned (north-up) METEOR picture grows at its TOP: following it is staying at the top
+                  onScroll={fullWidth ? (e) => { const n = e.nativeEvent; followRef.current = planRot ? n.contentOffset.y <= 24 : n.contentOffset.y + n.layoutMeasurement.height >= n.contentSize.height - 24; } : undefined}
+                  onContentSizeChange={fullWidth ? () => { if (followRef.current) { if (planRot) vScrollRef.current?.scrollTo({ y: 0, animated: false }); else vScrollRef.current?.scrollToEnd({ animated: false }); } } : undefined}
                   onLayout={(e) => { const w = Math.floor(e.nativeEvent.layout.width); setBoxW((p) => (p === w ? p : w)); }}
                   /* ★ scroll lane: a picture, centred, no controls in it */>
         {/* Centred: once the image is narrower than the panel (shrunk to fit a short box) it would

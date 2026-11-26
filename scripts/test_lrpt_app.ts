@@ -4,7 +4,7 @@
 import { lrptAttachParams, lrptStatusText, parseLrptStatus } from '../src/services/lrpt';
 import { REACH_DECODERS } from '../src/services/sdrTypes';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
-import { GAP_BAND_ROWS, INK, lrptFitNow, lrptFits, lrptViewToggle, mapOutline, mapRow, parseLrptGaps, renderSquashed, squashPlan } from '../src/utils/lrptGaps';
+import { GAP_BAND_ROWS, INK, drawBand, lrptFitNow, lrptFits, lrptViewToggle, mapOutline, mapRow, parseLrptGaps, renderSquashed, squashPlan } from '../src/utils/lrptGaps';
 import { createHash } from 'node:crypto';
 
 let fail = 0;
@@ -105,6 +105,23 @@ ok((CLIENT_DECODERS as readonly string[]).includes('lrpt'), 'a client decoder (C
   ok(!lrptFits(W, 1560, 360, 440), 'beta96: unsquashed it would not (the old behaviour: follow, the early picture scrolled away)');
   ok(!lrptFitNow('auto', W, 1600, 700, 440) && lrptFitNow('fit', W, 1600, 700, 440) && !lrptFitNow('follow', W, 100, 700, 440), 'beta96: a sliver follows; a tap overrides either way');
   ok(lrptViewToggle(true) === 'follow' && lrptViewToggle(false) === 'fit', 'beta96: a tap flips fit / follow');
+  // ★★★ beta96 NORTH UP: a northbound pass ("rot":180) shown turned round; a southbound one as received
+  ok(parseLrptStatus({ ...status, rot: 180 })!.rot === 180 && parseLrptStatus(status)!.rot === 0 && parseLrptStatus({ rot: 90 })!.rot === 0, 'beta96: "rot" parses (180 only; else 0)');
+  const turned = renderSquashed(src, W, plan, true);
+  const px = (a: Uint8Array, x: number, y: number) => Array.from(a.subarray((y * W + x) * 4, (y * W + x) * 4 + 4)).join(',');
+  ok(px(turned, 0, 0) === px(src, W - 1, H - 1) && px(turned, W - 1, plan.h - 1) === px(src, 0, 0), 'beta96: turned — the top-left pixel is the newest row\'s last (the top row = the northernmost on a northbound pass)');
+  ok(px(turned, 10, plan.h - 1 - 50) === px(src, W - 1 - 10, 50), 'beta96: every picture row turned (row 50 → its turned place, mirrored across)');
+  // the band: at its turned place, its label UPRIGHT (the very pixels of the unturned band — never turned text)
+  const bandAlone = new Uint8Array(W * GAP_BAND_ROWS * 4); drawBand(bandAlone, W, 0, GAP_BAND_ROWS, band.label);
+  const tTop = plan.h - 100 - GAP_BAND_ROWS;
+  ok(Buffer.compare(Buffer.from(turned.subarray(tTop * W * 4, (tTop + GAP_BAND_ROWS) * W * 4)), Buffer.from(bandAlone)) === 0, 'beta96: turned, the band sits at its turned place with its label upright (byte for byte the unturned band)');
+  ok(Buffer.compare(Buffer.from(renderSquashed(src, W, plan, false)), Buffer.from(out)) === 0, 'beta96: southbound / not known: as received (unchanged)');
+  ok(createHash('sha256').update(src).digest('hex') === before, 'beta96: turning the shown picture leaves the received one untouched');
+  // the outline turned with it: points turned, label text unchanged at a turned anchor inside the picture
+  const mt = mapOutline(ol, plan, true);
+  ok(mt.lines.coast[0][0] === W - 0 && mt.lines.coast[0][1] === plan.h - 50 && mt.lines.coast[0][2] === W - 100 && mt.lines.coast[0][3] === plan.h - (300 - 154 + GAP_BAND_ROWS), 'beta96: the outline\'s points turned with the picture');
+  ok(mt.labels[0].text === '50N' && mt.labels[0].x >= 0 && mt.labels[0].x <= W - 3 * 7 && mt.labels[0].y === plan.h - (300 - 154 + GAP_BAND_ROWS), `beta96: its label text unturned, at its turned anchor inside the picture (${mt.labels[0].x}, ${mt.labels[0].y})`);
+  ok(mapOutline(ol, squashPlan([], H), false) === ol, 'beta96: no gaps and not turned: the outline as sent');
   // junk
   ok(parseLrptGaps([[5, 2, 0, 0, 1, 0], ['x'], null, [0, 10, -5, NaN, 4, 0], [8, 20, 1, 2, 3, 0]]).length === 1, 'beta96: junk gaps dropped, overlaps dropped');
 }

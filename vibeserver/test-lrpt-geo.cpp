@@ -326,6 +326,14 @@ int main() {
                 CHECK(dec && turned && !same, "northbound: the gallery picture is the scanned one turned round EXACTLY ONCE (pixel for pixel)");
                 CHECK(p.geoJson.find("\"rot\":180") != std::string::npos, "northbound: its outline is drawn for the turned picture (rot 180)");
                 CHECK(lastStatus.find("\"rot\":180") != std::string::npos, "northbound: lrpt_status tells the clients to turn the live preview");
+                // ★ DOWNLOAD with the outline: the burnt copy is the TURNED picture with the turned outline — same size, not
+                //   turned a second time (the PNG's own pixels, apart from the outline's, unchanged)
+                std::string err; const std::string burnt = burn::withOutline(p.png, p.geoJson, err);
+                int bw = 0, bh = 0; std::vector<uint8_t> br;
+                const bool bok = !burnt.empty() && burn::decodeRgb(burnt, bw, bh, br).empty() && bw == pw && bh == ph;
+                size_t keep = 0, all = 0;
+                if (bok) for (size_t i = 0; i < br.size(); i += 3 * 97) { all++; keep += br[i] == pr[i] && br[i + 2] == pr[i + 2]; }
+                CHECK(bok && keep * 10 >= all * 8, "northbound: the burnt copy is the turned picture, not turned again (%zu of %zu samples unchanged)", keep, all);
             } else {
                 CHECK(rotted == 0 && !noted && p.name.find("north up") == std::string::npos, "southbound: nothing turned, no note");
                 CHECK(dec && same, "southbound: the gallery picture is as scanned (pixel for pixel)");
@@ -354,6 +362,13 @@ int main() {
             CHECK(at(50, 2) == ((g << 16) | (g << 8) | g), "the rest of the picture is untouched");
             bool lab = false; for (int y = 24; y < 40; y++) for (int x = 24; x < 40; x++) if (at(x, y) == 0x96CDFF) lab = true;
             CHECK(lab, "the grid label is drawn");
+            /* ★★★ beta96 the label TEXT reads the right way round (11-26: a saved "map outline" picture showed "N°55", "M°02" —
+             *  a south-up picture with upright labels, turned round afterwards to look at it; the server now turns the PICTURE
+             *  first and burns upright text into the turned one). 'N' of "5°N" at x 48: its diagonal is at the LEFT in glyph
+             *  row 2 (0x19) and at the RIGHT in row 4 (0x13); a mirrored or turned glyph has them the other way. */
+            const int nx = 24 + 2 * 12, ny = 24;
+            CHECK(at(nx + 1 * 2, ny + 2 * 2) == 0x96CDFF && at(nx + 3 * 2, ny + 2 * 2) != 0x96CDFF, "the label's N is upright, not mirrored (row 2: diagonal on the left)");
+            CHECK(at(nx + 3 * 2, ny + 4 * 2) == 0x96CDFF && at(nx + 1 * 2, ny + 4 * 2) != 0x96CDFF, "…and row 4: on the right");
         }
         // ★ every PNG row filter decodes (our writer uses Sub only; a decoder that skipped the others would be a trap)
         std::string rt; int rw, rh; std::vector<uint8_t> back;
