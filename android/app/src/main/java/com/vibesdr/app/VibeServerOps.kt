@@ -303,6 +303,7 @@ object VibeServerOps {
         when (a.optString("what")) {
             "compressAudio"    -> VibeLocalSDR.setVibeServerCompressAudio(a.optBoolean("on", true))
             "adminSecret"      -> VibeLocalSDR.setVibeServerAdminSecret(a.optString("secret", ""))
+            "pin"              -> VibeLocalSDR.setVibeServerAuth(a.optString("pin", ""))   // ★★ beta96 the device's own PIN change, live
             "uncompressed"     -> VibeLocalSDR.setVibeServerUncompressedAudio(a.optInt("mode", 0))
             "sessionLimit"     -> VibeLocalSDR.setVibeServerSessionLimit(a.optInt("minutes", 0))
             "stations"         -> { val j = a.optString("json", "[]"); VibeLocalSDR.setStationsJson(j); VibeServerRestore.cacheStations(ctx, j) }

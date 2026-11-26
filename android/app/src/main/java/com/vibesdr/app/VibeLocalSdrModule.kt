@@ -1214,6 +1214,9 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
     /** Live, no restart — the operator can lock the controls on a running server. */
     @ReactMethod
     fun setVibeServerAdminSecret(secret: String) { tell("adminSecret", JSONObject().put("secret", secret)) }
+    /** ★★ beta96 the listener PIN changed on the device itself (DeviceCredentials) — in force at once. */
+    @ReactMethod
+    fun setVibeServerPin(pin: String) { tell("pin", JSONObject().put("pin", pin)) }
 
     @ReactMethod
     fun setVibeServerUncompressedAudio(mode: Double) {
