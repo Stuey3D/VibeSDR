@@ -115,11 +115,39 @@ await session('snd', CLIP, 403005000, 96100000, 'wfm', async ({ ev, send, shot, 
   // ★ the band control moves the radio (the server owns the band: the next report lights the new one)
   await ev(`document.querySelector('.trkView:not([hidden]) [data-rng="hi"]')?.click()`);
   ok(await until(`document.querySelector('.trkView:not([hidden]) [data-rng="hi"]')?.getAttribute('aria-pressed') === 'true' && /404–406 MHz/.test(document.querySelector('.trkView:not([hidden]) .st')?.textContent || '')`, 8000), 'a band pick: 404–406 MHz');
+  // ★★★ beta96 maps2: the server feeds the day's sondes card every 20 s while SONDES runs (vibe_posgal.h) — make sure one
+  //     tick has seen positions before leaving, so the card is written when the mode stops
+  await sleep(22000);
   await ev(`document.querySelector('.trkView:not([hidden]) .exit').click()`);
   ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'EXIT SONDES closes the view');
   await sleep(1500);
   const after = await ev(`document.getElementById('mFreq')?.textContent`);
   ok(/96\.100/.test(after || ''), `the dial is back: ${after}`);
+  /* ★★★ beta96 maps2 STORED SONDES: the mode's end writes the day's card (gallery kind sondes, slot sondes-<date>); the AIR & SEA
+   *  map, opened from VIEWS · AVIATION with SONDES off, draws them from it — faded by age, keyed sds:, in the SONDES tab as
+   *  "remembered", the KEY's remembered row, the status. */
+  const cardUp = await until(`fetch('/vibeserver/gallery.json?kind=sondes&limit=10', { cache: 'no-store' }).then(r => r.json()).then(j => (j.items || []).some(i => /^sondes-\\d{4}-/.test(i.s || ''))).catch(() => false)`, 40000);
+  ok(cardUp, 'the day\'s sondes card is in the gallery once SONDES stops (kind sondes, slot sondes-<date>)');
+  const card = await ev(`fetch('/vibeserver/gallery.json?kind=sondes&limit=10', { cache: 'no-store' }).then(r => r.json()).then(j => { const it = (j.items || []).find(i => /^sondes-/.test(i.s || '')); return it ? fetch('/vibeserver/gallery/file/' + encodeURIComponent(it.f)).then(r => r.text()) : ''; })`) || '';
+  ok(/^Radiosondes heard · \d{4}-\d\d-\d\d \(UTC\)/.test(card) && /S3310411 · - · /.test(card) && /U0912345 · - · /.test(card), `the card lists the sondes heard: ${card.split('\n').slice(5, 8).join(' | ')}`);
+  await ev(`document.getElementById('avMapBtn')?.click()`);
+  ok(await until(`[...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'VIEWS · AVIATION opens the AIR & SEA map with SONDES off');
+  ok(await until(`!!document.querySelector('.trkView:not([hidden]) .tab[data-tab="sondes"]')`, 20000),
+     `the SONDES tab is there from the store: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tab')].map(b => b.textContent.trim()).join(',')`)}`);
+  const chips = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) [data-tgl]')].map(b => b.textContent.trim()).join(',')`) || '';
+  ok(!chips || /SONDES/.test(chips), `its chip where there is a chip row (one layer alone draws none): ${chips || '(none)'}`);
+  ok(!/RADIOSONDES/.test(await ev(`document.querySelector('.trkView:not([hidden]) .ttl')?.textContent`) || ''), 'not live: the title is not SONDES\'s');
+  await ev(`document.querySelector('.trkView:not([hidden]) .tab[data-tab="sondes"]')?.click()`);
+  ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow')].filter(r => (r.dataset.key || '').startsWith('sds:')).length >= 3`, 8000),
+     `the SONDES tab lists them as remembered: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow')].map(r => r.dataset.key + ' ' + (r.querySelector('small')?.textContent || '')).join(' | ')`)}`);
+  ok(/remembered/.test(await ev(`document.querySelector('.trkView:not([hidden]) .trkRow[data-key^="sds:"] small')?.textContent`) || ''), 'a row says remembered');
+  ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) .trkMapHost ellipse')].filter(e => e.getAttribute('fill') === '#9cc3d8').length >= 3`, 10000),
+     `the remembered balloons are on the map (${await ev(`document.querySelectorAll('.trkView:not([hidden]) .trkMapHost ellipse').length`)})`);
+  ok(/sondes remembered \(24 h\)/.test(await ev(`document.querySelector('.trkView:not([hidden]) .st')?.textContent`) || ''), `the status says so: ${await ev(`document.querySelector('.trkView:not([hidden]) .st')?.textContent`)}`);
+  await ev(`document.querySelector('.trkView:not([hidden]) .trkRow[data-key="sds:S3310411"]')?.click()`);
+  ok(await until(`/Remembered by this server/.test(document.querySelector('.vtl-card')?.textContent || '')`, 6000), `its card: ${(await ev(`document.querySelector('.vtl-card')?.textContent`) || '').slice(0, 140)}`);
+  console.log('   screenshot', await shot('stored'));
+  await ev(`document.querySelector('.trkView:not([hidden]) .exit').click()`);
 });
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
