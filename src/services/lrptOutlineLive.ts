@@ -9,9 +9,16 @@ import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { OUTLINE_KEY, outlineFromStored, outlineToStored, type Outline } from '../utils/lrptOutline';
 import { sameGaps, type LrptGap } from '../utils/lrptGaps';   // ★ beta96 the live picture's gaps (squashed bands)
+import { LRPT_PICK_KEY, pickFromStored, pickToStored, type LrptPick } from '../utils/lrptChannels';   // ★★★ beta96 the channel picker
 
-interface State { outline: Outline | null; why: string; on: boolean; gaps: LrptGap[]; rot: 0 | 180 }
-let state: State = { outline: null, why: '', on: outlineFromStored(null), gaps: [], rot: 0 };
+/** ★★★ beta96 THE VIEWER'S CHANNEL PICKER (src/utils/lrptChannels.ts): what the key says — set by DecoderClient, which keeps
+ *  the rows per channel and draws the one shown. `show` = this server sends channels and the pass has a choice. */
+export interface LrptChanKey { show: boolean; label: string; hint: string; picked: boolean }
+
+interface State { outline: Outline | null; why: string; on: boolean; gaps: LrptGap[]; rot: 0 | 180; pick: LrptPick; chan: LrptChanKey }
+const NO_CHAN: LrptChanKey = { show: false, label: '', hint: '', picked: false };
+let state: State = { outline: null, why: '', on: outlineFromStored(null), gaps: [], rot: 0, pick: 'auto', chan: NO_CHAN };
+const pickSubs = new Set<(p: LrptPick) => void>();
 const subs = new Set<(s: State) => void>();
 const emit = () => { for (const f of subs) f(state); };
 let loaded = false;
@@ -19,6 +26,7 @@ function load() {
   if (loaded) return;
   loaded = true;
   AsyncStorage.getItem(OUTLINE_KEY).then((v) => { state = { ...state, on: outlineFromStored(v) }; emit(); }).catch(() => {});
+  AsyncStorage.getItem(LRPT_PICK_KEY).then((v) => { const p = pickFromStored(v); if (p !== state.pick) { state = { ...state, pick: p }; emit(); for (const f of pickSubs) f(p); } }).catch(() => {});
 }
 
 /** DecoderClient: the server's live outline (or why there is none). */
@@ -27,6 +35,25 @@ export function setLiveOutline(outline: Outline | null, why: string) { state = {
 export function clearLiveOutline() { if (state.outline || state.why || state.gaps.length || state.rot) { state = { ...state, outline: null, why: '', gaps: [], rot: 0 }; emit(); } }
 /** ★★★ beta96 DecoderClient: the live picture's gaps from lrpt_status (src/utils/lrptGaps.ts) — emitted only when changed. */
 export function setLiveGaps(gaps: LrptGap[], rot: 0 | 180 = 0) { if (!sameGaps(gaps, state.gaps) || rot !== state.rot) { state = { ...state, gaps, rot }; emit(); } }
+/** ★★★ beta96 DecoderClient: the viewer's pick (loaded once from AsyncStorage) — `fn` runs now and on every change. */
+export function watchLrptPick(fn: (p: LrptPick) => void): () => void { load(); pickSubs.add(fn); fn(state.pick); return () => { pickSubs.delete(fn); }; }
+/** The key: the next channel (DecoderClient works out the choices and passes the next pick). Remembered on this device. */
+export function setLrptPick(p: LrptPick) {
+  if (p === state.pick) return;
+  state = { ...state, pick: p }; emit();
+  for (const f of pickSubs) f(p);
+  AsyncStorage.setItem(LRPT_PICK_KEY, pickToStored(p)).catch(() => {});
+}
+/** DecoderClient: what the key says (emitted only when it changed). */
+export function setLrptChanKey(k: LrptChanKey) {
+  const c = state.chan;
+  if (c.show === k.show && c.label === k.label && c.hint === k.hint && c.picked === k.picked) return;
+  state = { ...state, chan: k }; emit();
+}
+let nextPickFn: (() => void) | null = null;
+/** DecoderClient registers how to step to the next channel (it knows this pass's choices). */
+export function setLrptNextPick(fn: (() => void) | null) { nextPickFn = fn; }
+export function nextLrptPickNow() { nextPickFn?.(); }
 export function setOutlineOn(on: boolean) {
   state = { ...state, on }; emit();
   AsyncStorage.setItem(OUTLINE_KEY, outlineToStored(on)).catch(() => {});

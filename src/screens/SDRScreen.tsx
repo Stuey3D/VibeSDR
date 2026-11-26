@@ -6641,6 +6641,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         else if (activeDecRef.current === 'hell') decoderImageRef.current?.hellLine(ln, w, px);   // ★ FELD HELL: drawn plainly
         else                                 decoderImageRef.current?.wefaxLine(ln, w, px);
       },
+      // ★★★ beta96 METEOR LRPT: the viewer picked another channel — the live picture redrawn in it (lrptChannels.ts)
+      onImageRepaint: (n: number, row: (y: number) => Uint8Array | null) => { if (activeDecRef.current === 'lrpt') decoderImageRef.current?.repaintRgb(n, row); },
       onImageDone: () => {
         decoderImageRef.current?.imageDone();
         if (satOnRef.current && satDecRef.current && activeDecRef.current === satDecRef.current) setSatPictureDone(true);   // ★★★ SATELLITE: pass end

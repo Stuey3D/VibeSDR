@@ -6,6 +6,7 @@ import { REACH_DECODERS } from '../src/services/sdrTypes';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
 import { GAP_BAND_ROWS, INK, drawBand, lrptFitNow, lrptFits, lrptViewToggle, mapOutline, mapRow, parseLrptGaps, renderSquashed, squashPlan } from '../src/utils/lrptGaps';
 import { createHash } from 'node:crypto';
+import { LrptRows, LRPT_CHAN_OP, lrptChoices, lrptPickLabel, nextLrptPick, parseLrptChanFrame, pickFromStored, pickToStored, resolveLrptView } from '../src/utils/lrptChannels';
 
 let fail = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
@@ -124,6 +125,52 @@ ok((CLIENT_DECODERS as readonly string[]).includes('lrpt'), 'a client decoder (C
   ok(mapOutline(ol, squashPlan([], H), false) === ol, 'beta96: no gaps and not turned: the outline as sent');
   // junk
   ok(parseLrptGaps([[5, 2, 0, 0, 1, 0], ['x'], null, [0, 10, -5, NaN, 4, 0], [8, 20, 1, 2, 3, 0]]).length === 1, 'beta96: junk gaps dropped, overlaps dropped');
+}
+
+// ── ★★★ beta96 THE VIEWER'S CHANNEL PICKER (src/utils/lrptChannels.ts) — a 1-2-4 pass by DAY and by NIGHT ──
+{
+  const W = 8;
+  const chanFrame = (y: number, rA: number, bA: number, extras: Array<[number, number]>) => {
+    const b = [LRPT_CHAN_OP, y >>> 24, (y >>> 16) & 255, (y >>> 8) & 255, y & 255, 0, 0, 0, W, rA, bA, extras.length];
+    for (const [a, v] of extras) { b.push(a); for (let x = 0; x < W; x++) b.push(v + x); }
+    return new Uint8Array(b);
+  };
+  const f = parseLrptChanFrame(chanFrame(3, 65, 64, [[67, 100]]));
+  ok(!!f && f.y === 3 && f.w === W && f.rA === 65 && f.bA === 64 && f.extras.length === 1 && f.extras[0][0] === 67 && f.extras[0][1][2] === 102, 'beta96 picker: a 0x09 row parses');
+  ok(parseLrptChanFrame(chanFrame(3, 65, 64, [[67, 100]]).slice(0, 20)) === null && parseLrptChanFrame(chanFrame(3, 12, 64, [])) === null && parseLrptChanFrame(new Uint8Array([9, 0])) === null, 'beta96 picker: a short / junk 0x09 is dropped');
+  const rows = new LrptRows();
+  const rgb = new Uint8Array(W * 3); for (let x = 0; x < W; x++) { rgb[x * 3] = rgb[x * 3 + 1] = 200 + x; rgb[x * 3 + 2] = 10 + x; }
+  rows.composite(0, W, rgb);
+  ok(!rows.supported && !rows.ready(0), 'beta96 picker: an older server (no 0x09): not supported — no key');
+  rows.channels(parseLrptChanFrame(chanFrame(0, 65, 64, [[67, 100]]))!);
+  rows.composite(1, W, rgb);   // row 1's 0x09 not here yet
+  ok(rows.supported && rows.hasComp() && rows.apids().join() === '64,65,67', `beta96 picker: channels seen ${rows.apids().join()}`);
+  const c = rows.row(0, 'comp')!, c1 = rows.row(0, 64)!, c2 = rows.row(0, 65)!, c4 = rows.row(0, 67)!;
+  ok(c[0] === 200 && c[1] === 200 && c[2] === 10, 'beta96 picker: COMPOSITE = the 0x01 row as sent');
+  ok(c1[3] === 11 && c1[4] === 11 && c1[5] === 11 && c2[3] === 201 && c4[3] === 101 && c4[5] === 101, 'beta96 picker: CH 1 = its B, CH 2 = its R, CH 4 = the 0x09 extra — grey');
+  ok(!rows.ready(1) && rows.row(1, 'comp') !== null, 'beta96 picker: a row whose 0x09 is still to come is drawn only in the composite');
+  ok(rows.row(5, 64) === null, 'beta96 picker: a row never received: nothing (not drawn)');
+  const h = rows.row(0, 66)!;   // a channel this row does not carry: hatched as the server hatches
+  ok((h[0] === 54 || h[0] === 26) && h[2] === h[0] + 10, 'beta96 picker: a channel missing from a row is hatched');
+  // AUTO: by day the composite; at night (ch 1 + 2 dark) channel 4 — the very case of NickB's 19:43 Meteor-M2-3 pass
+  const day = resolveLrptView('auto', [64, 65, 67], [], true), night = resolveLrptView('auto', [64, 65, 67], [64, 65], true);
+  ok(day.view === 'comp' && day.why === 'day' && lrptPickLabel('auto', day) === 'AUTO · COMPOSITE', `beta96 AUTO by day: ${lrptPickLabel('auto', day)}`);
+  ok(night.view === 67 && night.why === 'night' && lrptPickLabel('auto', night) === 'AUTO · CH 4 IR (NIGHT)', `beta96 AUTO at night: ${lrptPickLabel('auto', night)}`);
+  ok(resolveLrptView('auto', [64, 65, 68], [64, 65], true).view === 68, 'beta96 AUTO at night on a 1-2-5 pass: channel 5');
+  ok(resolveLrptView('auto', [65, 67], [65], false).view === 67 && resolveLrptView('auto', [65, 67], [], false).view === 65, 'beta96 AUTO with no composite: the infrared at night, else the first channel');
+  ok(resolveLrptView('auto', [], [], false).view === 'comp', 'beta96 AUTO before any status: the composite (as ever)');
+  // manual picks, a pick this pass cannot show
+  ok(resolveLrptView(65, [64, 65, 67], [64, 65], true).view === 65 && lrptPickLabel(65, resolveLrptView(65, [64, 65, 67], [], true)) === 'CH 2', 'beta96 a manual pick is obeyed, even at night: CH 2');
+  ok(resolveLrptView('comp', [64, 65, 67], [64, 65], true).view === 'comp', 'beta96 COMPOSITE picked: the composite, night or not');
+  const gone = resolveLrptView(68, [64, 65, 67], [64, 65], true);
+  ok(gone.view === 67 && lrptPickLabel(68, gone) === 'AUTO · CH 4 IR (NIGHT)', 'beta96 a remembered CH 5 on a 1-2-4 pass: AUTO for now (said)');
+  const ch = lrptChoices([64, 65, 67], true);
+  ok(ch.join() === 'auto,comp,64,65,67' && nextLrptPick('auto', ch) === 'comp' && nextLrptPick(67, ch) === 'auto' && nextLrptPick(68, ch) === 'auto', 'beta96 the key cycles AUTO → COMPOSITE → CH 1 → CH 2 → CH 4 → AUTO');
+  ok(lrptChoices([67], false).join() === 'auto,67', 'beta96 a one-channel pass: nothing to pick (no key)');
+  ok(pickFromStored(pickToStored(67)) === 67 && pickFromStored(pickToStored('comp')) === 'comp' && pickFromStored('junk') === 'auto' && pickFromStored(null) === 'auto' && pickToStored(64) === 'ch1', 'beta96 the stored pick round-trips; junk = AUTO');
+  // lrpt_status
+  const s2 = parseLrptStatus({ ...real, apids: [67, 64, 65, 'x', 99, 64], dark: [64, 65] });
+  ok(!!s2 && s2.apids.join() === '64,65,67' && s2.dark.join() === '64,65' && parseLrptStatus(real)!.apids.length === 0, 'beta96 lrpt_status apids / dark parsed and bounded ([] from an older server)');
 }
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');

@@ -34,7 +34,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { screenNavRef } from './ScreenNav';
 import { captureRegion, useAnnounce, useKeyboardMode, noteTouchInteraction, useRepeatingKeys, NAV_REPEAT_KEYS, PANEL_IDLE_MS, useNavFocus, NAV_ADJUST } from './PanelNav';
-import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+import { useLrptOutline, nextLrptPickNow } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch (+ beta96 the channel key)
 import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1958,6 +1958,14 @@ export default function DecoderPanel({
           )}
           {/* ★ V12 METEOR LRPT: MAP OUTLINE: OFF / ON — only once the server has sent an outline for this picture (no dead
               key); one choice with the gallery's and the SATELLITE box's (src/services/lrptOutlineLive.ts) */}
+          {/* ★★★ beta96 the live picture's CHANNEL — AUTO (composite by day, infrared at night) · COMPOSITE · CH 1 · CH 2 · CH 4…
+              (src/utils/lrptChannels.ts); only once the server sends channels and the pass has a choice */}
+          {activeDecoder === 'lrpt' && lrptOl.chan.show && !viewingPrev && (
+            <HBtn run hitSlop={6} accessibilityLabel={`Picture channel: ${lrptOl.chan.label}. ${lrptOl.chan.hint}`}
+              onPress={(e: any) => { e?.stopPropagation(); nextLrptPickNow(); }}>
+              <DecoderKeyLabel tone={lrptOl.chan.picked ? 'accent' : undefined}>{lrptOl.chan.label}</DecoderKeyLabel>
+            </HBtn>
+          )}
           {activeDecoder === 'lrpt' && !!lrptOl.outline && !viewingPrev && (
             <HBtn run hitSlop={6} accessibilityLabel={outlineKeyA11y(lrptOl.on)}
               onPress={(e: any) => { e?.stopPropagation(); lrptOl.toggle(); }}>
