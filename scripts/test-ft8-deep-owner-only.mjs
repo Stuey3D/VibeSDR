@@ -15,7 +15,8 @@ let fail = 0, n = 0;
 const ok = (c, what) => { n++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
 
 // ── 1. nothing a listener sees names it ──
-const OWNER_ONLY = new Set(['src/screens/ServerModeScreen.tsx', 'src/components/AboutOverlay.tsx']);   // AboutOverlay: the release note
+const OWNER_ONLY = new Set(['src/screens/ServerModeScreen.tsx', 'src/components/AboutOverlay.tsx',   // AboutOverlay: the release note
+  'src/utils/newModes.ts']);   // ★ beta96 the owner's NEW-modes rule: its generation table names the option tokens; owner-only (checked below)
 const PAT = /ft8[+-]deep|dig deeper|deepTier/i;
 const walk = (d, out) => {
   let ents = [];
@@ -32,6 +33,9 @@ const listenerFiles = [...walk('src', []), ...walk('web/client', []), ...walk('h
 const hits = listenerFiles.filter((p) => PAT.test(rd(p)));
 ok(listenerFiles.length > 50, `${listenerFiles.length} listener-facing source files looked at`);
 ok(hits.length === 0, `no listener-facing control or message names dig deeper${hits.length ? ': ' + hits.join(', ') : ''}`);
+// ★ newModes.ts is owner-only ONLY while nothing but the owner's server screen imports it.
+const newModesUsers = listenerFiles.filter((p) => /from '[^']*utils\/newModes'/.test(rd(p)));
+ok(newModesUsers.length === 0, `utils/newModes.ts is imported only by the owner's server screen${newModesUsers.length ? ' — also: ' + newModesUsers.join(', ') : ''}`);
 const about = rd('src/components/AboutOverlay.tsx');
 const note = (about.match(/detail: 'FT8 \/ FT4 DIG DEEPER[^']*/) || [''])[0];
 ok(/automatic/i.test(note) && /server owner/i.test(note), 'the release note says it is automatic, and that only the server owner can override it');
