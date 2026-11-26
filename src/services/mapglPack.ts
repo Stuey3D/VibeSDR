@@ -5,7 +5,8 @@
  * ★★ WHY A COPY AT ALL: the fonts are fetched by MapLibre from a URL TEMPLATE —
  *    file:///…/fonts/{fontstack}/{range}.pbf — which needs a real directory per font. Native assets
  *    arrive under hashed names with no folders (see src/generated/mapglAssets.ts), so they are copied
- *    into place. The tile packs come too, so every path the style names is stable across launches.
+ *    into place. ★★★ beta96: the tile packs are NOT copied any more — the page reads them by range over the
+ *    bridge (readPackRange) straight from the app bundle, so the 30 MB exist once, not twice.
  *
  * ★★ The marker file is the whole correctness story, exactly as in mapPack.ts: written LAST, after
  *    every file has landed, so a copy killed halfway leaves no marker and is simply redone next open.
@@ -19,7 +20,7 @@
  * ★ ensureMapglPack() runs on every GPU-map open; the already-copied path is one marker read.
  */
 import { Asset } from 'expo-asset';
-import { Directory, File, Paths, type FileHandle } from 'expo-file-system';
+import { Directory, File, FileMode, Paths, type FileHandle } from 'expo-file-system';
 import { NativeModules, Platform } from 'react-native';
 import { MAPGL_FILES, MAPGL_VERSION } from '../generated/mapglAssets';
 import { toBase64 } from './mapglDetail';
@@ -27,8 +28,31 @@ import { toBase64 } from './mapglDetail';
 const DIR = 'mapgl';
 const MARKER = '.copied';
 
+/** ★★★ beta96: the three big packs are read BY RANGE straight from where the OS already keeps them — the iOS app
+ *  bundle, the Android APK — and are never copied (basic 18 MB + relief + runways ≈ 30.5 MB, which every install held
+ *  twice). Only fonts, scripts, icons and the style are copied (the WebView loads those by URL). */
+const PACKS = new Set(['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles']);
+
+/** ★★ The marker names the LAYOUT as well as the content: a beta95/96 copy (marker = MAPGL_VERSION alone) holds the
+ *  packs in <documents>/mapgl/, so it no longer matches, is redone once without them, and the old copies are deleted
+ *  — never ~30 MB orphaned. Content changes still move MAPGL_VERSION as before. */
 function packVersion(): string {
-  return MAPGL_VERSION;
+  return MAPGL_VERSION + '+bundlepacks';
+}
+
+/** iOS: each pack's file in the app bundle (expo-asset's localUri — the bundle path itself in a release build; the
+ *  Metro download cache in development). Filled by ensureMapglPack; readPackRange reads only what is here. */
+const bundlePacks = new Map<string, string>();
+
+async function resolveBundlePacks(): Promise<void> {
+  for (const [rel, mod] of MAPGL_FILES) {
+    if (!PACKS.has(rel) || bundlePacks.has(rel)) continue;
+    const asset = Asset.fromModule(mod);
+    await asset.downloadAsync();
+    if (!asset.localUri) throw new Error(`mapglPack: no bundle file for ${rel}`);
+    bundlePacks.set(rel, asset.localUri);
+  }
+  for (const p of PACKS) if (!bundlePacks.has(p)) throw new Error(`mapglPack: ${p} is not in the app`);
 }
 
 /** The pack directory. Does NOT touch the filesystem. */
@@ -61,6 +85,7 @@ export async function ensureMapglPack(): Promise<string> {
   const dir = mapglDir();
   const marker = new File(dir, MARKER);
   const version = packVersion();
+  await resolveBundlePacks();   // ★ every open: the packs are read from the bundle, wherever this launch put it
   try {
     if (marker.exists && (await marker.text()).trim() === version) return DIR + '/';
   } catch {
@@ -71,7 +96,12 @@ export async function ensureMapglPack(): Promise<string> {
   // ★ A stale marker goes BEFORE any overwrite, so a copy that dies part-way cannot be mistaken for
   //   a complete one of either version.
   try { if (marker.exists) marker.delete(); } catch { /* overwritten at the end regardless */ }
+  // ★★ UPGRADE CLEAN-UP: an older copy kept the packs here (~30 MB). Gone before anything else is written.
+  for (const p of PACKS) {
+    try { const f = new File(dir, p); if (f.exists) f.delete(); } catch { /* best effort — retried on the next copy */ }
+  }
   for (const [rel, mod] of MAPGL_FILES) {
+    if (PACKS.has(rel)) continue;   // read from the bundle by range (resolveBundlePacks), never copied
     const asset = Asset.fromModule(mod);
     await asset.downloadAsync();                    // ★ Android: extracts from the APK; iOS: the bundle path
     if (!asset.localUri) throw new Error(`mapglPack: no local file for ${rel}`);
@@ -93,9 +123,9 @@ export async function ensureMapglPack(): Promise<string> {
  *     from the one file on disk — the path the High Detail pack has always used (mapglDetail.ts readDetailRange).
  * ★ Trade-off: a bridge round trip per tile (a few KB; a world tile ~100–200 KB) instead of a memcpy — some JS-thread
  *   time on first draw, for ~30 MB less RAM the whole time a map is open. MapLibre keeps decoded tiles either way.
- * ★ ONLY the three bundled packs, ONLY under our own fixed folder (`mapgl/` iOS, `mapgl-bundled/` Android — the
- *   WebView page's base), and reads are capped: the page is ours, but the bridge is not a file server. */
-const PACKS = new Set(['vibemap-basic.pmtiles', 'vibemap-relief.pmtiles', 'vibemap-runways.pmtiles']);
+ * ★ ONLY the three bundled packs, from where the OS keeps them (beta96: the iOS app bundle, the Android APK — never a
+ *   copy), and reads are capped: the page is ours, but the bridge is not a file server. `base` is still checked (the
+ *   page's own fixed folder name) though neither platform reads under it any more. */
 const MAX_READ = 4 * 1024 * 1024;   // ★ pmtiles asks 16 KB for the header, then directories and tiles — never MBs
 const handles = new Map<string, FileHandle>();
 
@@ -109,10 +139,20 @@ export function closePackHandles(): void {
 export function readPackRange(base: string, name: string, offset: number, length: number): string | null {
   if (!PACKS.has(name) || !/^[a-z-]+\/$/.test(base)) return null;
   if (!(offset >= 0) || !(length > 0) || length > MAX_READ) return null;
-  const key = base + name;
+  if (Platform.OS === 'android') {
+    /* ★★★ beta96 ANDROID: straight out of the APK (VibeMapGL.readPackRange — the packs are stored uncompressed and
+     *  no longer unpacked; an entry that turned out compressed is read from its unpacked copy there instead). */
+    const mod = NativeModules.VibePowerModule as
+      { mapglPackRange?: (n: string, o: number, l: number) => string | null } | undefined;
+    try { return mod?.mapglPackRange?.(name, Math.floor(offset), Math.floor(length)) ?? null; } catch { return null; }
+  }
+  /* iOS: the app bundle's own file (resolveBundlePacks), opened READ-ONLY — the bundle cannot be opened for update. */
+  const src = bundlePacks.get(name);
+  if (!src) return null;
+  const key = src;
   try {
     let h = handles.get(key);
-    if (!h) { h = new File(Paths.document, base.slice(0, -1), name).open(); handles.set(key, h); }
+    if (!h) { h = new File(src).open(FileMode.ReadOnly); handles.set(key, h); }
     const size = h.size ?? 0;
     if (offset >= size) return null;
     h.offset = offset;
