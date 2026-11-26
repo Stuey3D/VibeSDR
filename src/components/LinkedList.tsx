@@ -17,6 +17,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ScrollView, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { scrollLane } from '../constants/popupTokens';
 import { linkedEndPad, linkedMaxY, linkedReveal, linkedSeam, linkedSnapOffsets, type RowBox } from '../utils/linkedListScroll';
 
 export interface LinkedList {
@@ -117,6 +118,7 @@ export function useLinkedList(upperH: number, lowerH: number, lowerRef?: React.R
       <ScrollView ref={(isUpper ? upper : lower) as any}
         style={[style, { height: isUpper ? g.seam : dims.current.lowerH }]}
         showsVerticalScrollIndicator={!isUpper}
+        contentContainerStyle={scrollLane /* ★ both halves take the lane, so the rows stay the same width across the crease */}
         scrollEventThrottle={16}
         snapToOffsets={g.offs.length > 1 ? g.offs : undefined}
         decelerationRate="fast"
