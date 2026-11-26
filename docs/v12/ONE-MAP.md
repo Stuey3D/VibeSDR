@@ -20,8 +20,11 @@ Stuart, later on 11-26 (design change, via the coordinator): **TWO maps, not one
 - The amateur map is about **propagation and people**. It runs at continental-to-world scale (great circles to
   spotters, grids, bands), and its layers are callsigns. One chip row holding 20 layers would be unreadable on a 4"
   phone (see feedback_control_deck_stays_minimal).
-- The community map is UNCHANGED. It still excludes amateur spots, so it matches the air/sea map plus MeshCore as it
-  stands today.
+- **The COMMUNITY map is the combination** (Stuart confirmed the split 11-26: "exactly what I was thinking"). It holds all
+  of AVIATION & MARITIME plus the MeshCore repeaters, as it does today, and never amateur spots. It lives on
+  main/directory and is not part of this build. The shared kit pieces stay pure and exportable so the three maps keep
+  one vocabulary: the layer catalogue (`LIVE_LAYERS`, `LIVE_GROUPS`), the glyphs and `fadeOf` (`web/community/kit.ts`
+  can export them).
 - The brief's MISC group is gone: sondes moved to air/sea, APRS and MeshCore to amateur.
 
 Both maps are built on **one map kit and one shared code path**:
