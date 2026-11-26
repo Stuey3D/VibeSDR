@@ -17816,10 +17816,18 @@ function setDecLive(on: boolean) {
 }
 
 /** Copy the live canvas onto the visible one (used when viewing live, and on return-to-live). */
+/* ★★ beta95 METEOR: THE PICTURE IS AS TALL AS WHAT HAS ARRIVED (Stuart 11-25: "it did draw but scrolled to nothing").
+ *  The server pre-sizes the preview to 1 600 rows (0x07); shown whole, the SATELLITE box's follow went to the foot of an
+ *  empty canvas. The live LRPT picture is shown to its last row drawn — always a decoded one (the server sends a gap's
+ *  rows, hatched and labelled, only once picture follows it) — so following the foot follows the newest picture. */
+function visibleRows(src: HTMLCanvasElement): number {
+  return src === decLiveCv && activeDec === 'lrpt' && decLiveMaxY >= 0 ? Math.min(src.height, decLiveMaxY + 1) : src.height;
+}
 function blitToVisible(src: HTMLCanvasElement | null) {
   const c = $<HTMLCanvasElement>('decImage');
   if (!src) return;
-  if (c.width !== src.width || c.height !== src.height) { c.width = src.width; c.height = src.height; }
+  const h = visibleRows(src);
+  if (c.width !== src.width || c.height !== h) { c.width = src.width; c.height = h; }
   const ctx = c.getContext('2d');
   ctx?.clearRect(0, 0, c.width, c.height);
   ctx?.drawImage(src, 0, 0);
@@ -18227,7 +18235,7 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   // Mirror the just-drawn line to the visible canvas when we're watching live.
   if (!decViewingPrev) {
     const vis = $<HTMLCanvasElement>('decImage');
-    if (vis.width !== cv.width || vis.height !== cv.height) blitToVisible(cv);
+    if (vis.width !== cv.width || vis.height !== visibleRows(cv)) blitToVisible(cv);   // ★ beta95 LRPT: grows with its rows
     else vis.getContext('2d')?.putImageData(img, 0, y);
   }
 }

@@ -406,6 +406,12 @@ static void testLivePass(bool quick) {
         o.dopplerHz = [&] { return kDop0 + kRate * tNow; };
         o.satInRange = [&] { return c.inRange; };
         o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; } };
+        // ★★ beta95 the gap drawn AS a gap (gapart): the preview rows and the status, kept for the one-picture case
+        std::map<uint32_t, std::vector<uint8_t>> rows; std::string lastJson;
+        if (c.inRange == 1) {
+            o.frame = [&](const uint8_t* d, size_t n) { if (n > 9 && d[0] == 0x01) { const uint32_t y = (uint32_t(d[1]) << 24) | (uint32_t(d[2]) << 16) | (uint32_t(d[3]) << 8) | d[4]; rows[y].assign(d + 9, d + n); } };
+            o.json = [&](const std::string& j) { if (j.find("lrpt_status") != std::string::npos) lastJson = j; };
+        }
         {
             Run run(o);
             const size_t blk = size_t(fs / 20);
@@ -429,6 +435,25 @@ static void testLivePass(bool quick) {
         std::printf("  %s: frames before %llu, after %llu, pictures filed %d (%d partial)\n", c.what, (unsigned long long)framesA, (unsigned long long)framesB, saves, partial);
         CHECK(framesA >= 12 && framesB >= 12, "%s: frames before %llu after %llu", c.what, (unsigned long long)framesA, (unsigned long long)framesB);
         CHECK(saves == c.wantSaves, "%s: %d pictures filed, want %d", c.what, saves, c.wantSaves);
+        if (c.inRange == 1) {
+            int black = 0, hatched = 0, labelled = 0;
+            for (auto& kv : rows) {
+                const auto& r = kv.second; bool allZero = true, hasHatch = false, hasText = false;
+                for (size_t i = 0; i + 2 < r.size(); i += 3) {
+                    if (r[i] || r[i + 1] || r[i + 2]) allZero = false;
+                    if ((r[i] == 54 || r[i] == 26) && r[i + 2] == r[i] + 10) hasHatch = true;
+                    if (r[i] == 214 && r[i + 2] == 224) hasText = true;
+                }
+                black += allZero; hatched += hasHatch; labelled += hasText;
+            }
+            const size_t gl = lastJson.find("\"gapLines\":"), dl = lastJson.find("\"decoded\":");
+            const int gapLines = gl == std::string::npos ? -1 : std::atoi(lastJson.c_str() + gl + 11), decoded = dl == std::string::npos ? -1 : std::atoi(lastJson.c_str() + dl + 10);
+            std::printf("  beta95 the gap: %zu preview rows, %d hatched, %d with the label, %d plain black; status decoded %d, gap %d lines\n", rows.size(), hatched, labelled, black, decoded, gapLines);
+            CHECK(black == 0, "beta95: no preview row is plain black (%d)", black);
+            CHECK(hatched >= 20, "beta95: the 35 s gap is drawn as a hatch (%d rows)", hatched);
+            CHECK(labelled >= 10, "beta95: and labelled NO SIGNAL hh:mm-hh:mm in the picture (%d rows of text)", labelled);
+            CHECK(decoded > 0 && gapLines >= 100, "beta95: the status counts decoded lines apart from the gap's (decoded %d, gap %d)", decoded, gapLines);
+        }
     }
 }
 

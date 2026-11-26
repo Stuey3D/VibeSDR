@@ -15,13 +15,13 @@ const st = parseLrptStatus(real);
 ok(!!st && st.frames === 47 && st.lines === 112 && st.channels.length === 3, 'a real status parses');
 ok(lrptStatusText(st) === '112 lines · channels 1, 2, 5 · 47 frames', `the line during a pass: ${lrptStatusText(st)}`);
 ok(lrptStatusText(parseLrptStatus({ ...real, sync: false })) === '112 lines · channels 1, 2, 5 · 47 frames · between frames, still listening', 'a gap in the frames is said as a gap (an older server: no reading)');
-ok(lrptStatusText(parseLrptStatus({ ...real, sync: false, snrDb: 3.24, needDb: 5 })) === '112 lines · channels 1, 2, 5 · 47 frames · between frames, still listening · signal +3.2 dB over the noise (needs about +5)', 'beta91: the gap with the signal reading');
+ok(lrptStatusText(parseLrptStatus({ ...real, sync: false, snrDb: 3.24, needDb: 5 })) === '112 lines · channels 1, 2, 5 · 47 frames · between frames, still listening · signal +3.2 dB over the noise (decodes from about +4, best above +5)', 'beta91: the gap with the signal reading');
 ok(lrptStatusText(parseLrptStatus({ carrier: true, mode: 'OQPSK', offsetHz: 812 })) === 'carrier found (OQPSK, +812 Hz) · looking for frames', 'carrier found');
 ok(lrptStatusText(parseLrptStatus({ sync: true, mode: 'QPSK', frames: 9, bad: 2 })) === 'QPSK locked · frames 9 (2 unreadable)', 'frames before any picture');
 ok(lrptStatusText(parseLrptStatus({})) === 'listening for a METEOR satellite', 'nothing yet');
 ok(lrptStatusText(parseLrptStatus({ on: true, lock: 73 })) === 'listening for a METEOR satellite', 'beta91: the lock % is never shown (an older server sends only that)');
-ok(lrptStatusText(parseLrptStatus({ on: true, lock: 64, snrDb: 0.1, needDb: 5 })) === 'listening for a METEOR satellite · signal +0.1 dB over the noise (needs about +5)', 'beta91: noise reads about 0 dB, and what decoding needs');
-ok(lrptStatusText(parseLrptStatus({ on: true, snrDb: 4.26, needDb: 5, saved: 1 })) === 'last pass saved to the gallery · listening for a METEOR satellite · signal +4.3 dB over the noise (needs about +5)', 'beta91: after a pass is filed the LIVE state shows, never a stale "picture complete"');
+ok(lrptStatusText(parseLrptStatus({ on: true, lock: 64, snrDb: 0.1, needDb: 5 })) === 'listening for a METEOR satellite · signal +0.1 dB over the noise (decodes from about +4, best above +5)', 'beta91: noise reads about 0 dB, and what decoding needs');
+ok(lrptStatusText(parseLrptStatus({ on: true, snrDb: 4.26, needDb: 5, saved: 1 })) === 'last pass saved to the gallery · listening for a METEOR satellite · signal +4.3 dB over the noise (decodes from about +4, best above +5)', 'beta91: after a pass is filed the LIVE state shows, never a stale "picture complete"');
 ok(lrptStatusText(parseLrptStatus({ on: true, snrDb: -0.4 })).includes('signal −0.4 dB'), 'a reading under the noise is signed');
 { const j = parseLrptStatus({ snrDb: 'x', needDb: Infinity, saved: -3, inRange: 7 }); ok(!!j && j.snrDb === undefined && j.needDb === undefined && j.saved === 0 && j.inRange === 1, 'beta91 fields bounded'); }
 ok(lrptStatusText(null) === 'waiting for a METEOR pass', 'no status at all');
@@ -36,6 +36,10 @@ ok(JSON.stringify(lrptAttachParams()) === '{"modulation":"auto","diff":"auto"}',
 ok(lrptAttachParams(80000).symbol_rate === 80000 && lrptAttachParams(79000).symbol_rate === 80000 && lrptAttachParams(72000).symbol_rate === 72000, 'attach: a satellite entry names its rate');
 ok(lrptAttachParams(0).symbol_rate === undefined, 'attach: 0 = AUTO');
 // registration
+// ★★ beta95 (Stuart's 11-25 pass: it locked at ~+3.0 and decoded) — the wording, and decoded lines apart from the gap's
+ok(lrptStatusText(parseLrptStatus({ on: true, snrDb: 3.04, needDb: 4 })) === 'listening for a METEOR satellite · signal +3.0 dB over the noise (decodes from about +3, best above +4)', 'beta95: decodes from about +3, best above +4');
+ok(lrptStatusText(parseLrptStatus({ ...real, lines: 656, decoded: 320, gapLines: 336, channels: ['1 visible', '2 near-IR', '4 infrared'], frames: 40 })) === '320 lines decoded · 336 of no signal · channels 1, 2, 4 · 40 frames', 'beta95: the 656 "lines" of 11-25 said as 320 decoded and 336 of no signal');
+ok(lrptStatusText(parseLrptStatus({ ...real, decoded: 112, gapLines: 0 })) === '112 lines · channels 1, 2, 5 · 47 frames', 'beta95: no gap — the plain count');
 ok((REACH_DECODERS as readonly string[]).includes('lrpt'), 'greyed with its reason off 137 MHz (REACH_DECODERS)');
 ok((CLIENT_DECODERS as readonly string[]).includes('lrpt'), 'a client decoder (CLIENT_DECODERS)');
 

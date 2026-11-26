@@ -20,7 +20,10 @@ export interface LrptStatus {
   frames: number;        // frames that passed Reed–Solomon
   bad: number;           // frames that did not
   packets: number;
-  lines: number;         // picture lines so far
+  lines: number;         // picture lines so far (the gaps included — placed by time)
+  /** ★ beta95 of those, the lines with picture, and the lines of no signal between them (drawn hatched and labelled
+   *  "NO SIGNAL hh:mm-hh:mm" in the picture itself, vibe_lrpt_run.h gapart). undefined from an older server. */
+  decoded?: number; gapLines?: number;
   channels: string[];    // live MSU-MR channels ("1 visible", "2 near-IR", "5 thermal" …)
   why?: string;          // a reason it cannot run here (the IQ slice's rate)
 }
@@ -45,16 +48,25 @@ export function parseLrptStatus(d: unknown): LrptStatus | null {
     bad: Math.max(0, Math.round(n('bad'))),
     packets: Math.max(0, Math.round(n('packets'))),
     lines: Math.max(0, Math.round(n('lines'))),
+    decoded: typeof o.decoded === 'number' && isFinite(o.decoded) ? Math.max(0, Math.round(o.decoded)) : undefined,
+    gapLines: typeof o.gapLines === 'number' && isFinite(o.gapLines) ? Math.max(0, Math.round(o.gapLines)) : undefined,
     channels: Array.isArray(o.channels) ? (o.channels as unknown[]).filter((c) => typeof c === 'string').map((c) => (c as string).slice(0, 24)).slice(0, 6) : [],
     why: typeof o.why === 'string' && o.why ? (o.why as string).slice(0, 160) : undefined,
   };
 }
 
-/** "signal +3.2 dB over the noise (needs about +5)" — empty from an older server that does not measure it. */
+/** "signal +3.2 dB over the noise (decodes from about +3, best above +4)" — empty from an older server that does not
+ *  measure it. ★★ beta95 (Stuart's 11-25 pass on the Sony, vertical + LNA: it locked at about +3.0 and decoded there) —
+ *  "needs about +4" was wrong: decoding starts about a dB under the server's figure and is best above it. */
 export function lrptSignalText(st: LrptStatus | null): string {
   if (!st || st.snrDb === undefined) return '';
   const v = st.snrDb, need = st.needDb ?? 5;
-  return `signal ${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)} dB over the noise (needs about +${need.toFixed(0)})`;
+  return `signal ${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)} dB over the noise (decodes from about +${Math.max(1, need - 1).toFixed(0)}, best above +${need.toFixed(0)})`;
+}
+/** ★ beta95 "320 lines (336 of no signal)" — decoded lines apart from the gap's; an older server's plain count. */
+export function lrptLinesText(st: LrptStatus): string {
+  if (st.decoded === undefined || st.gapLines === undefined || st.gapLines <= 0) return `${st.lines} lines`;
+  return `${st.decoded} lines decoded · ${st.gapLines} of no signal`;
 }
 
 /** The decoder box's status line — and the SATELLITE window's, so it is always the LIVE state (a pass filed earlier is
@@ -67,7 +79,7 @@ export function lrptStatusText(st: LrptStatus | null): string {
     const ch = st.channels.length ? ` · channels ${st.channels.map((c) => c.split(' ')[0]).join(', ')}` : '';
     /* ★★ beta91: a gap in the frames is a gap in the picture, not its end (the server keeps the pass open while the
      *  satellite is up) — so "signal lost" says what the receiver is doing about it. */
-    return `${st.lines} lines${ch} · ${st.frames} frames${st.sync ? '' : ` · between frames, still listening${sig ? ' · ' + sig : ''}`}`;
+    return `${lrptLinesText(st)}${ch} · ${st.frames} frames${st.sync ? '' : ` · between frames, still listening${sig ? ' · ' + sig : ''}`}`;
   }
   const filed = st.saved > 0 ? 'last pass saved to the gallery · ' : '';
   if (st.sync) return `${filed}${st.mode} locked · frames ${st.frames}${st.bad ? ` (${st.bad} unreadable)` : ''}`;
