@@ -197,7 +197,7 @@ function meshRouteDraw(map,L,rt){
     add(L.marker(p,{icon:L.divIcon({className:'vmr-bd',html:html,iconSize:[18,16],iconAnchor:[9,24]}),interactive:false,keyboard:false}));}
   var segs=(rt&&rt.seg)||[],marks=(rt&&rt.marks)||[],n=Math.min(70,Math.max(1,Math.round(num(rt&&rt.ticks))));
   function tick(t){if(dead)return;var i;for(i=0;i<segs.length&&i<600;i++)if(segs[i].t===t)seg(segs[i]);for(i=0;i<marks.length&&i<400;i++)if(marks[i].t===t)badge(marks[i]);}
-  for(var t=1;t<=n;t++)(function(t){if(!STEP)tick(t);else timers.push(setTimeout(function(){tick(t);},(t-1)*STEP));})(t);
+  for(var t=1;t<=n;t++)(function(t){if(!STEP||t===1)tick(t);else timers.push(setTimeout(function(){tick(t);},(t-1)*STEP));})(t);
   return {clear:function(){dead=true;for(var q=0;q<timers.length;q++)clearTimeout(timers[q]);timers=[];
     for(var k=0;k<layers.length;k++){try{layers[k].remove();}catch(e){}}layers=[];}};
 }

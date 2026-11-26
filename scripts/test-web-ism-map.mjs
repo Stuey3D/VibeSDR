@@ -55,15 +55,18 @@ const node = (key, kind, name, ntype, role, lat, lon, hops, seen, extra = {}) =>
   freq: kind === 'meshcore' ? 869.618e6 : 869.525e6, level: -80, snr: 5.5, seen, age: seen + 3600, count: 6, sf: kind === 'meshcore' ? 8 : 11, bw: kind === 'meshcore' ? 62500 : 250000, ...extra,
 });
 const FAKE = [
-  node('f1', 'meshcore', 'Benson', 'repeater', 'repeater', 51.6223, -1.1028, 7, 40, { msgs: [{ ago: 30, from: 'Benson', text: 'NEVER-ON-THE-MAP' }] }),
-  node('f2', 'meshcore', 'M0SWM AL3 7', 'repeater', 'repeater', 51.7990, -0.3967, 8, 300),
-  node('f3', 'meshcore', 'MeshCore Repeater', 'repeater', 'repeater', 52.2060, -0.9080, 3, 120),
+  node('f1', 'meshcore', 'Benson', 'repeater', 'repeater', 51.6223, -1.1028, 7, 40, { node: 'c1c2c3c4', msgs: [{ ago: 30, from: 'Benson', text: 'NEVER-ON-THE-MAP' }] }),
+  node('f2', 'meshcore', 'M0SWM AL3 7', 'repeater', 'repeater', 51.7990, -0.3967, 8, 300, { node: '9f001122' }),
+  node('f3', 'meshcore', 'MeshCore Repeater', 'repeater', 'repeater', 52.2060, -0.9080, 3, 120, { node: 'a3b4c5d6' }),
   node('f4', 'meshcore', 'Daventry Room', 'room', 'room server', 52.2570, -1.1610, 2, 900),
   node('f5', 'meshcore', 'Brixworth WX', 'sensor', 'sensor', 52.3330, -0.9050, 2, 1800),
   node('f6', 'meshcore', 'Alice T-Deck', 'companion', 'chat node', 52.24, -0.89, 1, 60, { approx: 1 }),
   node('f7', 'meshtastic', 'Hilltop Router', 'repeater', 'router', 52.3990, -0.7260, 4, 600),
   node('f8', 'meshtastic', 'Bob Handheld', 'companion', 'client', 52.22, -0.94, 2, 200, { approx: 1 }),
-  node('f9', 'meshcore', 'Kettering Hill', 'repeater', 'repeater', 52.4300, -0.6400, 5, 72000),
+  node('f9', 'meshcore', 'Kettering Hill', 'repeater', 'repeater', 52.4300, -0.6400, 5, 72000, { node: 'a3000001' }),
+  // ★★ beta96 THE ROUTE: its advert came 9f → a3 → 5e → c1: M0SWM (placed), a3 = MeshCore Repeater OR Kettering Hill
+  //   (ambiguous), 5e (nobody heard: unknown), Benson (placed)
+  node('f11', 'meshcore', 'Route Test', 'repeater', 'repeater', 51.3000, -0.2000, 4, 90, { node: 'ee112233', relays: '9f a3 5e c1' }),
 ];
 const INJECT = `(() => {
   const FAKE = ${JSON.stringify(FAKE)};
@@ -183,6 +186,44 @@ try {
      'it appears on the open map, pulsing — no reload');
   ok(await ev(`/Newcomer Rptr/.test(${view}.querySelector('.rows').textContent)`), '…and in its list');
   console.log('   screenshot', await shot('ismmap-live.png'));
+
+  /* ★★ beta96 (Stuart 11-26) THE ROUTE, A SELECTION HOLDS THE VIEW, ONE km ↔ miles */
+  console.log('── beta96: the route, the held view, km ↔ miles ──');
+  const st0 = await ev(`${view}.querySelector('.st').textContent`);
+  ok(/furthest direct: |furthest via mesh: /.test(st0) && / km/.test(st0), `the status says furthest direct / via mesh: ${st0}`);
+  await ev(`document.querySelector('#ismChips .ismUnits[data-u="speed"]').click()`);   // the ISM list's KM/H → MPH key
+  ok(await until(`/ mi/.test(${view}.querySelector('.st').textContent) && !/ km/.test(${view}.querySelector('.st').textContent)`, 4000),
+     `KM/H → MPH in the ISM list: the map's status in miles: ${await ev(`${view}.querySelector('.st').textContent`)}`);
+  ok(await ev(`/\d mi/.test(${view}.querySelector('.rows').textContent) && !/\d km/.test(${view}.querySelector('.rows').textContent) && !/NM/.test(${view}.textContent)`), '…its NODES list in miles too (never NM)');
+  const cam = `JSON.stringify((() => { const m = window.__vibeTrkMap, c = m.getCenter(); return { lat: +c.lat.toFixed(4), lng: +c.lng.toFixed(4), z: +m.getZoom().toFixed(2) }; })())`;
+  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Route Test/.test(x.textContent)); r && r.click(); })()`);
+  await sleep(2600);   // the fly-to, and four hops at 300 ms
+  const rcard = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
+  ok(/route: 4 hops, 2 placed, 1 ambiguous, 1 unknown/.test(rcard) && /1 · 9f · M0SWM AL3 7/.test(rcard) && /one of MeshCore Repeater, Kettering Hill|one of Kettering Hill, MeshCore Repeater/.test(rcard)
+     && /unknown repeater 0x5e/.test(rcard) && /4 · c1 · Benson/.test(rcard), `the route card: ${rcard.slice(rcard.indexOf('route:'), rcard.indexOf('route:') + 160)}`);
+  ok(/ mi [NESW]/.test(rcard), '…the card in miles');
+  const lit = JSON.parse(await ev(`JSON.stringify({ bd: document.querySelectorAll('.vmr-bd').length, ar: document.querySelectorAll('.vmr-ar').length, nums: [...document.querySelectorAll('.vmr-bd')].map(b => b.textContent).join(' ') })`));
+  ok(lit.bd === 4 && lit.ar === 6, `the route drawn hop by hop: ${lit.bd} badges (${lit.nums}), ${lit.ar} arrowheads (node→9f, 9f→each a3, each a3→c1 across the unknown, c1→receiver)`);
+  console.log('   screenshot', await shot('ismmap-route.png'));
+  const c1 = await ev(cam);
+  await ev(`window.__fakeAdd(${JSON.stringify(node('f12', 'meshcore', 'Far North Rptr', 'repeater', 'repeater', 53.9, -1.5, 6, 1))})`);   // a refresh with a node outside the view
+  await sleep(4500);
+  const c2 = await ev(cam);
+  ok(c1 === c2, `a selection HOLDS the view through refreshes (Stuart's recording): ${c1} → ${c2}`);
+  ok(await ev(`${view}.querySelector('.fit').classList.contains('paused')`), '…the FIT key shows the auto fit paused');
+  await ev(`${view}.querySelector('.fit').click()`);
+  await sleep(3500);
+  const c3 = await ev(cam);
+  ok(c3 !== c2 && !(await ev(`${view}.querySelector('.fit').classList.contains('paused')`)), `FIT re-frames: ${c3}`);
+  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Route Test/.test(x.textContent)); r && r.click(); })()`);
+  await sleep(1500);
+  ok(await ev(`${view}.querySelector('.fit').classList.contains('paused')`), 'chosen again: held again');
+  await ev(`${view}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await sleep(600);
+  ok(await ev(`document.querySelectorAll('.vmr-bd').length === 0 && document.querySelectorAll('.vmr-ar').length === 0`), 'the selection cleared: the route goes');
+  ok(!(await ev(`${view}.querySelector('.fit').classList.contains('paused')`)), '…and the auto fit resumes');
+  await ev(`document.querySelector('#ismChips .ismUnits[data-u="speed"]').click()`);   // back to km/h
+  ok(await until(`/ km/.test(${view}.querySelector('.st').textContent)`, 4000), 'MPH → KM/H: km again');
   await ev(`${view}.querySelector('.exit').click()`);
   ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 4000), 'CLOSE MAP');
 

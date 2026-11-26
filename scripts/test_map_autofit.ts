@@ -276,7 +276,11 @@ console.log('── every map uses it ──');
   ok(/digiFit=window\.VibeAutoFit\?VibeAutoFit\.attach\(map,\{/.test(app), 'app: digi / CW spots maps');
   // ★★ beta96 stage 8 NDB is a live state of the AIR & SEA map: no FIT chip of its own — the map's FIT frames the beacons
   ok(/autoFit:false,drawReceiver:false/.test(app) && !/__ndbFitKey|label="FIT"/.test(app + ndbList), 'app: NDB — on the AIR & SEA map, framed by its FIT (no second chip)');
-  ok(/if \(trkWantFocus\)|af\)af\.pause\(\)/.test(app) && /var af=trkFitMake\(\);if\(af\)af\.pause\(\);/.test(app), 'app: a row chosen pauses it (ADS-B\'s focus)');
+  // ★★ beta96 any selection (a row, a tap, a mesh route) holds the view until FIT or the selection is cleared (trkSelFit)
+  ok(/var af=trkFitMake\(\);trkSelFit\(String\(k\)\);/.test(app) && /if\(k!=null\)\{trkSelNow=String\(k\);if\(st\.on\)\{if\(!st\.paused\)af\.pause\(\);trkSelHeld=true;\}\}/.test(app)
+     && /else\{trkSelNow=null;if\(trkSelHeld\)\{trkSelHeld=false;if\(st\.on&&st\.paused\)af\.resume\(\);\}\}/.test(app)
+     && /onSelect:function\(k\)\{trkPost\(\{t:'trkSel',key:k==null\?null:String\(k\)\}\);trkSelFit\(k\);/.test(app),
+     'app: a selection (row or tap) pauses it until FIT or the selection is cleared');
   ok(/if \(!w\.VibeAutoFit\) runSource\(MAP_AUTOFIT_JS\);/.test(tracksWeb) && /this\.af = w\.VibeAutoFit\.attach\(map, \{\s*points: \(\) => \{ const p = layer\.points\(\); const m = this\.morePoints\?\.\(\); return m\?\.length \? \[\.\.\.p, \.\.\.m\] : p; \}, receiver: \(\) => layer\.receiver\(\), button: this\.fitBtn/.test(tracksWeb),
      'web: every track view (AIS, APRS, DSC, ISM + gallery, NAVTEX, sondes, datalink) — the FIT key is the auto fit\'s, with the receiver');
   ok(!/this\.autoFit\b|fitKeys/.test(tracksWeb), 'web: the old per-view fit-on-new-item logic is gone (one implementation)');

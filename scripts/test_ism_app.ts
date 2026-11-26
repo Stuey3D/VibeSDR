@@ -207,7 +207,8 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('the web\'s messages escape what came off the air', /Hello &lt;b&gt;Racecourse&lt;\/b&gt;/.test(web.ismListHtml(w, 'msgs', { mph: false, pressure: 'psi' })), true);
   eq('MESSAGES empty text, both', app.ismEmptyText('msgs'), web.ismEmptyText('msgs'));
   eq('the map status, both', app.ismMapStatus(a2, rx), web.ismMapStatus(w, rx));
-  eq('…furthest named', /2 on the map · 2 repeaters · furthest Moulton Rptr \d/.test(web.ismMapStatus(w, rx)), true);
+  // ★★ beta96 the furthest is said by how it was heard: Moulton first-hand → "furthest direct:" (meshRoute.ts meshFarText)
+  eq('…furthest named', /2 on the map · 2 repeaters · furthest direct: Moulton Rptr \d/.test(web.ismMapStatus(w, rx)), true);
   eq('the map icon, both', app.ismMapIcon(a2.devices[0]), web.ismMapIcon(w.devices[0]));
   eq('the map card escapes', /&lt;|<b>Northampton Base<\/b>/.test(app.ismMapCard(a2.devices[0], rx)), true);
   const items = app.ismMapItems(a2, rx);
@@ -267,7 +268,7 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('…room server type', web.ismNodeType(gw.nodes[2]), 'room');
   eq('the gallery card: first / last heard, times, background-and-live', /heard in the background and live[\s\S]*first heard 09:00 · last heard 12:01 UTC · 14 times/.test(web.ismGalCard(gw.nodes[0], gw.rx)), true);
   eq('gallery status', web.ismGalStatus(gw.nodes, gw.rx), app.ismGalStatus(ga.nodes, ga.rx));
-  eq('…words', /^3 nodes heard · 1 repeater · furthest Benson 7\d km$/.test(web.ismGalStatus(gw.nodes, gw.rx)), true);
+  eq('…words', /^3 nodes heard · 1 repeater · furthest via mesh: Benson 7\d km$/.test(web.ismGalStatus(gw.nodes, gw.rx)), true);   // ★★ beta96 Benson at 7 hops
   // ── the time filter ──
   eq('ranges, both', [app.ISM_RANGES.map((r) => r.id), app.ISM_LIVE_RANGES.map((r) => r.id)], [web.ISM_RANGES.map((r) => r.id), ['1h', '24h']]);
   eq('in range: 1 h keeps the fresh, 24 h the day', [web.ismInRange(wn.devices, '1h').map((d) => d.key), web.ismInRange(wn.devices, '24h').map((d) => d.key)], [['n1', 'n3'], ['n1', 'n2', 'n3']]);
