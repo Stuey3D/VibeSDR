@@ -18100,7 +18100,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_benchHold.load()) return;   // ★★★ never takes the radio back while a benchmark measures the machine
         // ★★ a satellite pass has the radio (or is taking it): the kept mode comes back when its session ends
         if (satPassBusy_.load() || satWantsRadio_.load()) return;
-        if (mapModeOnNow() || g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)) return;
+        if (mapModeOnNow()) {
+            /* ★ Already in the kept mode. With nobody here it is the keep's again (a listener's band step meanwhile was
+             *  somebody's use of it) — the passes and the resume read that (mapKeptNow). The mode never leaves for want of
+             *  listeners while it is kept (wholeModeLeavesWhenEmpty), so this is where that hand-back happens. */
+            if (!mapByKeep_.load()) {
+                bool anyone;
+                { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+                if (!anyone) {
+                    mapByKeep_.store(true);
+                    LOGI("[MAP] last listener left \xe2\x80\x94 staying in %s (kept running when nobody is connected)", vsMapEntry().name.c_str());
+                }
+            }
+            return;
+        }
+        if (g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)) return;
         // ★ never over another whole-radio mode — wait for its own leave (kept ADS-B's 2026-11-12 rule); background
         //   decoding's AIS / ISM are not waited for (the keep owns the idle radio)
         if (modeLeaveDueAt.load() > 0.0) return;
