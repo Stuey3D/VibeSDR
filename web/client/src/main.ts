@@ -1590,7 +1590,7 @@ async function connect(host: string, pin: string) {
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
   // ★ `dab=2`: the DAB report in pieces (src/services/dabAssemble.ts) — a server that predates it ignores the flag.
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2&wide=1&span=1', auth)}`;   // ★ V12 wide=1: the full-capture row (wfWide.ts) · span=1: each frame's own span (beta83)
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2&wide=1&span=1&adsbd=1', auth)}`;   // ★ V12 wide=1: the full-capture row (wfWide.ts) · span=1: each frame's own span (beta83)
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.

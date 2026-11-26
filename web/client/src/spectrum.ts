@@ -21,6 +21,7 @@ import { parseWide, WIDE_MAGIC, type WideRow } from './wfWide';
 import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { AdsbInfoStore, type AdsbInfo } from '../../../src/services/adsbInfo';
+import { AdsbDeltaStore } from '../../../src/services/adsbDelta';   // ★★ V12 beta96 ADS-B as deltas
 import { ismSanitise, type IsmReport } from './ism';
 import { ndbSanitise, type NdbReport } from './ndb';
 import { aisSanitise, type AisReport } from './tracks';
@@ -1377,6 +1378,16 @@ export class SpectrumClient {
   }
 
   private _handleMessageA(msg: any) {
+    /* ★★ V12 beta96 ADS-B AS DELTAS (adsbd=1 — src/services/adsbDelta.ts, shared with the app): the table is kept here
+     *  and comes back as an ordinary `adsb` message, so the case below is unchanged. Always applied, even while the
+     *  ghost guard drops reports, so the table never misses a tick; a gap asks for the whole table again. */
+    if (msg.type === 'adsb_k' || msg.type === 'adsb_d') {
+      const r = this.adsbDelta.take(msg);
+      if (r.resync) this._send({ type: 'adsb_resync' });
+      if (!r.report) return;
+      msg = r.report;
+    }
+    if (msg.type === 'adsb_off') this.adsbDelta.clear();
     switch (msg.type) {
       /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts, shared with the app). `dab_list` / `dab_dls`
        *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
@@ -2630,6 +2641,8 @@ export class SpectrumClient {
   adsbHeld = false;
   /** ★ What each aircraft is (adsb_info), per hex, merged into every report. */
   private adsbInfo = new AdsbInfoStore();
+  /** ★★ V12 beta96 the ADS-B table as the delta listener holds it (adsbDelta.ts). */
+  private adsbDelta = new AdsbDeltaStore();
   /** ★ A report already on the wire when our `adsb off` lands is a ghost — the DAB rule (dabQuietUntil). */
   private adsbQuietUntil = 0;
   adsb(on: boolean) {

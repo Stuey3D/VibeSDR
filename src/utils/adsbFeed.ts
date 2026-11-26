@@ -7,12 +7,14 @@
 
 export interface AdsbFeedPreset { name: string; host: string; port: number; uuid: 'auto' | 'paste' }
 /** ★ The sites whose published feed set-ups give a host and port taking a plain Beast stream (docs/v12/ADSB-FEED.md: where
- *  each came from, read 2026-11-26). ADS-B Exchange publishes its own feed program instead, which reads our Beast port. */
+ *  each came from, read 2026-11-26). ★ ADS-B Exchange added 11-26: its feed client's own target (feed1.adsbexchange.com:30004,
+ *  reduced Beast, a UUID); MLAT and its stats page still need its client, which can read our Beast port. */
 export const ADSB_FEED_PRESETS: AdsbFeedPreset[] = [
   { name: 'adsb.lol', host: 'feed.adsb.lol', port: 30004, uuid: 'auto' },
   { name: 'adsb.fi', host: 'feed.adsb.fi', port: 30004, uuid: 'auto' },
   { name: 'airplanes.live', host: 'feed.airplanes.live', port: 30004, uuid: 'auto' },
   { name: 'map.flights', host: 'feed.map.flights', port: 30004, uuid: 'paste' },
+  { name: 'ADS-B Exchange', host: 'feed1.adsbexchange.com', port: 30004, uuid: 'auto' },
 ];
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 

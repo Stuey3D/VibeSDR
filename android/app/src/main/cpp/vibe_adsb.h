@@ -778,9 +778,9 @@ public:
     /** The table as JSON, in the field names dump1090's aircraft.json made familiar (hex, flight, lat, lon,
      *  alt_baro, gs, track, baro_rate, squawk, seen, seen_pos, messages, rssi). Positions older than 60 s are
      *  dropped, not drawn where the aircraft used to be. */
-    std::string json(double now) const {
+    std::string json(double now, bool withAircraft = true) const {   // ★ beta96 false: the header only (vibe_adsb_delta.h)
         std::string o;
-        o.reserve(96 + ac_.size() * 220);
+        o.reserve(96 + (withAircraft ? ac_.size() * 220 : 0));
         char t[128];
         std::snprintf(t, sizeof t, "{\"now\":%.1f,\"messages\":%llu,", now, (unsigned long long)good_);
         o += t;
@@ -790,7 +790,7 @@ public:
         o += t;
         o += "\"aircraft\":[";
         bool first = true;
-        for (const auto& kv : ac_) {
+        if (withAircraft) for (const auto& kv : ac_) {
             const Aircraft& a = kv.second;
             if (!first) o += ',';
             first = false;

@@ -8657,6 +8657,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    frames it always got (the R36S, the watch, older apps and pages read a 22-byte header). docs/PROTOCOL.md. */
     std::mutex stampMtx_;                                 // ★ leaf lock, like wideMtx_
     std::set<net::Socket*> stampSubs_;                    // ★ under stampMtx_
+    /* ★★ V12 beta96 THE ADS-B DELTA PROTOCOL (vibe_adsb_delta.h): a socket that asked (`adsbd=1`) gets `adsb_k` / `adsb_d`
+     *  instead of the whole `adsb` list every second. The client's own word, like `span=1`; it grants nothing. */
+    std::mutex adsbDeltaMtx_;                             // ★ leaf lock
+    std::set<net::Socket*> adsbDeltaSubs_;                // ★ under adsbDeltaMtx_
+    void adsbDeltaSubscribe(net::Socket* s, bool subscribe) {
+        std::lock_guard<std::mutex> lk(adsbDeltaMtx_);
+        if (subscribe) adsbDeltaSubs_.insert(s); else adsbDeltaSubs_.erase(s);
+    }
+    bool adsbDeltaWants(net::Socket* s) {
+        std::lock_guard<std::mutex> lk(adsbDeltaMtx_);
+        return !adsbDeltaSubs_.empty() && adsbDeltaSubs_.count(s) > 0;
+    }
     void stampSubscribe(net::Socket* s, bool subscribe) {
         std::lock_guard<std::mutex> lk(stampMtx_);
         if (subscribe) stampSubs_.insert(s); else stampSubs_.erase(s);
@@ -14688,7 +14700,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_adsbMode.load(std::memory_order_relaxed)) {
             const std::string info = g_adsb.infoAll();   // ★ every aircraft's details, once, before its first report
             if (!info.empty()) sendText(sock, info);
-            sendText(sock, g_adsb.report());
+            if (adsbDeltaWants(sock.get())) {   // ★ beta96 the delta listener's table, whole (vibe_adsb_delta.h)
+                std::lock_guard<std::mutex> sl(adsbSendMtx_);
+                sendText(sock, g_adsb.deltaKeyframe());
+            } else sendText(sock, g_adsb.report());
         }
         if (g_ismMode.load(std::memory_order_relaxed)) sendText(sock, g_ism.report());   // ★ the device list, at once
         if (g_ndbMode.load(std::memory_order_relaxed)) { const std::string r = g_ndb.report(); sendText(sock, r.empty() ? ndbHello() : r); }   // ★ the beacons, at once
@@ -17903,11 +17918,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         g_rateGuard.settled(sampleRate);
     }
 
-    void sendAdsbAll() {
-        // ★ the aircraft details that changed since last second (adsb_info) go FIRST, so the report that follows
-        //   can be drawn with them — and only when something changed: a quiet sky costs nothing extra
-        const std::string info = g_adsb.takeInfoDelta();
-        std::string r = g_adsb.report();
+    /** ★ The report's ticks on a 1 s grid — never re-based on a late tick (the delta protocol's times sit on it,
+     *  vibe_adsb_delta.h); a radio more than a second behind starts the grid again from now. */
+    void adsbNextReport(double t) { adsbLastReport_ += 1.0; if (t - adsbLastReport_ >= 1.0) adsbLastReport_ = t; }
+    /** ★★ beta96 one tick at a time: every delta socket gets adsb_k / adsb_d in the order they were built. Taken before
+     *  clientMtx, never under it. */
+    std::mutex adsbSendMtx_;
+    /** The report's own tail: the gain and the feed warning, added to a report() string (with or without aircraft). */
+    std::string adsbFinish(std::string r) {
         // ★ the gain, for the ADS-B view's GAIN key: what the radio is at, and who chose it
         const int curG = g_gainTarget.load(std::memory_order_relaxed);
         const int shownG = curG >= 0 && curG != adsbGainSet_ ? curG : adsbGainSet_;   // ★ a listener's gain, the moment it is set
@@ -17946,9 +17964,31 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                    + std::to_string(down > 0 ? long(std::time(nullptr) - down) : long(g_beastIn().secsSinceData())) + "}";
             }
         }
+        return r;
+    }
+    void sendAdsbAll() {
+        std::lock_guard<std::mutex> sl(adsbSendMtx_);
+        // ★ the aircraft details that changed since last second (adsb_info) go FIRST, so the report that follows
+        //   can be drawn with them — and only when something changed: a quiet sky costs nothing extra
+        const std::string info = g_adsb.takeInfoDelta();
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-        for (auto& sk : socks) { if (!info.empty()) sendText(sk, info); sendText(sk, r); }
+        /* ★★ V12 beta96 THE DELTA PROTOCOL (vibe_adsb_delta.h): built ONCE a tick, whoever is listening (a joiner's
+         *  keyframe is this state), and the same bytes to every socket that asked. The whole list is built only when a
+         *  socket still wants it — an older client gets exactly the report it always got. */
+        bool keyAll = false;
+        const std::string d = g_adsb.deltaTick(adsbFinish(g_adsb.report(false)), keyAll);
+        std::string r, k;
+        for (auto& sk : socks) {
+            if (!info.empty()) sendText(sk, info);
+            if (!d.empty() && adsbDeltaWants(sk.get())) {
+                if (keyAll) { if (k.empty()) k = g_adsb.deltaKeyframe(); sendText(sk, k); }
+                else sendText(sk, d);
+            } else {
+                if (r.empty()) r = adsbFinish(g_adsb.report());
+                sendText(sk, r);
+            }
+        }
     }
 
     /** The rate ADS-B runs at. ★ Without the owner's switch: whatever the radio already runs (vsAdsbWhyNot has made sure
@@ -18008,7 +18048,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     void beastTick() {
         const double t = nowSecs();
-        if (g_adsbMode.load(std::memory_order_relaxed) && t - adsbLastReport_ >= 1.0) { adsbLastReport_ = t; sendAdsbAll(); }
+        if (g_adsbMode.load(std::memory_order_relaxed) && t - adsbLastReport_ >= 1.0) { adsbNextReport(t); sendAdsbAll(); }
     }
     void adsbEnter(bool preSaved = false) {
         if (g_adsbMode.load()) { sendAdsbAll(); return; }
@@ -18401,7 +18441,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** From the DSP loop while in ADS-B: the report once a second, the gain rule every two. */
     void adsbTick() {
         const double t = nowSecs();
-        if (t - adsbLastReport_ >= 1.0) { adsbLastReport_ = t; sendAdsbAll(); }
+        if (t - adsbLastReport_ >= 1.0) { adsbNextReport(t); sendAdsbAll(); }
         if (t - adsbLastGain_ < 2.0) return;
         adsbLastGain_ = t;
         if (adsbGains_.empty() || adsbGainIdx_ < 0) return;
@@ -25298,6 +25338,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         // ★ AIS: one ship's track (the map's tapped ship) — a read, to the asker only
+        /* ★★ V12 beta96 a delta listener missed a tick (vibe_adsb_delta.h): the whole table again, to the asker only. A
+         *  read; cheap (the keyframe is built once per tick and shared). */
+        if (type == "adsb_resync") {
+            if (sock && g_adsbMode.load() && adsbDeltaWants(sock.get())) {
+                std::lock_guard<std::mutex> sl(adsbSendMtx_);
+                sendText(sock, g_adsb.deltaKeyframe());
+            }
+            return;
+        }
         if (type == "ais_trail") { double m = 0; if (sock && jsonNum(msg, "mmsi", m) && m > 0) sendText(sock, g_ais.trailJson(uint32_t(m))); return; }
         if (type == "adsb") {
             // ★ The default is OFF, as DAB's: a malformed message must never seize the receiver
@@ -28981,6 +29030,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ V12 the full-capture row (SPWB) — the client's own word; a socket that does not ask never gets one.
                 wideSubscribe(sock.get(), queryParam(reqLine, "wide") == "1");
                 stampSubscribe(sock.get(), queryParam(reqLine, "span") == "1");   // ★ V12 beta83 the span stamp (sendSpecFrame)
+                adsbDeltaSubscribe(sock.get(), queryParam(reqLine, "adsbd") == "1");   // ★ V12 beta96 ADS-B as deltas
                 const std::string bq = queryParam(reqLine, "bins");
                 wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
@@ -33506,6 +33556,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           clientSpecAudit.erase(sock.get());
           wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
           stampSubscribe(sock.get(), false);  // ★ V12 beta83 the span stamp (stampMtx_ is a leaf lock too)
+          adsbDeltaSubscribe(sock.get(), false);   // ★ V12 beta96 ADS-B deltas (a leaf lock too)
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent

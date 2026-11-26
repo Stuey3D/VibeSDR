@@ -198,6 +198,9 @@ flags_for() {
     # ★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): Beast round trip, settings, the local server and a push
     #   feed against 127.0.0.1 test sockets only (never a real aggregator), the service's sink end to end.
     test-adsb-feed)        echo "-O2 -pthread" ;;
+    # ★★ V12 beta96 the ADS-B DELTA protocol's encoder (vibe_adsb_delta.h): quantising, the header walk, ids, keyframes, the
+    #    150-aircraft synthetic sky's bytes and cost. scripts/test_adsb_delta.ts runs its --stream against the clients' store.
+    test-adsb-delta)       echo "-O2" ;;
     # ★ V12 TDF / ALS162 (decoders/tdf_phase.h): synthetic phase code through the TIME decoder — noise, drift, timing, CPU.
     #   `test-tdf --wav <file> [start_utc]` replays an UberSDR recording (docs/v12/TIME-TDF.md).
     test-tdf)              echo "-O2" ;;
@@ -1228,6 +1231,10 @@ if node --no-warnings scripts/test_adsb_layer.mjs; then pass=$((pass+1)); else f
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
 if npx tsx scripts/test_adsb_furthest.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.
+# ★★ V12 beta96 THE ADS-B DELTA PROTOCOL end to end (vibe_adsb_delta.h → src/services/adsbDelta.ts): the table rebuilt from
+#    the deltas equals the full report at every tick of a 150-aircraft sky — from the start, joining mid-stream, after a
+#    lost delta (resync), the app's list order and emergencies; junk refused. Compiles one C++ file. ~15 s.
+if nice -n 10 node --max-old-space-size=1024 --no-warnings scripts/test_adsb_delta.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_adsb_info.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 echo "── image metadata (EXIF / GPS / XMP) ──"
 if python3 scripts/strip-image-metadata.py --check; then pass=$((pass+1)); echo "  none"; else fail=$((fail+1)); echo "  ✗ run: python3 scripts/strip-image-metadata.py"; fi
@@ -1671,6 +1678,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    one beside a fake RTL, add/remove through sdr-change, the outage banner and its logs. Local sockets only. ~60 s.
 printf '\n\033[1m── ADS-B Beast feed radio (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-beast-feed.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE ADS-B DELTA PROTOCOL through the real server + its MEASUREMENT: an older client and a delta client side by
+#    side on a synthetic 150-aircraft Beast sky (KB/s per message type), the resync, 100 delta listeners' CPU. ~4 min.
+printf '\n\033[1m── ADS-B deltas: older vs delta listener, bytes and CPU (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 --no-warnings scripts/test-server-adsb-delta.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta95 THE FRONT DOOR'S ONE MERGED COMMUNITY FEED: a layer any radio may share is at the door, the same DSC call /
 #    APRS station from two radios is one row, a save through the door follows. Door only, no radio. ~10 s.
