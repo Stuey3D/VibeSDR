@@ -18,6 +18,7 @@ import Svg, { Path } from 'react-native-svg';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import type { MapSharedLine } from '../services/dialChat';
+import { scrollLane } from '../constants/popupTokens';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 
 export interface MapSharedProps {
@@ -79,7 +80,7 @@ export default function MapTopStrip(p: MapTopStripProps) {
         </NavRow>
         {tune && open && !locked && (
           <View style={s.pop} accessibilityRole="menu" accessibilityLabel="Tune the radio">
-            <ScrollView style={{ maxHeight: 380 }}>
+            <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={scrollLane}>
               {tune.rows.map((r) => {
                 const head = TUNE_GROUP_LABEL[r.group] !== last ? TUNE_GROUP_LABEL[r.group] : '';
                 last = TUNE_GROUP_LABEL[r.group];
