@@ -87,9 +87,11 @@ await session('snd', CLIP, 403005000, 96100000, 'wfm', async ({ ev, send, shot, 
   ok(await until(`/AVIATION & MARITIME · RADIOSONDES/.test(document.querySelector('.trkView:not([hidden]) .ttl')?.textContent || '')`, 3000), '★ beta96 stage 8: the AIR & SEA map, SONDES live (its title says RADIOSONDES)');
   ok(await until(`document.querySelector('.trkView:not([hidden]) .exit')?.textContent === 'EXIT SONDES'`, 3000), 'EXIT SONDES on the map');
   ok(await until(`document.querySelector('.trkView:not([hidden]) .tab[aria-selected="true"]')?.dataset.tab === 'sondes' || !document.querySelector('.trkView:not([hidden]) .tabs:not([hidden])')`, 3000), 'on the SONDES tab');
-  const bands = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) [data-rng]')].map(b => b.textContent.trim()).join(',')`);
-  ok(bands === '400–402,402–404,404–406', `the band control: ${bands} (the whole 400–406 is not offered at 2.4 MS/s)`);
-  ok(await until(`document.querySelector('.trkView:not([hidden]) [data-rng="mid"]')?.getAttribute('aria-pressed') === 'true'`, 8000), 'the band the radio is on is the lit one (402–404)');
+  // ★★★ beta96 (b96-mapchat) the bands are rows of the map's TUNE list (data-tune="sd:<band>"), no longer [data-rng] keys
+  await until(`!!document.querySelector('.trkView:not([hidden]) .tunePop [data-tune^="sd:"]')`, 8000);
+  const bands = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune^="sd:"]')].map(b => b.dataset.tune + '=' + (/(40\\d)(?:\\.\\d+)?\\s*–\\s*(40\\d)/.exec(b.textContent) || []).slice(1).join('–')).join(',')`);
+  ok(/^sd:\w+=400–402,sd:mid=402–404,sd:\w+=404–406$/.test(bands || ''), `the TUNE list's sonde bands: ${bands} (the whole 400–406 is not offered at 2.4 MS/s)`);
+  ok(await until(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="sd:mid"]')?.getAttribute('aria-checked') === 'true'`, 8000), 'the band the radio is on is the lit one (402–404)');
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkRow').length >= 3`, 30000), `sondes listed: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow b')].map(x => x.textContent).join(' | ')`)}`);
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkRow.nopos').length === 0`, 15000), 'every sonde has a position');
   const rows = await ev(`document.querySelector('.trkView:not([hidden]) .rows')?.textContent`) || '';
@@ -114,8 +116,8 @@ await session('snd', CLIP, 403005000, 96100000, 'wfm', async ({ ev, send, shot, 
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(600);
   // ★ the band control moves the radio (the server owns the band: the next report lights the new one)
-  await ev(`document.querySelector('.trkView:not([hidden]) [data-rng="hi"]')?.click()`);
-  ok(await until(`document.querySelector('.trkView:not([hidden]) [data-rng="hi"]')?.getAttribute('aria-pressed') === 'true' && /404–406 MHz/.test(document.querySelector('.trkView:not([hidden]) .st')?.textContent || '')`, 8000), 'a band pick: 404–406 MHz');
+  await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="sd:hi"]')?.click()`);   // ★ beta96 a TUNE row
+  ok(await until(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="sd:hi"]')?.getAttribute('aria-checked') === 'true' && /404–406 MHz/.test(document.querySelector('.trkView:not([hidden]) .st')?.textContent || '')`, 8000), 'a band pick: 404–406 MHz');
   // ★★★ beta96 maps2: the server feeds the day's sondes card every 20 s while SONDES runs (vibe_posgal.h) — make sure one
   //     tick has seen positions before leaving, so the card is written when the mode stops
   await sleep(22000);
