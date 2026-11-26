@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform, useWindowDimensions } from 'react-native';
+import { AppState, View, Text, TouchableOpacity, ScrollView, Image, ActivityIndicator, StyleSheet, Modal, Pressable, NativeEventEmitter, NativeModules, Alert, Platform, useWindowDimensions, Animated, Dimensions } from 'react-native';
 import { LOGO_DECODE } from '../constants/logoDecode';
 import * as FileSystem from 'expo-file-system/legacy';
 import { noteRecordingServer } from '../services/recordingsIndex';
@@ -39,6 +39,10 @@ import { dialKeyFor, pruneDial, stampUndatedDial } from '../services/dialSync';
 import { fmdxDeclaredRange } from '../services/fmdxDirectory';
 import { requestSync } from '../services/cloudSync';
 import { fmdxLayout, LOGO_BOX_COMPACT } from '../constants/fmdxLayout';
+import { useReservedRegions, deckClearance } from '../hooks/useReservedRegions';
+import { isFoldedFrontWindow, UiWindowOverride } from '../hooks/useUiScale';
+import { rowClearance } from '../utils/duoGeometry';
+import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
 import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from '../constants/fmBand';
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
@@ -347,7 +351,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       return { lo, hi };
     });
   }, [displayFreq, fmLo, fmHi]);
-  const [bottomH, setBottomH] = useState(0);   // measured island height (+ its bottom margin) → padding + VTS position
+  const [bottomH, setBottomH] = useState(0);   // measured island height (the deck alone; its lift is deckBottom) → padding + VTS position
   const [vtsH, setVtsH] = useState(0);         // the VTS strip's own height (VTSBar onHeight)
   // ★★ THE SCROLL AREA'S OWN SIZE — the window, not the device (fmdxLayout.ts). It is the ScrollView's frame
   // (flex: 1), which does not depend on its content, so the growth below cannot feed back into it.
@@ -989,6 +993,55 @@ export default function TunerScreen({ route, navigation }: Props) {
   // ★ Repeating, so holding > tunes continuously. On a SHARED tuner that is safe because the settle-commit debounce in
   // stepTune sends one retune when you stop rather than one per repeat.
   const { width: winW, height: winH } = useWindowDimensions();
+  /* ★★★ THE iPHONE DUO (Stuart 11-25: "the FM-DX screen was never checked on the Duo") — the receiver screen's rules
+   *  (SDRScreen, utils/duoGeometry.ts), for a screen that keeps its safe-area insets (no spectrum to run full bleed).
+   *  What the system draws over this window (the camera, the clock + Wi-Fi pill) and the hinge come from UIKit
+   *  (useReservedRegions) — empty on every other device and OS, so nothing below moves anywhere else.
+   *   · the header and the cards' columns stop short of a camera / pill rect over their rows (rowClearance);
+   *   · the deck LIFTS as a block above a camera that falls on it (deckClearance), and in folded landscape sits half
+   *     the home-indicator inset + 4 from the bottom, as on the receiver screen;
+   *   · on the folded front screen in portrait the deck has the REACH key (SHRINK / EXPAND, remembered per device —
+   *     the same setting as the receiver screen's);
+   *   · HALF-OPEN ("tabletop", the fold across a portrait window): the dial and the cards scroll in the TOP half, ending
+   *     8 pt above the fold; the station strip and the deck sit in the BOTTOM half, the deck scaled down if it would
+   *     reach the fold. Nothing of ours sits on the crease. The deck's own 0.81 short-window scale comes with useUiScale. */
+  const reserved = useReservedRegions();
+  const physScreen = Dimensions.get('screen');
+  const isLandscape = winW > winH;
+  const frontScreen = isFoldedFrontWindow(winW, winH, physScreen.width, physScreen.height);
+  const hinged = frontScreen || reserved.hinge != null;
+  const tableFold = !isLandscape && reserved.hinge?.status === 'partiallyOpen'
+    ? reserved.division.find((r) => r.w >= winW * 0.5 && r.y > winH * 0.2 && r.y + r.h < winH * 0.8)
+    : undefined;
+  const tabletop = !!tableFold;
+  const halfTop = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : 0;
+  const deckReach = useDeckReach(frontScreen);
+  const reachChoose = deckReach.choose;
+  const reachToggle = useMemo(() => ({ reach: deckReach.reach, onToggle: () => reachChoose(!deckReach.reach) }),
+    [deckReach.reach, reachChoose]);
+  /** The deck's top (its wrapper's y), for the camera lift — null until measured. */
+  const [deckY, setDeckY] = useState<number | null>(null);
+  const deckClear = deckClearance(reserved, deckY != null && deckY > 0 ? deckY : winH * 0.5, winW, winH);
+  /** The deck wrapper's distance from the window's bottom. */
+  const deckBottom = tabletop ? insets.bottom + 8
+    : deckClear.bottom > 0 ? deckClear.bottom
+    : hinged && isLandscape ? Math.round(insets.bottom / 2) + 4 : insets.bottom + 8;
+  /* Half-open: a deck that would not fit below the fold with the station strip above it is scaled down (the window it
+   *  lays out for is made shorter, as the receiver screen does) until it does. Reset whenever the shape changes. */
+  const [halfDeckK, setHalfDeckK] = useState(1);
+  useEffect(() => { setHalfDeckK(1); }, [tabletop, winW, winH, halfTop]);
+  const halfDeckWin = useMemo(() => (tabletop && halfDeckK < 1
+    ? { W: winW, H: Math.max(winW, Math.round(winH * halfDeckK)) } : null), [tabletop, halfDeckK, winW, winH]);
+  /** The header's rows, clear of a pill / camera over them (insets.top is where the SafeAreaView starts it). */
+  const headerClear = rowClearance(reserved, insets.top, 46, winW, winH);
+  const headerBottom = insets.top + headerClear.top + 46;
+  /** The cards' columns: clear of a corner rect anywhere over the scrolling area (it scrolls under the whole height). */
+  const scrollEndY = tabletop ? tableFold!.y - 8 : (deckY != null && deckY > 0 ? deckY : winH);
+  const cardsClear = rowClearance(reserved, headerBottom, Math.max(0, scrollEndY - headerBottom), winW, winH);
+  const padL = Math.max(14 + insets.left, cardsClear.left);
+  const padR = Math.max(14 + insets.right, cardsClear.right);
+  /** What the floating deck + strip take from the bottom of the scroll (nothing in half-open: they are below the fold). */
+  const deckReserve = tabletop ? 0 : deckBottom + bottomH + (vtsH ? vtsH + 8 : 0);
   const screenHl = useScreenHighlight(kbInUse && !anyOverlay && !showNotice, focusC.ring, [winW, winH]);
   useRepeatingKeys(true, (k: string) => {
     if (!k) return;
@@ -1222,9 +1275,9 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, [connected, showNotice]);
 
   const lay = useMemo(() => fmdxLayout(
-    scrollBox.w - 28 - insets.left - insets.right,
-    scrollBox.h - 14 - (14 + bottomH + (vtsH ? vtsH + 8 : 0)),
-  ), [scrollBox.w, scrollBox.h, insets.left, insets.right, bottomH, vtsH]);
+    scrollBox.w - padL - padR,
+    scrollBox.h - 14 - (14 + deckReserve),
+  ), [scrollBox.w, scrollBox.h, padL, padR, deckReserve]);
   const cs = lay.cardScale;
   const big = lay.logoBox !== LOGO_BOX_COMPACT;
 
@@ -1232,7 +1285,9 @@ export default function TunerScreen({ route, navigation }: Props) {
     <SafeAreaView ref={screenHl.rootRef as any} style={styles.root} edges={['top']}>
       {screenHl.ring}
       {/* Header (Back lives in the control island's menu slot) */}
-      <View style={[styles.header, { paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right }]}>
+      <View style={[styles.header, { paddingLeft: Math.max(16 + insets.left, headerClear.left),
+                                     paddingRight: Math.max(16 + insets.right, headerClear.right),
+                                     marginTop: headerClear.top }]}>
         <Text style={styles.title} numberOfLines={1}>{instanceName ?? 'FM-DX'}</Text>
         {/* Favourite this receiver. Same ♥/♡ convention as the instance picker —
             the app has no icon library, it uses Unicode glyphs throughout. */}
@@ -1275,22 +1330,23 @@ export default function TunerScreen({ route, navigation }: Props) {
 
       {/* ★★ V12 THE BACKGROUND SERVER'S CARD — as on the receiver screen, under the header. */}
       {!!dualMyId && dualShape.phase === 'paired' && (
-        <DualServerCard myId={dualMyId} top={insets.top + 46 + (paused ? 40 : 0)} onSwap={onDualSwap} />
+        <DualServerCard myId={dualMyId} top={headerBottom + (paused ? 40 : 0)} onSwap={onDualSwap} />
       )}
 
       {/* Power-saving pause: FM-DX disconnects (frees the shared tuner) — mirror the
           other backends' "PAUSED — TAP TO RECONNECT" pill (▶ or a tap resumes). */}
       {paused && (
-        <TouchableOpacity style={[styles.pausedBanner, { top: insets.top + 46 }]}
+        <TouchableOpacity style={[styles.pausedBanner, { top: headerBottom }]}
           onPress={resumeFromPause} activeOpacity={0.85}>
           <Text style={styles.pausedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
         </TouchableOpacity>
       )}
 
-      <ScrollView ref={scrollRef} style={{ flex: 1 }}
+      {/* ★ Half-open: the scroll ends 8 pt above the fold (the deck and the strip are in the bottom half). */}
+      <ScrollView ref={scrollRef} style={[{ flex: 1 }, tabletop && { marginBottom: winH - tableFold!.y + 8 }]}
         onLayout={(e) => { const { width, height } = e.nativeEvent.layout;
           setScrollBox(b => (b.w === width && b.h === height ? b : { w: width, h: height })); }}
-        contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + bottomH + (vtsH ? vtsH + 8 : 0), paddingLeft: 14 + insets.left, paddingRight: 14 + insets.right, gap: 12 }}>
+        contentContainerStyle={{ paddingTop: 14, paddingBottom: 14 + deckReserve, paddingLeft: padL, paddingRight: padR, gap: 12 }}>
         {error && <Text style={styles.err}>{error}</Text>}
 
         {/* Vintage tuning dial — every RDS name we decode is pinned to its freq */}
@@ -1411,17 +1467,31 @@ export default function TunerScreen({ route, navigation }: Props) {
           (which was clipping the island to 59px). onLayout feeds the ScrollView's
           bottom padding so nothing hides behind them. */}
       {/* ★ The station strip — the app's VTS, floating just above the island exactly as on the SDR screen. */}
-      <VTSBar notif={vtsNotif} bottom={bottomH + 8} serverType="fmdx" onHeight={setVtsH}
+      <VTSBar notif={vtsNotif} bottom={deckBottom + bottomH + 8} serverType="fmdx" onHeight={setVtsH}
         freqLabel={`${(displayFreq / 1e6).toFixed(3)} MHz`} />
-      <View
-        onLayout={(e) => setBottomH(e.nativeEvent.layout.height)}
-        style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}
+      <Animated.View
+        onLayout={(e) => {
+          const { y, height } = e.nativeEvent.layout;
+          setBottomH(height);
+          setDeckY(y);
+          // ★ Half-open: the deck and the strip above it must fit below the fold — else lay the deck out smaller.
+          if (tabletop) {
+            const room = winH - halfTop - deckBottom - (vtsH ? vtsH + 8 : 0);
+            if (height > room + 0.5) setHalfDeckK((k) => Math.max(0.5, Math.floor(k * (room / height) * 100) / 100));
+          }
+        }}
+        /* The app's real control island — wrapped like SDRScreen's pillWrap: 8 pt each side, `deckBottom` from the
+           bottom (the safe area + 8; lifted above a camera; lower in folded landscape), the bar's own bottomInset 0 so
+           its rounded corners are not clipped. REACH (the folded front screen): the left edge travels right. */
+        style={{
+          position: 'absolute', right: 8, bottom: deckBottom,
+          left: frontScreen ? deckReach.progress.interpolate({ inputRange: [0, 1], outputRange: [8, 8 + Math.round(winW * REACH_SHARE)] }) : 8,
+        }}
       >
-      {/* The app's real control island — wrapped exactly like SDRScreen's
-          pillWrap (inset 8px each side, bottom = safe-area + 8; bar's own
-          bottomInset is 0 so the rounded corners aren't clipped). */}
-      <View style={{ marginHorizontal: 8, marginBottom: insets.bottom + 8 }}>
+      <UiWindowOverride.Provider value={halfDeckWin}>
       <ControlsBar
+        /* ★★★ REACH (iPhone Duo, folded front screen in portrait): the SHRINK / EXPAND key between the drums. */
+        reachToggle={frontScreen ? reachToggle : undefined}
         frequency={displayFreq}
         mode="wfm"
         step={step}
@@ -1470,8 +1540,8 @@ export default function TunerScreen({ route, navigation }: Props) {
           ? { listeners: st.users, max: 0, alone: st.users <= 1, tuning: '', youPlus: true }
           : null}
       />
-      </View>
-      </View>
+      </UiWindowOverride.Provider>
+      </Animated.View>
 
       {/* First-connect shared-tuner notice */}
       <Modal visible={showNotice} transparent animationType="fade" onRequestClose={dismissNotice}>

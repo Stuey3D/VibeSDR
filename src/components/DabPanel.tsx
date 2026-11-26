@@ -24,7 +24,7 @@ import { screenNavRef } from './ScreenNav';
 import { Image, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { LOGO_DECODE } from '../constants/logoDecode';
 import Reanimated, { Easing as REasing, cancelAnimation, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
-import { DecoderShell, decoderBodyInset, useDecoderTokens, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
+import { DecoderShell, useDecoderSplit, decoderBodyInset, useDecoderTokens, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, engraveStyle,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { Canvas, Points, Rect } from '@shopify/react-native-skia';
 import { dabLicensedTail, dabTxSpecsTail, type DabState } from '../services/dabTypes';
@@ -258,11 +258,7 @@ const SignalHead = React.memo(function SignalHead({ d, cur, base, readAuth }: {
   d: DabState; cur: DabState['services'][number] | undefined; base: string; readAuth: string;
 }) {
   const { s } = useDecoderStyles(makeStyles);
-  const logo = useServiceLogo(base, d, cur, readAuth);
-  const [dead, setDead] = React.useState<string | null>(null);
-  const slide = dabSlideQuery(d.slide) ? withReadAuth(`${base}/vibeserver/dabslide?${dabSlideQuery(d.slide)}`, readAuth) : null;
-  const air = cur?.logoAir ? `${base}/vibeserver/dablogoair?sid=${cur.sid}` : null;
-  const pick = [slide, air, logo].find(u => !!u && u !== dead) ?? null;
+  const { pick, setDead } = useHeadPicture(d, cur, base, readAuth);
   if (!cur) return null;
   const ann = (d.announce ?? []).filter(a => a.subChId === cur.subch && a.types.length);
   const alarm = ann.some(a => a.alarm);
@@ -281,6 +277,58 @@ const SignalHead = React.memo(function SignalHead({ d, cur, base, readAuth }: {
         <Text style={s.headSub} numberOfLines={1}>{sub}</Text>
         {!!d.dls && <Marquee text={d.dls} style={s.headDls} />}
       </View>
+    </View>
+  );
+});
+
+/** The playing service's picture: the slideshow, else the logo off the air, else the looked-up logo — skipping one
+ *  that failed to load. Shared by the signal pane's head and the half-open upper panel (ServiceDetail). */
+function useHeadPicture(d: DabState, cur: DabState['services'][number] | undefined, base: string, readAuth: string) {
+  const logo = useServiceLogo(base, d, cur, readAuth);
+  const [dead, setDead] = React.useState<string | null>(null);
+  const slide = dabSlideQuery(d.slide) ? withReadAuth(`${base}/vibeserver/dabslide?${dabSlideQuery(d.slide)}`, readAuth) : null;
+  const air = cur?.logoAir ? `${base}/vibeserver/dablogoair?sid=${cur.sid}` : null;
+  const pick = [slide, air, logo].find(u => !!u && u !== dead) ?? null;
+  return { pick, setDead };
+}
+
+/**
+ * ★★★ THE PLAYING SERVICE, LARGE — the UPPER panel of the half-open BIG box (iPhone Duo; Stuart: "treat the decoder box
+ * as 2 halves"). The station list is the lower panel; this is what it is playing: the slideshow (or logo) at the
+ * panel's width, the name, codec and bit rate, the whole Dynamic Label wrapped rather than scrolled (there is room),
+ * and what DL Plus says it means. Only drawn there — every other layout keeps the list alone.
+ */
+const ServiceDetail = React.memo(function ServiceDetail({ d, cur, base, readAuth, waiting, maxPic }: {
+  d: DabState; cur: DabState['services'][number] | undefined; base: string; readAuth: string; waiting: string;
+  /** The picture's largest height — what the panel can spare after the text. */
+  maxPic: number;
+}) {
+  const { s, C } = useDecoderStyles(makeStyles);
+  const { pick, setDead } = useHeadPicture(d, cur, base, readAuth);
+  if (!cur) {
+    return <Text style={s.notice}>{d.services.length ? 'Pick a station below.' : ''}</Text>;
+  }
+  const ann = (d.announce ?? []).filter(a => a.subChId === cur.subch && a.types.length);
+  const alarm = ann.some(a => a.alarm);
+  const sub = [cur.codec + (cur.kbps ? ` ${cur.kbps} kbit/s` : ''), cur.prot ?? '',
+               cur.pty !== undefined && cur.pty >= 0 ? (DAB_PTY[cur.pty] ?? '') : ''].filter(Boolean).join(' · ');
+  const label = waiting || d.dls || '';
+  return (
+    <View style={s.detail}>
+      {pick
+        ? <Image key={pick} source={{ uri: pick }} style={[s.detailPic, { maxHeight: maxPic }]} resizeMode="contain"
+                 {...LOGO_DECODE} onError={() => setDead(pick)} />
+        : null}
+      <Text style={s.headName} numberOfLines={2}>
+        {cur.label || cur.sid.toString(16).toUpperCase()}
+        {ann.length ? (alarm ? '  ⚠ ALARM' : '  ● ANN') : ''}
+      </Text>
+      <Text style={s.headSub} numberOfLines={1}>{sub}</Text>
+      {!!label && <Text style={[s.detailDls, !!waiting && { color: C.selLive }]} numberOfLines={5}>{label}</Text>}
+      {!waiting && !!d.dlp && DLP_ORDER.filter(k => d.dlp![k]).slice(0, 4).map(k => (
+        <Row key={k} label={k[0].toUpperCase() + k.slice(1)} value={d.dlp![k]} />
+      ))}
+      {!!d.epgNow && <Row label="On now" value={`${d.epgNow.at} · ${d.epgNow.name}`} />}
     </View>
   );
 });
@@ -534,8 +582,12 @@ export default function DabPanel(p: DabPanelProps) {
   const bigBody = p.topSafe != null
     ? Math.max(140, winH - p.bottomOffset - p.topSafe - 46 - decoderBodyInset(dtk)) : tallBody;
   const smallBody = p.topLimit != null ? fitBody : 230;
-  const bigUseful = bigBody >= smallBody + 40;
+  /* ★★★ HALF-OPEN (iPhone Duo): BIG is the two-panel box — header + the playing service (or the SIGNAL pane) above
+   *  the fold, the station list below it (DecoderShell, useDecoderSplit). Offered whenever the split is. */
+  const split = useDecoderSplit();
+  const bigUseful = split ? true : bigBody >= smallBody + 40;
   const tall = p.tall && bigUseful;
+  const splitOn = tall && !!split;
   const maxBody = tall ? bigBody : smallBody;
   const d = p.d;
   const cur = d ? d.services.find(x => x.sid === d.sid) : undefined;
@@ -784,9 +836,9 @@ export default function DabPanel(p: DabPanelProps) {
     );
   })();
 
-  const body = (
-    <ScrollView ref={listRef} style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
-                showsVerticalScrollIndicator={false}>
+  /* ★ The body in three pieces so the half-open split can place them in its two panels; everywhere else they are
+   *  put back together in one scroll, exactly as before. */
+  const notices = (<>
       {!!p.error && <Text style={s.notice}>{p.error}</Text>}
       {/* ★★★ SAY WHY IT IS SILENT, IN BOTH PANES. DAB+ is decoded ON THE SERVER — Stuart,
           2026-09-08: "dab+ audio should always be handled on the server the client shouldnt do
@@ -803,6 +855,8 @@ export default function DabPanel(p: DabPanelProps) {
       )}
       {!d && !p.error && pane !== 'scan' && <Text style={s.notice}>Tuning the multiplex…</Text>}
 
+  </>);
+  const stationList = (<>
       {!!d && pane === 'stations' && (
         <>
           {d.services.length === 0 && (
@@ -834,6 +888,8 @@ export default function DabPanel(p: DabPanelProps) {
       )}
       {scanPane}
 
+  </>);
+  const signalPane = (<>
       {!!d && pane === 'signal' && (
         <>
           <SignalHead d={d} cur={cur} base={p.base} readAuth={p.readAuth ?? ''} />
@@ -1083,11 +1139,50 @@ export default function DabPanel(p: DabPanelProps) {
           )}
         </>
       )}
+  </>);
+  const body = (
+    <ScrollView ref={listRef} style={{ maxHeight: maxBody }} contentContainerStyle={s.body}
+                showsVerticalScrollIndicator={false}>
+      {notices}
+      {stationList}
+      {signalPane}
     </ScrollView>
   );
+  /* ★★★ HALF-OPEN BIG — the two panels. UPPER (under the header): the playing service, large, or the SIGNAL pane when
+   *  that is chosen. LOWER: the station list, filling its panel. The picture gives way to the text when room is short. */
+  const inset = decoderBodyInset(dtk);
+  const upperBody = split ? Math.max(80, split.upperH - 46 - inset) : 0;
+  const upper = splitOn && split ? (
+    <ScrollView style={{ maxHeight: upperBody }} contentContainerStyle={s.body} showsVerticalScrollIndicator={false}>
+      {notices}
+      {!!d && pane === 'stations' && (
+        <ServiceDetail d={d} cur={cur} base={p.base} readAuth={p.readAuth ?? ''} waiting={waitingText}
+                       maxPic={Math.max(0, Math.min((split.width - 24) * 3 / 4, upperBody - 150))} />
+      )}
+      {signalPane}
+    </ScrollView>
+  ) : null;
+  const lower = splitOn && split ? (
+    /* ★ No header above it, so on metal the window keeps the same margin at its top as at its sides. */
+    <DecoderBody style={{ marginTop: inset }}>
+      <ScrollView ref={listRef} style={{ height: Math.max(80, split.lowerH - 2 * inset) }} contentContainerStyle={s.body}
+                  showsVerticalScrollIndicator={false}>
+        {/* ★ V12: the scan pane lives in stationList too (scanPane), so only the SIGNAL pane swaps the list for rows. */}
+        {(pane !== 'signal' || !d) ? stationList : (
+          /* ★ On the SIGNAL pane the list still sits below: the stations pane's rows, the readings above. */
+          <>
+            {d.services.map(sv => (
+              <ServiceRow key={sv.sid} sv={sv} d={d} base={p.base} readAuth={p.readAuth ?? ''}
+                          waiting={sv.sid === d.sid ? waitingText : ''} onPress={() => pick(sv.sid)} />
+            ))}
+          </>
+        )}
+      </ScrollView>
+    </DecoderBody>
+  ) : undefined;
 
   return (
-    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={tall} borderColor={grab ? navRing : undefined}>
+    <DecoderShell bottom={p.bottomOffset} maxWidth={DAB_MAX_W} tall={tall} borderColor={grab ? navRing : undefined} lower={lower}>
         {/* ★ A place the screen's highlight can land: Enter takes the keys back into the box. */}
         <View pointerEvents="none" style={StyleSheet.absoluteFill} ref={screenNavRef('dabBox', () => setGrab(true))} />
         <DecoderHeader>
@@ -1133,7 +1228,7 @@ export default function DabPanel(p: DabPanelProps) {
             <Text style={[s.mux, { opacity: 0.75, fontSize: 11, marginBottom: 4 }]} accessibilityRole="text">
               Every user can choose their own station on this multiplex</Text>
           )}
-          {body}
+          {upper ?? body}
         </DecoderBody>
     </DecoderShell>
   );
@@ -1192,6 +1287,10 @@ const makeStyles = (T: DecoderTokens) => {
   headName: { fontFamily: FONT, fontSize: 16, letterSpacing: 1, color: C.sel },
   headSub:  { fontFamily: FONT, fontSize: 12, color: C.muted, marginTop: 1 },
   headDls:  { fontFamily: FONT, fontSize: 13, color: C.value, marginTop: 2 },
+  // ★ Half-open upper panel (ServiceDetail): the picture at the panel's width, the label wrapped.
+  detail:    { gap: 4, paddingBottom: 4 },
+  detailPic: { alignSelf: 'stretch', aspectRatio: 4 / 3, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.05)', marginBottom: 4 },
+  detailDls: { fontFamily: FONT, fontSize: 13, lineHeight: 18, color: C.value, marginTop: 2 },
   svc:      { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6,
               paddingHorizontal: 6, borderRadius: 6 },
   svcActive:{ backgroundColor: C.selBg },

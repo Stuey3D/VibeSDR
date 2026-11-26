@@ -41,7 +41,9 @@ import { guardJson } from '../services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf } from '../services/rspAgcReadout';
 import {
   Alert,
+  Animated,
   AppState,
+  Dimensions,
   Linking,
   Modal,
   BackHandler,
@@ -333,7 +335,13 @@ import { noteRecordingServer } from '../services/recordingsIndex';
 import { crumb } from '../services/crumbs';
 import { PsStabiliser } from '../services/psStabiliser';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
-import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
+import { TABLET_MIN_SIDE, isFoldedFrontWindow, isFrontScreenWindow, UiWindowOverride } from '../hooks/useUiScale';
+import { useReservedRegions, avoidRects, clearBelow, rightLimitAt, deckClearance, namePlacement } from '../hooks/useReservedRegions';
+import { halfOpenSplit, serversChipPlacement } from '../utils/duoGeometry';
+import { useDeckReach, REACH_SHARE } from '../components/DeckReach';
+import { DecoderAvoidContext, BoxRectsContext } from '../components/DecoderShell';
+import { chipCollapsed, CHIP_EXPAND_DELAY_MS, type ChipRect } from '../utils/serversChipCollapse';
+import { EDGE_TAB_W, EDGE_TAB_H } from '../components/edgeChipGeometry';
 import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { transcribeCaps, refreshTranscribeCaps, downloadTranscribeLanguage, keepTranscribeLanguages, startTranscribe, stopTranscribe, setTranscribeTuning, onTranscribe, pickLocale, langName, transcribeLanguageList, transcribeChoiceCode, sameLanguage, translateTargetLabel, type TranscribeCaps } from '../services/transcriber';
@@ -2266,8 +2274,32 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  Layout follows the WINDOW, never the device. */
   const { width: screenW, height: screenH } = useWindowDimensions();
   const isLandscape = screenW > screenH;
+  /* ★★★ iPHONE DUO (Stuart, 2026-11-25). What the system draws over this window (the camera, the clock + Wi-Fi pill)
+   *  and the hinge, from UIKit (useReservedRegions — empty on every other device and OS, so nothing else moves). */
+  const reserved = useReservedRegions();
+  const physScreen = Dimensions.get('screen');
+  /** The folded front screen: a short, whole, portrait phone window (isFoldedFrontWindow) — the deck's grab bar. */
+  const frontScreen = isFoldedFrontWindow(screenW, screenH, physScreen.width, physScreen.height);
+  /* ★★★ FULL BLEED ON A FOLDING DISPLAY ("we can extend up" — Stuart, open portrait; and the front screen's design:
+   *  "the status icons float over the spectrum, the camera simply sits over the spectrum"). On a window UIKit reports a
+   *  hinge for (UIHingeInteraction, iOS 27.1), the spectrum and waterfall run to the top edge and ONLY our own
+   *  furniture keeps clear of the camera and the status pill — by their real rects, below. Everywhere else (every
+   *  iPhone, iPad and Mac) the top inset is kept exactly as before. */
+  const fullBleed = frontScreen || reserved.hinge != null;
+  /** Where the screen's own furniture is measured from: the top inset, or the glass's edge when full bleed. */
+  const chromeTop = fullBleed ? 0 : insets.top;
+  /* ★★★ HALF-OPEN — "TABLETOP" (iPhone Duo, Stuart 2026-11-25, an experiment he asked for): UIKit says the hinge is
+   *  partially open AND gives the fold as a division region across a portrait window. Then the TOP half is the
+   *  spectrum and waterfall only, and the BOTTOM half holds the deck — beside the open decoder box, or centred on its
+   *  own. The waterfall runs THROUGH the fold and on down behind the deck and box, as flat (Stuart: "spectrum can
+   *  cross and fill the screen"); only controls and text keep off the fold. Flat or folded: exactly as before (Apple reserves the
+   *  fold only while partially open). The waterfall, the connection and the audio are untouched by the switch. */
+  const tableFold = !isLandscape && reserved.hinge?.status === 'partiallyOpen'
+    ? reserved.division.find((r) => r.w >= screenW * 0.5 && r.y > screenH * 0.2 && r.y + r.h < screenH * 0.8)
+    : undefined;
+  const tabletop = !!tableFold;
   /** The waterfall's top inset: the new orientation's settled value from a rotation's first render (useOrientationInset). */
-  const wfInsetTop = useOrientationInset(insets.top, isLandscape);
+  const wfInsetTop = useOrientationInset(chromeTop, isLandscape);
   /* ★★★ ANDROID: THE WINDOW DOES NOT DRAW THROUGH A ROTATION UNTIL THIS SCREEN HAS RE-RENDERED AT THE NEW SIZE
    *  (MainActivity.onConfigurationChanged). The waterfall's size is this render's — 270–380 ms after the turn on the Moto
    *  — and drawing in between showed the old-size picture in a corner of the turned screen, then a jump. Armed while
@@ -2311,8 +2343,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Spec ratio (portrait + landscape stored separately) ───────────────────
   const [specRatioPortrait,  setSpecRatioPortrait]  = useState(0.28);
   const [specRatioLandscape, setSpecRatioLandscape] = useState(0.20);
+  /* ★★★ FOUR CASES ON THE iPHONE DUO (Stuart, 2026-11-25: "we need 4 ratio options for spectrum/waterfall,
+   *  portrait/landscape, front and inner screens"). The FRONT screen (folded, either way up — isFrontScreenWindow)
+   *  keeps its own pair; the inner screen, and every other device, keeps today's pair. Front portrait defaults to
+   *  more waterfall (its deck takes a larger share of a short screen). */
+  const [specRatioFrontPortrait,  setSpecRatioFrontPortrait]  = useState(0.24);
+  const [specRatioFrontLandscape, setSpecRatioFrontLandscape] = useState(0.22);
   const [ratioOverlayOpen,   setRatioOverlayOpen]   = useState(false);
-  const specFrac = isLandscape ? specRatioLandscape : specRatioPortrait;
+  const frontAnyWay = isFrontScreenWindow(screenW, screenH, physScreen.width, physScreen.height);
+  const specFrac = frontAnyWay
+    ? (isLandscape ? specRatioFrontLandscape : specRatioFrontPortrait)
+    : (isLandscape ? specRatioLandscape : specRatioPortrait);
 
   // ── Client ────────────────────────────────────────────────────────────────
 
@@ -4559,10 +4600,73 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  it whole pushed the clock and the receiver name a long way inside an edge nothing was covering — the
    *  waterfall already draws under there. Enough of it to clear a rounded corner, not all of it. */
   const rightInset = Math.max(12, Math.min(insets.right, 20) + 8);
+  /* ★★★ CLEAR OF THE CAMERA AND THE STATUS PILL (iPhone Duo, Stuart 2026-11-25: the clock and Wi-Fi sat on the
+   *  receiver's name and the SERVER HEALTH pill, folded and open). The receiver's name stops short of any system rect
+   *  in its rows; the right-hand stack starts below any in its column. Both read UIKit's own rects (useReservedRegions)
+   *  — no rect, no change, which is every other device. */
+  const namePlace = fullBleed ? namePlacement(reserved, chromeTop, 64, screenW, rightInset)
+    : { right: rightInset, minTop: 0, crowded: false };
+  const stationIdRightClear = namePlace.right;
   /** ★★ THE TOP OF THE RIGHT-HAND HEADER STACK, in one place — the health pill, the session clock,
    *  the listener count and the admin note all hang off it, and three of them used to write the same
    *  expression out for themselves. Two readers of one rule is how one of them ends up wrong. */
-  const rightStackTop = insets.top + 46 + (stationIdH > 0 ? stationIdH + 8 : 0);
+  const rightColClear = clearBelow(reserved, screenW - 180, screenW, screenH);
+  const rightStackTop = Math.max(chromeTop + 46 + (stationIdH > 0 ? stationIdH + 8 : 0),
+                                 rightColClear > 0 ? rightColClear + 8 : 0,
+                                 namePlace.minTop > 0 && stationIdH > 0 ? namePlace.minTop + stationIdH + 8 : 0);
+  /** The Servers chip's top: 46 below the furniture line, and below any system rect over its corner. */
+  /* ★★ The ordinary left margin in every pose, DROPPED below a corner camera or status rect that would meet it — never
+   *  shifted sideways (Stuart, Duo folded landscape, camera top-left: "it's avoiding the camera by coming in too far, so
+   *  just do what we did with the health chips and drop it lower"). On a hinged (full-bleed) window the camera comes as a
+   *  reserved rect, and the safe-area inset on its side is what pushed the chip in past the dB scale, so the margin there
+   *  is a plain 12; every other device keeps the inset + 8 (the Dynamic Island side), exactly as before. */
+  const serversPlace = serversChipPlacement(reserved,
+    { left: fullBleed ? 12 : Math.max(12, insets.left + 8), top: chromeTop + 46 },
+    Math.max(serversChipW, 120), 38, screenW, screenH);
+  const serversLeft = serversPlace.left;
+  const serversTop = serversPlace.top;
+  /* ★★★ THE SERVERS BUTTON TUCKS INTO AN EDGE TAB WHEN A BOX WOULD COVER IT (Stuart, 2026-11-25: "I think the servers
+   *  button has always clipped, especially on phones. Wonder if it's worth making it collapsible too" — "in waterfall
+   *  mode it's there fully"; "it will help the SE massively"). Every decoder box, the DAB box and Advanced RDS report
+   *  where they are (DecoderShell BoxRectsContext); when any of them meets the FULL chip's rect the chip becomes its
+   *  icon-only tab on the left edge (ServersChip `compact`), over a plain waterfall it is the full button. It tucks at
+   *  once and comes back only after CHIP_EXPAND_DELAY_MS with nothing over it, so a box resizing never makes it flicker. */
+  const boxRectsRef = useRef(new Map<number, ChipRect[]>());
+  const [boxRectsVer, setBoxRectsVer] = useState(0);
+  const onBoxRects = useCallback((id: number, rects: ChipRect[] | null) => {
+    const m = boxRectsRef.current, prev = m.get(id);
+    if (!rects) { if (!prev) return; m.delete(id); }
+    else {
+      if (prev && prev.length === rects.length && prev.every((r, i) =>
+        Math.abs(r.x - rects[i].x) < 1 && Math.abs(r.y - rects[i].y) < 1 && Math.abs(r.w - rects[i].w) < 1 && Math.abs(r.h - rects[i].h) < 1)) return;
+      m.set(id, rects);
+    }
+    setBoxRectsVer((v) => v + 1);
+  }, []);
+  /** The FULL chip (its last measured width; ~38 pt tall) — never the tab's, or tucking would undo itself. */
+  const chipOverlap = useMemo(() => chipCollapsed(
+    { x: serversLeft, y: serversTop, w: serversChipW > 0 ? serversChipW : 120, h: 38 },
+    [...boxRectsRef.current.values()].flat()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [serversLeft, serversTop, serversChipW, boxRectsVer]);
+  const [chipCompact, setChipCompact] = useState(false);
+  useEffect(() => {
+    if (chipOverlap) { setChipCompact(true); return; }
+    const t = setTimeout(() => setChipCompact(false), CHIP_EXPAND_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [chipOverlap]);
+  /** A centred banner's top (muted / paused / reconnect): the same line, clear of a system rect over the middle. */
+  const bannerTop = (() => {
+    const y = clearBelow(reserved, screenW * 0.2, screenW * 0.8, screenH);
+    return Math.max(chromeTop + 46, y > 0 ? y + 8 : 0);
+  })();
+  /* ★★ THE RECEIVER'S NOTES (owner's notice, "somebody moved the dial", the shared-receiver note) on a full-bleed
+   *  window sit BELOW the Servers chip (Stuart, Duo: "the shared-receiver toast covers the Servers button and the
+   *  frequency scale"), and no wider than the room left of a system rect in their rows. Everywhere else: as before. */
+  const noticeTop = fullBleed ? serversTop + 50 : insets.top + 8;
+  const noticeRightLimit = rightLimitAt(reserved, noticeTop, noticeTop + 70, screenW);
+  const noticeMaxW = Number.isFinite(noticeRightLimit)
+    ? Math.max(200, Math.min(screenW * 0.7, 2 * (noticeRightLimit - 8 - screenW / 2))) : undefined;
   /** ★★ EVERYTHING BELOW THE PILL MOVES DOWN TO FIT IT, and that is the intended trade: the brief's
    *  whole requirement is that the pill stays COMPACT ("almost a widget pill like the battery one"),
    *  so a few pixels of travel for the clock is preferable to shrinking it until it cannot be read.
@@ -4941,6 +5045,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           num('autoContrast', setAutoContrast);   num('step', setStep);
           num('specRatioPortrait', setSpecRatioPortrait);
           num('specRatioLandscape', setSpecRatioLandscape);
+          num('specRatioFrontPortrait', setSpecRatioFrontPortrait);
+          num('specRatioFrontLandscape', setSpecRatioFrontLandscape);
           bool('specShow', setSpecShow);          bool('peakHold', setPeakHold);
           bool('knownLabels', setKnownLabels);
           bool('spatialSmooth', setSpatialSmooth);
@@ -4965,7 +5071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
-      specRatioPortrait, specRatioLandscape, avgFrames, knownLabels,
+      specRatioPortrait, specRatioLandscape, specRatioFrontPortrait, specRatioFrontLandscape, avgFrames, knownLabels,
     });
     latestPrefsJson.current = json;
     const key = prefsTarget.current === 'server'
@@ -4978,7 +5084,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
-      specRatioPortrait, specRatioLandscape, avgFrames, knownLabels, baseUrl]);
+      specRatioPortrait, specRatioLandscape, specRatioFrontPortrait, specRatioFrontLandscape, avgFrames, knownLabels, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
   // override; THIS SERVER = per-instance override; GLOBAL = the shared blob.
@@ -4993,6 +5099,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
     setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
+    setSpecRatioFrontPortrait(0.24); setSpecRatioFrontLandscape(0.22);
     appAlert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
 
@@ -12653,7 +12760,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  short portrait window the listener count and the admin note are not drawn (the health and time cards TUCK —
    *  see EdgeChip below), and SMALL fills from the server-name row (boxTopLimit); BIG reaches the status row.
    *  Minimise or close it and they come back. */
-  const boxTopLimit = boxHidesVts ? rightStackTop + 8 : undefined;
+  const boxTopLimit = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : boxHidesVts ? rightStackTop + 8 : undefined;
   useEffect(() => { if (boxHidesVts) setVtsBarH(0); }, [boxHidesVts]);
 
   /* ★★★ THE HEALTH AND TIME CARDS TUCK INTO THE EDGE (Stuart, 2026-10-03: "the health and time chips when slid off
@@ -12668,6 +12775,31 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Opening a box puts a card the user had brought out back on 'auto', so it tucks for the box. */
   const boxesDrawn = !isLandscape || isTablet;
   const anyBoxOpen = boxesDrawn && (dabBoxOpen || decoderShown || (advRdsOpen && status.mode === 'wfm'));
+  /* ★★ HALF-OPEN geometry (see tableFold). The bottom half starts 8 pt below the fold. With a decoder box open the deck
+   *  takes the LEFT half and the box the RIGHT, both on the bottom edge — unless half the width would be under 300 pt,
+   *  when the box stacks over the deck instead. The deck is laid out for the room it really has (UiWindowOverride), so
+   *  it is a phone deck in a half, a one-row deck across a wide short half. */
+  const halfTop = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8 : 0;
+  const halfSide = tabletop && anyBoxOpen && screenW / 2 - 12 >= 300;
+  const halfDeckW = halfSide ? Math.floor(screenW / 2) - 12 : screenW - 16;
+  /* ★★★ HALF-OPEN, NO BOX: THE PORTRAIT DECK (Stuart: "controls with no decoder box could be the portrait version" —
+   *  "in actual portrait they are"). Exactly the flat-open portrait deck (the real window: no override), at the bottom
+   *  with the home-indicator margin. Only if it would reach the fold is it scaled down — still the portrait deck, laid
+   *  out for a portrait window of the same width and a shorter height (useUiScale sizes a tablet by its long side), so
+   *  its top keeps 8 pt below the division rect. With a box open: the deck in the right half, as before. */
+  const [halfDeckK, setHalfDeckK] = useState(1);
+  useEffect(() => { setHalfDeckK(1); }, [tabletop, screenW, screenH, halfTop]);
+  const halfDeckWin = useMemo(() => (!tabletop ? null
+    : halfSide || anyBoxOpen ? { W: halfDeckW + 16, H: Math.max(200, screenH - halfTop) }   // a box: as before
+    : halfDeckK < 1 ? { W: screenW, H: Math.max(screenW, Math.round(screenH * halfDeckK)) } : null),
+    [tabletop, halfSide, anyBoxOpen, halfDeckW, screenH, screenW, halfTop, halfDeckK]);
+  /* ★★ HALF-OPEN: the DLS / RDS label bar over the deck — in the RIGHT column when a box is open — only when it fits
+   *  between the fold and the deck's top (its last measured height, 46 until it has been seen). Otherwise it stays
+   *  hidden: never on the crease, never over the box (Stuart); the box shows the text anyway. */
+  const vtsLastH = useRef(46);
+  const onVtsHeight = useCallback((h: number) => { if (h > 0) vtsLastH.current = h; setVtsBarH(h); }, []);
+  const halfVtsFits = tabletop && pillY != null && pillY - 8 - halfTop >= vtsLastH.current;
+  const halfVtsInset = useMemo(() => (halfSide ? { left: Math.ceil(screenW / 2) + 4 + 6, right: 14 } : null), [halfSide, screenW]);
   const hs = health ? healthSummary(health) : null;
   const healthHot = !!hs && hs.worst >= 3;
   const timeStage = useCountdownStage(sessionEndsAt != null && !adminOk ? sessionEndsAt : null, limitSoft || borrowed);
@@ -12689,7 +12821,18 @@ export default function SDRScreen({ route, navigation }: Props) {
   const TIME_TAB = ['#ffb833', '#ffe14d', '#ff6b6b'];
   /* ★ BIG reaches the status row, never past it — "make sure we respect the status row at the top of the screen
    *  so we can still use our buttons without fouling the OS". */
-  const boxTopSafe = insets.top + 6;
+  /* ★★ A decoder box may rise BESIDE the camera / status column (it narrows clear of it — DecoderShell, DecoderAvoid
+   *  below — Stuart: "shrink to the left so that it clears the system status"); only a full-width status band (a Split
+   *  View share's) holds it below. */
+  /* ★★ Half-open: NOTHING on the crease (Stuart: "dont cover over the crease … treat the decoder box as 2 halves"). A
+   *  single box (SMALL) stays wholly BELOW the fold; BIG is two panels either side of it (halfSplit, DecoderShell) and
+   *  each panel offers BIG from that split, not from this. */
+  const boxTopSafe = tableFold ? Math.ceil(tableFold.y + tableFold.h) + 8
+    : Math.max(insets.top + 6, (() => {
+    let y = 0;
+    for (const r of avoidRects(reserved)) if (r.w >= screenW * 0.5 && r.y < screenH * 0.25) y = Math.max(y, r.y + r.h);
+    return y > 0 ? Math.ceil(y) + 6 : 0;
+  })());
   /* ★ (2026-10-06) No `edgeRight` here any more: it was `insets.right`, which put the health / time cards ~43 pt
    *  inside the glass in landscape. EdgeChip now anchors at the physical edge and pads by the inset itself
    *  (edgeChipGeometry) — one rule, read in one place. */
@@ -14485,13 +14628,41 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  measured at: on the render that carries a rotation it no longer matches, so the waterfall draws everywhere
    *  until the deck has landed and measured again — never a stale hole over a bare patch of screen. */
   const [deckFrame, setDeckFrame] = useState<{ x: number; y: number; w: number; h: number; r: number; W: number; H: number } | null>(null);
+  /* ★ While the deck is being pulled to or from REACH (DeckReach), it re-lays out every frame; re-measuring the waterfall's
+   *  hole each time would re-render this screen per frame. The hole is dropped for the move (the waterfall draws
+   *  everywhere, as it does through a rotation) and the last frame measured is taken when the deck lands. */
+  const deckMovingRef = useRef(false);
+  const deckPendingRef = useRef<{ x: number; y: number; w: number; h: number; r: number } | null | undefined>(undefined);
   const onDeckFrame = useCallback((f: { x: number; y: number; w: number; h: number; r: number } | null) => {
+    if (deckMovingRef.current) { deckPendingRef.current = f; return; }
     setDeckFrame(p => {
       if (!f) return p ? null : p;
       if (p && p.x === f.x && p.y === f.y && p.w === f.w && p.h === f.h && p.r === f.r && p.W === screenW && p.H === screenH) return p;
       return { ...f, W: screenW, H: screenH };
     });
   }, [screenW, screenH]);
+  const onDeckMoving = useCallback((moving: boolean) => {
+    if (moving) {
+      if (deckMovingRef.current) return;
+      deckMovingRef.current = true;
+      deckPendingRef.current = undefined;
+      setDeckFrame(null);
+      return;
+    }
+    deckMovingRef.current = false;
+    const f = deckPendingRef.current;
+    deckPendingRef.current = undefined;
+    if (f !== undefined) onDeckFrame(f);
+  }, [onDeckFrame]);
+  const deckReach = useDeckReach(frontScreen, onDeckMoving);
+  /* ★★ THE DECK KEEPS CLEAR OF THE CAMERA AND THE STATUS PILL (Stuart, Duo folded landscape: "camera hole fouls the
+   *  controls … simply shift the controls upwards"). Any system rect in the deck's rows lifts the whole deck, as a
+   *  block, to sit just above it. The camera may sit over the spectrum or the waterfall, never a control or readout. */
+  const deckClear = deckClearance(reserved, pillY != null && pillY > 0 ? pillY : screenH * 0.5, screenW, screenH);
+  const deckReachShift = Math.round(screenW * REACH_SHARE);
+  const reachChoose = deckReach.choose;
+  const reachToggle = useMemo(() => ({ reach: deckReach.reach, onToggle: () => reachChoose(!deckReach.reach) }),
+    [deckReach.reach, reachChoose]);
   const deckOcclusion = useMemo(() => (
     !controlsHidden && deckFrame && deckFrame.W === screenW && deckFrame.H === screenH ? deckFrame : null
   ), [controlsHidden, deckFrame, screenW, screenH]);
@@ -14897,7 +15068,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "Servers is your Back button (there's no Back swipe here — it would fight the drum). Tap it to return to the server list, favourite this server, set it as your default, or refresh a connection that is behaving oddly. Listen to a 2nd server keeps this one playing while you add another server of any kind, or a second radio on a VibeServer — two servers or VFO A/B, never both at once.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers button at the top left is your Back button. While a decoder box covers its spot it tucks into a small tab on the left edge; tap that just the same. Tap it to return to the server list, favourite this server, set it as your default, or refresh a connection that is behaving oddly. Listen to a 2nd server keeps this one playing while you add another server of any kind, or a second radio on a VibeServer — two servers or VFO A/B, never both at once.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -14977,6 +15148,31 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Layout ────────────────────────────────────────────────────────────────
 
   const bottomInset = insets.bottom;
+  /* ★★ The decoder boxes' right edge keeps clear of the system's corner rects and the right-hand edge tabs
+   *  (DecoderShell). Only rects narrower than half the window (a full-width band holds the box below it instead). */
+  /* ★★★ HALF-OPEN BIG = TWO PANELS in the left column, either side of the fold (Stuart: "dont cover over the crease.
+   *  id suggest splitting the data and treat the decoder box as 2 halves"; duoGeometry halfOpenSplit). Only while the
+   *  box is beside the deck (halfSide); null = no room for two panels, and BIG is not offered (the box stays below the
+   *  fold). */
+  /* ★ The upper panel runs to the top edge (below any system rect over the column). It used to start below the Servers
+   *  chip, which covered its first lines; the chip now tucks into its edge tab when a box meets it (chipCompact). */
+  const halfSplit = useMemo(() => (tableFold && halfSide
+    ? halfOpenSplit(reserved, tableFold, screenH, { x0: 8, x1: screenW - (Math.ceil(screenW / 2) + 4) },
+                    { top: chromeTop, bottomInset })
+    : null), [tableFold, halfSide, reserved, screenH, screenW, chromeTop, bottomInset]);
+  const decoderAvoid = useMemo(() => {
+    if (tabletop) {
+      const bottom = halfSide ? bottomInset + 8 : pillBottom + 8;
+      return { rects: [], windowW: screenW, frame: {
+        left: 8, right: halfSide ? Math.ceil(screenW / 2) + 4 : 8, bottom,
+        maxHeight: Math.max(120, screenH - halfTop - bottom),
+        split: halfSplit ? { ...halfSplit, windowH: screenH } : undefined } };
+    }
+    const rects = avoidRects(reserved).filter((r) => r.w < screenW * 0.5);
+    if (!rects.length) return { rects: [], windowW: screenW };
+    if (health || sessionLimitMins) rects.push({ x: screenW - (EDGE_TAB_W + 14), y: rightStackTop, w: EDGE_TAB_W + 14, h: 2 * EDGE_TAB_H + 16 });
+    return { rects, windowW: screenW };
+  }, [reserved, screenW, health, sessionLimitMins, rightStackTop, tabletop, halfSide, bottomInset, pillBottom, screenH, halfTop, halfSplit]);
 
   /* ★★★ Into SATELLITE (its key, and a REMIND banner's LISTEN): each other whole-radio mode switched OFF properly. */
   satEnterRef.current = () => {
@@ -15027,6 +15223,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     aprsList ? aprsList.stations.filter((st) => st.lat != null && st.lon != null && !st.killed).length : 0);
 
   return (
+    <DecoderAvoidContext.Provider value={decoderAvoid}>
+    <BoxRectsContext.Provider value={onBoxRects}>
     <View
       ref={screenHl.rootRef}
       style={styles.root}
@@ -15409,10 +15607,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         stationId={stationId}
         onStationIdHeight={setStationIdH}
         // ★ Same edge as the session clock and the listener count below it — see rightInset.
-        stationIdRight={rightInset}
+        stationIdRight={stationIdRightClear}
+        /* ★★ Crowded by a system rect (the Duo's camera + status pill): shown on connect, then faded (Stuart). */
+        stationIdFadeMs={namePlace.crowded ? 6000 : undefined}
+        stationIdMinTop={namePlace.minTop || undefined}
+        stationIdWake={`${baseUrl}|${connected ? 1 : 0}`}
         // ★ …and it stops short of the Servers chip opposite (2026-10-16: on an iPhone 12 a long location line
         //   ran underneath it). Only while the chip is drawn.
-        stationIdLeft={!controlsHidden && serversChipW > 0 ? Math.max(12, insets.left + 8) + serversChipW + 10 : undefined}
+        stationIdLeft={!controlsHidden && serversChipW > 0 ? serversLeft + serversChipW + 10 : undefined}
         specFrac={specFrac}
         panLoHz={walls?.loHz}
         panHiHz={walls?.hiHz}
@@ -15438,10 +15640,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       <SpecRatioOverlay
         visible={ratioOverlayOpen}
         isLandscape={isLandscape}
-        portraitRatio={specRatioPortrait}
-        landscapeRatio={specRatioLandscape}
+        portraitRatio={frontAnyWay ? specRatioFrontPortrait : specRatioPortrait}
+        landscapeRatio={frontAnyWay ? specRatioFrontLandscape : specRatioLandscape}
         bottomOffset={pillBottom + 8}
-        onChange={(p, l) => { setSpecRatioPortrait(p); setSpecRatioLandscape(l); }}
+        onChange={(p, l) => {
+          if (frontAnyWay) { setSpecRatioFrontPortrait(p); setSpecRatioFrontLandscape(l); }
+          else { setSpecRatioPortrait(p); setSpecRatioLandscape(l); }
+        }}
+        caseLabel={reserved.hinge
+          ? `${frontAnyWay ? 'FRONT' : 'INNER'} · ${isLandscape ? 'LANDSCAPE' : 'PORTRAIT'}` : undefined}
+        avoid={avoidRects(reserved)}
+        windowW={screenW}
         onClose={() => setRatioOverlayOpen(false)}
       />
       </PanelBoundary>
@@ -15466,7 +15675,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★★ "FM band-stop filter fitted" / "Outside this antenna's range" — the owner's aerial
           ranges and filters (2026-10-06). The free slot at pillBottom + 8, clear of the VTS bar;
           the idle-terms pill and the decoder box stack above it by its measured height. */}
-      {antBands && !controlsHidden ? (
+      {/* ★ Never over an open control panel (Stuart, Duo: the notice landed on the ratio slider) — held while it is up. */}
+      {antBands && !controlsHidden && !ratioOverlayOpen ? (
         <AntennaBandNotice hz={status.frequency} bands={antBands}
           port={(radioCaps as { antenna?: string } | null)?.antenna ?? null}
           bottom={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0)}
@@ -15562,7 +15772,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★★ And because `availH` is computed from this offset, a taller stack automatically
           // SHRINKS the box rather than pushing it off the top — which is what "in BIG mode on a
           // smaller screen, the box itself gets smaller" asks for, with no separate logic.
-          bottomOffset={pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+          bottomOffset={halfSide ? bottomInset + 8 : pillBottom + 8 + (vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClear={clearDecoderOutput}
           notice={activeDecoder === 'transcribe' && txOffer && txCaps ? (() => {
             const nm = langName(txOffer.code);
@@ -15685,7 +15895,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Reconnect failed (server full / rate-limited) — tap retries */}
       {!kiwiRefused && reconnectFailedUi && (
-        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+        <TouchableOpacity style={[styles.mutedBanner, { top: bannerTop }]}
           ref={screenNavRef('reconnectBanner', () => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); })}
           onPress={() => { setReconnectFailedUi(false); setDataSaverOff(false); unmute(); fullReconnect(); }}
           activeOpacity={0.85}>
@@ -15965,7 +16175,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       {/* Paused → disconnected — tap does a full from-scratch reconnect */}
       {!kiwiRefused && dataSaverOff && !reconnectFailedUi && (
-        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+        <TouchableOpacity style={[styles.mutedBanner, { top: bannerTop }]}
           ref={screenNavRef('pausedBanner', () => { setDataSaverOff(false); unmute(); fullReconnect(); })}
           onPress={() => { setDataSaverOff(false); unmute(); fullReconnect(); }} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>⏸ PAUSED — TAP TO RECONNECT</Text>
@@ -15978,13 +16188,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★★ V12 PAGING mutes the speaker while PAGE runs: the banner says so and is not a key (an unmute would be undone at
           once — a control whose every use is a no-op is not offered). Closing PAGE puts the audio back as it was. */}
       {isLocal && isMuted && pagingOn && !dataSaverOff && !reconnectFailedUi && (
-        <View style={[styles.mutedBanner, { top: insets.top + 46 }]} pointerEvents="none">
+        <View style={[styles.mutedBanner, { top: bannerTop }]} pointerEvents="none">
           <Text style={styles.mutedBannerText}>{pagingMutedBanner(isRecording)}</Text>
         </View>
       )}
       {/* ★★ APRS / METEOR LRPT: the banner names the decoder and stays a key — the listener may unmute (silentDecoder.ts) */}
       {isLocal && isMuted && !pagingOn && !dataSaverOff && !reconnectFailedUi && (
-        <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
+        <TouchableOpacity style={[styles.mutedBanner, { top: bannerTop }]}
           ref={screenNavRef('mutedBanner', unmute)}
           onPress={unmute} activeOpacity={0.85}>
           <Text style={styles.mutedBannerText}>{isSilentDecoder(activeDecoder) && silentMute.holdsSpeaker ? silentMutedBanner(activeDecoder) : '🔇 AUDIO MUTED — TAP TO UNMUTE'}</Text>
@@ -16001,24 +16211,57 @@ export default function SDRScreen({ route, navigation }: Props) {
       )}
 
       {/* Controls pill — absolute overlay, margin 8px each side */}
-      {!controlsHidden && <View
+      {!controlsHidden && <Animated.View
         /* ★★ CLEAR OF THE BACK-GESTURE EDGES (Stuart, 2026-10-11, the Moto in landscape: "the tuning controls land …
            slightly too close to the edge of the screen and cause the back command to be triggered when swiping on
            them"). Android's back swipe starts in the outer ~24 dp of each side; the drums sat at 8. Android phones in
            landscape keep the bar 28 pt in from each edge (plus the cut-out) — the SAME on both sides, so the bar stays
            centred under the strip ("lopsided", the Moto's camera cut-out is on one side). Everything else: 8, as before. */
-        style={[styles.pillWrap, { bottom: bottomInset + 8 },
-                Platform.OS === 'android' && isLandscape && !isTablet
-                  ? { left: Math.max(28, insets.left + 8, insets.right + 8), right: Math.max(28, insets.left + 8, insets.right + 8) } : null]}
+        /* ★★★ iPhone Duo (2026-11-25): each side also clears a system rect in the deck's rows (deckClear), and on the
+           folded front screen the right side holds the REACH grab bar's gutter and the left edge travels with it. */
+        style={(() => {
+          const edge = Platform.OS === 'android' && isLandscape && !isTablet
+            ? Math.max(28, insets.left + 8, insets.right + 8) : 8;
+          if (tabletop) {
+            // ★ On the bottom line in both half-open layouts (no box: the portrait deck, full width; a box: the right half).
+            return [styles.pillWrap, {
+              left: halfSide ? Math.ceil(screenW / 2) + 4 : 8, right: 8, bottom: bottomInset + 8,
+            }];
+          }
+          const left = Math.max(edge, deckClear.left);
+          const right = Math.max(edge, deckClear.right);
+          return [styles.pillWrap, {
+            /* ★ Folded landscape on the Duo (Stuart: "the controls could drop slightly here"): the deck sits half the
+             *  home-indicator inset + 4 from the bottom instead of the whole inset + 8 — the indicator is a thin bar
+             *  at the very bottom, and the one-row deck clears it. A camera there lifts it instead (deckClear). */
+            bottom: deckClear.bottom > 0 ? deckClear.bottom
+              : fullBleed && isLandscape ? Math.round(bottomInset / 2) + 4 : bottomInset + 8,
+            right,
+            left: frontScreen
+              ? deckReach.progress.interpolate({ inputRange: [0, 1], outputRange: [left, left + deckReachShift] })
+              : left,
+          }];
+        })()}
         onLayout={(e: any) => {
           // Track pill top so bottom-anchored overlays can sit above it
           setPillY(e.nativeEvent.layout.y);
+          // ★ Half-open, no box: a portrait deck that would reach the fold is scaled down until it keeps 8 pt below it.
+          if (tabletop && !anyBoxOpen) {
+            const room = screenH - halfTop - (bottomInset + 8), h = e.nativeEvent.layout.height;
+            if (h > room + 0.5) setHalfDeckK((k) => Math.max(0.5, Math.floor(k * (room / h) * 100) / 100));
+          }
         }}
       >
+        <UiWindowOverride.Provider value={halfDeckWin}>
         <PanelBoundary name="Controls" autoRetry noticeTop={0}>
         {/* ★ The recording timer ticks in RecElapsed (re-renders the bar, not this screen). */}
         <RecElapsed startedAt={recStartedAt} render={(recSeconds) => (
         <ControlsBar
+          /* ★★★ REACH (iPhone Duo, folded front screen in portrait): the SHRINK / EXPAND key between the drums. */
+          reachToggle={frontScreen ? reachToggle : undefined}
+          /* ★ Half-open: the deck's place and size are in the key too, so the waterfall's hole follows it (a hole left
+           *  where the deck first landed was the black band under it — Stuart, half-open, 2026-11-25). */
+          measureKey={`${deckClear.bottom}|${screenW}x${screenH}|${bottomInset}${tabletop ? `|half:${halfSide ? 1 : 0}:${halfDeckK}` : ''}`}
           srvTzOffsetMin={srvTz.offsetMin}
           srvTzAbbr={srvTz.abbr}
           srvTzId={srvTz.id}
@@ -16124,7 +16367,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         />
         )} />
         </PanelBoundary>
-      </View>}
+        </UiWindowOverride.Provider>
+      </Animated.View>}
 
       {/* Servers chip — the discoverable route back to the instance list (§brief).
           Anchored to the safe-area top (NOT specTop/wfTop, which move when the
@@ -16161,7 +16405,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           already muted the audio and frozen the waterfall — this says the silence is not a fault), or the radio off
           CI-V. Not dismissible: it clears itself when the radio does. Outranks the listener note below. */}
       {!!icomBanner(icom) && (
-        <View style={[styles.ownerNotice, { top: insets.top + 8 + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }]}
+        <View style={[styles.ownerNotice, { top: noticeTop + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }, noticeMaxW ? { maxWidth: noticeMaxW } : null]}
               pointerEvents="none" accessibilityLiveRegion="polite">
           <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{icomBanner(icom)}</Text>
         </View>
@@ -16171,7 +16415,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {!icomBanner(icom) && !!icomFollowNote(icom, adminOk) && !icomNoteSeen && !dialHint && (
         // nav-skip: a passing notice, not a control — it clears itself after 15 s (icomNoteShowing), so a pad never needs it
         <TouchableOpacity accessibilityRole="button" accessibilityLabel="Dismiss" onPress={() => setIcomNoteSeen(true)}
-          style={[styles.ownerNotice, { top: insets.top + 8 + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }]}>
+          style={[styles.ownerNotice, { top: noticeTop + (ownerNotice && ownerNotice !== noticeSeen ? 56 : 0) }, noticeMaxW ? { maxWidth: noticeMaxW } : null]}>
           <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{icomFollowNote(icom, adminOk)}</Text>
           {/* nav-skip: the same notice's × (touch only); it clears itself after 15 s */}
           <TouchableOpacity accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8}
@@ -16181,14 +16425,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
       {!!dialHint && (
-        <View style={[styles.ownerNotice, { top: insets.top + 8 }]} pointerEvents="none">
+        <View style={[styles.ownerNotice, { top: noticeTop }, noticeMaxW ? { maxWidth: noticeMaxW } : null]} pointerEvents="none">
           <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={2}>{dialHint}</Text>
         </View>
       )}
       {!!ownerNotice && ownerNotice !== noticeSeen && (
         <TouchableOpacity activeOpacity={0.85}
           onPress={() => setNoticeSeen(ownerNotice)}
-          style={[styles.ownerNotice, { top: insets.top + 8 }]}>
+          style={[styles.ownerNotice, { top: noticeTop }, noticeMaxW ? { maxWidth: noticeMaxW } : null]}>
           <Text style={[styles.ownerNoticeTxt, { flex: 1 }]} numberOfLines={3}>{ownerNotice}</Text>
           <TouchableOpacity
             onPress={() => setNoticeSeen(ownerNotice)}
@@ -16302,8 +16546,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Servers">
         <ServersChip
           anchorRef={tourRef('serversChip')}
-          top={insets.top + 46}
-          left={Math.max(12, insets.left + 8)}
+          top={serversTop}
+          left={serversLeft}
           serverName={instanceName ?? baseUrl}
           isFavourite={isFavourite}
           isDefault={isDefault}
@@ -16323,6 +16567,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
           onChipWidth={setServersChipW}
+          compact={chipCompact}
+          edgeInset={insets.left}
         />
         </PanelBoundary>
       )}
@@ -16333,7 +16579,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★ The same card over a full-screen map (dualMapCard) — a Modal covers this one. */}
       {!!dualMyId && dualShape.phase === 'paired' && !serversOpen && (
         <PanelBoundary name="Second server">
-          <DualServerCard myId={dualMyId} top={insets.top + 46 + 44} onSwap={onDualSwap} boxOpen={anyBoxOpen} />
+          <DualServerCard myId={dualMyId} top={serversTop + 44} onSwap={onDualSwap} boxOpen={anyBoxOpen} />
         </PanelBoundary>
       )}
 
@@ -16367,7 +16613,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           raw={advRdsRaw} onRaw={setAdvRdsRaw}
           tall={advRdsTall} onTall={setAdvRdsTall}
           // ★ Above the VTS bar, like every other box anchored here (see the note at line ~8381).
-          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+          bottomOffset={halfSide ? bottomInset + 8 : pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           onClose={() => setAdvRdsOpen(false)}
         />
         </PanelBoundary>
@@ -16405,7 +16651,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onScanTune={(ch, sid) => { const b = DAB_BLOCKS[ch]; if (b) dabGoTo(b.hz, sid ?? -1); }}
           scanMayTune={dabScanMayTune({ dialMode: dialState?.mode ?? 'exclusive', admin: adminOk, askLocked: askLocked(dialState), scanLocked: scanLockMine })}
           // ★ Above the VTS bar — the DAB box sat on top of it (Stuart, 2026-09-15 07:06).
-          bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
+          bottomOffset={halfSide ? bottomInset + 8 : pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
           /* ★ The RADIO's address, not the door's — the carousel and the kept logo files belong to
            *  the receiver that is decoding this multiplex. connectBase resolves to /r/<id>. */
           base={connectBase.replace(/\/+$/, '')}
@@ -16540,7 +16786,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       </RotateFade>
       {/* ★★★ SATELLITE-BEST 1.6 — the REMIND banners (with the mode off too), at the top of the screen */}
       <SatRemindBanner toasts={satToasts} nowSec={Date.now() / 1000} picked={satPicked}
-                       pickedName={satPickedSat?.name} top={insets.top + 8}
+                       pickedName={satPickedSat?.name} top={noticeTop}
                        onListen={satRemListen} onDismiss={(k) => satSetToasts(satToastsRef.current.filter((x) => x.r.key !== k))} />
       {/* ★★ V12 THE SONDES BOX — the datalink's place (SondesPanel); the waterfall live above it, MAP over everything. */}
       <RotateFade>
@@ -16636,11 +16882,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           ★ vtsBarH is forced to 0 alongside, or everything that reserves space above the bar —
           the decoder box, the powersave pill, the idle-terms notice — would keep a gap for a bar
           that is not there. See the vtsBarH rule further up. */}
-      {!controlsHidden && !advRdsOpen && !boxHidesVts && (
+      {/* ★ Half-open: the label bar sits over the deck only where it fits between the fold and the deck's top
+          (halfVtsFits) — never on the crease; with a box open, in the RIGHT column over the deck. Otherwise hidden. */}
+      {!controlsHidden && !advRdsOpen && !boxHidesVts && !(tableFold && !halfVtsFits) && (
         <PanelBoundary name="Station bar" autoRetry>
         <VTSBar notif={vtsNotif} bottom={pillBottom + 8}
                 anchors={drumAnchors}
-                serverType={isLocal ? 'local' : route.params.serverType} onHeight={setVtsBarH}
+                inset={halfVtsInset}
+                serverType={isLocal ? 'local' : route.params.serverType} onHeight={onVtsHeight}
                 onHoldExtended={onVtsHoldExtended}
                 onTimedEnd={onVtsTimedEnd}
                 /* ★ What a VFD display shows for a name it cannot draw (faceplates §7). */
@@ -16772,6 +17021,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setAutoContrast(5); setSpatialSmooth(true);
           setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
+    setSpecRatioFrontPortrait(0.24); setSpecRatioFrontLandscape(0.22);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
           if (serverDspEnabled) onServerDsp(false);
@@ -18121,6 +18371,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         </PanelBoundary>
       ) : null}
     </View>
+    </BoxRectsContext.Provider>
+    </DecoderAvoidContext.Provider>
   );
 }
 

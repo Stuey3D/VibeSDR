@@ -29,6 +29,7 @@
 
 import { useWindowDimensions } from 'react-native';
 import { createContext, useContext, useMemo } from 'react';
+import { TABLET_MIN_SIDE, phonePortraitScale } from '../utils/duoGeometry';
 
 export interface UiScale {
   scale:       number;
@@ -61,8 +62,15 @@ export function uprightBandScale(base: UiScale): UiScale {
            drumW: r(140), drumH: r(44), pxStep: r(22) };
 }
 
+/** ★★ A SUBTREE LAID OUT FOR A SMALLER "WINDOW" THAN THE REAL ONE (iPhone Duo, half-open: the deck lives in the bottom
+ *  half, or half of it beside a decoder box). useUiScale then sizes for that area exactly as it would for a window of
+ *  that size — layout follows the space it is given. null = the real window (everywhere else). */
+export const UiWindowOverride = createContext<{ W: number; H: number } | null>(null);
+
 export function useUiScale(): UiScale {
-  const { width: W, height: H } = useWindowDimensions();
+  const win = useWindowDimensions();
+  const ovr = useContext(UiWindowOverride);
+  const W = ovr?.W ?? win.width, H = ovr?.H ?? win.height;
   const override = useContext(UiScaleOverride);
 
   const own = useMemo(() => {
@@ -75,9 +83,17 @@ export function useUiScale(): UiScale {
      *  a 601 pt tablet and drew a phone's column half again as big. A tablet's controls are thumb-sized, the same size
      *  whichever way it is held: upright it takes the scale its LONG side gives in landscape. Phones are unchanged. */
     const tablet = Math.min(W, H) >= TABLET_MIN_SIDE;
+    /* ★★ A SHORT PORTRAIT WINDOW SCALES BY ITS HEIGHT TOO (iPhone Duo, Stuart 2026-11-25, the folded front screen:
+     *  "controls need to be a touch smaller"). The front screen is 466 × 678 pt — wider than any iPhone and far
+     *  shorter for its width — so width / 390 gave the deck 1.19× and it took the lower half of the glass from the
+     *  waterfall. The phone reference is 390 pt wide AND tall enough for that width (every iPhone since the X is
+     *  ≥ 2.0 : 1, the SE 1.78 : 1); a window shorter than SHORT_REF_H takes the smaller of the two. The front screen
+     *  lands at 1.04 (87 % of what it had); no iPhone, iPad or Mac window changes (they are all taller than
+     *  390 × SHORT_REF_H / 390 for their width). A Split View share of the Duo's open screen with the same short
+     *  shape gets the same, which is the same squeeze and the same answer. Window, never device. */
     const scale = isLandscape || tablet
       ? Math.max(0.58, Math.min(1.45, Math.max(W, H) / 926))
-      : Math.max(0.75, Math.min(1.45, W / 390));
+      : phonePortraitScale(W, H);
 
     const r = (n: number) => Math.round(n * scale);
     const f = (n: number) => n * scale;
@@ -95,12 +111,8 @@ export function useUiScale(): UiScale {
   return override ?? own;
 }
 
-/** ★★ THE TABLET LINE: a window whose SHORTEST side is at least this (pt) is a tablet (Android's sw600dp). It was 768
- *  (the iPad's), so a 601 pt Galaxy Tab A9, an open foldable and an iPad mini (744) were treated as PHONES and got the
- *  phone column scaled up 1.45× — "as if someone had taken a phone and made it 8 inches" (Stuart, 2026-10-11).
- *  ONE number for every reader (useUiScale, SDRScreen, MenuSheet). */
-export const TABLET_MIN_SIDE = 600;
-
 /** ★★ An upright tablet at least this wide (pt) takes the LANDSCAPE bar (ControlsBar `band`): 10" Android tablets and
  *  every full-size iPad. The Tab A9 (601) and iPad mini (744) are too narrow for it and keep the portrait deck. */
 export const UPRIGHT_BAND_MIN_W = 800;
+
+export { TABLET_MIN_SIDE, SHORT_REF_H, FRONT_SCREEN_MAX_ASPECT, isFoldedFrontWindow, isFrontScreenWindow } from '../utils/duoGeometry';

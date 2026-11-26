@@ -29,7 +29,7 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View, ViewStyle, type LayoutChangeEvent,} from 'react-native';
+  View, ViewStyle, type LayoutChangeEvent, useWindowDimensions,} from 'react-native';
 import { useRegionHandback, useNavFocus } from './PanelNav';
 import { BlurView } from 'expo-blur';
 import SectionIcon from './SectionIcon';
@@ -43,7 +43,7 @@ import {
   vec,
 } from '@shopify/react-native-skia';
 import DrumWheel from './DrumWheel';
-import { askBannerText, askLocked, sharedTunerText, dabFreeText, chatT, type AskState } from '../services/dialChat';
+import { askLocked, sharedBannerWords, dabFreeText, chatT, type AskState } from '../services/dialChat';
 import { DomeKey, DomeText, DomeIcon, type IconStroke } from './DomeKey';
 import ChassisPlate, { GlossPanel, RecessedWindow } from './ChassisPlate';
 import { useDerivedValue, useSharedValue, type SharedValue } from 'react-native-reanimated';
@@ -548,6 +548,10 @@ function Unit({ id, onUnit, gap = 0, children }:
 }
 
 // ── SVG paths (from mockup HTML) ──────────────────────────────────────────────
+/* ★ REACH key legends (iPhone Duo front screen, Stuart): the action the tap will do. SHRINK = four corner arrows
+ *  pointing IN to the centre; EXPAND = the same four pointing OUT. 20-unit box, stroked like the other legends. */
+const SHRINK_PATH = Skia.Path.MakeFromSVGString('M3 3l5 5M8 4.5V8H4.5M17 3l-5 5M12 4.5V8h3.5M3 17l5-5M8 15.5V12H4.5M17 17l-5-5M12 15.5V12h3.5')!;
+const EXPAND_PATH = Skia.Path.MakeFromSVGString('M8 8L3 3M3 6.5V3h3.5M12 8l5-5M17 6.5V3h-3.5M8 12l-5 5M3 13.5V17h3.5M12 12l5 5M17 13.5V17h-3.5')!;
 const CHAT_PATH   = Skia.Path.MakeFromSVGString('M3 4.5A1.5 1.5 0 0 1 4.5 3h11A1.5 1.5 0 0 1 17 4.5v8A1.5 1.5 0 0 1 15.5 14H7l-4 3V4.5Z')!;
 const SHARE_LINES = Skia.Path.MakeFromSVGString('M13.3 5L6.7 9M13.3 15L6.7 11')!;
 const SHARE_C1    = Skia.Path.MakeFromSVGString('M15 4m-1.8 0a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0')!;
@@ -744,6 +748,11 @@ export interface ControlsBarProps {
   /** ★★ The deck's frame in WINDOW coordinates + corner radius while it is OPAQUE and settled (Transparency off, or a
    *  metal plate), else null — the waterfall skips shading what it hides (WaterfallView deckOcclusion). */
   onDeckFrame?: (f: (Rect & { r: number }) | null) => void;
+  /** Changes whenever the caller moves the deck's wrapper (a lift clear of the camera): the deck re-measures. */
+  measureKey?: string | number;
+  /** ★★ iPhone Duo, folded front screen in portrait: the REACH key between the drums (DeckReach owns the state).
+   *  Undefined = no key, the drums sit as they always have. */
+  reachToggle?: { reach: boolean; onToggle: () => void };
 }
 
 // ── Signal bar canvas ─────────────────────────────────────────────────────────
@@ -1280,18 +1289,9 @@ function sharedBannerText(st: SharedTuner, tight: boolean): string {
   if (st.said) return st.said;
   // ★★ V12 beta83 the stations line, alternating with whatever the ask line is (a pick is not a dial move — dialChat).
   if (st.dabOwn && st.dabFree && !st.alone) return dabFreeText();
-  // ★★ Ask before tuning: while locked the banner says what to do now (ask / waiting / when it is yours).
-  const ask = st.ask ? askBannerText(st.ask, tight) : null;
-  if (ask) return ask;
-  // ★ In the chat's language (dialChat sharedTunerText) — the banner is where a chat line lands, so it speaks it too.
-  return st.alone ? sharedTunerText(true, st.listeners, st.max)
-    : st.youPlus
-      /* ★★★ "You+N": the count includes us, so N = total − 1 and nobody has to work out
-       *  whether they are in it. No "/max" — FM-DX has no cap to report. */
-      //  ★ On the narrowest layouts (SE in Display Zoom) the prefix goes, never the words
-      //    that matter — truncating mid-word is the one outcome that is not allowed.
-      ? `${tight ? '' : 'Shared Tuner - '}Ask Before Tuning (You+${Math.max(1, st.listeners - 1)})`
-      : sharedTunerText(false, st.listeners, st.max, false, !!st.dabOwn);
+  // ★★ ONE helper for every other state, so the head-count is never dropped from the ask-before-tuning lines, in the
+  //    chat's language (dialChat sharedBannerWords).
+  return sharedBannerWords(st as any, tight);
 }
 function sharedBannerLabel(st: SharedTuner): string {
   // ★ V12 beta83 a screen reader gets both halves of the alternation at once.
@@ -1302,7 +1302,10 @@ function sharedBannerLabel(st: SharedTuner): string {
 function sharedBannerLabelBase(st: SharedTuner): string {
   if (st.scanLock) return 'The owner triggered a scan of this receiver. Please wait — the controls come back, and the radio returns to where it was, when it ends.';
   if (st.said) return `Chat: ${st.said}`;
-  if (askLocked(st.ask)) return 'Shared tuner. Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.';
+  const who = st.alone ? '' : st.youPlus
+    ? ` You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening.`
+    : ` ${st.listeners}${st.max > 1 ? ` of ${st.max}` : ''} listening.`;
+  if (askLocked(st.ask)) return `Shared tuner.${who} Tuning is locked until you ask in the chat — a yes, or no answer in 15 seconds, lets you in.`;
   return st.alone ? 'Shared tuner. Nobody else is listening — free to tune.'
     : st.youPlus
       ? `Shared tuner. You and ${Math.max(1, st.listeners - 1)} other${st.listeners - 1 === 1 ? '' : 's'} listening — ask before tuning.`
@@ -2053,6 +2056,8 @@ const AUDIO_MUTED_STROKES: IconStroke[] = [
   { path: MUTE_RING, width: 1.5 }, { path: MUTE_SLASH, width: 1.5 },
 ];
 const CHAT_STROKES:  IconStroke[] = [{ path: CHAT_PATH }];
+const SHRINK_STROKES: IconStroke[] = [{ path: SHRINK_PATH }];
+const EXPAND_STROKES: IconStroke[] = [{ path: EXPAND_PATH }];
 
 function Cog({ size, progress }: { size: number; progress?: SharedValue<number> }) {
   return <DomeIcon size={size} k={size / 24} strokes={COG_STROKES} progress={progress} />;
@@ -2227,7 +2232,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
-  vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onControlRects, plateInset }: any) {
+  vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onControlRects, plateInset, reachToggle }: any) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const handbackFlash = useHandbackFlash();
 
@@ -2545,6 +2550,18 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
                          vfoLetter={vfoAB} onTrapHold={onVfoSwap} />}
           <AskLockShield st={sharedDial} />
         </ControlSlot>
+        {/* ★★★ REACH (iPhone Duo, folded front screen in portrait only — Stuart 2026-11-25): a small key BETWEEN the
+            drums. Tap: the whole deck shrinks and lines up on the right (SHRINK legend → EXPAND); tap again: full
+            size, centred. The caller owns the state (DeckReach); absent everywhere else, so the drums sit as today. */}
+        {reachToggle && (
+          <DomeKey style={{ width: Math.max(s.r(30), 30), alignSelf: 'stretch' }} height={DRUM_H} lightReach={keyProps.lightReach}
+            hitSlop={{ top: 4, bottom: 4, left: Math.floor(COL_GAP / 2), right: Math.floor(COL_GAP / 2) }}
+            onPress={reachToggle.onToggle}
+            accessibilityLabel={reachToggle.reach ? 'Expand controls' : 'Shrink controls'}>
+            {p => <DomeIcon size={Math.round(s.r(18))} k={Math.round(s.r(18)) / 20}
+                            strokes={reachToggle.reach ? EXPAND_STROKES : SHRINK_STROKES} progress={p} />}
+          </DomeKey>
+        )}
         {!singleDrum && (
           <ControlSlot style={{ flex: 1 }} report={r => onControlRects?.({ zoom: r })}>
             {zoomKeys
@@ -3326,6 +3343,7 @@ function useRotateSlide(W: number, H: number, onSettled?: React.MutableRefObject
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function ControlsBar({
+  reachToggle, measureKey,
   srvTzOffsetMin = null, srvTzAbbr = '', srvTzId = '',
   frequency, mode, step, connected, bottomInset,
   signalLevel, peakLevel, snrDb = 40, signalActive, meterBus, signalMode = 'snr',
@@ -3389,7 +3407,14 @@ function ControlsBar({
   const solidDeck = fpTheme.opaque && !ct.plate;
   const s = useUiScale();
   const deckSettled = useRef<(() => void) | undefined>(undefined);
-  const rot = useRotateSlide(s.W, s.H, deckSettled);
+  /* ★★★ A ROTATION IS THE WINDOW'S, NOT THE LAYOUT'S. useUiScale's W / H follow a UiWindowOverride (iPhone Duo,
+   *  half-open: the deck laid out for its half), so turning the phone from half-open portrait to landscape was NOT a
+   *  width / height swap here (669 x 447 → 951 x 669) while it was one for the window — the deck never went away and
+   *  came back, so it never called notifyRevealed, and everything waiting on that (RotateFade: the decoder box; the
+   *  station strip) stayed invisible. Stuart, open inner screen in landscape: "decoder box should be in landscape mode".
+   *  The real window here, as RotateFade and the strip read it. With no override the two are the same numbers. */
+  const win = useWindowDimensions();
+  const rot = useRotateSlide(win.width, win.height, deckSettled);
 
   /* ★★ THE CHANNEL NAME IS THE READOUT ON THE RASTER (airband only — airChannel is null elsewhere). An
    *  8.33 kHz channel's name is not its frequency (118.010 tunes 118.0083 MHz), and the name is what a
@@ -3479,6 +3504,15 @@ function ControlsBar({
   }, [onDeckFrame, deckOpaque, deckAway, RADIUS]);
   deckSettled.current = measureDeck;
   useEffect(() => { measureDeck(); }, [measureDeck]);
+  /* ★★ RE-MEASURE WHEN THE DECK'S PARENT MOVES IT (Stuart, Duo folded landscape: "our avoidance has left a large black
+   *  gap"). Lifting the deck clear of a camera moves its wrapper, not the deck inside it, so the deck's own onLayout
+   *  never fires and the waterfall kept its hole where the deck USED to be — a black band under the lifted deck.
+   *  The caller bumps `measureKey` whenever it moves the deck; one frame later the hole follows. */
+  useEffect(() => {
+    if (measureKey == null) return;
+    const t = setTimeout(() => deckSettled.current?.(), 34);
+    return () => clearTimeout(t);
+  }, [measureKey]);
   useEffect(() => () => onDeckFrame?.(null), [onDeckFrame]);
   const onDeckLayout = useCallback(() => { rot.onLayout(); measureDeck(); }, [rot.onLayout, measureDeck]);
 
@@ -3538,6 +3572,8 @@ function ControlsBar({
      *  ★★ The same silence covers the bar's session clock, the lightning badge, read-only and admin: the props
      *     exist, are typed `any`, and go nowhere. A prop list written twice is a fact stored twice. */
     readOnly, sharedDial, storms, adminMode,
+    /** iPhone Duo front screen: the REACH key between the drums (PortraitBar only); undefined everywhere else. */
+    reachToggle: band ? undefined : reachToggle,
     /** The plate's padding and corner, for the panels that run to its edge (black's gloss panel). */
     plateInset: { top: PAD_TOP, h: PAD_H, radius: RADIUS },
   };

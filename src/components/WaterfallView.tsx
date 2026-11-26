@@ -48,7 +48,7 @@ import { avHold, avNoteAudio, clockOwnMs, newAvSync } from '../assets/wfAvSync';
 import { audioPlayoutMs } from '../utils/audioPlayout';
 import { noteFault } from '../services/faultLog';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
+import { Animated, AppState, Easing, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
   Canvas,
   Fill,
@@ -302,6 +302,13 @@ export interface WaterfallViewProps {
   /** ★ The left limit for the receiver's name (the Servers chip's right edge + a gap): past it the lines end in
    *  "…" rather than run under the chip (2026-10-16, an iPhone 12). Absent = no limit. */
   stationIdLeft?: number;
+  /** ★★ Where the name is crowded by the camera and the status pill (iPhone Duo, Stuart 2026-11-25: "server name maybe
+   *  needs to fade out when connected"): show it, then fade it out after this many ms. Absent = always shown. */
+  stationIdFadeMs?: number;
+  /** Changes whenever the name should be shown again (a connect, a reconnect, a server switch). */
+  stationIdWake?: string;
+  /** ★ The name's top may not be above this (window y) — below a system status band it would otherwise sit under. */
+  stationIdMinTop?: number;
   /** ★ How tall this overlay ended up, so the parent can put the session countdown UNDER it
    *  instead of on top of it. Measured rather than assumed: one line and two lines differ, and a
    *  constant here would have to be kept in step with a font size nobody would think to check. */
@@ -685,6 +692,7 @@ function WaterfallView({
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   needleHidden = false, wideVfo = false, needleLabel, tunedStation = null, secondVfo = null, activeVfo = null,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
+  stationIdFadeMs, stationIdWake, stationIdMinTop,
   smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null, orbOverlay = null,
@@ -730,6 +738,22 @@ function WaterfallView({
    *  ★★★ THE RING GROWS FIRST (2026-10-30, utils/wfRingSize.ts): a view taller than the ring asks for a deeper one (up to
    *    the device's RAM tier — 1024 under 2 GB or unknown, 2048 under 4 GB, 4096 above), and only past THAT does a row
    *    grow a pixel. ringTarget is what the ring is or is about to be (the growth runs in the effect below, between rows). */
+  /* ★★ THE RECEIVER'S NAME FADES WHERE IT IS CROWDED (stationIdFadeMs). Shown in full on a connect / reconnect / switch
+   *  (stationIdWake, or the name itself changing), held, then a calm 900 ms ease-out to nothing. Where it is not crowded,
+   *  opacity stays 1 and nothing runs. The name is never lost: the Servers chip's menu carries it. */
+  const nameOpacity = useRef(new Animated.Value(1)).current;
+  const nameKey = `${stationIdWake ?? ''}|${stationId?.line1 ?? ''}`;
+  useEffect(() => {
+    nameOpacity.stopAnimation();
+    nameOpacity.setValue(1);
+    if (!stationIdFadeMs || !stationId) return;
+    const t = setTimeout(() => {
+      Animated.timing(nameOpacity, { toValue: 0, duration: 900, easing: Easing.out(Easing.cubic), useNativeDriver: true })
+        .start();
+    }, stationIdFadeMs);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nameKey, stationIdFadeMs]);
   const natRowPx  = Math.max(1, Math.round(PixelRatio.get()));
   const ringRows  = useRef(RING_ROWS);   // the ring's live depth (pushRow, publishRing, the fan) — grows only
   const ringCap   = useMemo(() => ringCapFromDeviceClass(readNativeDeviceClass()), []);
@@ -2745,10 +2769,27 @@ function WaterfallView({
       const x1 = Math.min(width, hzToX(b.hi));
       const px = x1 - x0;
       if (px <= 0) continue;
-      const label = px < 28 ? '' : px < 60 ? (b.bandLabel ?? b.name.split(' ')[0]) : b.name;
-      segs.push({ x0, x1, color: bandColor(b), label, key: `${b.lo}-${b.hi}` });
+      segs.push({ x0, x1, color: bandColor(b), label: '', key: `${b.lo}-${b.hi}`, lx0: x0, lx1: x1, band: b } as any);
     }
-    return segs;
+    /* ★★ EACH LABEL IN ITS OWN BAND'S VISIBLE PIECE, NEVER OVERPRINTED (Stuart, 2026-11-25, 225.648 MHz: "DAB / DAB+
+     *  (Band III)" and "UHF Military Airband" printed on top of each other). A band's colour bar is drawn under every
+     *  narrower band that sits on it (widest first), so its label belongs only in the part still showing: its span
+     *  less every later segment, the widest such piece. Too narrow for even the short name → no label. */
+    for (let i = 0; i < segs.length; i++) {
+      const sg: any = segs[i];
+      let pieces: [number, number][] = [[sg.x0, sg.x1]];
+      for (let j = i + 1; j < segs.length; j++) {
+        const o = segs[j];
+        pieces = pieces.flatMap(([a, z]) => (o.x1 <= a || o.x0 >= z ? [[a, z]]
+          : [[a, Math.min(z, o.x0)], [Math.max(a, o.x1), z]].filter(([p, q]) => q - p > 0)) as [number, number][]);
+      }
+      const best = pieces.reduce<[number, number] | null>((m, p) => (!m || p[1] - p[0] > m[1] - m[0] ? p : m), null);
+      const px = best ? best[1] - best[0] : 0;
+      const b: Band = sg.band;
+      sg.label = px < 28 ? '' : px < 60 ? (b.bandLabel ?? b.name.split(' ')[0]) : b.name;
+      if (best) { sg.lx0 = best[0]; sg.lx1 = best[1]; }
+    }
+    return segs as Array<{ x0: number; x1: number; color: string; label: string; key: string; lx0: number; lx1: number }>;
   }, [visStart, bwHz, width, ituRegion, hzToX]);
 
   // ── Frequency ticks ─────────────────────────────────────────────────────────
@@ -3419,7 +3460,7 @@ function WaterfallView({
         {bandSegs.filter(s => s.label).map(s => (
           <View key={'bl' + s.key} pointerEvents="none"
                 style={[styles.bandLabelWrap,
-                        { left: s.x0 + 2, width: s.x1 - s.x0 - 4, height: BAND_H }]}>
+                        { left: s.lx0 + 2, width: s.lx1 - s.lx0 - 4, height: BAND_H }]}>
             <Text numberOfLines={1}
                   style={[styles.bandLabel, { fontFamily }]}>{s.label}</Text>
           </View>
@@ -3674,9 +3715,9 @@ function WaterfallView({
         {/* Station-ID overlay — top-right of the spectrum (web parity:
             bold "CALLSIGN - NAME", location at 75% beneath, drop shadow) */}
         {stationId != null && specShow && specH > 40 && (
-          <View pointerEvents="none"
+          <Animated.View pointerEvents="none"
                 onLayout={(e) => onStationIdHeight?.(e.nativeEvent.layout.height)}
-                style={[styles.stationId, { top: specTop + 6, right: stationIdRight },
+                style={[styles.stationId, { top: Math.max(specTop + 6, stationIdMinTop ?? 0), right: stationIdRight, opacity: nameOpacity },
                         stationIdLeft != null ? { left: stationIdLeft } : null]}>
             <Text style={[styles.stationIdL1, { color: stationId.color }]} numberOfLines={1}>
               {stationId.line1}
@@ -3686,7 +3727,7 @@ function WaterfallView({
                 {stationId.line2}
               </Text>
             )}
-          </View>
+          </Animated.View>
         )}
 
       </View>

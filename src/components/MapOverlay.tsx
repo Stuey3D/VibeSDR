@@ -290,7 +290,7 @@ function buildHtml(
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
-  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
+  const TITLE = isHfdl ? 'HFDL MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
     : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'DIGI MODES MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED

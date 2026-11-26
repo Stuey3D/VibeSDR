@@ -1330,6 +1330,10 @@ if node --no-warnings scripts/test_dual_server.ts >/dev/null; then pass=$((pass+
 # ★★ THE BOOKMARK UNDER THE POINTER (bookmarkHover.ts — GitHub #60): passband or mode default, nearest wins, "+N more",
 #    tiered binary search agreeing with brute force, and the web pointer label's wiring.
 if node --no-warnings scripts/test_bookmark_hover.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_bookmark_hover.ts"; fi
+if node --no-warnings scripts/test_duo_layout.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_duo_layout.ts"; fi
+if node --no-warnings scripts/test_decoder_shell_layout.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_decoder_shell_layout.ts"; fi
+if node --no-warnings scripts/test_servers_chip.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_servers_chip.ts"; fi
+if node --no-warnings scripts/test_shared_banner.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_shared_banner.ts"; fi
 # ★★★ THE CANNED CHAT PAD (chatPad.ts, capSheen.ts): the phrase pad scrolls inside a cap that never
 #     overflows the drawer on any phone (the SE lost phrases 7–14 below its edge), and a dome key's
 #     sheen is flex shares, never percentage heights (Yoga drew ghost slabs over a multi-line wrap).

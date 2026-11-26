@@ -26,6 +26,7 @@ import { useBusValue, type ValueBus } from '../services/valueBus';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { LayoutChangeEvent } from 'react-native';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT,
+         useDecoderSplit, decoderBodyInset, useDecoderTokens,
          useDecoderStyles, type DecoderTokens } from './DecoderShell';
 import { DECODER_MEANING, meaningText } from '../constants/decoderTokens';
 import { AlphaType, Canvas, ColorType, Image as SkiaImage, Path, Points, Rect, Skia,
@@ -34,7 +35,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { RdsExt } from '../services/UberSDRClient';
 import StationLogo from './StationLogo';
 import { mpxPowerParts } from '../services/mpxPower';
-import { scrollLane } from '../constants/popupTokens';
+import { scrollLane, SCROLL_LANE } from '../constants/popupTokens';
+import { advRdsPlotLayout } from '../utils/advRdsPlotLayout';
 
 /* ★★ THE PALETTE IS THE SHELL'S (DecoderShell, brief §10.1), and it is LIVE: every component reads
  *  `useDecoderStyles(makeStyles)`, so a chassis / colour / Decoder-background change reaches the
@@ -1098,7 +1100,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
    *  on the phone, a proper reflow").
    *  ★ 820 = the fields column (~340) plus the plots (~330) plus padding and the gap. Below that
    *  they would be squeezed rather than placed, which is worse than stacking. */
-  const wideCols = p.tall && winW >= 820;
+  const split = useDecoderSplit();
+  const splitOn = p.tall && !!split;
+  const inset = decoderBodyInset(useDecoderTokens());
+  const wideCols = p.tall && winW >= 820 && !splitOn;
+  /* ★★ The plots at the LOWER PANEL's own width when split (Stuart: "labels getting cut off in advanced rds mode" —
+   *  they were laid out for a box, 330 pt, in a ~296 pt panel). null = the box, exactly as before. */
+  const pl = advRdsPlotLayout(splitOn && split ? split.width - 2 * inset - 12 - SCROLL_LANE : null);
   // ★★ LEAVE THE STATUS BAR ALONE. In BIG mode the panel is anchored at the bottom and grew
   // straight up past the notch, covering the clock and battery (Stuart's screenshot,
   // 2026-07-27). The available height has to stop at the safe area, not at the window edge.
@@ -1110,62 +1118,9 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
   // the seven fields you glance at while tuning and nothing else; BIG is the full instrument.
   const maxH = Math.min(avail, p.tall ? winH * 0.82 : winH * 0.34);
 
-  return (
-    <DecoderShell bottom={p.bottomOffset} maxHeight={maxH} maxWidth={wideCols ? 800 : 600}
-                  tall={p.tall}>
-      {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
-          column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
-          stacked where only the fields and the 310-wide symbol trace have to fit. */}
-        {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
-            it. The control island next to it has used BlurView since it was built, which is
-            exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
-            plus a light tint: the spectrum reads through it, the text still reads on top. */}
-        {/* ★★★ NO BLUR IN BIG — A BACKDROP BLUR OVER THE SPECTRUM IS THE EXPENSIVE CASE, AND IT
-            IS THE SPECTRUM SPECIFICALLY, NOT THE AREA. Stuart pinned it exactly: "it's only when
-            it covers the spectrum part; in small mode when it's over the waterfall only, no
-            issues" (2026-08-02). The two are drawn by completely different means and the blur
-            costs accordingly:
-              • the WATERFALL is a Shader/ImageShader — a GPU texture blit, nearly free to resample;
-              • the SPECTRUM is a Skia vector Path REBUILT EVERY FRAME (buildSpecPathRef →
-                Skia.Path.Make) and filled.
-            A backdrop blur forces whatever sits beneath it into an offscreen buffer to sample. Over
-            a texture that is cheap; over a live per-frame vector path it is not, and at 20 fps it
-            stutters — on an M4, which is the tell that this is a compositing cost and not raw GPU
-            power. Stuart: "I'd like to hope that the glass effect of the box isn't causing a GPU
-            issue on an M4 MacBook."
-            ★★ AND IT IS WHY SLOWING THE RDS PAYLOAD DID NOT FIX THIS. The blur redraws because the
-            content BENEATH it moved, not because the analyser updated — so the analyser's rate was
-            never the lever. That rate was genuinely wrong and worth fixing on its own; it was not
-            this bug, and I said it was.
-            ★ BIG is exactly the mode that reaches up over the spectrum; SMALL sits over the
-            waterfall alone and has never stuttered. So SMALL keeps its blur — the original
-            complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
-            and BIG, where you are reading an instrument rather than watching through it, takes a
-            near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
-        {/* ★ Blur and tint are DecoderShell's now, from TRANSPARENCY EFFECTS: with it ON, 35 in
-            SMALL and 0 in BIG, iOS only — never on silver / black, and never with it OFF. */}
-        <DecoderHeader>
-          {/* ★ Matches the button that opens it — an abbreviation in one place and the full
-              name in the other reads as two different features. */}
-          <DecoderTitle>ADVANCED RDS</DecoderTitle>
-          <View style={{ flex: 1 }} />
-          {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
-              fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
-              but in the field the raw and confirmed values were always identical, so the
-              data never changed and only three labels ever went green (Stuart). A
-              control that appears to do nothing is worse than no control.
-              ★ The server still sends both sets, so this is a UI removal: reinstating it
-              means making it cover more than five fields, not re-adding a button. */}
-          {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
-              was broken it also appeared to do nothing at all. */}
-          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} hitSlop={6}
-                      label={p.tall ? 'SMALL' : 'BIG'} />
-          <DecoderKey tone="close" onPress={p.onClose} hitSlop={8} label="✕" />
-        </DecoderHeader>
-
-        <DecoderBody>
-        <ScrollView contentContainerStyle={[s.body, scrollLane, wideCols && s.bodyWide]}>
-          <View style={wideCols ? s.colFields : undefined}>
+  /* ★ The rows in three pieces — the summary you watch while tuning, the BIG reference rows, the plots — so the
+   *  half-open split can place them; everywhere else they are put back exactly where they were. */
+  const summaryRows = (<>
           {/* ★ RAW mode needs saying, not just showing — a panel full of red labels with no
               explanation reads as breakage rather than as "arriving but not yet trusted". */}
           {raw && (
@@ -1204,8 +1159,8 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="RadioText"   value={p.rt || DASH} />
           <Row raw={raw} label="Rate"        value={rateTxt} />
 
-          {/* ── Everything below is BIG only. ───────────────────────────────────────── */}
-          {p.tall && <>
+  </>);
+  const extraRows = (<>
           {/* ★ U+21D4 ⇔, NOT U+2194 ↔. The latter has EMOJI presentation by default and iOS
               rendered it as a blue tile mid-label (Stuart's screenshot, 2026-07-28). U+21D4
               has no emoji form, so it stays a glyph on every platform without a variation
@@ -1260,16 +1215,11 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           <Row raw={raw} label="AF MHz"      value={afTxt} />
           <Row raw={raw} label="Group share" value={groupShareTxt} />
 
-          </>}
-          </View>
-
-          {/* ★ The plots are their own column when wide, and simply the next thing down the page
-              when not. Splitting them out of the BIG-only fragment above is what makes both
-              layouts expressible without duplicating the field list. */}
-          {p.tall && (
+  </>);
+  const plots = (
           <View style={wideCols ? s.colPlots : undefined}>
           <Text style={s.section}>PLOTS</Text>
-          <View style={s.plots}>
+          <View style={[s.plots, pl.stacked && s.plotsStacked]}>
             {/* ★★ THE COLUMN'S WIDTH MUST NOT FOLLOW ITS VERDICT. It was content-sized, so it was ~120 pt for
                 "RDS no lock", wider for "clean · 12% scatter" and ~50 pt wider again for "rotating — unlocked
                 encoder" — and a station whose coherence sits near the 0.35 line flips that several times a
@@ -1281,7 +1231,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                 layout, never by the text. */}
             <View style={s.constCol}>
               <Text style={s.plotLbl}>CONSTELLATION</Text>
-              <Constellation xy={plotXy} size={120} />
+              <Constellation xy={plotXy} size={pl.constSize} />
               <View>
                 <Text style={[s.verdict, { opacity: 0 }]} aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                   {CONST_VERDICT_ROTATING}
@@ -1291,13 +1241,13 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             </View>
             {/* ★ 200 = the figures' block below (devGrid, L/R rows, devVerdict), so this column is never
                 narrower than what it draws; it takes any extra width, and the constellation gives way first. */}
-            <View style={s.mpxCol}>
+            <View style={[s.mpxCol, pl.stacked && s.mpxColStacked]}>
               <Text style={s.plotLbl}>MPX</Text>
-              <Mpx mpx={plotMpx} width={180} height={72} />
+              <Mpx mpx={plotMpx} width={pl.plotW} height={72} />
               <Text style={[s.plotLbl, { marginTop: 4 }]}>SCOPE VIEW · PILOT · STEREO · RDS</Text>
               {scopeBands.map((b) => (
                 <View key={b.name} style={{ marginBottom: 3 }}>
-                  <ScopeBox grid={b.g} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={180} height={40} colour={b.colour} />
+                  <ScopeBox grid={b.g} ew={x?.eyeW ?? 0} eh={x?.eyeH ?? 0} width={pl.plotW} height={40} colour={b.colour} />
                   <Text style={[s.scopeLbl, { color: `rgb(${b.colour[0]},${b.colour[1]},${b.colour[2]})` }]}>
                     {b.name}{b.khz > 0.05 ? `  ${b.khz.toFixed(1)} kHz` : ''}
                   </Text>
@@ -1314,7 +1264,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
                     • the TICK  = mpxHold, the 6 s excursion memory — also what the digits quote;
                     • the LINE at 75 % = the limit.
                   0-100 kHz, so 1 kHz = 1 %. Drawn dim when the reading is not trusted. */}
-              <View style={{ width: 180, height: 8, marginTop: 4, borderRadius: 2,
+              <View style={{ width: pl.plotW, height: 8, marginTop: 4, borderRadius: 2,
                              backgroundColor: C.devBarBg,
                              borderWidth: 1, borderColor: C.devBarBorder,
                              overflow: 'hidden' }}>
@@ -1399,7 +1349,7 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
           {/* ★ Its name is SYMBOL TRACE — what the website and the About note call it. It became "SYMBOL EYE"
               when the duplicate went (above), and Stuart could not remember the original (2026-09-19). */}
           <Text style={s.plotLbl}>SYMBOL TRACE</Text>
-          <Eye xy={plotXy} width={310} height={70} />
+          <Eye xy={plotXy} width={pl.eyeW} height={70} />
           <Text style={s.plotNote}>
             Two clear bands = every bit decided with margin. A filled gap means symbols are
             landing on the decision line, and the errors follow.
@@ -1411,9 +1361,93 @@ export default function AdvRdsPanel(p: AdvRdsPanelProps) {
             </View>
           )}
           </View>
-          )}
+  );
+  /* ★★★ HALF-OPEN BIG (iPhone Duo; Stuart: "treat the decoder box as 2 halves"): the header and the summary rows above
+   *  the fold, the reference rows and the plots below it (DecoderShell, useDecoderSplit). One column, never two. */
+  const upperBody = splitOn && split ? (
+    <DecoderBody>
+      <ScrollView style={{ maxHeight: Math.max(60, split.upperH - 46 - inset) }} contentContainerStyle={[s.body, scrollLane]}>
+        {summaryRows}
+      </ScrollView>
+    </DecoderBody>
+  ) : null;
+  const lowerBody = splitOn && split ? (
+    <DecoderBody style={{ marginTop: inset }}>
+      <ScrollView style={{ height: Math.max(60, split.lowerH - 2 * inset) }} contentContainerStyle={[s.body, scrollLane, { paddingBottom: 16 }]}>
+        {extraRows}
+        {plots}
+      </ScrollView>
+    </DecoderBody>
+  ) : undefined;
+
+  return (
+    <DecoderShell bottom={p.bottomOffset} maxHeight={maxH} maxWidth={wideCols ? 800 : 600}
+                  tall={p.tall} lower={lowerBody}>
+      {/* ★ The cap is the CONTENT's width, not a guess: the fields column is 340 and the plots
+          column ~330, plus the 18 gap and 24 of padding — so ~760 in two columns, and ~560
+          stacked where only the fields and the 310-wide symbol trace have to fit. */}
+        {/* ★★ THE PANEL HAD NO BLUR AT ALL — a 95%-opaque slab that blanked the waterfall behind
+            it. The control island next to it has used BlurView since it was built, which is
+            exactly why the two looked like different apps on iOS (Stuart, 2026-07-28). Blur
+            plus a light tint: the spectrum reads through it, the text still reads on top. */}
+        {/* ★★★ NO BLUR IN BIG — A BACKDROP BLUR OVER THE SPECTRUM IS THE EXPENSIVE CASE, AND IT
+            IS THE SPECTRUM SPECIFICALLY, NOT THE AREA. Stuart pinned it exactly: "it's only when
+            it covers the spectrum part; in small mode when it's over the waterfall only, no
+            issues" (2026-08-02). The two are drawn by completely different means and the blur
+            costs accordingly:
+              • the WATERFALL is a Shader/ImageShader — a GPU texture blit, nearly free to resample;
+              • the SPECTRUM is a Skia vector Path REBUILT EVERY FRAME (buildSpecPathRef →
+                Skia.Path.Make) and filled.
+            A backdrop blur forces whatever sits beneath it into an offscreen buffer to sample. Over
+            a texture that is cheap; over a live per-frame vector path it is not, and at 20 fps it
+            stutters — on an M4, which is the tell that this is a compositing cost and not raw GPU
+            power. Stuart: "I'd like to hope that the glass effect of the box isn't causing a GPU
+            issue on an M4 MacBook."
+            ★★ AND IT IS WHY SLOWING THE RDS PAYLOAD DID NOT FIX THIS. The blur redraws because the
+            content BENEATH it moved, not because the analyser updated — so the analyser's rate was
+            never the lever. That rate was genuinely wrong and worth fixing on its own; it was not
+            this bug, and I said it was.
+            ★ BIG is exactly the mode that reaches up over the spectrum; SMALL sits over the
+            waterfall alone and has never stuttered. So SMALL keeps its blur — the original
+            complaint that produced it was a 0.95 slab blanking the waterfall behind that strip —
+            and BIG, where you are reading an instrument rather than watching through it, takes a
+            near-solid tint instead. Platform.OS is 'ios' on a Mac, which is how the Mac got here. */}
+        {/* ★ Blur and tint are DecoderShell's now, from TRANSPARENCY EFFECTS: with it ON, 35 in
+            SMALL and 0 in BIG, iOS only — never on silver / black, and never with it OFF. */}
+        <DecoderHeader>
+          {/* ★ Matches the button that opens it — an abbreviation in one place and the full
+              name in the other reads as two different features. */}
+          <DecoderTitle>ADVANCED RDS</DecoderTitle>
+          <View style={{ flex: 1 }} />
+          {/* ★ RAW REMOVED 2026-07-28. It showed the UNCONFIRMED value for five block-B
+              fields (PTY/TP/TA/MS/DI) and coloured those labels by confirmation state —
+              but in the field the raw and confirmed values were always identical, so the
+              data never changed and only three labels ever went green (Stuart). A
+              control that appears to do nothing is worse than no control.
+              ★ The server still sends both sets, so this is a UI removal: reinstating it
+              means making it cover more than five fields, not re-adding a button. */}
+          {/* ★ Say what it DOES. A bare caret read as decoration, and while the panel height
+              was broken it also appeared to do nothing at all. */}
+          <DecoderKey active={p.tall} onPress={() => p.onTall(!p.tall)} hitSlop={6}
+                      label={p.tall ? 'SMALL' : 'BIG'} />
+          <DecoderKey tone="close" onPress={p.onClose} hitSlop={8} label="✕" />
+        </DecoderHeader>
+
+        {splitOn ? upperBody : (<DecoderBody>
+        <ScrollView contentContainerStyle={[s.body, scrollLane, wideCols && s.bodyWide]}>
+          <View style={wideCols ? s.colFields : undefined}>
+          {summaryRows}
+
+          {/* ── Everything below is BIG only. ───────────────────────────────────────── */}
+          {p.tall && extraRows}
+          </View>
+
+          {/* ★ The plots are their own column when wide, and simply the next thing down the page
+              when not. Splitting them out of the BIG-only fragment above is what makes both
+              layouts expressible without duplicating the field list. */}
+          {p.tall && plots}
         </ScrollView>
-        </DecoderBody>
+        </DecoderBody>)}
     </DecoderShell>
   );
 }
@@ -1477,6 +1511,9 @@ const makeStyles = (T: DecoderTokens) => { const C: Palette = palette(T); const 
              marginTop: 10, marginBottom: 2 },
   plots:   { flexDirection: 'row', gap: 10, marginTop: 4 },
   constCol: { flexShrink: 1, minWidth: 120 },
+  // ★ Half-open lower panel (advRdsPlotLayout): the constellation above the figures, not beside them.
+  plotsStacked:  { flexDirection: 'column', gap: 4 },
+  mpxColStacked: { flexGrow: 0, flexBasis: 'auto' },
   mpxCol:   { flexGrow: 1, flexShrink: 0, flexBasis: 200 },
   plotLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, color: C.muted, marginBottom: 2, marginTop: 8 },
   scopeLbl: { fontFamily: FONT, fontSize: 10, letterSpacing: 1, marginTop: 1 },

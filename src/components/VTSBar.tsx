@@ -86,7 +86,7 @@ const VFD_PASS_CAP_MS = 30000;
  *  display every glyph drawn in Nixie One is neon (§2) — including a notice that carries its own
  *  colour, which is then ignored. */
 
-export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '', onHoldExtended, onTimedEnd, anchors = null }:
+export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel = '', onHoldExtended, onTimedEnd, anchors = null, inset = null }:
     { notif: VtsNotifData | null; bottom: number; serverType?: string; onHeight?: (h: number) => void;
       /** ★ A timed notif was held longer than asked (a VFD's one full pass, onVfdPass): its key and the
        *  new total, so the screen's own deadline — which defers station names and starts the next
@@ -101,7 +101,10 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
        *  it can draw (§7: Cyrillic, CJK… until native transliteration lands). */
       freqLabel?: string;
       /** ★ Landscape: the window x of the VFO drum's + and the zoom drum's − (ControlsBar onDrumAnchors). */
-      anchors?: { left: number; right: number } | null }) {
+      anchors?: { left: number; right: number } | null;
+      /** ★ Half-open iPhone Duo: the bar's left / right in the window, over the deck in the RIGHT column (the decoder
+       *  box has the left). Absent everywhere else — the bar spans the deck as it always has. */
+      inset?: { left: number; right: number } | null }) {
   useFaceplateOnTrial();   // ★★★ the VFD strip is faceplate too (constants/faceplate.ts CRASH SAFETY)
   const fp = useFaceplate();
   const COL = fp.vts;
@@ -353,7 +356,7 @@ export default function VTSBar({ notif, bottom, serverType, onHeight, freqLabel 
        turn's own render, then up on the bar's shared slide. */
     <Animated.View pointerEvents="none"
                    style={[StyleSheet.absoluteFill, { opacity: rotAway ? 0 : 1, transform: [{ translateY: rotSlide }] }]}>
-    <Animated.View style={[styles.wrap, { bottom, opacity: fade, left: side, right: side }]}
+    <Animated.View style={[styles.wrap, { bottom, opacity: fade, left: inset?.left ?? side, right: inset?.right ?? side }]}
                    pointerEvents="none">
     <View ref={barRef} collapsable={false} style={[styles.bar, { backgroundColor: fp.chassis.vtsBg, borderColor: fp.chassis.vtsBorder }]}
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) => {

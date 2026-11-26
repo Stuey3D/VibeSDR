@@ -63,7 +63,7 @@ import { bandSkimPending, bandSkimSignalFor, bandSkimText, BAND_SKIM_WAITING, ty
 import { CW_Q_COLOURS } from '../services/cwList';
 import { cwWpmText } from '../utils/cwFormat';
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderKeyLabel, DecoderBody,
-         DECODER_FONT, decoderBodyInset, engraveStyle, useDecoderTokens, useDecoderStyles,
+         DECODER_FONT, decoderBodyInset, useDecoderSplit, useFlow, FlowUpper, FlowLower, engraveStyle, useDecoderTokens, useDecoderStyles,
          type DecoderTokens } from './DecoderShell';
 import StationLogo from './StationLogo';
 import { scrollLane } from '../constants/popupTokens';
@@ -208,13 +208,16 @@ function fmtSpotTimeSec(t: number): string {
 
 // Memoized spot row — with FlatList virtualization only the ~12 visible rows
 // render, and unchanged rows skip re-render entirely when new spots flush in.
-const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded, skimText, skimColour, hl }: {
+const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, onTuneHz, expanded, skimText, skimColour, hl, compact = false }: {
   s: SpotRow; isCW: boolean; font: string; callColor: string; expanded: boolean;
   onTuneHz?: (hz: number) => void;
   /** ★★★ beta92 the pad / keyboard / remote highlight (utils/spotsNav): the focus tint, as DAB's rows draw it. */
   hl?: string;
   /** ★★ beta92 a CW / RTTY spot in the BAND SKIMMER: its signal's message (expanded only) and its confidence colour. */
   skimText?: string; skimColour?: string;
+  /** ★ Half-open lower panel (~300 pt): tighter cells and no country column — it moves to the expanded line — so the
+   *  CALLSIGN keeps its room (at full width it was left ~30 pt). Everywhere else false: the row as always. */
+  compact?: boolean;
 }) {
   const dp = useDecoderStyles(makeDp);
   // Line 1: Time · Call · Band · Mode · SNR · Country · Distance.
@@ -229,31 +232,35 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
   return (
     <TouchableOpacity style={[expanded ? dp.spotRowTall : dp.spotRow, hl ? { backgroundColor: hl } : null]}
       onPress={() => s.freqHz && onTuneHz?.(s.freqHz)} activeOpacity={0.6}>
-      <View style={dp.spotLine}>
-        <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
-          {fmtSpotTime(s.time)}
+      <View style={[dp.spotLine, compact && dp.spotLineCompact]}>
+        <Text style={[dp.spotCell, dp.spotTime, compact && dp.spotTimeCompact, { fontFamily: font }]}>
+          {/* ★ Compact (half-open lower panel): HH:MM, so the callsign keeps its room — the seconds (the slot) are on
+              the EXPAND line, which carries the full HH:MM:SSz. */}
+          {compact ? fmtSpotTime(s.time).slice(0, 5) : fmtSpotTime(s.time)}
         </Text>
         {/* ★ V12: the callsign opens its QRZ.COM page (CwView CallLink) — its own tap, not the row's tune. */}
         <CallLink call={s.call} style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]} />
-        <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
+        <Text style={[dp.spotCell, dp.spotBand, compact && dp.spotBandCompact, { fontFamily: font }]}>{s.band}</Text>
         {/* ★ V12: the mode in ITS colour — the same as its map marker (src/utils/digiModes.ts). */}
-        <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }, !isCW && { color: digiModeStyle(s.mode).colour }]}>
+        <Text style={[dp.spotCell, dp.spotMode, compact && dp.spotModeCompact, { fontFamily: font }, !isCW && { color: digiModeStyle(s.mode).colour }]}>
           {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
         </Text>
         <Text style={[dp.spotCell, dp.spotSnr,
           (s.snr ?? -99) >= 0 ? dp.snrOk : dp.snrLow, { fontFamily: font }]}>
           {s.snr !== undefined ? s.snr : ''}
         </Text>
+        {!compact && (
         <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
           {abbrCountry(s.country)}
         </Text>
+        )}
         {/* Distance-to-receiver (FT8: from the TX grid). Its own cell so country +
             distance both show; blank when unknown.
             ★ ROUND IT. UberSDR sends distance_km as a raw float, so this printed
             "8231.437291841km" and blew the column apart. Sub-kilometre precision is
             meaningless anyway — a Maidenhead grid square is ~100 km across, so every
             digit after the point is invented. */}
-        <Text style={[dp.spotCell, dp.spotDist, { fontFamily: font }]} numberOfLines={1}>
+        <Text style={[dp.spotCell, dp.spotDist, compact && dp.spotDistCompact, { fontFamily: font }]} numberOfLines={1}>
           {s.distKm != null ? `${Math.round(s.distKm)}km` : ''}
         </Text>
       </View>
@@ -263,6 +270,7 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         // locator, so the row must not leave a gap where the grid would have been.
         <Text style={[dp.spotDetail, { fontFamily: font }]} numberOfLines={1}>
           {spotDetailLine([
+            compact ? abbrCountry(s.country) : undefined,
             s.grid,
             s.bearing != null ? `${Math.round(s.bearing)}°` : undefined,
             fmtSpotTimeSec(s.time),
@@ -438,7 +446,19 @@ export default function DecoderPanel({
    *  "we can have bigger decoder boxes for things like RTTY/FT8"). The 0.62 cap stays for a big window (a Mac
    *  ~1300 pt tall, where it was "a decoder box swallowing the entire app"). */
   const bigH = winH > 950 ? Math.min(availH, winH * 0.62) : availH;
-  const bigUseful = bigH >= smallFit + 40;
+  /* ★★★ HALF-OPEN (iPhone Duo): BIG is the two-panel box either side of the fold (DecoderShell, useDecoderSplit) —
+   *  the header and a summary above, the log / list below; text with no natural split FLOWS from one into the other.
+   *  Offered whenever the split is. */
+  const splitAt = useDecoderSplit();
+  /* ★★ V12: the list decoders (CW / PSK / RTTY rows, JT-TTY, DSC, NCDXF, balloons, APRS) and the scanner have no
+   *  two-panel layout yet — in half-open they stay the one box below the fold and BIG is not offered (the same as a
+   *  window with no room for the split). Same tests as the is… flags below, made here from the props. */
+  const noSplitBody = dabProgrammes.length === 0 && spotsKind === null && (
+    ((activeDecoder === 'cw' || activeDecoder === 'psk' || activeDecoder === 'rtty') && !!cw) || (activeDecoder === 'jtty' && !!jtty)
+    || (activeDecoder === 'dsc' && !!dsc) || (activeDecoder === 'ncdxf' && !!ncdxf) || (activeDecoder === 'balloon' && !!balloon)
+    || (activeDecoder === 'aprs' && !!aprs) || (activeDecoder === 'scanner' && !!scanner));
+  const split = noSplitBody ? null : splitAt;
+  const bigUseful = splitAt ? !noSplitBody : bigH >= smallFit + 40;
   const tall = tallPick && bigUseful;
   const bodyH = Math.round(tall ? bigH : Math.min(availH, smallFit));
   // ★★★ EVERY SCROLLING BODY MUST USE THIS. `dp.body` used to carry `maxHeight: 200` and FOUR
@@ -449,6 +469,12 @@ export default function DecoderPanel({
   // were missed.
   // ★ Use `bodySize` everywhere. If a new scrolling body is added, it gets this too.
   const bodySize = tall ? { height: bodyH } : { maxHeight: bodyH };
+  /** Half-open BIG: the upper panel's room under the header, and the lower panel's whole height (minus the metal window's
+   *  margins, which it has at the top too — there is no header above it). */
+  const splitInset = decoderBodyInset(tk);
+  const upperBodyH = split ? Math.max(60, Math.floor(split.upperH - HEADER_H - splitInset)) : 0;
+  const lowerBodyH = split ? Math.max(60, Math.floor(split.lowerH - 2 * splitInset)) : 0;
+  const flow = useFlow();
   // ★★★ AND CAP THE WIDTH. `wrap` is left:8/right:8 — full bleed, which is correct on a phone and
   // absurd on an iPad or a Mac window, where a decoder box stretched the entire width of the screen
   // (Stuart, 2026-07-31: "it's also a bit wide on the iPad, Mac view too"). It was sized to the
@@ -488,6 +514,8 @@ export default function DecoderPanel({
   const skimPending = React.useMemo(() => (isSpotsMode && spotsKind === 'digi' && bandSkim
     ? bandSkimPending(bandSkim, sfMode, spots.map((p) => ({ mode: p.mode, callsign: p.call, frequency: p.freqHz, timestamp: p.time }))) : []),
     [isSpotsMode, spotsKind, bandSkim, sfMode, spots]);
+  /** Half-open BIG: the spots table is in the lower panel, ~300 pt wide (SpotRowView compact). */
+  const spotsCompact = tall && !!split;
   // Canvas header state — fed by DecoderImageCanvas callbacks (skin parity)
   const [imageInfo,   setImageInfo]   = useState('');
   const [hasPrev,     setHasPrev]     = useState(false);
@@ -918,9 +946,9 @@ export default function DecoderPanel({
                    onTuneHz={onTuneHz} expanded={spotsExpanded}
                    skimText={sg ? ((cwPlain && sg.set ? plainEnglish(t) : t) || '\u2026') : undefined}
                    skimColour={sg && sg.set ? CW_Q_COLOURS[sg.q] : undefined}
-                   hl={spotHlKey !== null && spotRowKey(item) === spotHlKey ? spotHlTint : undefined} />
+                   hl={spotHlKey !== null && spotRowKey(item) === spotHlKey ? spotHlTint : undefined} compact={spotsCompact} />
     );
-  }, [spotsKind, onTuneHz, spotsExpanded, tk.accent, bandSkim, cwPlain, spotHlKey, spotHlTint]);
+  }, [spotsKind, onTuneHz, spotsExpanded, tk.accent, bandSkim, cwPlain, spotHlKey, spotHlTint, spotsCompact]);
 
   // ★ The flash. Entering the box is otherwise invisible, and invisible focus has looked like a broken
   // keyboard three times over in this work. It announces itself once and then gets out of the
@@ -1320,8 +1348,327 @@ export default function DecoderPanel({
     : isAprs && aprs!.is9600 ? 'APRS · 9600'
     : (DECODER_LABELS[activeDecoder!] ?? String(activeDecoder).toUpperCase());
 
+  /* ★ WEFAX's adjust row and the picture as pieces too (the split puts the row above the fold, the picture below). */
+  const adjRow = () => (
+          /* ★ One row at a time (see 'ONLY THE KEYS IN USE'): the summary, or MARGIN's keys, or SLANT's. Every key the
+             same 44 pt, 12 pt apart. ★ MARGIN has ◀ ▶ only, no 5 px pair: on the narrowest phone (SE, Display Zoom:
+             ~284 pt for the row) four arrows + DONE at this size do not fit on one line, and a held 1 px key goes
+             ×5 after eight repeats anyway — and the drag is the coarse move. */
+          <View style={dp.adjRow}>
+            {adjMode === 'align' && !viewingPrev ? (<>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Move the chart left (hold to repeat)"
+                {...hold((m) => nudgeShift(m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀</DecoderKeyLabel></HBtn>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Move the chart right (hold to repeat)"
+                {...hold((m) => nudgeShift(-m))}><DecoderKeyLabel style={dp.bigKeyTxt}>▶</DecoderKeyLabel></HBtn>
+              <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>{`${signedPx(curShift)} px`}</Text>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish aligning"
+                onPress={() => setAdjMode('summary')}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
+            </>) : adjMode === 'slant' ? (<>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Slant less (hold to repeat)"
+                {...hold((m) => nudgeSlant(-SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>−</DecoderKeyLabel></HBtn>
+              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Slant more (hold to repeat)"
+                {...hold((m) => nudgeSlant(SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>+</DecoderKeyLabel></HBtn>
+              <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>{signedSlant(drawSlant)}</Text>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish setting the slant"
+                onPress={() => setAdjMode('summary')}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
+            </>) : (<>
+              {/* ★ The figures APPLIED: this chart's shift (auto-align's, or the listener's) and the slant drawn. */}
+              {!viewingPrev && (
+                <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the margin: drag the chart sideways"
+                  navId="margin" padAdjust={{ id: 'margin', begin: () => setRawChart(false), step: (d: 1 | -1) => nudgeShift(-d) }}
+                  onPress={() => { setRawChart(false); setAdjMode('align'); }}>
+                  <DecoderKeyLabel active={!rawChart && manualShift != null} style={dp.bigKeyTxt}>
+                    {rawChart ? 'MARGIN RAW' : `MARGIN ${manualShift != null ? 'MANUAL' : 'AUTO'} ${signedPx(curShift)} px`}
+                  </DecoderKeyLabel>
+                </HBtn>
+              )}
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the slant"
+                navId="slant" padAdjust={{ id: 'slant', begin: () => setRawChart(false), step: (d: 1 | -1) => nudgeSlant(SLANT_STEP * d) }}
+                onPress={() => { setRawChart(false); setAdjMode('slant'); }}>
+                <DecoderKeyLabel active={!rawChart && slantManual} style={dp.bigKeyTxt}>
+                  {rawChart ? 'SLANT RAW' : `SLANT ${slantManual ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
+                </DecoderKeyLabel>
+              </HBtn>
+              {/* ★ AUTO and RAW are a MODE PAIR (Stuart, 2026-10-06 — AUTO replaces RESET): AUTO is lit while nothing
+                  manual and no RAW is in effect, and pressing it goes back to automatic from either. */}
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Automatic margin and slant"
+                accessibilityState={{ selected: !rawChart && !slantManual && manualShift == null }}
+                onPress={() => { changeAlign(null); setSlantTouched(false); setManualShift(null); setRawChart(false); }}>
+                <DecoderKeyLabel active={!rawChart && !slantManual && manualShift == null} style={dp.bigKeyTxt}>AUTO</DecoderKeyLabel>
+              </HBtn>
+              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Show the chart exactly as received, no correction"
+                accessibilityState={{ selected: rawChart }}
+                onPress={() => setRawChart((r) => !r)}><DecoderKeyLabel active={rawChart} style={dp.bigKeyTxt}>RAW</DecoderKeyLabel></HBtn>
+            </>)}
+          </View>
+  );
+  const imageCanvas = (maxH: number) => (
+            <DecoderImageCanvas
+              align={isWefax ? { shift: manualShift ?? 0, slant: drawSlant } : undefined}
+              autoMargin={isWefax && manualShift == null}
+              onAutoAlign={onChartAlign}
+              autoSlant={!slantTouched}
+              stationSlant={wefaxPreset(tunedHz).slant}
+              stationFormat={wefaxFormat(tunedHz)}
+              raw={isWefax && rawChart}
+              onNewChart={onNewChart}
+              alignPreview={isWefax && adjOpen && aligning && !viewingPrev ? curShift : undefined}
+              onAlignDrag={onAlignDrag}
+              ref={imageRef}
+              maxHeight={maxH}
+              decoderName={activeDecoder ?? 'image'}
+              outline={activeDecoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
+              zoom={IMG_ZOOMS[imgZoomI]}
+              onInfo={setImageInfo}
+              onStatus={(s: string) => onImageStatus?.(s)}
+              onPrevState={(hp: boolean, vp: boolean) => { setHasPrev(hp); setViewingPrev(vp); }}
+            />
+  );
+
+  /* ★ The header popup, the DAB list and the spots table as pieces, so the half-open split can place them in its two
+   *  panels; everywhere else they render where they always did, at the same size. */
+  const popupStrip = popup ? (
+          <View style={[dp.dabSpeedPop, { borderBottomColor: dc.hdrBdr }]}>
+            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: FONT }]}>{popup.title}</Text>
+            <View style={popup.wrap ? dp.popWrapRow : dp.dabSpeedRow}>
+              {popup.opts.map((o, oi) => (
+                <TouchableOpacity key={o.key}
+                  style={[popup.wrap ? dp.popChip : dp.dabSpeedBtn,
+                          { borderColor: o.on ? dc.btnBdrA : dc.btnBdr }, o.on && { backgroundColor: dc.btnAct },
+                          kbZone === 'popup' && speedIdx === oi && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={() => { o.apply(); popup.close(); }} activeOpacity={0.7}>
+                  <Text style={[dp.dabSpeedBtnTxt, { color: o.on ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
+                    {o.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+  ) : null;
+  const dabList = (size: object) => (
+          <ScrollView ref={dabScroll} style={[dp.body, size]} showsVerticalScrollIndicator {...bodyScroll}
+            /* ★ scroll lane: full-width rows, each inset 12 pt by dabRow's own padding */>
+            {dabProgrammes.map((p, pi) => {
+              const active = p.id === activeDabId;
+              const navOn = kbZone === 'list' && listIdx === pi;
+              return (
+                <TouchableOpacity key={p.id}
+                  onLayout={(e) => { dabY.current[p.id] = e.nativeEvent.layout.y; }}
+                  style={[dp.dabRow, { borderBottomColor: dc.hdrBdr },
+                          navOn && { backgroundColor: focusC.tint(0.16) }]}
+                  onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
+                  <StationLogo name={p.name} />
+                  <Text style={[dp.dabName, { color: active ? tk.selected : dc.output, fontFamily: FONT }]}
+                        numberOfLines={1}>
+                    {active ? '✓ ' : ''}{p.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+  );
+  const spotsList = (size: object) => (
+          <FlatList
+            ref={spotsRef}
+            style={[dp.body, size]}
+            // ★ The indicator's lane: a spot row's columns run to its right edge (10 pt inset only).
+            contentContainerStyle={scrollLane}
+            {...bodyScroll}
+            data={visibleSpots}
+            // ★★ NO INDEX IN THE KEY. Spots are newest-first, so a burst PREPENDS rows and
+            // every index shifts — with the index in the key, every existing row got a new
+            // identity, the whole list was treated as new, and the scroll position went with
+            // it. On UberSDR a burst is every band at once, which is why it looked violent.
+            keyExtractor={spotRowKey}
+            // ★ And this is the property built for exactly this: content added ABOVE must not
+            // move what you are looking at. Within 40px of the top it still follows the live
+            // feed, so sitting at the top behaves as before — it is only reading further down
+            // that is now left alone. (Stuart's diagnosis: "all the bursts of new contacts try
+            // and pull that list rapidly to the top again".)
+            maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 40 }}
+            renderItem={renderSpot}
+            initialNumToRender={12}
+            maxToRenderPerBatch={12}
+            windowSize={5}
+            // ★★ removeClippedSubviews is OFF, deliberately. Spot rows change height when
+            // EXPAND is toggled, and with clipping on, iOS mis-estimates the content size,
+            // corrects it, the correction moves the offset, and the list oscillates — Stuart:
+            // "scrolling rapidly and getting stuck bouncing up and down". It is a documented
+            // problem with dynamic row heights, and the memory it saves on a list this short is
+            // not worth a list that cannot be read.
+            removeClippedSubviews={false}
+            // A stable key per spot rather than one including the index, so a row keeps its
+            // identity across the re-render that expanding causes.
+            extraData={[spotsExpanded, bandSkim, cwPlain, spotHlKey]}
+            // ★★★ beta92 the pad / keyboard highlight is kept on screen (see onSpotsViewable)
+            onViewableItemsChanged={onSpotsViewable}
+            viewabilityConfig={spotsViewConfig}
+            onScrollToIndexFailed={onSpotsScrollFail}
+            ListHeaderComponent={skimPending.length ? (
+              <View>
+                {skimPending.map((sg, si) => (
+                  <View key={skimWaitKey(sg)} onLayout={(e) => { skimY.current[si] = e.nativeEvent.layout.y; }}>
+                    <SkimWaitRow sg={sg} font={FONT} expanded={spotsExpanded} plain={cwPlain} onTuneHz={onTuneHz}
+                                 hl={spotHlKey !== null && skimWaitKey(sg) === spotHlKey ? spotHlTint : undefined} />
+                  </View>
+                ))}
+              </View>
+            ) : null}
+            ListEmptyComponent={skimPending.length ? null :
+              <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
+                waiting for spots…
+              </Text>
+            }
+          />
+  );
+
+  /* ★★★ HALF-OPEN BIG — the two panels (iPhone Duo; Stuart: "treat the decoder box as 2 halves"). Per decoder:
+   *   · spots (FT8 / FT4 / WSPR / JS8, CW) — upper: the header, its popup and a summary (count, bands, modes, newest);
+   *     lower: the table.
+   *   · DAB (OpenWebRX) — upper: the header and what is playing; lower: the programme list.
+   *   · NAVTEX — upper: the message's title line (station · subject · serial, receiving / lost); lower: its text.
+   *   · ADS-B — upper: a count; lower: the aircraft table.
+   *   · WEFAX / SSTV — upper: the header and WEFAX's adjust row; lower: the picture.
+   *   · RTTY, Morse, Whisper, time — no natural split: the text FLOWS from the upper panel into the lower (useFlow).
+   *  Minimised: the header alone, no lower panel. */
+  const splitOn = tall && !!split && !minimised;
+  const lowerSize = { height: lowerBodyH };
+  const spotSummary = (() => {
+    if (!isSpotsMode || !splitOn) return '';
+    const count = (key: (r: SpotRow) => string) => {
+      const m = new Map<string, number>();
+      for (const r of visibleSpots) { const k = key(r); if (k) m.set(k, (m.get(k) ?? 0) + 1); }
+      return [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`).join(' · ');
+    };
+    const newest = visibleSpots.reduce((m, r) => Math.max(m, r.time), 0);
+    return [`${visibleSpots.length} spot${visibleSpots.length === 1 ? '' : 's'}${visibleSpots.length !== spots.length ? ` of ${spots.length}` : ''}`
+              + (newest ? ` · newest ${fmtSpotTimeSec(newest)}` : ''),
+            count((r) => r.band), spotsKind === 'cw' ? '' : count((r) => r.mode)].filter(Boolean).join('\n');
+  })();
+  const activeDab = isDabMode ? dabProgrammes.find((x) => x.id === activeDabId) : undefined;
+  // ★ V12: drawn as the plain text body draws it (TRANSCRIBE's callsign links, RTTY's EXPLAIN).
+  const flowText = (
+    <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]}>
+      {activeDecoder === 'transcribe'
+        ? <TranscriptText text={decoderText} linkStyle={{ color: tk.accent, fontWeight: '700' }} />
+        : activeDecoder === 'rtty' && cwPlain ? plainEnglish(decoderText)
+        : decoderText}
+    </Text>
+  );
+  const isTextFlow = !isNavtex && !isListDec && !isNcdxf && !isBalloon && !isScanner && !isImageMode && !isSpotsMode && !isAircraftMode && !isDabMode;
+  /* ★★ V12 BAND GOVERNOR: which modes are live — a chip per mode in its map colour and letter (digiModes), its state
+   *  in words for VoiceOver (spotsBand spotChipText). Only in Band (the server sends no status in Single). A piece, so the
+   *  half-open split can draw it in the upper panel. */
+  const spotChips = isSpotsMode && spotsKind === 'digi' && !!spotModeStates?.length ? (
+          <View style={dp.chipRow} accessibilityRole="summary">
+            {spotModeStates.map((m) => {
+              const st = digiModeStyle(m.mode);
+              const live = m.state === 'active' || m.state === 'light';
+              /* ★★ TAP A CHIP TO SHOW ONLY THAT MODE, TAP AGAIN FOR ALL (Stuart, 2026-10-27) — the same sfMode the MODE
+               *  key sets, so the two never disagree; the web's chips do the same. Others dim while one is chosen. */
+              const fam = sfModes.find((f) => f !== 'ALL' && spotModeMatches(m.mode, f, spotModes ?? SF_MODES_UBERSDR));
+              const sel = !!fam && sfMode === fam;
+              const dimmed = sfMode !== 'ALL' && !sel;
+              // nav-skip: a touch shortcut for the MODE key (sfMode), which the pad reaches — ALL included.
+              return (
+                <Pressable key={m.mode} accessibilityRole="button"
+                      accessibilityLabel={spotChipText(m) + (fam ? (sel ? ', showing only this mode — tap for every mode' : ', tap to show only this mode') : '')}
+                      accessibilityState={{ selected: sel }}
+                      disabled={!fam} hitSlop={4}
+                      onPress={() => { if (fam) setSfMode(sel ? 'ALL' : fam); }}
+                      style={[dp.chip, { borderColor: sel ? tk.accent : m.state === 'shed' ? '#E8A23A' : tk.divider },
+                              (m.state === 'idle' || m.state === 'off' || m.state === 'out') && { opacity: m.state === 'idle' ? 0.55 : 0.45 },
+                              dimmed && { opacity: 0.4 },
+                              m.state === 'out' && { borderStyle: 'dashed' }]}>
+                  <Text style={[dp.chipDot, { backgroundColor: st.colour, color: st.ink, fontFamily: FONT }]}>{st.letter}</Text>
+                  <Text style={[dp.chipTxt, { color: tk.value, fontFamily: FONT },
+                                m.state === 'off' && { textDecorationLine: 'line-through' }]}>{m.mode}</Text>
+                  <Text style={[dp.chipState, { fontFamily: FONT, color: live ? '#5BE36B' : m.state === 'shed' ? '#E8A23A' : tk.muted }]}>
+                    {m.state.toUpperCase()}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+  ) : null;
+  const upperBody = !splitOn ? null : (
+    <DecoderBody>
+      {popupStrip}
+      {isSpotsMode && (
+        <Text style={[dp.status, dp.splitSummary]} numberOfLines={3}>{spotSummary || 'waiting for spots…'}</Text>
+      )}
+      {spotChips}
+      {isDabMode && (
+        <View style={dp.splitNow}>
+          {!!activeDab && <StationLogo name={activeDab.name} />}
+          <Text style={[dp.dabName, { color: activeDab ? tk.selected : dc.status, fontFamily: FONT }]} numberOfLines={2}>
+            {activeDab ? activeDab.name : 'pick a programme below'}
+          </Text>
+        </View>
+      )}
+      {isAircraftMode && (
+        <Text style={[dp.status, dp.splitSummary]} numberOfLines={1}>
+          {`${aircraft!.length} aircraft · ${aircraft!.filter((x) => x.lat != null).length} with a position`}
+        </Text>
+      )}
+      {isNavtex && (nvShown ? (
+        <View style={[dp.nvHead, dp.splitPad, { borderBottomColor: 'transparent' }]}>
+          <Text style={[dp.nvTitle, { color: tk.accent, fontFamily: FONT }]} numberOfLines={3}>{navtexTitle(nvShown)}</Text>
+          <Text style={[dp.nvMeta, { color: tk.muted, fontFamily: FONT }]} numberOfLines={1}>
+            {[nvViewingPrev ? 'PREVIOUS' : !nvShown.done ? 'RECEIVING' : 'STANDING BY',
+              navtexLostPct(nvShown) != null ? `${navtexLostPct(nvShown)}% lost` : ''].filter(Boolean).join(' · ')}
+          </Text>
+        </View>
+      ) : (
+        <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
+          standing by — each message appears here as it arrives
+        </Text>
+      ))}
+      {isImageMode && isWefax && adjOpen && adjRow()}
+      {isTextFlow && !!notice && (
+        <View style={dp.adjRow}>
+          <Text style={[dp.output, { flex: 1, minWidth: 160, color: dc.output, fontFamily: FONT }]}>{notice.text}</Text>
+          {!!notice.action && !!notice.onAction && (
+            <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel={notice.action} onPress={notice.onAction}>
+              <DecoderKeyLabel active style={dp.bigKeyTxt}>{notice.action}</DecoderKeyLabel>
+            </HBtn>
+          )}
+        </View>
+      )}
+      {isTextFlow && (
+        <FlowUpper flow={flow} height={upperBodyH} style={[dp.bodyContent, scrollLane]}>{flowText}</FlowUpper>
+      )}
+    </DecoderBody>
+  );
+  const lowerBody = !splitOn ? undefined : (
+    <DecoderBody style={{ marginTop: splitInset }}>
+      {isSpotsMode && spotsList(lowerSize)}
+      {isDabMode && dabList(lowerSize)}
+      {isAircraftMode && (
+        <View style={[dp.bodyContent, lowerSize]}>
+          <AircraftPanel aircraft={aircraft!} scrollRef={aircraftRef} />
+        </View>
+      )}
+      {isNavtex && !!nvShown && (
+        <ScrollView ref={outputRef} style={[dp.body, lowerSize]} contentContainerStyle={[dp.bodyContent, scrollLane]}
+          {...bodyScroll} showsVerticalScrollIndicator>
+          <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]} selectable>{navtexBody(nvShown)}</Text>
+        </ScrollView>
+      )}
+      {isImageMode && imageRef && (
+        <View style={dp.bodyContent}>{imageCanvas(lowerBodyH)}</View>
+      )}
+      {isTextFlow && (
+        <FlowLower ref={outputRef} flow={flow} upperH={upperBodyH} height={lowerBodyH} style={dp.body}
+          contentStyle={[dp.bodyContent, scrollLane]} {...bodyScroll} showsVerticalScrollIndicator>
+          {flowText}
+        </FlowLower>
+      )}
+    </DecoderBody>
+  );
+
   return (
-    <DecoderShell bottom={bottomOffset} maxWidth={PANEL_MAX_W} tall={tall}
+    <DecoderShell bottom={bottomOffset} maxWidth={PANEL_MAX_W} tall={tall} lower={lowerBody} shown={panelOn}
                   borderColor={kbZone ? focusC.ring : undefined}
                   wrapStyle={{ opacity, transform: [{ translateY: slideY }] }}
                   onTouchStart={noteTouchInteraction}>
@@ -1641,83 +1988,12 @@ export default function DecoderPanel({
 
         {/* ★ With Transparency OFF on silver / black the body sits in the recessed dark window (§10.2); on glass
             DecoderBody is nothing at all. Not drawn when minimised — an empty window is not "hidden". */}
-        {!minimised && (<DecoderBody>
+        {splitOn ? upperBody : !minimised && (<DecoderBody>
         {/* Body — hidden when minimised; image canvas for WEFAX/SSTV */}
-        {!minimised && isImageMode && isWefax && adjOpen && (
-          /* ★ One row at a time (see 'ONLY THE KEYS IN USE'): the summary, or MARGIN's keys, or SLANT's. Every key the
-             same 44 pt, 12 pt apart. ★ MARGIN has ◀ ▶ only, no 5 px pair: on the narrowest phone (SE, Display Zoom:
-             ~284 pt for the row) four arrows + DONE at this size do not fit on one line, and a held 1 px key goes
-             ×5 after eight repeats anyway — and the drag is the coarse move. */
-          <View style={dp.adjRow}>
-            {adjMode === 'align' && !viewingPrev ? (<>
-              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Move the chart left (hold to repeat)"
-                {...hold((m) => nudgeShift(m))}><DecoderKeyLabel style={dp.bigKeyTxt}>◀</DecoderKeyLabel></HBtn>
-              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Move the chart right (hold to repeat)"
-                {...hold((m) => nudgeShift(-m))}><DecoderKeyLabel style={dp.bigKeyTxt}>▶</DecoderKeyLabel></HBtn>
-              <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>{`${signedPx(curShift)} px`}</Text>
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish aligning"
-                onPress={() => setAdjMode('summary')}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
-            </>) : adjMode === 'slant' ? (<>
-              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Slant less (hold to repeat)"
-                {...hold((m) => nudgeSlant(-SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>−</DecoderKeyLabel></HBtn>
-              <HBtn run hitSlop={4} style={dp.arrowKey} accessibilityLabel="Slant more (hold to repeat)"
-                {...hold((m) => nudgeSlant(SLANT_STEP * m))}><DecoderKeyLabel style={dp.bigKeyTxt}>+</DecoderKeyLabel></HBtn>
-              <Text style={[dp.status, dp.adjLabel]} numberOfLines={1}>{signedSlant(drawSlant)}</Text>
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Finish setting the slant"
-                onPress={() => setAdjMode('summary')}><DecoderKeyLabel active style={dp.bigKeyTxt}>DONE</DecoderKeyLabel></HBtn>
-            </>) : (<>
-              {/* ★ The figures APPLIED: this chart's shift (auto-align's, or the listener's) and the slant drawn. */}
-              {!viewingPrev && (
-                <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the margin: drag the chart sideways"
-                  navId="margin" padAdjust={{ id: 'margin', begin: () => setRawChart(false), step: (d: 1 | -1) => nudgeShift(-d) }}
-                  onPress={() => { setRawChart(false); setAdjMode('align'); }}>
-                  <DecoderKeyLabel active={!rawChart && manualShift != null} style={dp.bigKeyTxt}>
-                    {rawChart ? 'MARGIN RAW' : `MARGIN ${manualShift != null ? 'MANUAL' : 'AUTO'} ${signedPx(curShift)} px`}
-                  </DecoderKeyLabel>
-                </HBtn>
-              )}
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Adjust the slant"
-                navId="slant" padAdjust={{ id: 'slant', begin: () => setRawChart(false), step: (d: 1 | -1) => nudgeSlant(SLANT_STEP * d) }}
-                onPress={() => { setRawChart(false); setAdjMode('slant'); }}>
-                <DecoderKeyLabel active={!rawChart && slantManual} style={dp.bigKeyTxt}>
-                  {rawChart ? 'SLANT RAW' : `SLANT ${slantManual ? 'MANUAL' : 'AUTO'} ${signedSlant(drawSlant)}`}
-                </DecoderKeyLabel>
-              </HBtn>
-              {/* ★ AUTO and RAW are a MODE PAIR (Stuart, 2026-10-06 — AUTO replaces RESET): AUTO is lit while nothing
-                  manual and no RAW is in effect, and pressing it goes back to automatic from either. */}
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Automatic margin and slant"
-                accessibilityState={{ selected: !rawChart && !slantManual && manualShift == null }}
-                onPress={() => { changeAlign(null); setSlantTouched(false); setManualShift(null); setRawChart(false); }}>
-                <DecoderKeyLabel active={!rawChart && !slantManual && manualShift == null} style={dp.bigKeyTxt}>AUTO</DecoderKeyLabel>
-              </HBtn>
-              <HBtn run hitSlop={4} style={dp.bigKey} accessibilityLabel="Show the chart exactly as received, no correction"
-                accessibilityState={{ selected: rawChart }}
-                onPress={() => setRawChart((r) => !r)}><DecoderKeyLabel active={rawChart} style={dp.bigKeyTxt}>RAW</DecoderKeyLabel></HBtn>
-            </>)}
-          </View>
-        )}
+        {!minimised && isImageMode && isWefax && adjOpen && adjRow()}
         {!minimised && isImageMode && imageRef && (
           <View style={dp.bodyContent}>
-            <DecoderImageCanvas
-              align={isWefax ? { shift: manualShift ?? 0, slant: drawSlant } : undefined}
-              autoMargin={isWefax && manualShift == null}
-              onAutoAlign={onChartAlign}
-              autoSlant={!slantTouched}
-              stationSlant={wefaxPreset(tunedHz).slant}
-              stationFormat={wefaxFormat(tunedHz)}
-              raw={isWefax && rawChart}
-              onNewChart={onNewChart}
-              alignPreview={isWefax && adjOpen && aligning && !viewingPrev ? curShift : undefined}
-              onAlignDrag={onAlignDrag}
-              ref={imageRef}
-              maxHeight={bodyH}
-              decoderName={activeDecoder ?? 'image'}
-              outline={activeDecoder === 'lrpt' && lrptOl.on ? lrptOl.outline : null}
-              zoom={IMG_ZOOMS[imgZoomI]}
-              onInfo={setImageInfo}
-              onStatus={(s: string) => onImageStatus?.(s)}
-              onPrevState={(hp: boolean, vp: boolean) => { setHasPrev(hp); setViewingPrev(vp); }}
-            />
+            {imageCanvas(bodyH)}
           </View>
         )}
         {/* ADS-B gets a real table rather than the text blob.
@@ -1833,136 +2109,14 @@ export default function DecoderPanel({
             station) or one of the spots filters. Drawn as a strip under the header rather than
             as a floating overlay: the box already sits above the control bar and an overlay
             would need measuring to avoid going off the top of an SE. */}
-        {!minimised && popup && (
-          <View style={[dp.dabSpeedPop, { borderBottomColor: dc.hdrBdr }]}>
-            <Text style={[dp.dabSpeedTitle, { color: dc.status, fontFamily: FONT }]}>{popup.title}</Text>
-            <View style={popup.wrap ? dp.popWrapRow : dp.dabSpeedRow}>
-              {popup.opts.map((o, oi) => (
-                <TouchableOpacity key={o.key}
-                  style={[popup.wrap ? dp.popChip : dp.dabSpeedBtn,
-                          { borderColor: o.on ? dc.btnBdrA : dc.btnBdr }, o.on && { backgroundColor: dc.btnAct },
-                          kbZone === 'popup' && speedIdx === oi && { borderColor: focusC.ring, borderWidth: 2 }]}
-                  onPress={() => { o.apply(); popup.close(); }} activeOpacity={0.7}>
-                  <Text style={[dp.dabSpeedBtnTxt, { color: o.on ? dc.btnActT : dc.btnTxt, fontFamily: FONT }]}>
-                    {o.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-        {!minimised && isDabMode && (
-          <ScrollView ref={dabScroll} style={[dp.body, bodySize]} showsVerticalScrollIndicator {...bodyScroll}
-            /* ★ scroll lane: full-width rows, each inset 12 pt by dabRow's own padding */>
-            {dabProgrammes.map((p, pi) => {
-              const active = p.id === activeDabId;
-              const navOn = kbZone === 'list' && listIdx === pi;
-              return (
-                <TouchableOpacity key={p.id}
-                  onLayout={(e) => { dabY.current[p.id] = e.nativeEvent.layout.y; }}
-                  style={[dp.dabRow, { borderBottomColor: dc.hdrBdr },
-                          navOn && { backgroundColor: focusC.tint(0.16) }]}
-                  onPress={() => onSelectDab?.(p.id)} activeOpacity={0.7}>
-                  <StationLogo name={p.name} />
-                  <Text style={[dp.dabName, { color: active ? tk.selected : dc.output, fontFamily: FONT }]}
-                        numberOfLines={1}>
-                    {active ? '✓ ' : ''}{p.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        )}
+        {!minimised && popup && popupStrip}
+        {!minimised && isDabMode && dabList(bodySize)}
 
         {/* ★★ V12 BAND GOVERNOR: which modes are live — a chip per mode in its map colour and letter (digiModes), its state
             in words for VoiceOver (spotsBand spotChipText). Only in Band (the server sends no status in Single). */}
-        {!minimised && isSpotsMode && spotsKind === 'digi' && !!spotModeStates?.length && (
-          <View style={dp.chipRow} accessibilityRole="summary">
-            {spotModeStates.map((m) => {
-              const st = digiModeStyle(m.mode);
-              const live = m.state === 'active' || m.state === 'light';
-              /* ★★ TAP A CHIP TO SHOW ONLY THAT MODE, TAP AGAIN FOR ALL (Stuart, 2026-10-27) — the same sfMode the MODE
-               *  key sets, so the two never disagree; the web's chips do the same. Others dim while one is chosen. */
-              const fam = sfModes.find((f) => f !== 'ALL' && spotModeMatches(m.mode, f, spotModes ?? SF_MODES_UBERSDR));
-              const sel = !!fam && sfMode === fam;
-              const dimmed = sfMode !== 'ALL' && !sel;
-              // nav-skip: a touch shortcut for the MODE key (sfMode), which the pad reaches — ALL included.
-              return (
-                <Pressable key={m.mode} accessibilityRole="button"
-                      accessibilityLabel={spotChipText(m) + (fam ? (sel ? ', showing only this mode — tap for every mode' : ', tap to show only this mode') : '')}
-                      accessibilityState={{ selected: sel }}
-                      disabled={!fam} hitSlop={4}
-                      onPress={() => { if (fam) setSfMode(sel ? 'ALL' : fam); }}
-                      style={[dp.chip, { borderColor: sel ? tk.accent : m.state === 'shed' ? '#E8A23A' : tk.divider },
-                              (m.state === 'idle' || m.state === 'off' || m.state === 'out') && { opacity: m.state === 'idle' ? 0.55 : 0.45 },
-                              dimmed && { opacity: 0.4 },
-                              m.state === 'out' && { borderStyle: 'dashed' }]}>
-                  <Text style={[dp.chipDot, { backgroundColor: st.colour, color: st.ink, fontFamily: FONT }]}>{st.letter}</Text>
-                  <Text style={[dp.chipTxt, { color: tk.value, fontFamily: FONT },
-                                m.state === 'off' && { textDecorationLine: 'line-through' }]}>{m.mode}</Text>
-                  <Text style={[dp.chipState, { fontFamily: FONT, color: live ? '#5BE36B' : m.state === 'shed' ? '#E8A23A' : tk.muted }]}>
-                    {m.state.toUpperCase()}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
+        {!minimised && spotChips}
         {/* Spots table — virtualized; newest first; tap frequency to tune */}
-        {!minimised && isSpotsMode && (
-          <FlatList
-            ref={spotsRef}
-            style={[dp.body, bodySize]}
-            // ★ The indicator's lane: a spot row's columns run to its right edge (10 pt inset only).
-            contentContainerStyle={scrollLane}
-            {...bodyScroll}
-            data={visibleSpots}
-            // ★★ NO INDEX IN THE KEY. Spots are newest-first, so a burst PREPENDS rows and
-            // every index shifts — with the index in the key, every existing row got a new
-            // identity, the whole list was treated as new, and the scroll position went with
-            // it. On UberSDR a burst is every band at once, which is why it looked violent.
-            keyExtractor={spotRowKey}
-            // ★ And this is the property built for exactly this: content added ABOVE must not
-            // move what you are looking at. Within 40px of the top it still follows the live
-            // feed, so sitting at the top behaves as before — it is only reading further down
-            // that is now left alone. (Stuart's diagnosis: "all the bursts of new contacts try
-            // and pull that list rapidly to the top again".)
-            maintainVisibleContentPosition={{ minIndexForVisible: 0, autoscrollToTopThreshold: 40 }}
-            renderItem={renderSpot}
-            initialNumToRender={12}
-            maxToRenderPerBatch={12}
-            windowSize={5}
-            // ★★ removeClippedSubviews is OFF, deliberately. Spot rows change height when
-            // EXPAND is toggled, and with clipping on, iOS mis-estimates the content size,
-            // corrects it, the correction moves the offset, and the list oscillates — Stuart:
-            // "scrolling rapidly and getting stuck bouncing up and down". It is a documented
-            // problem with dynamic row heights, and the memory it saves on a list this short is
-            // not worth a list that cannot be read.
-            removeClippedSubviews={false}
-            // A stable key per spot rather than one including the index, so a row keeps its
-            // identity across the re-render that expanding causes.
-            extraData={[spotsExpanded, bandSkim, cwPlain, spotHlKey]}
-            // ★★★ beta92 the pad / keyboard highlight is kept on screen (see onSpotsViewable)
-            onViewableItemsChanged={onSpotsViewable}
-            viewabilityConfig={spotsViewConfig}
-            onScrollToIndexFailed={onSpotsScrollFail}
-            ListHeaderComponent={skimPending.length ? (
-              <View>
-                {skimPending.map((sg, si) => (
-                  <View key={skimWaitKey(sg)} onLayout={(e) => { skimY.current[si] = e.nativeEvent.layout.y; }}>
-                    <SkimWaitRow sg={sg} font={FONT} expanded={spotsExpanded} plain={cwPlain} onTuneHz={onTuneHz}
-                                 hl={spotHlKey !== null && skimWaitKey(sg) === spotHlKey ? spotHlTint : undefined} />
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            ListEmptyComponent={skimPending.length ? null :
-              <Text style={[dp.output, dp.spotEmpty, { color: dc.status, fontFamily: FONT }]}>
-                waiting for spots…
-              </Text>
-            }
-          />
-        )}
+        {!minimised && isSpotsMode && spotsList(bodySize)}
         </DecoderBody>)}
 
     </DecoderShell>
@@ -2005,6 +2159,10 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
               lineHeight: 14 },
   chipTxt:  { fontSize: 10, letterSpacing: 0.3 },
   chipState:{ fontSize: 8.5, fontWeight: '700', letterSpacing: 0.4 },
+  // ★ Half-open upper panel: the summary under the header (spots, ADS-B), what is playing (DAB), the NAVTEX title line.
+  splitSummary: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 12, lineHeight: 17 },
+  splitNow:     { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  splitPad:     { paddingHorizontal: 12, paddingTop: 8 },
   /* ★ The WEFAX SHIFT / SLANT strip under the header (ADJ). Wraps on a narrow box rather than clipping. */
   adjRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, paddingHorizontal: 8, paddingVertical: 6 },
   adjLabel: { minWidth: 70, flexShrink: 1 },
@@ -2089,6 +2247,12 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   // Widened with the font step from 10pt to 11pt — the old widths were cut for 10pt and clip
   // "20:14"/"FT8" at the larger size. Check on the SE in Display Zoom before trimming these.
   spotTime:    { width: 56 },   // ★ HH:MM:SS (was HH:MM, 42)
+  // ★ Half-open lower panel (SpotRowView compact): see the prop.
+  spotLineCompact: { gap: 4 },
+  spotTimeCompact: { width: 36 },   // ★ HH:MM in compact (V12's full width is HH:MM:SS, 56)
+  spotBandCompact: { width: 34 },
+  spotModeCompact: { width: 35 },
+  spotDistCompact: { width: 48 },
   spotBand:    { width: 38 },
   spotMode:    { width: 40 },
   spotSnr:     { width: 30, textAlign: 'right' },

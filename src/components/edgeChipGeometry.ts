@@ -72,7 +72,7 @@ export interface EdgeChipGeometry {
   maxCardW: number;
 }
 
-export function edgeChipGeometry({ windowW, windowH, insets, cardW, cardH = 0, top = 0, islandSide = null }: {
+export function edgeChipGeometry({ windowW, windowH, insets, cardW, cardH = 0, top = 0, islandSide = null, rects = null }: {
   windowW: number; insets: EdgeInsets;
   /** The card's measured width (it includes padRight, so it changes with a rotation). */
   cardW: number;
@@ -80,12 +80,30 @@ export function edgeChipGeometry({ windowW, windowH, insets, cardW, cardH = 0, t
   windowH?: number; top?: number; cardH?: number;
   /** Where the island / notch is (useIslandSide); null = not known ⇒ the full inset. */
   islandSide?: IslandSide | null;
+  /** ★★★ THE REAL CUT-OUT RECTS, where the system gives them (iPhone Duo — useReservedRegions: the camera and the
+   *  status pill, window coordinates). Then the chip pads only for a rect that actually overlaps ITS rows on the right
+   *  edge, and otherwise only for the rounded corner. The Duo's front camera is in a CORNER: rotated with the camera
+   *  bottom-right, iOS reports a right inset for it, and the island-side rule padded the tabs at the TOP by all of it
+   *  — the RC16 "huge when collapsed" bug again (Stuart 2026-11-25). null = not known: the island-side rule below,
+   *  exactly as before (every iPhone and iPad). */
+  rects?: { x: number; y: number; w: number; h: number }[] | null;
 }): EdgeChipGeometry {
   const inset = Math.max(0, Math.round(insets.right));
   const span = Math.max(EDGE_TAB_H, cardH);
-  const padRight = islandSide === 'left' || islandSide === 'none'
-    ? Math.min(inset, windowH == null ? inset : cornerIntrusion(top, span, windowH))
-    : inset;
+  const corner = windowH == null ? 0 : cornerIntrusion(top, span, windowH);
+  let padRight: number;
+  if (rects) {
+    padRight = corner;
+    for (const r of rects) {
+      if (r.y >= top + span || r.y + r.h <= top) continue;            // not in the chip's rows
+      if (r.w >= windowW * 0.5 || r.x + r.w / 2 < windowW / 2) continue; // a full-width band, or the left edge's
+      padRight = Math.max(padRight, Math.ceil(windowW - r.x));
+    }
+  } else {
+    padRight = islandSide === 'left' || islandSide === 'none'
+      ? Math.min(inset, windowH == null ? inset : corner)
+      : inset;
+  }
   // ★ Width-safe: a card can be no wider than the window less the far-side inset and a small gutter.
   const maxCardW = Math.max(EDGE_TAB_W * 2, windowW - Math.max(0, insets.left) - 8);
   const w = Math.min(Math.max(0, cardW), maxCardW);
