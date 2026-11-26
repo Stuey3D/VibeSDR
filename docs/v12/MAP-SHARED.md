@@ -35,7 +35,7 @@ ADS-B · datalink bands `acars`, `vdl2`, `acars+vdl2` (wide, ≥ 6.1 MS/s) · VO
 
 ## Tested how
 This Mac; vibeserver built from this worktree through the build lock; headless Edge `--mute-audio`; fake rtl_tcp (no clip).
-- `scripts/test-web-map-shared.mjs` (real server, `--users 4 --ask-before-tuning` / `--users 1`): see the report for the count.
+- `scripts/test-web-map-shared.mjs` 36/0 (real server, `--users 4 --ask-before-tuning` / `--users 1`). FINDING: after a raw listener leaves, the server keeps counting it (`users` and the dial's `listeners` stay 2/4; the controls bar says the same) while the ask lock lifts — the line agrees with the bar; FREE TO EXIT after a leave is therefore not proven.
 - `scripts/test_air_sea_tune.ts` 37/0 (RTL 2.4 / RSP 8 / HF+ shapes, the line's states, 8 languages).
 - `scripts/test_map_shared_app.ts` 28/0, `test_nav_coverage` ok, `test_decoder_key_grid` 79/0, `test_vormap_app` 52/0,
   `test_ndb_app` 204/0, `test_ais_aprs_app` 181/0, `test_map_page_kind` 72/0, `test_live_maps` 63/0, `test_chat_i18n` 102/0.
