@@ -7746,7 +7746,8 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
         if (communityLayerOk("hfdl", off)) keep |= 1u << vibeavshare::kHfdl;
         if (!keep) return r;
         keep |= 1u << vibeavshare::kAdsc;
-        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - kAircraftAgeSec * 1000), nowMs);
+        // ★ beta96: heard within the LONGER hold (a datalink position, 30 min); aircraftRows applies each source's own
+        auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - std::max(kAircraftAgeSec, kAircraftDatalinkAgeSec) * 1000), nowMs);
         for (auto& w : rows) w.srcMask &= keep;
         rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return !(w.srcMask & 0x0F); }), rows.end());
         const std::string c = aircraftCompact(rows, nowMs);
@@ -17681,7 +17682,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              why, rate / 1e6, mode.c_str(), mode.c_str(),
              latched ? ("the second stop there in 24 h: boosts held at " + vibe::RateFault::rateText(g_rateGuard.fault().ceiling)
                         + " or below").c_str()
-                     : "noted (the first): that rate is allowed again");
+                     : !vibe::rateGuardCanStep(rate)
+                       ? "at or below the 2.4 MS/s floor: never held lower (a second within 24 h tells the owner)"
+                       : "noted (the first): that rate is allowed again");
         vsSayVts("The radio stopped responding at " + vibe::RateFault::rateText(rate) + " during " + mode
                  + " \xe2\x80\x94 " + mode + " has ended and the radio is back at its own rate.");
         if (g_adsbMode.load()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":0}");
@@ -45229,6 +45232,10 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
      *  one rung down. The owner's switches are NEVER written — vsGuardAllows is the override. */
     if (b == vibe::RateGuard::Boot::Explained)
         LOGI("rate guard: the last run stopped at a boosted rate, but its marker was %s — not counted as a crash", why.c_str());
+    else if (b == vibe::RateGuard::Boot::Noted && f.floor)   // (c') at the 2.4 floor: told, never capped
+        LOGE("the last run of this server died while the radio was at %s — the second time in 24 hours, but %s is the "
+             "floor: nothing is held lower (the owner is told to look at the radio's USB power, cable or hub)",
+             where.c_str(), vibe::RateFault::rateText(f.floorRate).c_str());
     else if (b == vibe::RateGuard::Boot::Noted)
         LOGE("the last run of this server died while the radio was at %s — noted once; that rate is allowed again, and "
              "only a second stop there within 24 hours holds it lower", where.c_str());
@@ -46991,10 +46998,18 @@ void LocalSdrShim::healthTick() {
     }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
-    /* ★★ beta95 THE PILL AUDIT: the host's battery % is the OWNER's (the admin page's BATTERY card, with its suspend floor),
-     *  not a struggle a listener feels. What a listener does feel — connections suspended at the floor — is said to them
-     *  through the VTS line as it approaches (batteryTick). Read above (bgFullCpuTick) before it is taken off the pill. */
-    h.batPresent = false; h.batCharging = false; h.batPct = -1; h.bat = vibehealth::OK;
+    /* ★★★ beta96 — THE BATTERY IS BACK ON THE PILL (Stuart 11-26: "why is the battery level off the pill surely that is
+     *  useful info for battery powered servers and the listeners should know that info so they can work out how long they
+     *  have left"). beta95 took it off; that was wrong. The % stays on the pill (and on the admin BATTERY card, and the
+     *  VTS warnings before a suspend stay), and once the drain has been measured the card says how long is left — to the
+     *  owner's suspend floor when one is set, since that is when listening stops (vibehealth::BatteryEta). */
+    {
+        static vibehealth::BatteryEta eta;
+        const int floorPct = g_vsBatteryPauseAt.load();
+        h.batMins = h.batPresent ? eta.feed(h.batPct, !h.batCharging, now / 1000.0, floorPct) : (eta.reset(), -1);
+        const std::string line = vibehealth::batteryEtaText(h.batMins, floorPct > 0);
+        if (!line.empty()) h.notes.push_back(line);
+    }
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);

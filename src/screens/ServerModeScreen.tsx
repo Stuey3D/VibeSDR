@@ -242,7 +242,7 @@ import {
 } from '../services/icomRadio';
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
-import { rateGuardLine, type RateGuardState } from '../services/rateGuard';
+import { rateGuardIsBad, rateGuardLine, type RateGuardState } from '../services/rateGuard';
 
 /** ★ `tokens`: the main app's glass tokens in the user's colours (screens/ServerModeThemed.tsx); Lite passes none. */
 type Props = NativeStackScreenProps<RootStackParamList, 'ServerMode'> & { tokens?: PopupTokens };
@@ -1342,7 +1342,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   the owner's choice; the server only caps the boosts. */}
               {!!rateGuard?.fault && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <Text style={{ flex: 1, color: rateGuard.latched ? '#ff6b5e' : C.textDim, fontFamily: F, fontSize: 12, lineHeight: 16 }}>{rateGuardLine(rateGuard)}</Text>
+                  <Text style={{ flex: 1, color: rateGuardIsBad(rateGuard) ? '#ff6b5e' : C.textDim, fontFamily: F, fontSize: 12, lineHeight: 16 }}>{rateGuardLine(rateGuard)}</Text>
                   <TouchableOpacity style={{ borderWidth: 1, borderColor: C.border, borderRadius: 6, paddingHorizontal: 12, paddingVertical: 5 }}
                     onPress={async () => { const st = await rateGuardClear(); setRateGuard(st); }}>
                     <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Clear</Text>

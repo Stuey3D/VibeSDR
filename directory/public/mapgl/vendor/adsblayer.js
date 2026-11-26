@@ -245,6 +245,19 @@
     pts.push(pts[0].slice());
     return pts;
   }
+  /* ★★ beta96 THE OUTLINE IS LABELLED "ADS-B RANGE" (Stuart, 11-26: so nobody takes it for the distance rings). The GPU map
+   *  writes it ALONG the outline, repeated (symbol-placement line), so some of it is on screen at every zoom; the Leaflet
+   *  fallback puts one label at the outline's FURTHEST vertex — this — just outside it. [lon, lat] or null. */
+  const RANGE_LABEL = 'ADS-B RANGE';
+  function rangeLabelPoint(lat, lon, ring) {
+    if (!Array.isArray(ring) || ring.length < 4 || !isFinite(lat) || !isFinite(lon)) return null;
+    let best = null, bestNm = -1;
+    for (let i = 0; i < ring.length - 1; i++) {
+      const d = distNm(lat, lon, ring[i][1], ring[i][0]);
+      if (d > bestNm) { bestNm = d; best = ring[i]; }
+    }
+    return best ? [best[0], best[1]] : null;
+  }
   /* ★★ V12 beta95 THE OUTLINE GROWS LIVE (Stuart, 2026-11-25: "virtual radar does it straight away"). The map extends the
    *  outline itself from every position it already receives — the server's rule (vibe_adsb_range.h + vibe_adsb.h setPos):
    *  a position counts only from an aircraft's SECOND consistent one in a row (the step flown at ≤ 1 200 kt, at least 1 s
@@ -611,7 +624,7 @@
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
-                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
+                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
@@ -960,7 +973,7 @@
     const bRings = mk('RINGS', 'Range rings in nautical miles around the receiver');
     /* ★★ V12 beta94 RANGE — the range outline (rangeRing). Drawn only once this server has answered with one (an older
      *  server has none: no button — AGENTS.md, never a control that cannot act). */
-    const bRange = mk('RANGE', 'Range outline: the furthest aircraft heard on each bearing');
+    const bRange = mk('RANGE', 'ADS-B RANGE outline: the furthest aircraft heard on each bearing (not the distance rings)');
     bRange.hidden = true;
     /* ★ LABELS (Stuart, 2026-10-24: "on a busy screen they may be a bit of a mess"): off = no labels, except the aircraft
      *  you have selected, which keeps its own so you can still read it. */
@@ -992,7 +1005,8 @@
       + '<div class="bar" style="background:linear-gradient(90deg,' + grad + ')"></div>'
       + '<div class="ax"><span>0</span><span>10k</span><span>20k</span><span>30k</span><span>40k ft</span></div>'
       // ★ beta94 the range outline's key: what it is, the furthest in its window and ever, and the all-time line's switch
-      + '<div class="vsadsb-rg" hidden><div class="t">RANGE OUTLINE</div>'
+      // ★ beta96 named as it is on the map: ADS-B RANGE (the dashed NM rings are the distance rings, not this)
+      + '<div class="vsadsb-rg" hidden><div class="t">' + RANGE_LABEL + ' (the solid outline)</div>'
       + '<div class="r"><span class="g" style="color:rgb(' + T.range + ')">\u25AC</span><span class="vsadsb-rg-w"></span></div>'
       + '<div class="r vsadsb-rg-far" style="white-space:normal"></div>'
       + '<label class="r" style="cursor:pointer"><input type="checkbox" class="vsadsb-rg-all" style="margin:0"> All-time outline (dotted)</label>'
@@ -1083,7 +1097,7 @@
     function rangeTitle() {
       if (!rangeData && !liveHas()) return '';
       const f = catchText(farOf(rangeData && rangeData.far, liveFar));
-      return (prefs.range ? 'Range outline on' : 'Range outline off') + ' \u2014 the furthest aircraft heard on each bearing '
+      return (prefs.range ? 'ADS-B RANGE outline on' : 'ADS-B RANGE outline off') + ' \u2014 the furthest aircraft heard on each bearing (not the distance rings) '
         + (rangeData ? 'over ' : '') + rangeWindowText() + (f ? ' \u00b7 furthest ' + f : ' \u00b7 nothing heard yet');
     }
     function paintRangeKey() {
@@ -1120,6 +1134,8 @@
         const f = [];
         if (g.a) f.push({ type: 'Feature', properties: { k: 'a' }, geometry: { type: 'LineString', coordinates: g.a } });
         if (g.w) f.push({ type: 'Feature', properties: { k: 'w' }, geometry: { type: 'Polygon', coordinates: [g.w] } });
+        // ★ beta96 the label rides the outline itself (a LineString copy: the 'vsadsb-range-lbl' layer, placement line)
+        if (g.w) f.push({ type: 'Feature', properties: { k: 'l', t: RANGE_LABEL }, geometry: { type: 'LineString', coordinates: g.w } });
         src.setData({ type: 'FeatureCollection', features: f });
       } else {
         if (llRange) { lm.removeLayer(llRange); llRange = null; }
@@ -1127,6 +1143,11 @@
         const col = 'rgb(' + T.range + ')', grp = LL.layerGroup();
         if (g.a) LL.polyline(g.a.map((p) => [p[1], p[0]]), { color: col, weight: 1.5, opacity: 0.85, dashArray: '1 5', lineCap: 'round', interactive: false }).addTo(grp);
         if (g.w) LL.polygon(g.w.map((p) => [p[1], p[0]]), { color: col, weight: 3, opacity: 0.95, fillColor: col, fillOpacity: 0.08, interactive: false }).addTo(grp);
+        // ★ beta96 one "ADS-B RANGE" at the furthest vertex, in the map's lettering and the outline's colour
+        const c = g.w && drawCentre(), lp = c && rangeLabelPoint(c.lat, c.lon, g.w);
+        if (lp) LL.marker([lp[1], lp[0]], { interactive: false, keyboard: false, icon: LL.divIcon({ className: '', iconSize: [0, 0],
+          html: '<div class="vsadsb-rglbl" style="position:absolute;transform:translate(-50%,-130%);white-space:nowrap;font:700 10px \'JetBrains Mono\',ui-monospace,monospace;'
+            + 'letter-spacing:.06em;color:' + col + ';text-shadow:0 0 2px ' + T.halo + ',0 0 2px ' + T.halo + ',0 0 3px ' + T.halo + '">' + RANGE_LABEL + '</div>' }) }).addTo(grp);
         llRange = grp.addTo(lm);
       }
     }
@@ -1303,6 +1324,14 @@
       gl.addLayer({ id: 'vsadsb-range-line', type: 'line', source: 'vsadsb-range', filter: ['==', ['get', 'k'], 'w'],
                     layout: { 'line-join': 'round' },
                     paint: { 'line-color': 'rgb(' + T.range + ')', 'line-width': 3, 'line-opacity': 0.95 } });
+      /* ★★ beta96 "ADS-B RANGE" along the outline (Stuart 11-26: not to be confused with the distance rings) — the map's own
+       *  lettering, in the outline's colour, repeated every ~280 px of line so it is on screen whatever the zoom, kept upright,
+       *  just outside the line (offset), and never hidden by the aircraft labels' collision boxes. */
+      gl.addLayer({ id: 'vsadsb-range-lbl', type: 'symbol', source: 'vsadsb-range', filter: ['==', ['get', 'k'], 'l'],
+                    layout: { 'symbol-placement': 'line', 'symbol-spacing': 280, 'text-field': ['get', 't'],
+                              'text-font': ['JetBrains Mono Regular'], 'text-size': 11, 'text-letter-spacing': 0.08,
+                              'text-keep-upright': true, 'text-offset': [0, -0.9], 'text-allow-overlap': true, 'text-ignore-placement': true },
+                    paint: { 'text-color': 'rgb(' + T.range + ')', 'text-halo-color': T.halo, 'text-halo-width': 1.4 } });
       addRingLayers(gl, 'vsadsb-', T);
       gl.addLayer({ id: 'vsadsb-rx', type: 'symbol', source: 'vsadsb-rx',
                     layout: { 'icon-image': 'vsadsb-rx', 'icon-anchor': 'bottom', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
@@ -2001,7 +2030,7 @@
         if (gl) {
           gl.off('movestart', onMoveStart); gl.off('moveend', onMoveEnd); gl.off('click', onGlClick); gl.off('mousemove', onGlHover);
           for (const id of ['vsadsb-labels', 'vsadsb-icons', 'vsadsb-ring', 'vsadsb-halo', 'vsadsb-trail', 'vsadsb-trail-glow', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings',
-                            'vsadsb-range-line', 'vsadsb-range-all', 'vsadsb-range-fill']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
+                            'vsadsb-range-lbl', 'vsadsb-range-line', 'vsadsb-range-all', 'vsadsb-range-fill']) if (gl.getLayer && gl.getLayer(id)) gl.removeLayer(id);
           for (const id of ['vsadsb-ac', 'vsadsb-trail', 'vsadsb-rx', 'vsadsb-ringlbl', 'vsadsb-rings', 'vsadsb-range']) if (gl.getSource && gl.getSource(id)) gl.removeSource(id);
         } else {
           lm.off('movestart', onMoveStart); lm.off('moveend', onMoveEnd);

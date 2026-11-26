@@ -72,6 +72,27 @@ int main() {
         CHECK(out.size() == 3 && out[0].icao == 0x400004 && out[1].icao == 0x400001 && out[2].icao == 0x400005, "newest position first");
         const auto l = aircraftLayers(out);
         CHECK(l.size() == 3 && l[0] == "adsb" && l[1] == "vdl2" && l[2] == "hfdl", "layers adsb vdl2 hfdl (no acars: none heard)");
+        // ★★ beta96: a DATALINK position is held 30 min (faded on the map by its age); an ADS-B one still 5 min
+        {
+            std::vector<vibeavshare::Row> dl;
+            dl.push_back(plane(0x600001, nowMs - 20 * 60000, true, vibeavshare::kVdl2));    // VDL2, 20 min → kept
+            dl.push_back(plane(0x600002, nowMs - 29 * 60000, true, vibeavshare::kHfdl));    // HFDL, 29 min → kept
+            dl.push_back(plane(0x600003, nowMs - 25 * 60000, true, vibeavshare::kAdsc));    // ADS-C, 25 min → kept
+            dl.push_back(plane(0x600004, nowMs - 15 * 60000, true, vibeavshare::kAcars));   // ACARS, 15 min → kept
+            dl.push_back(plane(0x600005, nowMs - 31 * 60000, true, vibeavshare::kHfdl));    // HFDL, 31 min → out
+            dl.push_back(plane(0x600006, nowMs - 6 * 60000, true, vibeavshare::kAdsb));     // ADS-B, 6 min → out
+            auto heardDl = plane(0x600007, nowMs - 10 * 60000, true, vibeavshare::kAdsb);  // heard on VDL2 too, but the
+            heardDl.srcMask |= 1u << vibeavshare::kVdl2;                                    // POSITION is ADS-B's → 5 min → out
+            dl.push_back(heardDl);
+            auto unknown = plane(0x600008, nowMs - 10 * 60000, true, vibeavshare::kVdl2); unknown.posSrc = -1;   // unknown → ADS-B's 5 min
+            dl.push_back(unknown);
+            const auto o = aircraftRows(dl, nowMs);
+            CHECK(o.size() == 4 && o[0].icao == 0x600004 && o[1].icao == 0x600001 && o[2].icao == 0x600003 && o[3].icao == 0x600002,
+                  "datalink positions held 30 min, ADS-B 5 min, by the POSITION's source (%zu)", o.size());
+            const std::string c = aircraftCompact(o, nowMs);
+            CHECK(c.find("[\"600002\",") != std::string::npos && c.find(",1740,") != std::string::npos,
+                  "the row carries its position age (29 min = 1740 s) for the map's fade: %.120s", c.c_str());
+        }
         std::vector<vibeavshare::Row> lots;
         for (uint32_t i = 0; i < 1000; i++) lots.push_back(plane(0x500000 + i, nowMs - i * 100, true));
         const auto capped = aircraftRows(lots, nowMs);

@@ -47,7 +47,7 @@ import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSu
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
 import { NAV_HAZARD_COLOURS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../../../src/services/navtexIcons';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
-import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+import { SHIPPING_TITLE, shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
@@ -10111,6 +10111,10 @@ function shipHave(now: number): ShipHave {
     areas: seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m).length,
   };
 }
+/** ★★ beta96 the layers as drawn: SEA AREAS on every server, on by default only near the coast (shipLayersFor). */
+function shipLayersNow(): ShipLayers {
+  return shipLayersFor(shipLayers, seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m).length > 0);
+}
 /** ★ The KEY for the layers this map has: ships and DSC glyphs, the NAVTEX hazards, the weather arrows. */
 function shipKeyHtml(present: ShipLayerId[]): string {
   let h = shipLegendHtml(present);
@@ -10129,7 +10133,8 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
   const rx = myPos() ?? r?.rx ?? null;
   const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
   const present = shipLayersPresent(shipHave(now), focus);
-  const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
+  const eff = shipLayersNow();
+  const on = (id: ShipLayerId) => shipOn(id, present, eff);
   const items: any[] = [], out: string[] = [], status: string[] = [];
   const many = present.length > 1;
   const sec = (t: string) => (many ? `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>` : '');
@@ -10190,7 +10195,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
   return { items, rows: out.join(''), status: status.filter(Boolean).join(' · '), present, rx, building };
 }
 function shipSetChrome(v: TrackView, present: ShipLayerId[]) {
-  v.setToggles(shipToggles(present), shipLayers);
+  v.setToggles(shipToggles(present), shipLayersNow());
   v.setLegend(shipKeyHtml(present));
 }
 function navDraw() {
@@ -10214,7 +10219,7 @@ function shipViewOpts() {
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
     onRange: (id: string) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } navView?.setRange?.(id); aisView?.setRange?.(id); void navPoll(true); },
     onToggle: (id: string, on: boolean) => {
-      shipLayers = { ...shipLayers, [id]: on };
+      shipLayers = shipToggle(shipLayersNow(), id, on);   // ★ beta96 from the layers as drawn (SEA AREAS' coast default)
       try { localStorage.setItem(SHIP_LAYERS_KEY, JSON.stringify(shipLayers)); } catch { /* private */ }
       navDraw();
     },
@@ -10407,9 +10412,10 @@ function aisRender() {
   shipSetChrome(aisView, c.present);
   const live = r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>';
   const many = c.present.length > 1;
-  const rows = (many && shipOn('ships', c.present, shipLayers) ? '<div class="sec" role="heading" aria-level="3">SHIPS — HEARD NOW</div>' : '')
-    + (shipOn('ships', c.present, shipLayers) ? live : '') + c.rows;
-  aisView.update(shipOn('ships', c.present, shipLayers) ? [...items, ...c.items] : c.items, rows,
+  const eff = shipLayersNow();
+  const rows = (many && shipOn('ships', c.present, eff) ? '<div class="sec" role="heading" aria-level="3">SHIPS — HEARD NOW</div>' : '')
+    + (shipOn('ships', c.present, eff) ? live : '') + c.rows;
+  aisView.update(shipOn('ships', c.present, eff) ? [...items, ...c.items] : c.items, rows,
                  [aisStatus(r), c.status].filter(Boolean).join(' · '), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
 }
 /** ★ A report (on) or the server's `ais_off` (null). */

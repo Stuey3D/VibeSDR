@@ -15,7 +15,7 @@
 //
 // ── WHAT IS IN IT: THE EXISTING FORMATS, NOT A NEW ONE ───────────────────────────────────────────────────────────────
 //   "aircraft" — /vibeserver/aircraft.json's object (vibe_aircraft_share.h toJson): positioned rows only, heard in the
-//                last kAircraftAgeSec, newest first, at most kAircraftMax. Its "stations" (HFDL ground stations) kept.
+//                last kAircraftAgeSec (ADS-B) / kAircraftDatalinkAgeSec (datalink, beta96), newest first, at most kAircraftMax. Its "stations" (HFDL ground stations) kept.
 //   "ships"    — /vibeserver/gallery/ais-ships.json's object (vibe_ais_store.h toJson): heard in kShipsSinceSec, no tracks.
 //   "dsc"      — /vibeserver/gallery.json?kind=dsc's object (the gallery index lines; "plat"/"plon" pin a position).
 //   "navtex"   — /vibeserver/gallery/navtex-stations.json's object (vibe_navtex_map.h toJson) with rx = null: no receiver
@@ -63,7 +63,11 @@ namespace vibecommunity {
 static constexpr int64_t kCacheSec = 30;                 ///< one build per 30 s per process, whoever asks
 static constexpr size_t  kMaxBytes = 640 * 1024;          ///< the whole answer, at most
 static constexpr size_t  kAircraftMax = 600;
-static constexpr int64_t kAircraftAgeSec = 300;          ///< ★ live: a position older than 5 min is not "now" (Stuart 11-25)
+static constexpr int64_t kAircraftAgeSec = 300;          ///< ★ live: an ADS-B position older than 5 min is not "now" (Stuart 11-25)
+/** ★★ beta96 (Stuart 11-26: "hold them for 30 is fine faded to show older"): a position that came by DATALINK (ACARS, VDL2,
+ *  HFDL, ADS-C — posSrc not ADS-B) is reported minutes apart, often once an oceanic waypoint, so 5 min dropped nearly all
+ *  of them. They are kept 30 min; the row's position age (aircraftCompact field 3) lets the map fade them by age. */
+static constexpr int64_t kAircraftDatalinkAgeSec = 1800;
 static constexpr size_t  kShipsMax = 300;
 static constexpr int64_t kShipsSinceSec = 6 * 3600;      ///< the shipping map's own SHIP_KEEP_SEC
 static constexpr size_t  kDscMax = 150;
@@ -130,11 +134,16 @@ inline std::string offJson(const std::string& why) {
     return "{\"v\":1,\"on\":false,\"why\":\"" + jsonEsc(why) + "\"}";
 }
 
-/** ★ The aircraft to share: positioned, position no older than kAircraftAgeSec, newest first, at most kAircraftMax. */
+/** ★ A position from a datalink (not ADS-B)? An unknown source counts as ADS-B — the shorter hold. */
+inline bool aircraftPosDatalink(const vibeavshare::Row& w) { return w.posSrc > vibeavshare::kAdsb && w.posSrc < vibeavshare::kNSrc; }
+/** ★ The aircraft to share: positioned, position no older than kAircraftAgeSec (ADS-B) or kAircraftDatalinkAgeSec (a
+ *  datalink position), newest first, at most kAircraftMax. */
 inline std::vector<vibeavshare::Row> aircraftRows(std::vector<vibeavshare::Row> rows, int64_t nowMs,
-                                                   size_t maxRows = kAircraftMax, int64_t ageSec = kAircraftAgeSec) {
+                                                   size_t maxRows = kAircraftMax, int64_t ageSec = kAircraftAgeSec,
+                                                   int64_t datalinkAgeSec = kAircraftDatalinkAgeSec) {
     rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const vibeavshare::Row& w) {
-        return !(w.flags & 1) || !std::isfinite(w.lat) || !std::isfinite(w.lon) || nowMs - w.posMs > ageSec * 1000;
+        const int64_t keep = aircraftPosDatalink(w) ? datalinkAgeSec : ageSec;
+        return !(w.flags & 1) || !std::isfinite(w.lat) || !std::isfinite(w.lon) || nowMs - w.posMs > keep * 1000;
     }), rows.end());
     std::sort(rows.begin(), rows.end(), [](const vibeavshare::Row& a, const vibeavshare::Row& b) { return a.posMs > b.posMs; });
     if (rows.size() > maxRows) rows.resize(maxRows);
