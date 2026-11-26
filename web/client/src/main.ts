@@ -60,7 +60,7 @@ import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as 
          type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 // ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules
 import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProfile, liveTabs, liveTabPick, avLayersFrom, avLayerOf, shipLayerOf,
-         aircraftOrder, msgFeedUpdate, msgFilter, MAP_TITLE, TAB_LABEL, SHIP_ID, LIVE_ROW_CAP,
+         aircraftOrder, msgFeedUpdate, msgFilter, avSnrByKey, MAP_TITLE, TAB_LABEL, SHIP_ID, LIVE_ROW_CAP,
          LIVE_CHIP_COLOUR, type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../../../src/services/liveMaps';
 import { avMerge, avNowRule, avHave, avName, type AvLayerId } from '../../../src/services/aviationMap';
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
@@ -150,6 +150,7 @@ import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, gallery
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { bodyTextBase, fileBodyStart, fileTextBase, navtexQualityDetail, navtexQualityLine, navtexSnrLine, snrColour, snrOfItem, snrRanges, splitOfItem,
          type NavtexQualityFields } from '../../../src/utils/navtexQuality';
+import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { paintSnrStrip, qualityBar, snrHBar, watchSnrStrip } from './navtexSnrDom';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_FLOOR_DB, SQL_NEAR_SMOOTH, SQL_AUTO_SEED_RISE } from '../../../src/services/squelchNeighbours';
@@ -11038,8 +11039,10 @@ function asRender() {
   // ── the MESSAGES feed (every aircraft's last message as it changes; the owner's text where the server sent it) ──
   const bodies = new Map<string, string>();
   if (avOn && avR) for (const a of avR.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
+  const snrs = avSnrByKey(avOn && avR ? avR.aircraft : null);   // ★ beta96 each message's SNR chip (this server's decodes)
   asMsgs = msgFeedUpdate(asMsgs, asMsgSeen, planesAll.map((p) => ({ key: `a:${p.key}`, who: avName(p), src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age,
-    label: p.label, labelName: p.labelName, text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || '') })), Date.now());
+    label: p.label, labelName: p.labelName, text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || ''),
+    ...(snrs.get(p.icao || '') ?? snrs.get(p.reg || '') ?? snrs.get(p.flight || '') ?? {}) })), Date.now());
   // ── the tabs ──
   const aircraftN = liveHex.size + otherPlanes.length;
   const shipsN = (on('ships') ? sh.ships : 0) + (on('dsc') ? sh.dsc : 0);
@@ -11081,7 +11084,7 @@ function asRender() {
     const list = msgFilter(asMsgs, asMsgKey).slice(0, LIVE_ROW_CAP);
     rows = list.map((m) => `<div class="trkRow trkMsg" role="button" tabindex="0" data-key="m:${escapeHtml(m.id)}" data-focus="${escapeHtml(m.key)}">`
       + `<span class="id"><b><i class="sw" style="background:${avSrcColour(m.src)}"></i>${escapeHtml(m.who)}</b><small><span class="lbl">${escapeHtml(m.label)}</span>${m.labelName ? ' · ' + escapeHtml(m.labelName) : ''} · ${escapeHtml(m.src)}</small>`
-      + (m.text ? `<small class="avText">${escapeHtml(m.text)}</small>` : '') + `</span><span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(utcHm(m.t))}</span></div>`).join('')
+      + (m.text ? `<small class="avText">${escapeHtml(m.text)}</small>` : '') + `</span><span class="sp">${snrChipHtml(m.snrMode, m.snr)}</span><span class="rg"></span><span class="ag">${escapeHtml(utcHm(m.t))}</span></div>`).join('')
       || `<div class="trkEmpty">${avOn ? `Listening on every ${escapeHtml(avReport?.bandName || 'datalink')} channel. Messages appear here as they are heard — ACARS and VDL2 are bursts, so a quiet minute is normal.` : 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs — on any radio of this server.'}</div>`;
   } else if (tab === 'ships') {
     const liveRows = aisOn ? (aisR ? aisRows(aisR, rx) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>') : '';

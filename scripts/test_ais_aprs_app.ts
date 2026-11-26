@@ -66,6 +66,12 @@ const ar = app.aisListRows(aa, rx);
 eq('AIS list order = web (nearest first, no position last)', ar.map((r) => r.key), keysOf(web.aisRows(wa, rx)));
 eq('AIS list order without a receiver = web', app.aisListRows(aa, null).map((r) => r.key), keysOf(web.aisRows(wa, null)));
 const wr = web.aisRows(wa, rx);
+// ★★ beta96 each ship's last frame's SNR: the same chip on both (snrColour.ts 'ais'), none without one
+for (const r of ar) {
+  if (r.snr == null) { ok(`AIS row ${r.key}: no SNR, no chip`, r.snrMode === undefined); continue; }
+  ok(`AIS row ${r.key}: the web's row carries the same ${Math.round(r.snr)} dB chip`, r.snrMode === 'ais' && wr.includes(`>${Math.round(r.snr) < 0 ? '\u2212' : ''}${Math.abs(Math.round(r.snr))} dB</span>`));
+}
+ok('AIS: at least one row has an SNR in the sample', ar.some((r) => r.snr != null));
 for (const r of ar) {
   ok(`AIS row ${r.key}: name in the web's row`, wr.includes(web.esc(r.name)));
   ok(`AIS row ${r.key}: second line in the web's row`, wr.includes(web.esc(r.second.split(' · ')[0])));

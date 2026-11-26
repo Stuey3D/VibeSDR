@@ -20,6 +20,8 @@ import { DECODER_FONT } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H, EDGE } from '../services/adsbList';
 import type { TrackRow } from '../services/tracks';
+import { SnrChip } from './SnrChip';
+import type { SnrMode } from '../utils/snrColour';
 import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
 import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
 import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
@@ -273,6 +275,8 @@ function Row({ s, r, sel, onPress }: { s: S; r: TrackRow; sel: boolean; onPress:
           <Text style={[s.name, r.em && s.emName]} numberOfLines={1}>{r.name}</Text>
           {/* ★ beta95 a DX ship (aisDx.ts): a gold tag beside the name that never shrinks — the exciting ones stand out */}
           {r.dx ? <Text style={s.dxTag}>DX</Text> : null}
+          {/* ★ beta96 the message's SNR, colour-coded by its margin over the mode's decode threshold (never shrinks) */}
+          {r.snrMode ? <SnrChip mode={r.snrMode as SnrMode} db={r.snr} /> : null}
         </View>
         <Text style={s.second} numberOfLines={1}>{r.second}</Text>
       </View>

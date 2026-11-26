@@ -70,5 +70,12 @@ ok(b3.length === 3 && b3[2].id === 'acars+vdl2' && b3[2].channels === 16, 'three
   const r3 = parseAvReport({ type: 'avdata', band: 'acars', bandName: 'ACARS', hz: 131725000, msgs: 3, aircraft: [] });
   ok(avRateText(r3) === '', 'an older server (no msgRate): nothing said, never "0 msg/min"');
 }
+{ // ★★ beta96 the last message's SNR + its scale key (vibe_avi_service.h "snr","sm") — both, or neither
+  const r4 = parseAvReport({ type: 'avdata', aircraft: [{ reg: 'G-A', snr: 14.2, sm: 'vdl2', via: 'VDL2' }, { reg: 'G-B', snr: 'x', sm: 'vdl2' },
+    { reg: 'G-C', snr: 9 }, { reg: 'G-D', snr: 3, sm: 'hfdl1200\u0000' }] });
+  ok(!!r4 && r4.aircraft[0].snr === 14.2 && r4.aircraft[0].sm === 'vdl2', 'the SNR and its scale are read');
+  ok(!!r4 && r4.aircraft[1].snr === undefined && r4.aircraft[2].snr === undefined && r4.aircraft[2].sm === undefined, 'a bad number, or no scale: neither (never a guessed scale)');
+  ok(!!r4 && r4.aircraft[3].sm === 'hfdl1200', 'control characters out of the key');
+}
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);

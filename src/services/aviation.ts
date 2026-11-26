@@ -33,6 +33,9 @@ export interface AvAircraft {
   from?: string; to?: string; oooi?: string; oooiTime?: string; app?: string;
   label?: string; labelName?: string; text?: string;
   level: number; n: number; age: number; via: string;
+  /** ★ beta96 the LAST message's SNR (dB) and its scale key ("acars" "vdl2" "hfdl300"… — src/utils/snrColour.ts); only
+   *  for a message the aircraft sent; undefined from an older server */
+  snr?: number; sm?: string;
 }
 /** A band the server's datalink mode steps through (hwinfo / vibeserver.json avdataBands). */
 export interface AvBand { id: string; name: string; region: string; hz: number; channels: number; chLo?: number; chHi?: number }   // ★ beta96 chLo/chHi: first / last channel (Hz)
@@ -70,6 +73,7 @@ export function parseAvReport(m: unknown): AvReport | null {
       from: icao4(a.from) && icao4(a.to) ? icao4(a.from) : undefined, to: icao4(a.from) && icao4(a.to) ? icao4(a.to) : undefined, oooi: oooi && /^(out|off|on|in)$/.test(oooi) ? oooi : undefined, oooiTime: str(a.oooiTime, 5),
       app: str(a.app, 10), label: str(a.label, 4), labelName: str(a.labelName, 60), text: str(a.text, 300),
       level: num(a.level) ?? -120, n: num(a.n) ?? 0, age: num(a.age) ?? 0, via: str(a.via, 60) ?? '',
+      ...(num(a.snr) != null && str(a.sm, 10) ? { snr: num(a.snr), sm: str(a.sm, 10) } : {}),
     });
   }
   const ap = (o.apps && typeof o.apps === 'object' ? o.apps : null) as Record<string, unknown> | null;

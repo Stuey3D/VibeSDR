@@ -19,6 +19,7 @@ import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
 import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
+import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
 
@@ -300,11 +301,11 @@ export function aisRows(r: AisReport, rx: LatLon | null): string {
     // ★★ beta95 DX (aisDx.ts): the tag in the range column, which never truncates; unconfirmed / implausible say so there
     const dxs = aisDxState(v);
     const ub = dxs === 'unconf' && rx && v.uLat != null && v.uLon != null ? rangeBearing(rx, v.uLat, v.uLon) : null;
-    const where = rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
+    const where = snrChipHtml('ais', v.snr) + (rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
       : v.lat != null ? (dxs === 'dx' ? '<span class="dxTag">DX</span>' : '')
       : dxs === 'unconf' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.unconf}${ub ? ` ${Math.round(ub.nm)} NM ${compass8(ub.brg)}` : ''}</span>`
       : dxs === 'implausible' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.implausible}</span>`
-      : '<span class="dim">no position</span>';
+      : '<span class="dim">no position</span>');   // ★ beta96 the last frame's SNR chip first (the column never truncates)
     const second = [aisKindWord(v), dxs === 'unconf' ? 'unconfirmed position' : dxs === 'implausible' ? 'position implausible' : '',
       v.navName && v.nav !== 0 && v.nav !== 15 ? v.navName : '', v.dest ? '→ ' + v.dest : '', aisMetShort(v.met?.[0])].filter(Boolean).map(esc).join(' · ');
     return `<div class="trkRow${v.lat == null ? ' nopos' : ''}${v.kind === 'sart' ? ' em' : ''}${dxs === 'dx' ? ' dx' : ''}" role="button" tabindex="0" data-key="${esc(v.mmsi)}">`
@@ -493,6 +494,7 @@ const CSS = `
 .trkRow .ag{color:#8596a7}
 .trkRow .brg,.trkRow .dim{color:#8596a7}
 .trkRow.dx{box-shadow:inset 3px 0 0 #ffd34d}.trkRow.dx.sel{box-shadow:inset 3px 0 0 #ffd34d}
+.trkRow .snrChip{margin:0 5px 0 0}
 .trkRow .dxTag{display:inline-block;margin-right:5px;padding:0 4px;border-radius:3px;background:#ffd34d;color:#111;font:700 9.5px/14px ui-monospace,Menlo,monospace;letter-spacing:.6px;vertical-align:1px}
 .trkView i.up{color:#6dd36d;font-style:normal}
 .trkView i.dn{color:#ff8a6b;font-style:normal}

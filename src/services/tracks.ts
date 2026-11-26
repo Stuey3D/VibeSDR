@@ -370,6 +370,9 @@ export interface TrackRow {
   range: string; brg: string; noPos: boolean; age: string; em: boolean;
   /** ★ beta95 a DX ship (aisDx.ts): the list tags it in gold */
   dx?: boolean;
+  /** ★ beta96 the message's SNR (dB, its decoder's own measure) and which scale colours it (src/utils/snrColour.ts) —
+   *  the row's colour-coded chip; absent = no chip (an older server, a source that does not measure). */
+  snr?: number; snrMode?: string;
 }
 /** ★ NEAREST FIRST (no position last, then the newest) — the web's aisRows order. */
 export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] {
@@ -389,6 +392,7 @@ export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] 
       : dxs === 'implausible' ? AIS_DX_SHORT.implausible : 'no position',
     brg: rb ? compass8(rb.brg) : ub ? compass8(ub.brg) : '',
     noPos: v.lat == null, age: '', em: v.kind === 'sart',
+    ...(v.snr != null ? { snr: v.snr, snrMode: 'ais' } : {}),   // ★ beta96 the ship's last frame's SNR
   }; });
 }
 /** ★ The safety strip: the newest safety-related broadcasts (types 12/14), at most three, newest first. */
