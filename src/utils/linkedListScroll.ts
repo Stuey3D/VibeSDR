@@ -46,15 +46,28 @@ export function linkedSeam(rows: readonly RowBox[], upperH: number): number {
   return seam > 0 ? seam : upperH;
 }
 
-/** How far the list scrolls: until its last row reaches the bottom of the LOWER panel (0 = it all fits). */
-export function linkedMaxY(contentH: number, seam: number, lowerH: number): number {
-  return Math.max(0, Math.ceil(contentH - seam - lowerH));
+/**
+ * How far the list scrolls: until its last row is in the LOWER panel — and, like every rest offset, with the fold on a
+ * row boundary. The raw end (last row on the lower panel's bottom) can put a row across the fold, so the end is the
+ * first fold-on-a-boundary offset at or past it: the lower panel then has a sliver (under one row) of blank below the
+ * last row — `linkedEndPad` — which the lower list adds as bottom padding so it can scroll that far. 0 = it all fits.
+ */
+export function linkedMaxY(rows: readonly RowBox[], seam: number, lowerH: number): number {
+  const raw = linkedContentH(rows) - seam - lowerH;
+  if (raw <= 0) return 0;
+  for (const b of boundaries(rows)) if (b - seam >= raw - 0.5) return Math.ceil(b - seam);
+  return Math.ceil(raw);
+}
+
+/** The blank the lower list adds under its last row so it can reach `maxY` (0 when the raw end is a clean one). */
+export function linkedEndPad(rows: readonly RowBox[], seam: number, lowerH: number, maxY: number): number {
+  return Math.max(0, Math.ceil(maxY - (linkedContentH(rows) - seam - lowerH)));
 }
 
 /**
  * Where the list may come to rest: every offset that puts a row boundary exactly on the fold (boundary − seam), within
- * [0, maxY], plus 0 and maxY themselves (the top and the end are always reachable — at 0 the fold is on a boundary by
- * the seam's own definition). Ascending, unique.
+ * [0, maxY], plus 0 and maxY themselves (the top and the end — at 0 the fold is on a boundary by the seam's own
+ * definition, at maxY by linkedMaxY's). Ascending, unique.
  */
 export function linkedSnapOffsets(rows: readonly RowBox[], seam: number, maxY: number): number[] {
   const out = new Set<number>([0, maxY]);
