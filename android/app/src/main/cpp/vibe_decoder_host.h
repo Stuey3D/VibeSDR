@@ -486,7 +486,7 @@ public:
         clearLocked_();
         startKey_.clear(); name_.clear();
         if (textSlot_ >= 0) { if (env_.slots) env_.slots->release(textSlot_); textSlot_ = -1; }
-        { std::lock_guard<std::mutex> bl(textMtx_); textBuf_.clear(); morse_.clear(); nvCounts_.clear(); }
+        { std::lock_guard<std::mutex> bl(textMtx_); textBuf_.clear(); morse_.clear(); nvCounts_.clear(); nvSlices_.clear(); }
     }
     /** ★★ DIGITAL SPOTS — a second, independent slot. SINGLE: every registered mode on the listener's own audio (FT8 +
      *  FT4, the button there always was). BAND (V12, 2026-10-26): the band's IQ slice, every mode on its own dial — see
@@ -1609,6 +1609,13 @@ private:
                     std::lock_guard<std::mutex> bl(textMtx_);
                     if (nvCounts_.size() < 8) nvCounts_.push_back(c);
                 };
+                /* ★★ beta96 (Stuart 11-26): the SNR, a slice a second — op 0x08 | i16 BE signal | i16 BE noise, dBFS × 10
+                 *  (noise in the 100 Hz bit bandwidth). Sent BEFORE the text of the same chunk, so a message's last slice
+                 *  lands in it before its NNNN closes it. Display only; older clients ignore an op they do not know. */
+                nr->onSlice = [this](double sig, double noise) {
+                    std::lock_guard<std::mutex> bl(textMtx_);
+                    if (nvSlices_.size() < 8) nvSlices_.push_back({ sig, noise });
+                };
             }
             char b[160];
             std::snprintf(b, sizeof b, "decoder attached: fsk cf=%.0f shift=%.0f baud=%.2f enc=%s", cf, sh, baud, enc.c_str());
@@ -2661,6 +2668,7 @@ private:
     void decode_(const float* data, int count) {
         std::string text;
         std::vector<NavtexRx::Counts> counts;
+        std::vector<std::pair<double, double>> slices;   // ★ beta96 NAVTEX SNR slices (0x08)
         {
             std::lock_guard<std::mutex> lk(decMtx_);
             if (!running_()) return;
@@ -2790,14 +2798,23 @@ private:
             if (time_) time_->process(mono.data(), count);
             else if (fsk_) fsk_->process(mono.data(), count);
             else if (rttyAuto_) rttyAuto_->process(mono.data(), count);
-            { std::lock_guard<std::mutex> bl(textMtx_); text.swap(textBuf_); counts.swap(nvCounts_); }
+            { std::lock_guard<std::mutex> bl(textMtx_); text.swap(textBuf_); counts.swap(nvCounts_); slices.swap(nvSlices_); }
+        }
+        // ★ beta96: 0x08 SNR slices, before the text (see fsk attach)
+        for (const auto& sl : slices) {
+            uint8_t m[5]; m[0] = 0x08;
+            const int16_t v[2] = { (int16_t)std::lround(std::max(-3000.0, std::min(3000.0, sl.first * 10))),
+                                   (int16_t)std::lround(std::max(-3000.0, std::min(3000.0, sl.second * 10))) };
+            for (int k = 0; k < 2; k++) { m[1 + 2 * k] = (uint8_t)((uint16_t)v[k] >> 8); m[2 + 2 * k] = (uint8_t)v[k]; }
+            broadcast(m, sizeof m);
         }
         if (!text.empty()) textFrame(text);
         // ★ 0x07 | u32 BE clean | u32 BE repaired | u32 BE lost — after the text, never before it (see fsk attach).
+        //   ★ beta96: + u32 BE both-copies-agreed | u32 BE copies-disagreed (21 bytes; clients reading 13 still work).
         for (const auto& c : counts) {
-            uint8_t m[13]; m[0] = 0x07;
-            const unsigned long v[3] = { c.clean, c.repaired, c.failed };
-            for (int k = 0; k < 3; k++) {
+            uint8_t m[21]; m[0] = 0x07;
+            const unsigned long v[5] = { c.clean, c.repaired, c.failed, c.agreed, c.disagreed };
+            for (int k = 0; k < 5; k++) {
                 const uint32_t x = (uint32_t)std::min<unsigned long>(v[k], 0xffffffffUL);
                 m[1 + 4 * k] = (uint8_t)(x >> 24); m[2 + 4 * k] = (uint8_t)(x >> 16);
                 m[3 + 4 * k] = (uint8_t)(x >> 8);  m[4 + 4 * k] = (uint8_t)x;
@@ -2882,6 +2899,7 @@ private:
     std::mutex textMtx_;
     std::string textBuf_, morse_;
     std::vector<NavtexRx::Counts> nvCounts_;   // ★ NAVTEX per-message FEC counts, sent after the text (0x07)
+    std::vector<std::pair<double, double>> nvSlices_;   // ★ beta96 NAVTEX SNR slices, sent before the text (0x08)
     std::mutex sstvSendMtx_;
     std::mutex tapMtx_;
     DecoderTapPtr tap_;                       // ★ the gallery's copy of the running decoder — see DecoderTap
