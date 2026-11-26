@@ -11,6 +11,7 @@
  *    the last 7 days (a station does not move; what was heard this week is what this receiver hears).
  * ★ Everything from the card is checked again here and escaped where it is drawn.
  */
+import { radiosOf } from './mapScope';
 import { compass8, rangeBearing, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { fadeOf } from './liveMaps';
 
@@ -19,6 +20,8 @@ export interface GalPos {
   id: string; name: string; type: string; cc: string;
   lat: number; lon: number; alt: number | null; top: number | null; mhz: number | null;
   first: number; last: number;
+  /** ★★★ beta96 (mapScope.ts) the radios whose cards held it (the card's "ri"; absent = unknown) */
+  radios?: string[];
 }
 export type StoredKind = 'sondes' | 'vormap';
 export const STORED_ROWS_MAX = 300;
@@ -70,7 +73,8 @@ export function storedMerge(per: readonly GalPos[][], kind: StoredKind, nowSec: 
     if (!had) { by.set(r.id, { ...r }); continue; }
     const newer = r.last >= had.last ? r : had;
     const tops = [had.top, r.top].filter((x): x is number => x != null);
-    by.set(r.id, { ...newer, first: Math.min(had.first, r.first), top: tops.length ? Math.max(...tops) : null });
+    const radios = [...new Set([...(had.radios ?? []), ...(r.radios ?? [])])];
+    by.set(r.id, { ...newer, first: Math.min(had.first, r.first), top: tops.length ? Math.max(...tops) : null, ...(radios.length && had.radios && r.radios ? { radios } : { radios: undefined }) });
   }
   const since = nowSec - STORED_SPEC[kind].keepSec;
   return [...by.values()].filter((r) => r.last >= since).sort((a, b) => b.last - a.last).slice(0, STORED_ROWS_MAX);
@@ -78,7 +82,7 @@ export function storedMerge(per: readonly GalPos[][], kind: StoredKind, nowSec: 
 /** ★ The loader (web and app alike): `list(kind)` = the gallery's items of that kind, `text(f)` = one card's body. Null while a
  *  load runs or when the gallery did not answer (keep what is drawn). */
 export function storedLoader(kind: StoredKind, o: {
-  list: (kind: StoredKind) => Promise<ReadonlyArray<{ s?: string; t: number; f: string }> | null>;
+  list: (kind: StoredKind) => Promise<ReadonlyArray<{ s?: string; t: number; f: string; ri?: string }> | null>;
   text: (f: string) => Promise<string | null>;
 }): (nowSec: number) => Promise<GalPos[] | null> {
   const kept = new Map<string, GalPos[]>();
@@ -94,7 +98,14 @@ export function storedLoader(kind: StoredKind, o: {
       for (const c of cards) {
         want.add(c.f);
         let rows = c.t >= fresh ? undefined : kept.get(c.f);
-        if (!rows) { const b = await o.text(c.f); if (b != null) { rows = galPosParse(b, c.t, nowSec); if (c.t < fresh) kept.set(c.f, rows); } }
+        if (!rows) {
+          const b = await o.text(c.f);
+          if (b != null) {
+            const ri = radiosOf((c as { ri?: string }).ri);   // ★★★ beta96 the card's radios on each of its rows
+            rows = galPosParse(b, c.t, nowSec).map((x) => (ri.length ? { ...x, radios: ri } : x));
+            if (c.t < fresh) kept.set(c.f, rows);
+          }
+        }
         if (rows) per.push(rows);
       }
       for (const k of [...kept.keys()]) if (!want.has(k)) kept.delete(k);

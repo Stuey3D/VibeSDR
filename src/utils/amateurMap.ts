@@ -13,6 +13,7 @@
  *    the tests (scripts/test_amateur_map.ts) — the TS functions here, and AMATEUR_JS, the same rules as page text
  *    (plain ES5, no backticks, no backslashes: it sits inside both pages' template literals).
  */
+import { radiosOf } from '../services/mapScope';
 
 /** ★ The HEARD IN window in seconds (0 = everything kept). The spots map's own ids — '7d' / '30d' are "today and the N
  *  days before" (the store's day rows), hence 8 and 31 days; the app's live-only ids ('2m' … ) too. */
@@ -103,7 +104,7 @@ export function amMeshCardPick<T extends { s?: string; t: number; f: string }>(i
 /** ★ The loader (web and app alike): `list` = the gallery's ISM items, `card` = one card's nodes (ismNodesParse), `merge` =
  *  ismGalMerge. Returns null while a load is running or when the gallery did not answer (keep what is drawn). */
 export function amMeshLoader<N extends { last: number }>(o: {
-  list: () => Promise<ReadonlyArray<{ s?: string; t: number; f: string }> | null>;
+  list: () => Promise<ReadonlyArray<{ s?: string; t: number; f: string; ri?: string }> | null>;
   card: (f: string, t: number) => Promise<N[] | null>;
   merge: (per: N[][], nowSec: number) => N[];
 }): (win: string, nowSec: number) => Promise<N[] | null> {
@@ -120,7 +121,12 @@ export function amMeshLoader<N extends { last: number }>(o: {
       for (const c of cards) {
         want.add(c.f);
         let n = c.t >= fresh ? undefined : kept.get(c.f);
-        if (!n) { n = (await o.card(c.f, c.t)) ?? undefined; if (n && c.t < fresh) kept.set(c.f, n); }
+        if (!n) {
+          n = (await o.card(c.f, c.t)) ?? undefined;
+          const ri = radiosOf((c as { ri?: string }).ri);   // ★★★ beta96 the card's radios on each of its nodes (mapScope.ts)
+          if (n && ri.length) n = n.map((x) => ({ ...x, radios: ri }));
+          if (n && c.t < fresh) kept.set(c.f, n);
+        }
         if (n) per.push(n);
       }
       for (const k of [...kept.keys()]) if (!want.has(k)) kept.delete(k);
