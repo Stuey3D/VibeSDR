@@ -209,7 +209,7 @@ const tour = src('src/screens/SDRScreen.tsx');
 // ★ 2026-11-16 the mode card is an overview (Stuart): the AIS / APRS details live on their keys and in About, not the tour
 // ★ beta90: the shipping map moved into VIEWS (DIGI MODES · AVIATION · SHIPPING) — the card names it there.
 ok('Tour: the Mode card is the overview and names whole-receiver views', /whole-receiver views such as DAB, ADS-B and SATELLITE/.test(tour)
-   && /VIEWS holds the maps: AMATEUR[\s\S]{0,400}AVIATION[\s\S]{0,120}SHIPPING/.test(tour));
+   && /VIEWS holds the maps: AMATEUR[\s\S]{0,1200}AVIATION[\s\S]{0,120}SHIPPING/.test(tour));   // ★ beta96 maps2: AMATEUR's own description (tabs, layers, window) grew past 400
 ok('About: EXIT AIS is described', /EXIT AIS/.test(about));
 
 // ── ★★ beta95 DX / unconfirmed / implausible (aisDx.ts — the server's vibe_ais_service.h kDxNm) and the APRS altitude ──
