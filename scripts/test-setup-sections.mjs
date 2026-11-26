@@ -110,6 +110,16 @@ try {
   ok((await state('serverPane', 'Where this receiver is')).must, '…and comes back when it is emptied');
   await type('locator', 'IO91wm');
 
+  // ★ SECTIONS_SHOT=<dir>: pictures to LOOK at (no visible polish gaps) — a wide window and a phone's width
+  if (process.env.SECTIONS_SHOT) {
+    for (const [w, h] of [[1280, 900], [390, 844]]) {
+      await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: w < 500 });
+      await sleep(300);
+      const shot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+      if (shot.result) fs.writeFileSync(path.join(process.env.SECTIONS_SHOT, `server-${w}.png`), Buffer.from(shot.result.data, 'base64'));
+    }
+    await call('Emulation.clearDeviceMetricsOverride');
+  }
   console.log('── PSK Reporter: the save path\'s own refusal ──');
   await js(`(() => { const e = document.getElementById("pskrOn"); e.checked = true; e.dispatchEvent(new Event("change", { bubbles: true })); return 1; })()`);
   await type('pskrCall', '');
@@ -181,7 +191,31 @@ try {
   await sleep(400);
   ok(await js(`document.getElementById("maxFps").value`) === '5', 'the old radio keeps its own 5 fps (saved before beta96: identical behaviour)');
   ok(!(await state('radioPane', 'SDR display name')).must, 'a radio that is set up: no "!" on its name');
+  ok(!(await state('radioPane', 'SDR display name')).open, 'switching from a radio with a "!" to one without does not leave the section open');
+  await js(`document.getElementById("modeLocked").click(); 1`);
+  await sleep(300);
+  ok(await js(`[...document.querySelectorAll("#radioPane .card.sec")].every(c => [...c.children].filter(x => x.classList.contains("secHead")).length === 1 && c.firstElementChild.classList.contains("secHead"))`),
+     'a locked radio (rows moved between cards): every card still has ONE header, first');
+  s = await state('radioPane', 'Operating mode');
+  ok(s && /^Locked/.test(s.sum), `Operating mode · "${s && s.sum}"`);
+  await js(`document.getElementById("modeSingle").click(); 1`);
+  await sleep(200);
+  ok(await js(`[...document.querySelectorAll("#radioPane .card.sec")].every(c => [...c.children].filter(x => x.classList.contains("secHead")).length === 1 && c.firstElementChild.classList.contains("secHead"))`),
+     'unlocked again (rows moved home, inserted at the top of the hardware card): still ONE header, first');
+  ok(!!(await state('radioPane', 'Spectrum detail')), 'the zoom switch has its own section (Spectrum detail), not a loose line between cards');
 
+  if (process.env.SECTIONS_SHOT) {
+    await js(`radio().blockedModes = Object.keys(MODE_GENS).join(","); modeBlockRender(); modeBlockSummary(); 1`); await sleep(200);
+    await js(`window.scrollTo(0, 0); 1`);
+    for (const [w, h] of [[1280, 1400], [390, 1400]]) {
+      await call('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: w < 500 });
+      await sleep(300);
+      const shot = await call('Page.captureScreenshot', { format: 'png' });
+      if (shot.result) fs.writeFileSync(path.join(process.env.SECTIONS_SHOT, `radio-${w}.png`), Buffer.from(shot.result.data, 'base64'));
+    }
+    await call('Emulation.clearDeviceMetricsOverride');
+    await js(`radio().blockedModes = ""; modeBlockRender(); modeBlockSummary(); 1`);
+  }
   console.log('── the frame rate is saved ──');
   await js(`(() => { const t = [...document.querySelectorAll("#radioTabs button")].find(b => b.dataset.i === "-1"); t.click(); return 1; })()`);
   await sleep(200);

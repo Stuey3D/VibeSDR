@@ -43,6 +43,7 @@ AIS; bg ADS-B → FM → bg ADS-B; bg = landing joined; the rate gate; single mo
 test-setup-keep-run 87/87 · test-setup-order 15/15 · test_keep_run 56/56 · test_admin_bg 66/66 · test_new_modes_clients 95/95 ·
 check-android-settings-parity 217/0 · check-setup-page clean.
 
+**→ Built on b96-setupux (docs/v12/SETUP-UX.md): collapsible sections + the red "!" (web + app), the app's card order, the machine-wide frame rate with a per-radio override.** 
 **Not done here (coordinator's later asks, own branches):** collapsible sections + red "!" must-set headers (web + app), the
 app screen's card order, a machine-wide frame-rate default with per-radio override (the rate is ALREADY per radio since
 2026-10-11 — there is no server-tab frame rate to fall back to), Android gradle, the app's type-check.

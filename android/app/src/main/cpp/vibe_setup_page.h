@@ -1222,8 +1222,12 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       </div>
     </div><!-- /lockedOnly -->
       <!-- ★ EVERY MODE, not locked only (2026-09-18): the zoom FFT engages in single-user and shared-VFO
-           modes too, and hiding the switch here left those radios blocky at depth. -->
-        <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+           modes too, and hiding the switch here left those radios blocky at depth.
+           ★★ beta96 b96-setupux: its own card (Spectrum detail) — it sat loose between two cards, which with the cards
+              folded read as a stray line; a section header now says what it is set to. -->
+      <div class="card" id="zoomCard">
+        <h2>Spectrum detail</h2>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:6px">
           <input type="checkbox" id="zoomSpectrum" checked
                  style="width:16px;height:16px;accent-color:var(--amber)">
           <span>Keep the spectrum sharp when zoomed in</span></label>
@@ -1235,6 +1239,7 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              already being computed for everyone. Shown by setMode(). -->
         <div class="hint" id="zoomSpectrumSlow">On a slower machine there may be a slight delay when zooming in
           at the higher zoom levels, while the detail is recalculated.</div>
+      </div>
 
       <!-- ★★★ HOW MANY PEOPLE — AND IT BELONGS TO BOTH MODES. This card lived inside the
            locked-only block, so on an UNLOCKED radio the box was hidden and the count was stuck
@@ -12322,9 +12327,12 @@ function secCards() {
     .filter(c => !(c.parentElement && c.parentElement.closest(".card")) && c.querySelector("h2"));
 }
 function secShown(card) { return !!card && card.offsetParent !== null && !card.closest(".hide,[hidden],.androidOff"); }
+/** The card's header — found among its children, wherever a move put it (layoutLockedRadio inserts rows at the top). */
+function secHeadOf(card) { return [...card.children].find(c => c.classList.contains("secHead")) || null; }
 function secEnsure() {
   for (const card of secCards()) {
-    if (card.firstElementChild && card.firstElementChild.classList.contains("secHead")) continue;
+    const had = secHeadOf(card);
+    if (had) { if (card.firstElementChild !== had) card.insertBefore(had, card.firstChild); continue; }
     const h = card.querySelector("h2");
     const title = h.textContent.replace(/\s+/g, " ").trim();
     card.dataset.sec = (card.closest("#radioPane") ? "radio:" : "server:") + secSlug(title);
@@ -12354,8 +12362,8 @@ function secPaint(card, open) {
   if (card.__secOpen === open) return;
   card.__secOpen = open;
   card.classList.toggle("secOpen", open);
-  const b = card.firstElementChild;
-  if (b && b.classList.contains("secHead")) { b.setAttribute("aria-expanded", open ? "true" : "false"); b.querySelector(".secChev").textContent = open ? "▾" : "▸"; }
+  const b = secHeadOf(card);
+  if (b) { b.setAttribute("aria-expanded", open ? "true" : "false"); b.querySelector(".secChev").textContent = open ? "▾" : "▸"; }
 }
 function secToggle(card, open, intoIt) {
   const now = card.classList.contains("secOpen");
@@ -12367,11 +12375,11 @@ function secToggle(card, open, intoIt) {
   secPaint(card, want);
   if (want && intoIt) secFocusInside(card);
 }
-function secHeads() { return secCards().filter(secShown).map(c => c.firstElementChild).filter(b => b && b.classList.contains("secHead")); }
+function secHeads() { return secCards().filter(secShown).map(secHeadOf).filter(Boolean); }
 /** ↑ ↓ (W S) on a header: the next / previous header — a remote steps over every section, open or not. */
 function secFocusInside(card) {
   const first = [...card.querySelectorAll("input,select,textarea,button,a[href],[tabindex]")]
-    .find(e => e !== card.firstElementChild && !e.disabled && e.tabIndex >= 0 && e.offsetParent !== null);
+    .find(e => !e.classList.contains("secHead") && !e.disabled && e.tabIndex >= 0 && e.offsetParent !== null);
   if (first) { first.focus(); return true; }
   return false;
 }
@@ -12393,12 +12401,12 @@ function secHeadKey(e) {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape" && e.key !== "Backspace") return;
   const t = e.target, card = t && t.closest ? t.closest(".card.sec") : null;
-  if (!card || t === card.firstElementChild) return;
+  if (!card || t.classList.contains("secHead")) return;
   const typing = /^(INPUT|TEXTAREA)$/.test(t.tagName) && !/^(checkbox|radio|button|submit|range)$/i.test(t.type || "");
   if (e.key === "Backspace" && (typing || t.isContentEditable || t.tagName === "SELECT")) return;
   if (document.querySelector(".modalWrap:not([hidden])")) return;   // ★ a dialog's own Escape first
   e.preventDefault();
-  card.firstElementChild.focus();
+  secHeadOf(card).focus();
 });
 function secAll(open) {
   for (const card of secCards()) {
@@ -12448,6 +12456,7 @@ const SEC_SUM = {
   "radio:operating-mode": () => { const r = radio(); const s = r.singleMode && r.singleMode !== "general" ? r.singleMode : "";
     if (s) return "Single use · " + singleWords(s); return r.mode === "locked" ? "Locked" + (secRange() ? " " + secRange() : "") : "Unlocked"; },
   "radio:range": () => secRange(),
+  "radio:spectrum-detail": () => secC("zoomSpectrum") ? "Sharp when zoomed in" : "Magnified (cheaper)",
   "radio:listeners": () => { const n = parseInt(secV("users"), 10) || 1; return n + (n === 1 ? " listener" : " listeners") + (secC("askFirst") ? " · ask before tuning" : ""); },
   "radio:antenna": () => secShort(secV("antenna"), 60) || "Not described",
   "radio:ads-b-beast-feed": () => secV("beastAddr"),
@@ -12496,14 +12505,15 @@ function secSchedule() {
 function secRefresh() {
   secEnsure();
   for (const card of secCards()) {
-    const key = card.dataset.sec, b = card.firstElementChild;
-    if (!b || !b.classList.contains("secHead")) continue;
+    const key = card.dataset.sec, b = secHeadOf(card);
+    if (!b) continue;
     let must = "", sum = "";
     try { must = SEC_MUST[key] ? (SEC_MUST[key]() || "") : ""; } catch (e) { must = ""; }
     try { sum = SEC_SUM[key] ? (SEC_SUM[key]() || "") : ""; } catch (e) { sum = ""; }
-    if (card.__must !== must) {
-      if (card.__must && !must && card.classList.contains("secOpen")) card.__stayOpen = secCtx();
-      card.__must = must;
+    if (card.__must !== must || card.__mustCtx !== secCtx()) {
+      // ★ fixed under the owner's hands (same tab), never a tab switch to a radio without the problem
+      if (card.__must && !must && card.__mustCtx === secCtx() && card.classList.contains("secOpen")) card.__stayOpen = secCtx();
+      card.__must = must; card.__mustCtx = secCtx();
     }
     const red = !!must;
     if (card.classList.contains("secMust") !== red) card.classList.toggle("secMust", red);
