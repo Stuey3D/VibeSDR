@@ -12065,6 +12065,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  `sat lock` and a tune do (the shared-dial contract: a joiner who may not tune does not steer). */
     void satControl(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         const std::string op = jsonStr(msg, "op");
+        /* ★★★ beta95-2 hotfix (Stuart 11-26, Almere's ADS-B-only radio): SATELLITE was a way OUT of the only mode — a pick
+         *  (or the old lock) tunes the radio off 1090 MHz although every other mode is switched off. A listener's pick /
+         *  doppler / lock on an only-mode radio is refused with the only mode's reason, before anything else is looked at;
+         *  "drop"/"unlock" still pass (leaving is always allowed). The signed-in admin may, as with every only-mode exit. */
+        if (sock && op != "drop" && op != "unlock" && !adminNow(sock)) {
+            const std::string only = onlyModeNow();
+            if (!only.empty()) {
+                LOGI("[sat] only mode %s: a listener's \"%s\" refused", only.c_str(), op.c_str());
+                satRefuse(sock, op == "doppler" ? "doppler" : "pick", onlyModeWhy(only));
+                return;
+            }
+        }
         if (op == "pick") { satPick(sock, msg); return; }
         if (op == "doppler") { satDopplerOp(sock, msg); return; }
         if (op == "drop") { satDrop(sock); return; }
