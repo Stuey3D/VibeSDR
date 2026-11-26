@@ -1011,6 +1011,9 @@ if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 AIS + APRS in the app (src/services/tracks.ts) against the web's tracks.ts — one rule, two readers
 if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 THE MAP FOLLOWS THE MODE (Mac Ha 11-26: the AIS map's title over the ADS-B aircraft list) — the app's map page
+#    kept with its kind and opening (src/utils/mapPage.ts), the screen's map precedence, one whole-radio map at a time (app + web).
+if node --no-warnings scripts/test_map_page_kind.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 beta95 the band-plan strip's label room (src/utils/bandLabelPiece.ts — the web strip, the app's WaterfallView rule)
 if npx tsx scripts/test_band_label_piece.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 NCDXF beacons: the shared client half (src/services/ncdxf.ts) and both clients' keys (2026-11-16).
