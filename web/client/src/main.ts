@@ -166,7 +166,7 @@ import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay, type DigiMapLayer } from './digiMap';
-import { amMeshPoints, amBeaconPoints, amLiveOf, AMATEUR_JS, type AmLayer, type AmMeshPoint, type AmBeaconPoint } from '../../../src/utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, AMATEUR_JS, type AmLayer, type AmMeshPoint, type AmBeaconPoint } from '../../../src/utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM } from '../../../src/utils/digiMapShared';
 import { DIGI_STATS_JS } from '../../../src/utils/digiMapStats';
 import { digiGalCard, digiGalQuery, digiGalItemWindow } from '../../../src/utils/digiMapShared';   // ★ beta92 the gallery's digi map row (the app's same words)   // ★ beta92 the digi map's stats / legend / summary (the app's same code)   // ★ beta92 the digi map's FIT key (the app's same code)
@@ -18624,9 +18624,35 @@ function pushSpotsToMap() {
 /* ★★★ beta96 STAGE 7 THE AMATEUR MAP (src/utils/amateurMap.ts): MESH (this page's ISM report + the server's remembered
  *  nodes, ismStoredLoad), BEACONS (the NCDXF tracker's report) and the LIVE layer — what this receiver's decoder feeds now,
  *  only emphasised: every layer shows whatever is in the HEARD IN window. */
+/* ★★★ beta96 maps2 MESH REMEMBERS EVERY ISM BAND (Stuart 11-26): every band's "stations received" day cards over the map's
+ *  HEARD IN window (amateurMap.ts amMeshLoader — ≤ 16 cards, one at a time, past days kept, ≤ 1000 nodes), read when the
+ *  map opens, when its window changes and every 2 minutes while it is open and this page is visible. This server's own
+ *  HTTP (never the Worker). No gallery answer: ISM's band (ismStored), as before. */
+const amMeshLoad = amMeshLoader<IsmGalNode>({
+  list: async () => {
+    try { const r = await fetch(galUrl('/vibeserver/gallery.json?kind=ism&limit=1000'), { cache: 'no-store' });
+          if (!r.ok) return null; const j = await r.json() as { items?: GalleryItem[] }; return Array.isArray(j?.items) ? j.items : null; } catch { return null; }
+  },
+  card: async (f, t) => {
+    try { const r = await fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(f)}`), { cache: 'no-store' });
+          return r.ok ? ismNodesParse(await r.text(), t, Math.floor(Date.now() / 1000)).nodes : null; } catch { return null; }
+  },
+  merge: ismGalMerge,
+});
+let amMeshStored: IsmGalNode[] | null = null;
+let amMeshTimer: ReturnType<typeof setInterval> | null = null;
+function amMeshRefresh() {
+  if (!spotsMapWin || spotsMapWin.closed) { if (amMeshTimer) clearInterval(amMeshTimer); amMeshTimer = null; return; }
+  if (document.visibilityState !== 'visible') return;
+  void amMeshLoad(digiMapWindowPref(), Math.floor(Date.now() / 1000)).then((n) => { if (n) { amMeshStored = n; amMapRender(); } });
+}
+function amMeshStart() {
+  amMeshRefresh();
+  if (!amMeshTimer) amMeshTimer = setInterval(amMeshRefresh, 120_000);
+}
 function amExtras(): { mesh: AmMeshPoint[]; beacons: AmBeaconPoint[]; live: AmLayer | '' } {
   return {
-    mesh: amMeshPoints(ismReport?.devices ?? [], ismStored, Math.floor(Date.now() / 1000)),
+    mesh: amMeshPoints(ismReport?.devices ?? [], amMeshStored ?? ismStored, Math.floor(Date.now() / 1000)),
     beacons: amBeaconPoints(ncdxfLast, NCDXF_BANDS.map((b) => b.label)),
     live: amLiveOf(activeDec ?? (decoders?.spotsEnabled ? 'spots' : ''), ismOn),
   };
@@ -18678,6 +18704,7 @@ function openDigiModesMapImpl(o: DigiMapOpts = {}) {
   digiOverlay = o.overlay === undefined ? digiOverlay : digiOverlayClean(o.overlay);
   const layer: DigiMapLayer = o.layer === 'aprs' || o.layer === 'mesh' || o.layer === 'beacons' ? o.layer : 'spots';
   if (ismReport?.band && ismStoredBand !== ismReport.band) void ismStoredLoad();   // ★ beta96 the remembered mesh nodes
+  setTimeout(amMeshStart, 1500);   // ★ beta96 maps2 every band's remembered nodes (once the window is there to be told)
   if (spotsMapWin && !spotsMapWin.closed) {
     try {
       spotsMapWin.postMessage({ type: 'vibesdr-spots', spots: spotsMapPoints(), aprs: aprsMapPoints(), overlay: digiOverlay, ...amExtras(), layer, focus: o.focus || '' },
@@ -18713,6 +18740,7 @@ function openSpotsMap() { openDigiModesMap({ layer: 'spots' }); }
 addEventListener('message', (ev) => {
   if (!spotsMapWin || ev.source !== spotsMapWin || !ev.data || ev.data.type !== 'vibesdr-digimap-window') return;
   savePref('digiMapWindow', digiWindowOf(ev.data.window));
+  amMeshRefresh();   // ★ beta96 maps2 the remembered nodes follow the window
 });
 setDigiModesMapOpener(openDigiModesMapImpl);
 

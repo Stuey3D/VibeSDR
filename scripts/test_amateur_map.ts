@@ -11,7 +11,8 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { amKeep, amWinSec, amLiveOf, amMeshPoints, amBeaconPoints, amTabs, amSrcWords, AMATEUR_JS, AM_SRC_BACKGROUND, AM_SRC_LIVE,
-         amTabNow, amListRows, amCountsOf, amSpotKey, amAgoShort, amEmptyWords, AM_ROWS_MAX } from '../src/utils/amateurMap';
+         amTabNow, amListRows, amCountsOf, amSpotKey, amAgoShort, amEmptyWords, AM_ROWS_MAX,
+         amMeshCardPick, amMeshLoader, AM_MESH_CARDS_MAX, AM_MESH_NODES_MAX } from '../src/utils/amateurMap';
 
 let pass = 0, fail = 0;
 const ok = (c: unknown, what: string) => { if (c) pass++; else { fail++; console.log(`FAIL ${what}`); } };
@@ -123,6 +124,46 @@ eq(amTabs({}, 'beacons', 'aprs'), ['aprs', 'beacons'], 'tabs: the live one and t
   eq(amTabNow([], '', '', ''), 'spots', 'tab: none at all → SPOTS');
 }
 
+/* ── ★★★ beta96 maps2: MESH REMEMBERS EVERY ISM BAND (Stuart 11-26) — every band's day cards over the window, bounded ── */
+const meshDone = (async () => {
+  const now = 1_764_000_000, day = Math.floor(now / 86400) * 86400;
+  const card = (band: string, d: number) => ({ s: `ismnodes-${band}-2026-11-${String(26 - d).padStart(2, '0')}`, t: day - d * 86400, f: `${band}-${d}.txt` });
+  const items = [card('433', 0), card('868', 0), card('868', 1), card('915', 3), card('868', 9),
+                 { s: 'ismsum-868-2026-11-26', t: day, f: 'sum.txt' }, { s: 'ismlog-433-2026-11-26', t: day, f: 'log.txt' }];
+  eq(amMeshCardPick(items, '24h', now).map((c) => c.f), ['433-0.txt', '868-0.txt', '868-1.txt'], '24 H: today\'s and yesterday\'s cards of EVERY band (not the summary or the log)');
+  eq(amMeshCardPick(items, '7d', now).map((c) => c.f), ['433-0.txt', '868-0.txt', '868-1.txt', '915-3.txt'], '7 D: back to the window\'s first day');
+  eq(amMeshCardPick(items, 'all', now).length, 5, 'ALL: the gallery\'s 31 days');
+  const lots = Array.from({ length: 40 }, (_, i) => card(String(400 + i), i % 5));
+  eq(amMeshCardPick(lots, '30d', now).length, AM_MESH_CARDS_MAX, 'at most 16 cards (bounded)');
+  // the loader: one fetch at a time, a card older than yesterday kept (never fetched twice), today's and yesterday's fetched again
+  const fetched: string[] = [];
+  const nodesOf: Record<string, Array<{ key: string; last: number }>> = {
+    '433-0.txt': [{ key: 'a433', last: now - 600 }], '868-0.txt': [{ key: 'b868', last: now - 60 }], '868-1.txt': [{ key: 'c868', last: now - 80000 }],
+    '915-3.txt': [{ key: 'd915', last: now - 3 * 86400 + 100 }],
+  };
+  let inFlight = 0, most = 0;
+  const load = amMeshLoader<{ key: string; last: number }>({
+    list: async () => items,
+    card: async (f) => { inFlight++; most = Math.max(most, inFlight); fetched.push(f); await new Promise((r) => setTimeout(r, 1)); inFlight--; return nodesOf[f] ?? null; },
+    merge: (per) => per.flat(),
+  });
+  const a = await load('7d', now);
+  eq(a?.map((n) => n.key), ['b868', 'a433', 'c868', 'd915'], 'every band\'s nodes, newest first');
+  eq(most, 1, 'one card at a time (a live server)');
+  fetched.length = 0;
+  await load('7d', now + 60);
+  eq(fetched, ['433-0.txt', '868-0.txt', '868-1.txt'], 'again: today\'s and yesterday\'s fetched, the older day kept');
+  const b = await load('1h', now);
+  eq(b?.map((n) => n.key), ['b868', 'a433'], 'the loader\'s answer follows the window');
+  const busy = load('7d', now), again = await load('7d', now);
+  eq(again, null, 'a second load while one runs answers null (keep what is drawn)');
+  await busy;
+  const big = amMeshLoader<{ key: string; last: number }>({ list: async () => [card('868', 0)], card: async () => Array.from({ length: 1500 }, (_, i) => ({ key: `n${i}`, last: now - i })), merge: (per) => per.flat() });
+  eq((await big('24h', now))?.length, AM_MESH_NODES_MAX, 'at most 1000 nodes');
+  const none = amMeshLoader({ list: async () => null, card: async () => null, merge: () => [] });
+  eq(await none('24h', now), null, 'no gallery: null (the band\'s remembered ones stay)');
+})();
+
 /* ── the page text keeps each MESH / BEACONS marker by its key (a row opens it) ── */
 {
   const made: Array<{ ll: number[]; popup?: string }> = [];
@@ -160,9 +201,15 @@ eq(amTabs({}, 'beacons', 'aprs'), ['aprs', 'beacons'], 'tabs: the live one and t
   ok(/nav=\{\{ navCtx: amNav\.navCtx, scrollProps: amNav\.scrollProps \}\}/.test(mo) && /navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo),
      'app: the window keys and the list share ONE pad order (two owners would strand the keys)');
   ok(/window\.__amListWH=function/.test(mo) && /body\.amL:not\(\.dwide\) #dsum/.test(mo), 'app: the summary strip and the scale stand clear of the list');
+  ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored,/.test(main) && /savePref\('digiMapWindow', digiWindowOf\(ev\.data\.window\)\);\n  amMeshRefresh\(\);/.test(main),
+     'web: MESH remembers every band (amMeshLoader), and follows the window');
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored\?\.nodes \?\? \[\]/.test(sdr) && /amMeshLoad\(digiWin,/.test(sdr), 'app: MESH remembers every band, and follows the window');
   const sd = readFileSync('src/services/digiStations.ts', 'utf8');
   ok(/src: s\.src \}\);/.test(sd), 'app: a stored station carries who heard it (src) to the row');
 }
 
-console.log(`test_amateur_map: ${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+void meshDone.catch((e) => { fail++; console.log('FAIL the mesh loader threw', e); }).then(() => {
+  console.log(`test_amateur_map: ${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});

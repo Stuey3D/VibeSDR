@@ -177,7 +177,7 @@ import { parseSkimBands, skimPickable, type SkimBands, type SkimKind } from '../
 import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, pskWidthOf, passbandCentreHz, pskTuneFor,
          mergeRttyHistory, type CwList, type CwSpot } from '../services/cwList';
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
-import { amMeshPoints, amBeaconPoints, amLiveOf, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
+import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, type AmLayer } from '../utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
 import { NCDXF_BANDS, NCDXF_CALLS, ncdxfFollowAllowed, ncdxfFollowBand, ncdxfFollowTunedAway, ncdxfBeaconOn, ncdxfSlot, type NcdxfReport } from '../services/ncdxf';   // ★ V12 NCDXF beacons
 import { TONES_DEFAULTS, type TonesOptions } from '../services/tones';   // ★ V12 DTMF + 5-tone
 import { BALLOON_AUTO, balloonMerge, type BalloonPayload, type BalloonPicture, type BalloonReport, type BalloonSettings } from '../services/balloons';   // ★ V12 balloons
@@ -12572,12 +12572,31 @@ export default function SDRScreen({ route, navigation }: Props) {
     [localMapOpen, digiAprsOn, aprsList, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ beta96 stage 7 THE AMATEUR MAP (src/utils/amateurMap.ts): MESH (ISM's live report + this band's remembered nodes),
    *  BEACONS (the NCDXF tracker's report) and the LIVE layer — every layer follows the map's HEARD IN window (the page). */
+  /* ★★★ beta96 maps2 MESH REMEMBERS EVERY ISM BAND (Stuart 11-26): the remembered nodes of EVERY band's day cards over the map's
+   *  HEARD IN window (amateurMap.ts amMeshLoader — bounded: ≤ 16 cards, one at a time, past days kept, ≤ 1000 nodes), read on
+   *  opening, on a window change and every 2 minutes while the map is open. No gallery: this band's (ismStored), as before. */
+  const amMeshLoad = useMemo(() => (satGalleryGet ? amMeshLoader<IsmGalNode>({
+    list: async () => { const lj = await satGalleryGet('/vibeserver/gallery.json?kind=ism&limit=1000'); if (!lj) return null;
+                        try { const it = JSON.parse(lj)?.items; return Array.isArray(it) ? it : null; } catch { return null; } },
+    card: async (f, t) => { const body = await satGalleryGet(`/vibeserver/gallery/file/${encodeURIComponent(f)}`);
+                            return body ? ismNodesParse(body, t, Math.floor(Date.now() / 1000)).nodes : null; },
+    merge: ismGalMerge,
+  }) : null), [satGalleryGet]);
+  const [amMeshStored, setAmMeshStored] = useState<IsmGalNode[] | null>(null);
+  useEffect(() => {
+    if (!digiStorePolling || !amMeshLoad) { setAmMeshStored(null); return; }
+    let live = true;
+    const go = () => { void amMeshLoad(digiWin, Math.floor(Date.now() / 1000)).then((n) => { if (live && n) setAmMeshStored(n); }); };
+    go();
+    const t = setInterval(go, 120_000);
+    return () => { live = false; clearInterval(t); };
+  }, [digiStorePolling, amMeshLoad, digiWin]);
   const amateur = useMemo(() => (localMapOpen && digiStorePolling ? {
-    mesh: amMeshPoints(ismReport?.devices ?? [], ismStored?.nodes ?? [], Math.floor(Date.now() / 1000)),
+    mesh: amMeshPoints(ismReport?.devices ?? [], amMeshStored ?? ismStored?.nodes ?? [], Math.floor(Date.now() / 1000)),
     beacons: amBeaconPoints(ncdxfReport, NCDXF_BANDS.map((b) => b.label)),
     live: amLiveOf(activeDecoder ?? (spotsKind === 'digi' ? 'spots' : ''), ismOn),
     opened: digiOpenedOn,
-  } : null), [localMapOpen, digiStorePolling, ismReport, ismStored, ncdxfReport, activeDecoder, spotsKind, ismOn, digiOpenedOn]);   // eslint-disable-line react-hooks/exhaustive-deps
+  } : null), [localMapOpen, digiStorePolling, ismReport, ismStored, amMeshStored, ncdxfReport, activeDecoder, spotsKind, ismOn, digiOpenedOn]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
     const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);

@@ -83,6 +83,53 @@ export function amMeshPoints(live: readonly any[] | null | undefined, stored: re
   return [...by.values()].sort((a, b) => a.age - b.age).slice(0, 1000);
 }
 
+/* ★★★ beta96 maps2 MESH REMEMBERS EVERY ISM BAND (Stuart's 11-26 decision): the AMATEUR map's remembered nodes are every band's
+ *  "stations received" day cards (vibe_ism_gallery.h, slot "ismnodes-<band>-<date>") over the HEARD IN window — not only the
+ *  band ISM last used. BOUNDED: at most AM_MESH_CARDS_MAX cards (the newest days first), fetched ONE AT A TIME (a live
+ *  server); a card older than yesterday never changes, so it is kept and not fetched again (today's and yesterday's are —
+ *  yesterday's is written once more when its day rolls over); at most
+ *  AM_MESH_NODES_MAX nodes. ISM's own live map keeps its band's last 24 h (ismStored) as before. */
+export const AM_MESH_CARDS_MAX = 16;
+export const AM_MESH_NODES_MAX = 1000;
+const ISM_NODES_SLOT = /^ismnodes-[^-]+-\d{4}-\d\d-\d\d$/;
+/** The window's days, in seconds back from now ('all' = the gallery's 31 days, as ISM's gallery map). */
+function amSpanSec(win: string): number { return amWinSec(win) || 31 * 86400; }
+/** ★ The day cards to read for window `win`: every band's, from the day the window starts, newest first, bounded. */
+export function amMeshCardPick<T extends { s?: string; t: number; f: string }>(items: readonly T[] | null | undefined, win: string, nowSec: number, max = AM_MESH_CARDS_MAX): T[] {
+  const from = Math.floor((nowSec - amSpanSec(win)) / 86400) * 86400;
+  return (items ?? []).filter((c) => !!c && typeof c.s === 'string' && ISM_NODES_SLOT.test(c.s) && typeof c.f === 'string' && Number(c.t) >= from)
+    .sort((a, b) => b.t - a.t).slice(0, Math.max(0, max));
+}
+/** ★ The loader (web and app alike): `list` = the gallery's ISM items, `card` = one card's nodes (ismNodesParse), `merge` =
+ *  ismGalMerge. Returns null while a load is running or when the gallery did not answer (keep what is drawn). */
+export function amMeshLoader<N extends { last: number }>(o: {
+  list: () => Promise<ReadonlyArray<{ s?: string; t: number; f: string }> | null>;
+  card: (f: string, t: number) => Promise<N[] | null>;
+  merge: (per: N[][], nowSec: number) => N[];
+}): (win: string, nowSec: number) => Promise<N[] | null> {
+  const kept = new Map<string, N[]>();   // ★ past days' cards (they never change) — only those still picked
+  let busy = false;
+  return async (win, nowSec) => {
+    if (busy) return null;
+    busy = true;
+    try {
+      const items = await o.list();
+      if (!items) return null;
+      const cards = amMeshCardPick(items, win, nowSec);
+      const fresh = Math.floor(nowSec / 86400) * 86400 - 86400, per: N[][] = [], want = new Set<string>();   // ★ yesterday and today
+      for (const c of cards) {
+        want.add(c.f);
+        let n = c.t >= fresh ? undefined : kept.get(c.f);
+        if (!n) { n = (await o.card(c.f, c.t)) ?? undefined; if (n && c.t < fresh) kept.set(c.f, n); }
+        if (n) per.push(n);
+      }
+      for (const k of [...kept.keys()]) if (!want.has(k)) kept.delete(k);
+      const since = nowSec - amSpanSec(win);
+      return o.merge(per, nowSec).filter((n) => n.last >= since).sort((a, b) => b.last - a.last).slice(0, AM_MESH_NODES_MAX);
+    } catch { return null; } finally { busy = false; }
+  };
+}
+
 /** One NCDXF / IARU beacon heard, at its published site. */
 export interface AmBeaconPoint { key: string; call: string; where: string; lat: number; lon: number; age: number; bands: string[]; best: number }
 /** ★ The tracker's report → the beacons heard on any band (age = the most recent heard), with the bands heard on and the
