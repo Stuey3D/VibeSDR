@@ -40,7 +40,9 @@ export interface AvBand { id: string; name: string; region: string; hz: number; 
  *  ★ V12 2026-11-24 `gainNote`: on a radio the mode sets no gain on (the Airspy HF+) what its front end IS doing, in place
  *    of a dB figure ("HF+ AGC · attenuator 12 dB"); `rateNote`: the capture was raised for ACARS + VDL2 (the owner's 8 MS/s
  *    switch) and will be given back. */
-export interface AvReport { band: string; bandName: string; hz: number; msgs: number; dropped: number; aircraft: AvAircraft[]; gain?: number; gainAuto?: number;
+export interface AvReport { band: string; bandName: string; hz: number; msgs: number; dropped: number;
+  /** ★★ beta96 messages in the last minute (the server's rolling 60 s, AIS's rule); undefined = an older server */
+  msgRate?: number; aircraft: AvAircraft[]; gain?: number; gainAuto?: number;
   gainNote?: string; rateNote?: string;
   /** ★ what the applications read: positions, OOOI events, ADS-C and CPDLC messages, and those with text no layout fitted */
   apps?: { pos: number; oooi: number; adsc: number; cpdlc: number; unparsed: number } }
@@ -72,9 +74,15 @@ export function parseAvReport(m: unknown): AvReport | null {
   }
   const ap = (o.apps && typeof o.apps === 'object' ? o.apps : null) as Record<string, unknown> | null;
   const apps = ap ? { pos: num(ap.pos) ?? 0, oooi: num(ap.oooi) ?? 0, adsc: num(ap.adsc) ?? 0, cpdlc: num(ap.cpdlc) ?? 0, unparsed: num(ap.unparsed) ?? 0 } : undefined;
-  return { band: str(o.band, 10) ?? '', bandName: str(o.bandName, 20) ?? '', hz: num(o.hz) ?? 0, msgs: num(o.msgs) ?? 0,
+  return { band: str(o.band, 10) ?? '', bandName: str(o.bandName, 20) ?? '', hz: num(o.hz) ?? 0, msgs: num(o.msgs) ?? 0, msgRate: num(o.msgRate),
            dropped: num(o.dropped) ?? 0, aircraft, gain: num(o.gain), gainAuto: num(o.gainAuto),
            gainNote: str(o.gainNote, 60), rateNote: str(o.rateNote, 120), apps };
+}
+/** ★★ beta96 (Stuart 11-26: "a messages per minute like ais … it will allow me to check antenna performance quickly"): the
+ *  status line's rate — " · 12 msg/min", AIS's words and rounding (tracks.ts aisStatus); '' from an older server. */
+export function avRateText(r: AvReport | null): string {
+  const m = r?.msgRate;
+  return m == null || !isFinite(m) ? '' : ` · ${m.toFixed(m < 10 ? 1 : 0)} msg/min`;
 }
 /** ★ The status line's gain part — the same words on the web and in the app: " · gain 43.4 dB auto", or the radio's own
  *  state where the mode sets no gain (" · HF+ AGC"); then " · capture raised to 8 MS/s …" while it is. */
