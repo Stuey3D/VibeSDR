@@ -306,7 +306,7 @@ try {
   ok(list.bootstrap === true && list.scanner?.on === true, 'the page says the bootstrap is on, and what the scanner is set to');
   const q = await S.adminQ();
   const adm = await fetch(`${S.H}/vibeserver/admin/status?${q}`).then((r) => r.ok ? r.json() : null).catch(() => null);
-  ok(!adm || (adm.dxScan && /scanning|waiting/.test(adm.dxScan.state)), `the admin line: ${adm?.dxScan ? `${adm.dxScan.state} — ${adm.dxScan.now || adm.dxScan.last}` : '(no admin status endpoint)'}`);
+  ok(!adm || (adm.dxScan && /scanning|waiting/.test(adm.dxScan.state)), `the admin line: ${adm?.dxScan ? `${adm.dxScan.state} — ${adm.dxScan.now || adm.dxScan.last || adm.dxScan.why}` : '(no admin status endpoint)'}`);
 
   // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   console.log('── B. a listener arrives MID-HOP: the radio back, the hop not logged ──');
