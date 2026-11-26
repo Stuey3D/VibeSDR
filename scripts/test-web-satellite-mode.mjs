@@ -188,7 +188,8 @@ try {
   const geo = Array.from({ length: 80 }, (_, k) => [62 - k * 0.5, -25 + k * 0.45, 420]);
   await ev(`window.__p.onTrack(__Sat.parseSatTrack(${JSON.stringify({ type: 'sat_track', norad: 25544, aos: now - 200, los: now + 372, pts: [], geo })})); true`);
   const ink2 = await ev(`(() => { const c = document.querySelector('#satPanel canvas.sat-globe'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; })()`);
-  ok(ink2 > ink + 150, `1.7 the dotted orbit is inked (${ink} → ${ink2} px)`);
+  // ★★ beta96 SMALL draws the orbit without its arrows / tick (globeLayers): the dotted line alone adds fewer pixels
+  ok(ink2 > ink + 50, `1.7 the dotted orbit is inked (${ink} → ${ink2} px)`);
   // ★ beta91 the direction: the path runs north → south in time, the bird (47 N, 9 W) is on it — the countdown says so
   const cdH = await ev(`document.querySelector('#satPanel [data-s="cd"]').textContent`);
   ok(/^In range for 6:\d\d · highest in 1:\d\d \(40°\) · heading south$/.test(cdH), `beta91 the countdown says which way: ${cdH}`);
@@ -400,7 +401,8 @@ try {
     ok(await ev('window.__entered') === 1 && JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":27607,"tx":0,"doppler":true}', 'AOS: into SATELLITE and the ordinary pick');
     await ev(`window.__p.onPicked({ norad: 27607, tx: 0, decoder: '' }); window.__fake = ${(so50Aos + 30) * 1000}; window.__p.remTick(); true`);
     ok((await ev('window.__sent')).filter((m) => m.op === 'pick').length === 1, 'tuned once, not every second');
-    ok(/SCHEDULE · on SO-50 until .*then back to 101\.100 MHz WFM/.test(await ev(`[...document.querySelectorAll('#satPanel .sat-sline')].map(e => e.textContent).join(' | ')`)), 'the status line: on SO-50, then back to 101.1 WFM');
+    const stl = await ev(`[...document.querySelectorAll('#satPanel .sat-sline')].map(e => e.textContent).join(' | ')`);
+    ok(/SCHEDULE · on SO-50 until .*then back to 101\.100[\d ]* MHz WFM/.test(stl), `the status line: on SO-50, then back to 101.1 WFM (${stl})`);
     await ev(`window.__fake = ${(now + 40 * 60) * 1000}; window.__p.remTick(); true`);
     ok(JSON.stringify((await ev('window.__sent')).slice(-1)[0]) === '{"op":"pick","norad":90100,"tx":0,"doppler":true}', 'the higher overlapping pass takes over at its AOS (no back in between)');
     ok(!(await ev('window.__back')).length, '…nothing put back yet');
@@ -413,7 +415,8 @@ try {
     ok(await ev('window.__p.scheduled().length') === 1, 'SONATE-2 scheduled');
     await ev(`window.__sess = { sharedDial: true, listeners: 2 }; window.__p.render(); true`);
     ok(/your 1 scheduled pass will remind you/.test(await ev(`window.__p.show(), [...document.querySelectorAll('#satPanel .sat-sline')].map(e => e.textContent).join(' | ')`)), 'another listener on the dial: the line says scheduled passes remind instead');
-    await ev(`window.__p.exit(); window.__sent = []; window.__fake = ${(son2Aos - window.__lead0 * 60) * 1000}; true`.replace('window.__lead0', String(await ev('window.__p.lead'))));
+    const lead0 = Number(await ev('window.__p.lead')) || 2;
+    await ev(`window.__p.exit(); window.__sent = []; window.__fake = ${(son2Aos - lead0 * 60) * 1000}; true`);
     await ev(`window.__p.remTick(); true`);
     const dt = await ev(`document.querySelector('#satRemind .sat-toast')?.textContent || ''`);
     ok(/SONATE-2 rises in/.test(dt) && /did not tune by itself/.test(dt) && !(await ev('window.__sent')).some((m) => m.op === 'pick'), `degraded: a reminder (saying why), no tune (${dt})`);
@@ -423,7 +426,8 @@ try {
     await ev(`window.__sess = { sharedDial: true, listeners: 3 }; window.__p.onPicked({ norad: 59112, tx: 0, decoder: 'aprs' }); window.__back = []; window.__fake = ${(son2Aos + 60) * 1000}; window.__p.remTick(); true`);
     await ev(`window.__fake = ${(son2Aos + 700) * 1000}; window.__p.remTick(); true`);
     ok(!(await ev('window.__back')).length && await ev('window.__p.active'), 'someone joins mid-pass: nothing put back, the radio stays where it is');
-    await ev(`window.__p.exit(); window.__sess = {}; localStorage.removeItem('vibe.satSchedule'); window.__fake = ${T0}; true`);
+    // ★ left as the REMIND section left it (the mode on), for the telemetry section after
+    await ev(`window.__p.exit(); window.__sess = {}; localStorage.removeItem('vibe.satSchedule'); window.__fake = ${T0}; window.__p.show(); true`);
   }
   // 1.3 telemetry in the box
   const ao73 = priv(true); ao73.sats.push({ id: 'AO-73', name: 'AO-73', norad: 39444, note: '', age: 1, ageState: 'fresh', el: 20, inRangeFor: 400, lat: 50, lon: 0, rangeKm: 1500,
