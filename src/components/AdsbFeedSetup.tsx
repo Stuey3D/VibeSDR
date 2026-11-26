@@ -110,6 +110,11 @@ export default function AdsbFeedSetup({ C, F, model, onChange, status, error, ke
             send. A station UUID identifies your feed to the site. VibeServer makes one for you where the site{'’'}s own program
             would; for map.flights paste the one from your station page there.
           </Text>
+          {/* ★ beta96 Stuart 11-26: "push on mobile data is fine but maybe on android warn about data use" */}
+          <Text style={hint}>
+            On mobile data: each site you send to uses a few KB/s while ADS-B is running {'—'} fine on most plans. Over Wi-Fi it
+            uses none of your mobile allowance.
+          </Text>
         </View>
       )}
       {!!error && <Text style={[hint, { color: C.warn || C.text }]}>{error}</Text>}
