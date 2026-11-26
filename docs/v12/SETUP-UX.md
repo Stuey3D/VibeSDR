@@ -53,7 +53,7 @@ Stuart, 11-26, on the Sony TV: scrolling the long Setup screen with a remote "to
 
 | Test | Result | What |
 |---|---|---|
-| `scripts/test-setup-sections.mjs` | 53/53 | headless MUTED Edge + a real front door built from this tree (no radio process): headers on every card, closed by default, the red "!" (location, PSK Reporter, never set up, every mode off) clearing live and staying open, toggle + localStorage + reload, OPEN / CLOSE ALL, real ↓ ↑ S Enter Escape keys, a tab switch not keeping a "!" open, locked ↔ unlocked keeping one header, the frame rate saved (server 20, the new radio following, the old one at its own 5) |
+| `scripts/test-setup-sections.mjs` | 50/50 | headless MUTED Edge + a real front door built from this tree (no radio process): headers on every card, closed by default, the red "!" (location, PSK Reporter, never set up, every mode off) clearing live and staying open, toggle + localStorage + reload, OPEN / CLOSE ALL, real ↓ ↑ S Enter Escape keys, a tab switch not keeping a "!" open, locked ↔ unlocked keeping one header, the frame rate saved (server 20, the new radio following, the old one at its own 5) |
 | `scripts/test-setup-maxfps.mjs` | all good | + "Use the server's frame rate": follow / override / an old radio unchanged / a new radio follows / a phone never follows; the handler; the save |
 | `vibeserver/test-config-radios.cpp` | 311 checks, 0 fail | two radios: an old file unchanged; follow vs override; save/reload; the server's rate changing; bad values |
 | `scripts/test_setup_sections.ts` | 70/70 | the app's order, open/closed rules, OPEN / CLOSE ALL, the stay-open, the one-line summaries, the screen's wiring + the serverchoice hooks |
