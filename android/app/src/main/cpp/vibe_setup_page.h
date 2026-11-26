@@ -12347,6 +12347,7 @@ function secCtx() { return String(curRadio) + "|" + (curRadio >= 0 ? (radio().se
 function secWantOpen(card) {
   if (document.body.classList.contains("wifiFirst") && card.id === "wifiCard") return true;   // ★ the only card on the hotspot
   if (SEC_STATE[card.dataset.sec] === 1) return true;
+  if (card.__stayOpen === secCtx()) return true;   // ★ its "!" just cleared under the owner's hands: never snap shut on them
   return !!card.__must && card.__mustDismissed !== secCtx() + "|" + card.__must;
 }
 function secPaint(card, open) {
@@ -12360,25 +12361,28 @@ function secToggle(card, open, intoIt) {
   const now = card.classList.contains("secOpen");
   const want = open === undefined ? !now : !!open;
   SEC_STATE[card.dataset.sec] = want ? 1 : 0;
+  card.__stayOpen = null;
   if (!want && card.__must) card.__mustDismissed = secCtx() + "|" + card.__must;
   secSave();
   secPaint(card, want);
-  if (want && intoIt) {
-    const first = [...card.querySelectorAll("input,select,textarea,button,a[href],[tabindex]")]
-      .find(e => e !== card.firstElementChild && !e.disabled && e.tabIndex >= 0 && e.offsetParent !== null);
-    if (first) first.focus();
-  }
+  if (want && intoIt) secFocusInside(card);
 }
 function secHeads() { return secCards().filter(secShown).map(c => c.firstElementChild).filter(b => b && b.classList.contains("secHead")); }
 /** ↑ ↓ (W S) on a header: the next / previous header — a remote steps over every section, open or not. */
+function secFocusInside(card) {
+  const first = [...card.querySelectorAll("input,select,textarea,button,a[href],[tabindex]")]
+    .find(e => e !== card.firstElementChild && !e.disabled && e.tabIndex >= 0 && e.offsetParent !== null);
+  if (first) { first.focus(); return true; }
+  return false;
+}
 function secHeadKey(e) {
   if (e.altKey || e.ctrlKey || e.metaKey) return;
   const k = e.key, dn = k === "ArrowDown" || k === "s" || k === "S", up = k === "ArrowUp" || k === "w" || k === "W";
   if (!dn && !up) return;
   const hs = secHeads(), i = hs.indexOf(e.currentTarget);
   if (i < 0) return;
-  // ★ Down from an OPEN section's header goes into it (Enter did); only a closed one steps on to the next header
-  if (dn && e.currentTarget.parentElement.classList.contains("secOpen")) return;
+  // ★ Down from an OPEN section's header goes into it (as Enter did); only a closed one steps on to the next header
+  if (dn && e.currentTarget.parentElement.classList.contains("secOpen")) { if (secFocusInside(e.currentTarget.parentElement)) { e.preventDefault(); return; } }
   const to = hs[i + (dn ? 1 : -1)];
   if (!to) return;
   e.preventDefault();
@@ -12401,6 +12405,7 @@ function secAll(open) {
     if (!secShown(card)) continue;
     SEC_STATE[card.dataset.sec] = open ? 1 : 0;
     if (!open && card.__must) card.__mustDismissed = secCtx() + "|" + card.__must;
+    card.__stayOpen = null;
     secPaint(card, open);
   }
   secSave();
@@ -12496,7 +12501,10 @@ function secRefresh() {
     let must = "", sum = "";
     try { must = SEC_MUST[key] ? (SEC_MUST[key]() || "") : ""; } catch (e) { must = ""; }
     try { sum = SEC_SUM[key] ? (SEC_SUM[key]() || "") : ""; } catch (e) { sum = ""; }
-    if (card.__must !== must) card.__must = must;
+    if (card.__must !== must) {
+      if (card.__must && !must && card.classList.contains("secOpen")) card.__stayOpen = secCtx();
+      card.__must = must;
+    }
     const red = !!must;
     if (card.classList.contains("secMust") !== red) card.classList.toggle("secMust", red);
     const text = red ? "! " + must : sum;
