@@ -128,8 +128,9 @@ try {
     ok(await until(`!!${V}`, 6000), 'DATALINK opens its view');
     ok(/^AVIATION & MARITIME · DATALINK$/.test(await ev(`${V}?.querySelector('.ttl')?.textContent`) || ''), `…the AIR & SEA map, DATALINK live (${await ev(`${V}?.querySelector('.ttl')?.textContent`)})`);
     ok(await ev(`${V}.querySelector('.exit').textContent`) === 'EXIT DATALINK', 'EXIT DATALINK (the map is the mode)');
-    await until(`[...${V}.querySelectorAll('button')].some(b => b.textContent.trim() === 'VDL2' && b.dataset.rng)`, 8000);
-    await ev(`[...${V}.querySelectorAll('[data-rng]')].find(b => b.textContent.trim() === 'VDL2')?.click()`);
+    // ★★★ beta96 the DATALINK's bands are TUNE rows now (MAP-SHARED.md: the TUNE chip's list), no longer [data-rng] keys
+    await until(`!!${V}.querySelector('.tunePop [data-tune="av:vdl2"]')`, 8000);
+    await ev(`(() => { const r = ${V}.querySelector('.tunePop [data-tune="av:vdl2"]'); if (r && r.getAttribute('aria-checked') !== 'true') r.click(); return !!r; })()`);
     // ★★ beta96 DATALINK opens on MESSAGES (the feed, newest first) with the aircraft sort LATEST
     ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'messages'`, 4000), 'DATALINK opens on the MESSAGES tab');
     ok(await until(`[...${V}.querySelectorAll('.trkRow.trkMsg')].length >= 3`, 45000), `MESSAGES: the feed (${await ev(`${V}.querySelectorAll('.trkRow.trkMsg').length`)} messages)`);
