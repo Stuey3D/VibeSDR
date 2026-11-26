@@ -702,6 +702,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     if (r.bgDecode.size() > 8000) r.bgDecode.clear();   // a corrupt or hostile blob is dropped, never half-applied
     S("dxScan", r.dxScan);                     // ★★★ V12 the idle DX scanner — written in radioToJson below too
     if (r.dxScan.size() > 1000) r.dxScan.clear();
+    S("adsbFeed", r.adsbFeed);                 // ★★ V12 beta96 sharing ADS-B with flight trackers — written in radioToJson too
+    if (r.adsbFeed.size() > 4000) r.adsbFeed.clear();
     I("idleKickMin", r.idleKickMin);
     I("dabScanLabels", r.dabScanLabels);
     I("dabOwnStation", r.dabOwnStation);   // ★★ V12 own station per listener (docs/v12/DAB-OWN-STATION.md)
@@ -781,6 +783,7 @@ std::string radioToJson(const RadioConfig& r) {
     B("askBeforeTuning", r.askBeforeTuning);
     S("bgDecode", r.bgDecode);                 // ★ V12 — see the reader
     S("dxScan", r.dxScan);                     // ★★★ V12 — see the reader
+    S("adsbFeed", r.adsbFeed);                 // ★★ V12 beta96 — see the reader
     N("idleKickMin", r.idleKickMin);
     N("dabScanLabels", r.dabScanLabels);
     N("dabOwnStation", r.dabOwnStation);

@@ -1,0 +1,14 @@
+[
+  { "name": "never set, all off", "serve": false, "port": 30005, "open": false, "push": false, "blob": "" },
+  { "name": "Beast server only", "serve": true, "port": 30005, "open": false, "push": false,
+    "blob": "{\"serve\":true,\"port\":30005,\"open\":false,\"push\":false,\"feeds\":[]}" },
+  { "name": "adsb.fi + airplanes.live with UUIDs, any address", "serve": true, "port": 30105, "open": true, "push": true,
+    "edit": { "1": { "on": true, "uuid": "11111111-2222-4333-8444-555555555555" }, "2": { "on": true, "uuid": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE" } },
+    "blob": "{\"serve\":true,\"port\":30105,\"open\":true,\"push\":true,\"feeds\":[{\"host\":\"feed.adsb.fi\",\"port\":30004,\"on\":true,\"uuid\":\"11111111-2222-4333-8444-555555555555\"},{\"host\":\"feed.airplanes.live\",\"port\":30004,\"on\":true,\"uuid\":\"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\"}]}" },
+  { "name": "stored custom destination kept, switched off", "stored": "{\"serve\":false,\"port\":30005,\"open\":false,\"push\":true,\"feeds\":[{\"host\":\"10.0.0.5\",\"port\":30004,\"on\":true}]}",
+    "serve": false, "port": 30005, "open": false, "push": false,
+    "blob": "{\"serve\":false,\"port\":30005,\"open\":false,\"push\":false,\"feeds\":[{\"host\":\"10.0.0.5\",\"port\":30004,\"on\":true}]}" },
+  { "name": "map.flights without its UUID", "serve": false, "port": 30005, "open": false, "push": true, "edit": { "3": { "on": true } },
+    "error": "map.flights needs the station UUID" },
+  { "name": "port 99", "serve": true, "port": 99, "open": false, "push": false, "error": "1024 to 65535" }
+]

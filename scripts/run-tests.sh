@@ -448,6 +448,8 @@ deps_for() {
     test-config-alias)  echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ V12 beta90 the PSK Reporter / WSPRnet / DMR ID lookup settings round-trip, OFF by default.
     test-config-pskr)   echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ V12 beta96 sharing ADS-B with flight trackers: RadioConfig::adsbFeed round-trips, OFF by default.
+    test-config-adsbfeed) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
     test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
@@ -1007,6 +1009,8 @@ if npx tsx scripts/test_packet.ts; then pass=$((pass+1)); else fail=$((fail+1));
 if npx tsx scripts/test_m17.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 as a mode (m17.ts)
 if npx tsx scripts/test_dvsig.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 DV ID (dvsig.ts)
 if npx tsx scripts/test_spot_ranks.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta90 the gallery's ranking card
+if npx tsx scripts/test_adsb_feed.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta96 flight trackers: the app's copy
+if node scripts/test-setup-adsb-feed.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 beta96 flight trackers: the Setup card
 if npx tsx scripts/test_m17_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 M17 in the app (key, VTS, no width, ghost reports)
 if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),

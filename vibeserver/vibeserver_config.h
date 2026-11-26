@@ -777,6 +777,10 @@ struct RadioConfig {
     /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): one JSON blob, as bgDecode — {"on","bands","waitMin","raster",
      *  "viewAdmin","proof","gapMin"}. Empty = off (the default per radio). */
     std::string dxScan;
+    /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h, docs/v12/ADSB-FEED.md): one JSON blob, as dxScan —
+     *  {"serve","port","open","push","feeds":[{"host","port","on","uuid"}]}. Empty = everything off (the default per
+     *  radio). Validated at the save (vibe::beast::parseConfig); applied live. */
+    std::string adsbFeed;
 
     /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes of asking for nothing. 0 = OFF, and
      *  off is the default: this is an option for a busy shared receiver, not a policy.

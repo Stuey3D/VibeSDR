@@ -16,7 +16,7 @@ const PAGE = read('android/app/src/main/cpp/vibe_setup_page.h');
 const SCREEN = read('src/screens/ServerModeScreen.tsx')
   + read('src/components/BackgroundDecodingSetup.tsx') + read('src/components/BandLimitEditor.tsx')
   + read('src/components/AntennaBandsEditor.tsx') + read('src/components/IcomSetupCard.tsx') + read('src/services/icomRadio.ts')
-  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx');
+  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx') + read('src/components/AdsbFeedSetup.tsx');
 const VS = read('src/services/vibeServer.ts') + read('src/services/rspCard.ts');
 const BOOT = read('android/app/src/main/java/com/vibesdr/app/VibeServerBoot.kt');
 const KT = BOOT + read('android/app/src/main/java/com/vibesdr/app/VibeIcom.kt');
@@ -119,6 +119,8 @@ const TABLE = [
   P(['spMeteor', 'spOrbcomm', 'spFirst'], 'Satellite passes', 'bgDecode'),
   // ★★★ V12 the idle DX scanner (components/DxScanSetup) — one JSON blob, RadioConfig::dxScan; Lite too (the same engine)
   P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxOirt', 'dxExt', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
+  // ★★ V12 beta96 share ADS-B with flight trackers (components/AdsbFeedSetup) — one JSON blob, RadioConfig::adsbFeed
+  P(['afServe', 'afPort', 'afOpen', 'afPush'], 'SHARE ADS-B WITH FLIGHT TRACKERS', 'adsbFeed'),
   P(['rspVibeAgc'], 'VibeAGC (SDRplay)', 'rspVibeAgc'),
   P(['nbWide'], 'IMPULSE NOISE BLANKER', 'nbWide'),
   // ── the SDRplay card (Stuart 2026-11-04: "all the ones currently in Linux go to android") and the HF+ calibration ──
@@ -180,7 +182,9 @@ ok(/VibeLocalSDR\.setGallery\(galleryDir\(filesDir\)/.test(BOOT), 'VibeServerBoo
 {
   const priv = BOOT.slice(BOOT.indexOf('fun privateScanConfig'), BOOT.indexOf('fun privateScanConfig') + 1700);
   ok(/"bgDecode",?/.test(priv) && /\.remove\(k\)/.test(priv), 'the private DAB scan engine never runs the owner\'s profiles');
-  ok(/"dxScan"\)\)/.test(priv), '…nor the owner\'s DX scanner (V12)');
+  ok(/"dxScan",?/.test(priv), '…nor the owner\'s DX scanner (V12)');
+  ok(/"adsbFeed"\)\)/.test(priv), '…nor share ADS-B with flight trackers (beta96)');
+  ok(/VibeLocalSDR\.setAdsbFeed\(cfg\.s\("adsbFeed"\)\)/.test(BOOT) && JNI.includes('nativeSetAdsbFeed'), 'VibeServerBoot applies adsbFeed on every start (beta96)');
   ok(/VibeLocalSDR\.setDxScan\(cfg\.s\("dxScan"\)\)/.test(BOOT) && /VibeLocalSDR\.setDxLogFile\(/.test(BOOT), 'VibeServerBoot applies dxScan and the DX log file on every start');
 }
 ok(JNI.includes('nativeSetBackgroundDecoding') && JNI.includes('nativeSetGallery') && JNI.includes('nativeBackgroundCaps') && JNI.includes('nativeValidateBackgroundDecoding'), 'JNI: background decoding, gallery, caps and the save rule');

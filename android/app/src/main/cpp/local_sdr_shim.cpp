@@ -194,6 +194,7 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "vibe_m17.h"                 // ★ V12 M17: a per-listener mode — our own 4-FSK receiver, Codec 2 from the same library (docs/v12/M17.md)
 #include "vibe_dvsig.h"               // ★ V12 DV signalling: DMR / D-STAR / YSF / NXDN / dPMR identities, NEVER voice (docs/v12/DV-SIGNALLING.md)
 #include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
+#include "vibe_beast.h"             // ★★ V12 beta96: share ADS-B with flight trackers (Beast server + push feeds)
 #include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_lrpt_burn.h"         // ★ V12 METEOR LRPT: a picture with its map outline burnt in (?outline=1)
@@ -29491,6 +29492,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  with the aircraft settings an option to reset the adsb range ring"). GET = this radio's outline as the map gets
              *  it, plus "available" (the radio could run ADS-B — a row only there, AGENTS.md); POST ?reset=1 clears it, ?window=
              *  7|30|90|0 picks the days it is drawn over. Answered by the RADIO (/r/<serial>/…). */
+            /* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): GET = this radio's local Beast server and push
+             *  feeds — listening, readers, each destination's state / bytes / messages / dropped / last error — plus
+             *  "available" (the radio could run ADS-B; a row only there). Answered by the RADIO (/r/<serial>/…). Admin-gated:
+             *  it names the readers' addresses and the owner's destinations. */
+            if (what == "adsbfeed") {
+                if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
+                reply(200, "OK", LocalSdrShim::adsbFeedStatusJson());
+                return;
+            }
             if (what == "adsbrange") {
                 if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 const int64_t utc = (int64_t)time(nullptr);
@@ -30982,6 +30992,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             reply("200 OK", vibeadsb::rangeStore().json(vibeadsb::kRangeAdsb, utc));
             return;
+        /* ★★ V12 beta96 …and the flight-tracker sharing status for the app's SERVER screen on the phone that IS this server
+         *  (loopback = the owner, vsAdminHttpOk), as adsb-range above. GET /vibeserver/adsb-feed. */
+        } else if (reqLine.rfind("GET /vibeserver/adsb-feed", 0) == 0 && (reqLine.size() == 25 || reqLine[25] == '?' || reqLine[25] == ' ')) {
+            if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ it already said 401
+            const std::string body = LocalSdrShim::adsbFeedStatusJson();
+            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
+                          "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+            sock->close(); return;
         } else if (reqLine.rfind("GET /adsb/trail/", 0) == 0) {
             size_t to = reqLine.find_first_of(" ?#", 16);
             if (to == std::string::npos) to = reqLine.size();
@@ -44133,6 +44151,39 @@ bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& e
     g_bgCfgGen.fetch_add(1);
     LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
     return true;
+}
+/* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h, docs/v12/ADSB-FEED.md). Live. The decoder's sink is
+ *  hooked once: every believed reply goes to the hub (which returns at once when nothing is on), and ADS-B starting or
+ *  stopping tells the push feeds. ★ Not gated here on whether this radio can run ADS-B (that answer is not known until the
+ *  radio is open, and this is applied at start): the Setup card is drawn only where it can (AGENTS.md), and frames only
+ *  flow while ADS-B runs. The status says `available`. */
+bool LocalSdrShim::setAdsbFeed(const std::string& json, std::string& err) {
+    vibe::beast::Config c;
+    if (!vibe::beast::parseConfig(json, c, err)) { LOGI("[ADS-B feed] %s \xe2\x80\x94 not applied", err.c_str()); return false; }
+    static std::once_flag hooked;
+    std::call_once(hooked, [] {
+        g_adsb.setFeed([](const uint8_t* m, int len, uint64_t fine, float dbfs, uint32_t addr, double t) {
+                           vibe::beast::Hub::shared().frame(m, len, vibe::beast::ts12FromFine(fine), dbfs, addr, t);
+                       },
+                       [](bool on) { vibe::beast::Hub::shared().setActive(on); });
+    });
+    auto& hub = vibe::beast::Hub::shared();
+    hub.setActive(g_adsb.running());
+    if (vibe::beast::toJson(hub.config()) == vibe::beast::toJson(c) && hub.config().any() == c.any()) return true;
+    hub.configure(c);
+    size_t on = 0; for (const auto& d : c.feeds) if (d.on) ++on;
+    LOGI("[ADS-B feed] Beast server %s%s, push %s (%zu of %zu destinations on)", c.serve ? "ON port " : "off",
+         c.serve ? (std::to_string(c.port) + (c.open ? " (any address)" : " (LAN only)")).c_str() : "", c.push ? "ON" : "off", on, c.feeds.size());
+    return true;
+}
+std::string LocalSdrShim::adsbFeedStatusJson() {
+    std::string j = vibe::beast::Hub::shared().statusJson();
+    // ★ whether this radio could feed at all — the admin row and the Setup card are drawn only where it could
+    const std::string why = vsAdsbHwWhyNot();
+    j.pop_back();
+    j += std::string(",\"available\":") + (why.empty() ? "true" : "false");
+    if (!why.empty()) j += ",\"why\":\"" + vibe::beast::jsonEsc(why) + "\"";
+    return j + "}";
 }
 /* ★★★ THE IDLE DX SCANNER (V12, 2026-11-04). Live: the tick reads it every two seconds; switching it off stops a sweep
  *  and gives the dial back. A config that does not parse leaves the old one. */

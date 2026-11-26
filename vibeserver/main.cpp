@@ -19,6 +19,7 @@
 // around this same core later; nothing here should grow Mac-specific behaviour.
 
 #include "local_sdr_shim.h"
+#include "vibe_beast.h"   // ★★ V12 beta96 the flight-tracker settings are validated at the save
 #include "fd_passing.h"   // ★ vibe::fdListen — the hand-off socket is proved before a radio port goes local-only
 #include "directory.h"
 #include <functional>
@@ -1234,6 +1235,7 @@ void applySpotReporting(const vsconfig::ServerConfig& c, const vsconfig::RadioCo
     vibe::LocalSdrShim::setDmrIdLookup(c.dmrIdLookup, spotHttpGet);
 }
 std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
+std::string g_feedLastApplied;   // ★★ V12 beta96: …and the adsbFeed (sharing ADS-B with flight trackers)
 std::string g_dxLastApplied;   // ★★★ V12: …and the dxScan (the idle DX scanner)
 /** ★★★ V12: this radio's DX log file — one per radio, beside the gallery in the data dir. */
 static std::string dxLogFileFor(const std::string& serial) {
@@ -3456,6 +3458,12 @@ int main(int argc, char** argv) {
                     return false;
                 }
             }
+            // ★★ V12 beta96 sharing ADS-B with flight trackers: a wrong host, port or UUID is refused in words, never half-applied
+            for (const auto& r : next.radios) {
+                if (r.adsbFeed.empty()) continue;
+                vibe::beast::Config fc; std::string fe;
+                if (!vibe::beast::parseConfig(r.adsbFeed, fc, fe)) { err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + fe; return false; }
+            }
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
@@ -3495,6 +3503,7 @@ int main(int argc, char** argv) {
                     // ★★ V12 background decoding, live — the tick picks it up within two seconds (validated above).
                     { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); g_bgLastApplied = r.bgDecode; }
                     { std::string de; LocalSdrShim::setDxScan(r.dxScan, de); g_dxLastApplied = r.dxScan; }   // ★★★ V12 DX scanner, live
+                    { std::string fe; LocalSdrShim::setAdsbFeed(r.adsbFeed, fe); g_feedLastApplied = r.adsbFeed; }   // ★★ beta96 flight trackers, live
                     LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
                     LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
                     // ★ V12 the USRP's owner options, live: a new reference / correction / bandwidth with no restart.
@@ -3553,6 +3562,8 @@ int main(int argc, char** argv) {
                     g_bgLastApplied = next.radios[(size_t)pi].bgDecode;
                     std::string de; LocalSdrShim::setDxScan(next.radios[(size_t)pi].dxScan, de);
                     g_dxLastApplied = next.radios[(size_t)pi].dxScan;
+                    std::string fe; LocalSdrShim::setAdsbFeed(next.radios[(size_t)pi].adsbFeed, fe);   // ★★ beta96
+                    g_feedLastApplied = next.radios[(size_t)pi].adsbFeed;
                 }
             }
             if (next.configured) LocalSdrShim::setConfigured(true);
@@ -5616,6 +5627,9 @@ int main(int argc, char** argv) {
                 LocalSdrShim::setDxLogFile(dxLogFileFor(mine ? mine->serial : std::string()));
             }
             g_dxLastApplied = dj;
+            // ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h) — this radio's, never the front door's
+            if (!frontDoorOnly && mine) { std::string fe; LocalSdrShim::setAdsbFeed(mine->adsbFeed, fe); }
+            g_feedLastApplied = mine ? mine->adsbFeed : std::string();
             if (g_handheldChild) {
                 /* ★★★ THE HANDHELD'S GALLERY IS THE CARD (§0.1): Gallery/<DECODER>/<UTC> - <kHz> kHz <MODE>.ext, temp +
                  *  rename, the index in the engine's own data directory. Its size is half the card (the owner's
@@ -6217,6 +6231,12 @@ int main(int argc, char** argv) {
                                 std::string de;
                                 LocalSdrShim::setDxScan(mine->dxScan, de);
                                 std::printf("VibeServer: DX scanner settings re-read from %s\n", g_configPath.c_str());
+                            }
+                            if (mine && mine->adsbFeed != g_feedLastApplied) {   // ★★ V12 beta96 flight trackers, the same way
+                                g_feedLastApplied = mine->adsbFeed;
+                                std::string fe;
+                                LocalSdrShim::setAdsbFeed(mine->adsbFeed, fe);
+                                std::printf("VibeServer: ADS-B flight-tracker sharing re-read from %s\n", g_configPath.c_str());
                             }
                             if (mine && o.bgDecode.empty() && mine->bgDecode != g_bgLastApplied) {
                                 g_bgLastApplied = mine->bgDecode;

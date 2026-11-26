@@ -393,6 +393,11 @@ public:
     /** ★★★ V12 THE IDLE DX SCANNER (vibe_dxscan.h): this radio's settings, as RadioConfig::dxScan stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
     static bool setDxScan(const std::string& json, std::string& err);
+    /** ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h): this radio's settings, as RadioConfig::adsbFeed
+     *  stores them — the local Beast server and the push feeds. Live. false (and `err`) when it does not parse. */
+    static bool setAdsbFeed(const std::string& json, std::string& err);
+    /** …and their status ({"on","adsb","serve":{…},"feeds":[…],"line"}) — the admin page, the Setup card, the app. */
+    static std::string adsbFeedStatusJson();
     /** ★★★ …and where this radio's DX log lives (one file per radio; written every ~5 min when changed, and at shutdown). */
     static void setDxLogFile(const std::string& path);
     /** ★★ V12 what a background-decoding editor may offer here — the engine's own decoder table (ids, labels,

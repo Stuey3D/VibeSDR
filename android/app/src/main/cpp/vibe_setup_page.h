@@ -1514,6 +1514,51 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
            enforces them — listeners still change these for themselves in the audio menu's BROADCAST FM row. Not drawn
            for an Icom (it demodulates in the radio) or where WFM is blocked: a control with nothing to act on is worse
            than none (AGENTS.md). -->
+      <!-- ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (Stuart 2026-11-26: "like we did for PSKReporter"; docs/v12/ADSB-FEED.md,
+           vibe_beast.h). Its OWN card, per radio, OFF by default. Drawn only where this radio could run ADS-B (afRender reads
+           adsbLandOffer's `hw` — an HF+ or an Icom never sees it, AGENTS.md). Stored as RadioConfig::adsbFeed (one JSON blob). -->
+      <div class="card hide" id="adsbFeedCard">
+        <h2>Share ADS-B with flight trackers</h2>
+        <p class="why">Send the aircraft this radio hears to flight-tracking sites, or let a feeder program on your network read
+          them (FlightAware's PiAware, for one).</p>
+        <div class="hint" id="afKeepNote">Only while ADS-B is running on this radio. To feed all day, use ADS-B as the landing
+          page above and tick <b>Keep ADS-B running when nobody is connected</b>.</div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input type="checkbox" id="afServe" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Serve a Beast feed</b> for feeder programs on your network</span></label>
+        <div id="afServeBox" class="hide" style="margin-left:24px">
+          <label><span class="lbl">Port</span>
+            <input type="number" id="afPort" min="1024" max="65535" step="1" style="max-width:120px">
+            <div class="hint">30005 is the usual Beast port. Give each ADS-B radio on this machine its own.</div></label>
+          <label style="display:flex;gap:8px;align-items:center">
+            <input type="checkbox" id="afOpen">
+            <span>Allow any address, not only this network</span></label>
+          <div class="hint" id="afOpenWarn">Off: only this machine and your local network can connect. On: anyone who can
+            reach this machine's port can read it &mdash; only for a feeder elsewhere that you run yourself.</div>
+          <div class="hint"><b>FlightAware:</b> install PiAware from FlightAware's own instructions, then point it here:
+            <code>sudo piaware-config receiver-type other</code>, <code>sudo piaware-config receiver-host <span id="afHost">this-server</span></code>,
+            <code>sudo piaware-config receiver-port <span id="afPortEcho">30005</span></code>, <code>sudo systemctl restart piaware</code>,
+            then claim the feeder on flightaware.com. Step by step: <i>Feed FlightAware from a VibeServer</i> in the VibeServer guide.
+            <b>ADS-B Exchange</b> and other sites with their own feed program can read this port the same way.</div>
+        </div>
+        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input type="checkbox" id="afPush" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Send to flight-tracking sites</b></span></label>
+        <div id="afPushBox" class="hide" style="margin-left:24px">
+          <div id="afRows"></div>
+          <button type="button" class="ghost" id="afAdd" style="margin-top:6px">Add another site (host and port)</button>
+          <div class="hint">Each site gets a stream with repeats thinned to two a second per aircraft and message kind, as
+            their own feed programs send. A <b>station UUID</b> identifies your feed to the site (the ones that use one make
+            it yours on their stats pages). VibeServer makes one for you where the site's own program would; for
+            map.flights paste the one from your station page there.</div>
+        </div>
+        <div class="hint" id="afStatus" style="color:var(--amber)"></div>
+        <div class="hint">What is sent: the replies aircraft broadcast (identity, position, altitude, speed, squawk and the
+          rest) as this radio decoded them, with the signal level and a timestamp from the radio's own sample clock.
+          <b>Nothing about your listeners.</b> VibeServer never sends this receiver's position: a site knows where you are
+          only if you enter it in your account there. <b>MLAT (multilateration) is not supported</b> &mdash; the timestamps
+          are not precise enough for it, so leave a site's MLAT setting off.</div>
+      </div>
       <div class="card" id="fmDefCard">
         <h2>Broadcast FM defaults</h2>
         <p class="why">What a listener starts with in the BROADCAST FM row of the audio menu. They can still change any
@@ -4531,6 +4576,7 @@ function adsbLandShow(r, o) {
   return on;
 }
 function dabLandRender() {
+  if (typeof afRender === "function" && $("adsbFeedCard") && afRadio) afRender();   // ★ beta96 the same offer gates the card
   const wrap = $("dabLandWrap"); if (!wrap) return;
   const r = radio();
   const hwCan = dabLandHwCan();
@@ -7577,6 +7623,7 @@ function fill() {
   if ($("idleGrace")) $("idleGrace").value = String(r.idleGrace != null ? Math.round(r.idleGrace) : 300);
   bgLoad(r);   // ★ V12 background decoding — see bgLoad
   dxLoad(r);   // ★★★ V12 the idle DX scanner — see dxLoad
+  if ($("adsbFeedCard")) afLoad(r);   // ★★ V12 beta96 sharing ADS-B with flight trackers — see afLoad
   $("sessionLimit").value = r.sessionLimitMin || 0;
   $("sessionLimitMode").value = r.sessionLimitSoft ? "soft" : "hard";
   if ($("askFirst")) $("askFirst").checked = !!r.askBeforeTuning;   // ★ absent = off, as on every older config
@@ -8295,6 +8342,144 @@ function bgLoad(r) {
     if ($("decoderMax")) $("decoderMax").addEventListener("input", bgRender);
   }
   bgRender();
+}
+
+/* ── ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (RadioConfig::adsbFeed — one JSON blob; vibe_beast.h parseConfig) ──
+ *  The presets are the sites whose published feed set-ups give a host and port that take a plain Beast stream
+ *  (docs/v12/ADSB-FEED.md says where each came from, and when it was read). ADS-B Exchange is not one: its published route
+ *  is its own feed program, which can read our Beast port. Pure parts (afBlob/afRowsFrom) are tested by
+ *  scripts/test-setup-adsb-feed.mjs. */
+const AF_PRESETS = [
+  { name: "adsb.lol", host: "feed.adsb.lol", port: 30004, uuid: "auto" },
+  { name: "adsb.fi", host: "feed.adsb.fi", port: 30004, uuid: "auto" },
+  { name: "airplanes.live", host: "feed.airplanes.live", port: 30004, uuid: "auto" },
+  { name: "map.flights", host: "feed.map.flights", port: 30004, uuid: "paste" },
+];
+const AF_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+let afRadio = null, afRowsModel = [], afTimer = 0;
+function afNewUuid() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(b); else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+  const h = Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+/** The stored blob → one row per preset (ticked if listed) and one per custom destination. */
+function afRowsFrom(cfg) {
+  const feeds = Array.isArray(cfg && cfg.feeds) ? cfg.feeds : [];
+  const rows = AF_PRESETS.map(p => {
+    const f = feeds.find(x => String(x.host || "").toLowerCase() === p.host && Number(x.port) === p.port);
+    return { preset: p, on: !!(f && f.on !== false), host: p.host, port: p.port, uuid: f && f.uuid ? String(f.uuid) : "" };
+  });
+  for (const f of feeds) {
+    if (AF_PRESETS.some(p => String(f.host || "").toLowerCase() === p.host && Number(f.port) === p.port)) continue;
+    rows.push({ preset: null, on: f.on !== false, host: String(f.host || ""), port: Number(f.port) || 30004, uuid: f.uuid ? String(f.uuid) : "" });
+  }
+  return rows;
+}
+/** The rows + switches → the blob the server stores, or {error}. Presets that are unticked are not stored; a custom row
+ *  stays (ticked or not) until removed. "" when nothing was ever set and everything is off. */
+function afBlob(serve, port, open, push, rows, hadBefore) {
+  const feeds = [];
+  for (const r of rows) {
+    if (r.preset && !r.on) continue;
+    const host = String(r.host || "").trim();
+    if (!host) continue;
+    if (!/^[A-Za-z0-9.:-]{1,253}$/.test(host)) return { error: `“${host}” is not a host name or address` };
+    const pt = Number(r.port);
+    if (!(pt >= 1 && pt <= 65535 && Math.floor(pt) === pt)) return { error: `the port for ${host} must be 1 to 65535` };
+    const u = String(r.uuid || "").trim();
+    if (u && !AF_UUID.test(u)) return { error: `the station UUID for ${host} is not a UUID (8-4-4-4-12 hex)` };
+    if (push && r.on && r.preset && r.preset.uuid === "paste" && !u) return { error: `${r.preset.name} needs the station UUID from your station page there` };
+    const f = { host, port: pt, on: !!r.on };
+    if (u) f.uuid = u.toLowerCase();
+    feeds.push(f);
+  }
+  if (feeds.length > 8) return { error: "at most 8 flight-tracking sites" };
+  const p = Number(port);
+  if (serve && !(p >= 1024 && p <= 65535 && Math.floor(p) === p)) return { error: "the Beast port must be a whole number from 1024 to 65535" };
+  if (!serve && !push && !feeds.length && !hadBefore) return { blob: "" };
+  return { blob: JSON.stringify({ serve: !!serve, port: p >= 1024 && p <= 65535 ? p : 30005, open: !!open, push: !!push, feeds }) };
+}
+function afLoad(r) {
+  afRadio = r || null;
+  let c = {};
+  try { c = r && r.adsbFeed ? JSON.parse(r.adsbFeed) : {}; } catch (e) { c = {}; }
+  if (!c || typeof c !== "object") c = {};
+  $("afServe").checked = c.serve === true;
+  $("afPort").value = String(c.port >= 1024 ? c.port : 30005);
+  $("afOpen").checked = c.open === true;
+  $("afPush").checked = c.push === true;
+  afRowsModel = afRowsFrom(c);
+  if (!$("afServe").__wired) {
+    $("afServe").__wired = 1;
+    for (const id of ["afServe", "afPush", "afOpen"]) $(id).addEventListener("change", afRender);
+    $("afPort").addEventListener("input", afRender);
+    $("afAdd").addEventListener("click", () => {
+      if (afRowsModel.length >= AF_PRESETS.length + 8) return;
+      afRowsModel.push({ preset: null, on: true, host: "", port: 30004, uuid: "" }); afRender();
+    });
+  }
+  afRender();
+  afStatusPoll();
+}
+function afRowsDraw() {
+  const box = $("afRows");
+  box.innerHTML = afRowsModel.map((r, i) => {
+    const name = r.preset ? `<b>${esc(r.preset.name)}</b> <span class="why" style="margin:0">${esc(r.host)}:${r.port}</span>`
+      : `<input type="text" data-af="host" data-i="${i}" value="${esc(r.host)}" placeholder="host.example.org" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:220px;display:inline-block">
+         <input type="number" data-af="port" data-i="${i}" value="${r.port}" min="1" max="65535" style="max-width:100px;display:inline-block">
+         <button type="button" class="ghost" data-af="del" data-i="${i}" style="flex:0 0 auto">Remove</button>`;
+    const uuidBox = r.on ? `<div style="margin:4px 0 0 24px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+         <span class="lbl" style="margin:0">Station UUID</span>
+         <input type="text" data-af="uuid" data-i="${i}" value="${esc(r.uuid)}" placeholder="${r.preset && r.preset.uuid === "paste" ? "paste it from your map.flights station page" : "none (optional)"}" maxlength="36" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:330px;display:inline-block">
+         ${r.preset && r.preset.uuid === "paste" ? "" : `<button type="button" class="ghost" data-af="newuuid" data-i="${i}" style="flex:0 0 auto">New</button>`}</div>` : "";
+    return `<div style="margin-top:8px"><label style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+         <input type="checkbox" data-af="on" data-i="${i}" ${r.on ? "checked" : ""}>${name}</label>${uuidBox}</div>`;
+  }).join("");
+  box.querySelectorAll("[data-af]").forEach(el => {
+    const i = Number(el.dataset.i), k = el.dataset.af;
+    const row = afRowsModel[i];
+    if (k === "on") el.addEventListener("change", () => {
+      row.on = el.checked;
+      if (row.on && !row.uuid && row.preset && row.preset.uuid === "auto") row.uuid = afNewUuid();   // ★ as the site's own program does
+      afRender();
+    });
+    else if (k === "host") el.addEventListener("input", () => { row.host = el.value.trim(); });
+    else if (k === "port") el.addEventListener("input", () => { row.port = Number(el.value); });
+    else if (k === "uuid") el.addEventListener("input", () => { row.uuid = el.value.trim(); });
+    else if (k === "newuuid") el.addEventListener("click", () => { row.uuid = afNewUuid(); afRender(); });
+    else if (k === "del") el.addEventListener("click", () => { afRowsModel.splice(i, 1); afRender(); });
+  });
+}
+function afRender() {
+  const card = $("adsbFeedCard"); if (!card) return;
+  const r = afRadio || (typeof radio === "function" ? radio() : null);
+  // ★ only where this radio could run ADS-B at all (the landing's own rule) — AGENTS.md, no dead controls
+  const o = r && typeof adsbLandOffer === "function" ? adsbLandOffer(r, HW, adsbLandForm()) : { hw: false };
+  card.classList.toggle("hide", !o.hw);
+  $("afServeBox").classList.toggle("hide", !$("afServe").checked);
+  $("afPushBox").classList.toggle("hide", !$("afPush").checked);
+  $("afPortEcho").textContent = String(Number($("afPort").value) || 30005);
+  $("afHost").textContent = location.hostname || "this-server";
+  $("afKeepNote").classList.toggle("hide", !!(r && r.landingAdsb && r.adsbKeepRunning));
+  afRowsDraw();
+}
+function afCollect() {
+  const hadBefore = !!(afRadio && afRadio.adsbFeed);
+  return afBlob($("afServe").checked, $("afPort").value, $("afOpen").checked, $("afPush").checked, afRowsModel, hadBefore);
+}
+/** The status line: asked of the radio (admin-gated) on load, then every 15 s while the card shows and the page is visible. */
+async function afStatusPoll() {
+  clearTimeout(afTimer);
+  const el = $("afStatus"); if (!el) return;
+  if ($("adsbFeedCard").classList.contains("hide")) { el.textContent = ""; return; }
+  try {
+    const j = await (await fetch(`${HW_PREFIX}/vibeserver/admin/adsbfeed?${await authQuery()}`, {cache: "no-store"})).json();
+    el.textContent = j && j.on ? "Now: " + (j.line || "") + (j.frames ? ` · ${j.frames} messages decoded since this server started` : "") : "";
+  } catch (e) { el.textContent = ""; }
+  afTimer = setTimeout(() => { if (document.visibilityState === "visible") afStatusPoll(); else afTimer = setTimeout(afStatusPoll, 15000); }, 15000);
 }
 /* ── ★★★ V12 THE IDLE DX SCANNER (RadioConfig::dxScan — one JSON blob, as bgDecode; the server's vibe_dxscan.h reads it) ── */
 let dxRadio = null, dxKeep = {};
@@ -9016,6 +9201,8 @@ function collectRadio() {
     ...($("hwBg") && !$("hwBg").classList.contains("hide") ? { bgDecode: bgCollect() } : {}),
     // ★★★ V12 the idle DX scanner, as ONE JSON string (RadioConfig::dxScan); not offered on an Icom (nothing saved there)
     ...($("hwDx") && !$("hwDx").classList.contains("hide") ? { dxScan: dxCollect() } : {}),
+    // ★★ V12 beta96 sharing ADS-B with flight trackers, as ONE JSON string (RadioConfig::adsbFeed); only where the card shows
+    ...($("adsbFeedCard") && !$("adsbFeedCard").classList.contains("hide") && afRadio && !afCollect().error ? { adsbFeed: afCollect().blob } : {}),
     // ★ Sent as typed; the SERVER clamps to the 15-minute floor, so the page cannot be the thing
     //   that decides what is too short.
     idleKickMin: parseInt($("idleKick").value || "0", 10),
@@ -10652,6 +10839,7 @@ $("saveRadioBtn").onclick = async () => {
   // ★ This posts the whole machine too (collect()), so the same address rule holds here.
   if (dirReachStops()) return;
   if (pskrStops()) return;
+  if (afStops()) return;   // ★★ beta96 a wrong flight-tracker entry is said, not saved
   // ★ The same wait as the master save: this button is the ONE most likely to be pressed straight
   //   after opening a tab, which is precisely the window where the form is still the last radio's.
   await hwPending;
@@ -10717,6 +10905,15 @@ function wsprnetCallValue() {
 /** Shaped like a callsign (plausibleCall): 3\u201315 of A\u2013Z 0\u20139 /, a letter and a digit, nothing but those. */
 function wsprnetCallOk(s) {
   return /^[A-Z0-9\/]{3,15}$/.test(s) && /[A-Z]/.test(s) && /[0-9]/.test(s) && !/^\/|\/$|\/\//.test(s);
+}
+function afStops() {
+  const card = $("adsbFeedCard");
+  if (!card || card.classList.contains("hide")) return false;
+  const r = afCollect();
+  if (!r.error) return false;
+  $("saveErr").textContent = "Not saved \u2014 Share ADS-B with flight trackers: " + r.error + ".";
+  card.scrollIntoView({behavior: "smooth", block: "center"});
+  return true;
 }
 function pskrStops() {
   if (!$("pskrOn") || !$("pskrOn").checked) return false;
@@ -10791,6 +10988,7 @@ $("saveBtn").onclick = async () => {
   $("saveErr").textContent = "";
   if (dirReachStops()) return;
   if (pskrStops()) return;
+  if (afStops()) return;   // ★★ beta96 a wrong flight-tracker entry is said, not saved
   $("saveBtn").disabled = true;
   $("barMsg").textContent = "Saving…";
   // ★★★ WAIT FOR THE FORM TO BELONG TO THIS RADIO. stashRadio() refuses to read a form that is
