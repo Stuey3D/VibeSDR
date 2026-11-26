@@ -5,6 +5,75 @@ approved by Stuart 11-26 from the measured options in part 2).
 
 ## RESUME HERE
 
+### Part 4 (branch `b96-mappack`): Android carries the GPU map ONCE, and the app reads the packs BY RANGE
+
+- **Done, both jobs.** Commits c94e639b7 (renderer + test), 9caeb9a62 (app + Android manifest + checks), then the web page
+  and this section.
+- **Job 1, one copy on Android.** Every `require()` in `src/generated/mapglAssets.ts` made Metro embed that file in the APK
+  (`res/`, names shortened by R8) — but Android's map never read those copies: since 10-13 it reads the APK's own
+  `assets/mapgl/` bundle (mapgl-assets.gradle), unpacked once to `filesDir/mapgl-bundled/` by `VibeMapGL.bundleDir`, the
+  same folder the in-app VibeServer serves at `/mapgl/`. So all 75 map files went in twice: 30.5 MB of Stored packs plus
+  fonts, scripts and icons. Now `sync-mapgl-assets.mjs` also writes **`src/generated/mapglAssets.android.ts`** (same
+  `MAPGL_VERSION`, `MAPGL_FILES = []`); Metro picks it over `mapglAssets.ts` on Android, so nothing is embedded twice.
+  The app and the built-in server share the one unpacked `mapgl-bundled/` (as they already did); the server's URL and
+  `?r=<basicRev>` are unchanged (no C++ change). `check-map-overlay.mjs` fails if the Android twin is stale or ever
+  `require()`s a file. Lite never had the RN copy (no React Native) and keeps its single `assets/mapgl/` copy.
+- ★★ **TRAP: an INCREMENTAL gradle build keeps the old copies.** `android/app/build/generated/res/react/<variant>/` is not
+  cleaned by the bundle task, so a build on top of an older one still packs the stale `res/raw/assets_mapgl_*` files
+  (seen here: the first after-build was still 169.2 MB). A release build must start clean, or delete that folder first.
+  Check: `unzip -l <apk> | grep -c 'res/.*pmtiles'` must be 0.
+- **Job 2, range reads.** `vibemapgl.js` takes a new option **`packRange(name, offset, length)`**: when a host gives it
+  (and no `rangeBase`), the basic, relief and runways packs are pmtiles sources over ranged reads, each first probed for
+  its `PMTiles` magic (a missing relief/runways pack is left out as before; a missing basic pack fails as before). The
+  map page (MapOverlay) answers through the bridge exactly as for the detail pack: message `mgpack` →
+  `mapglPack.ts readPackRange(glBase, name, off, len)` (FileHandle, base64, same `__mgDeliver`). Only the three bundled
+  names, only under the page's own base (`mapgl/` iOS, `mapgl-bundled/` Android), reads capped at 4 MB, handles closed
+  before an iOS re-copy. `detailRange` now works on either app path. Without `packRange` the old whole-read path remains
+  (any other host; an iOS install whose copied `vibemapgl.js` is still the old one simply reads whole, as before).
+  ★ Trade-off: a bridge round trip per tile (base64) instead of a memcpy, on first draw only (MapLibre keeps decoded
+  tiles), for ~29 MB less RAM the whole time a map is open.
+- **Upgrades from beta95:** Android — the APK manifest version changes (`#version` in `assets/mapgl/manifest.tsv`), so
+  `VibeMapGL` re-unpacks `mapgl-bundled/` (marker last) and the app and server read the new pack; Android never used
+  `MAPGL_VERSION`. iOS — `MAPGL_VERSION` 33407805-75-13d314b3ce3e → 33410715-75-3e2fee586428, so `ensureMapglPack`
+  re-copies (and with it the new `vibemapgl.js`).
+- `vibe_web_page.h` rebuilt via the lock (the pages' `/mapgl/` `?r=` covers `vibemapgl.js`).
+
+| Measured (11-26) | Before | After | Change |
+|---|---|---|---|
+| APK, `assembleCurrentRelease` (debug-key signed, arm64 + armv7) | 169,229,797 B | 137,640,528 B | **−31,589,269 B (−31.6 MB)** |
+| APK `res/` entries | 1,489 (37.9 MB) | 1,414 (4.5 MB) | the 75 map files gone; `assets/mapgl/` 81 entries, unchanged |
+| Android storage once installed (APK + `mapgl-bundled/` 33.6 MB) | ≈ 202.9 MB | ≈ 171.3 MB | **−31.6 MB** (the `res/` copy was never unpacked, so the saving is the APK's) |
+| Lite APK | one copy | one copy | only `vibemapgl.js` changed |
+| Map page ArrayBuffers with a map open (V8 backing stores, `MEASURE_MEM=1`, 3 rounds each, 6 views incl. the world) | 35.1 MB | 6.0 MB | **−29.1 MB** (basic+relief+runways = 30.5 MB) |
+| Bytes over the bridge for those 6 views | — | 2.26 MB in 134 reads | |
+
+Correction to part 3's table: Android storage was ≈ +28 MB *per copy* there; the app's `documents/mapgl` copy does not exist
+on Android (that path is iOS only), so the doubled storage was the APK's `res/` copy, now gone.
+
+**Memory, how measured and what is still owed.** Headless Edge (Chromium, the Android System WebView's engine), the app's
+page path (`OPEN('whole')` vs `OPEN('range')`, the bridge played by HTTP ranges + the base64 round trip), forced GC, then
+`Runtime.getHeapUsage().backingStorageSize`. Renderer RSS is printed too but swings by hundreds of MB under SwiftShader,
+so it is not judged. Not measured on a phone: no emulator image here (only an armv7 Android-TV 5.0 and an API 28 image;
+the two adb devices are Stuart's live servers, not touched). **On a device:** open a map, wait for idle, then
+`adb shell dumpsys meminfo net.vibesdr.app` AND the WebView's renderer (`adb shell dumpsys meminfo | grep -i sandboxed`
+→ `dumpsys meminfo <pid>`), before (beta95) and after; expect ~30 MB less in the renderer. iOS: not built here (vendored
+device-only libs block a sim link); `tsc` clean for app code, and the iOS path is the same JS (`readPackRange` with base
+`mapgl/`, the files `ensureMapglPack` already copies).
+
+**Tests (part 4):** `scripts/test-server-map-water-nl.mjs` with the b96-keeprun vibeserver and mapgl-detail-v4: **476
+passed, 0 failed** — a new fetch test of the server's `/mapgl/vibemap-basic.pmtiles?r=319a8e477c` (206 + magic +
+`Content-Range …/18177938`, HEAD length), the three old phases, and two new ones: **app range path** (261 reads, 1.46 MB
+for every sample) and **app range path + detail** (387 reads, 2.08 MB) — every water/land point the same as the server's
+map. `MEASURE_MEM=1 … test-server-map-water-nl.mjs`: 5/0. `check-map-overlay.mjs`: all checks passed. Lite
+`assembleDebug` (release needs the rotation keys) built; app `assembleCurrentRelease` built with a throwaway
+keystore.properties pointing at the debug key (deleted after).
+
+**Open (one line each):**
+- Android could skip unpacking the three packs (30.5 MB storage): they are Stored, so the server and the app could read
+  them straight out of the APK (`AssetFileDescriptor` offset + length). A C++ change in vibe_mapgl.h — not done.
+- iOS still keeps two copies (app bundle + `documents/mapgl/`, ~32 MB): with range reads the packs could be read from the
+  bundle path and only the fonts/scripts copied. Not done (cannot be run here).
+
 - **Part 3 is done** on branch `b96-basicrivers` (off b96-integrate): Overture river/canal/tidal/dock areas >= 200 m wide,
   z5–8, are IN the basic pack. Ships at Rotterdam, London, Antwerp and Saigon sit on water on every server and in the app
   without High Detail Maps. Commits 13bdc62bc (pipeline), abed9ab5e (pack + style + renderer + copies), fe94e714c (pack
@@ -99,8 +168,7 @@ inside none >= 100 m.
 ### Not done / open
 - The Natural Earth river LINES (`rivers-b`) still draw over-zoomed; close in they sit beside the true river area
   (visible at Rotterdam z9). Hiding them where areas exist would need per-feature data; left as it is.
-- Android stores the pack twice in the APK (and twice more on disk once unpacked). Sharing one copy between the app and
-  its in-app server would save ~18 MB APK and ~18 MB storage, but is a packaging change, not part of this job.
+- ✓ DONE in part 4: Android stored the pack twice in the APK; it now carries it once.
 - ODbL: the website says the OSM-derived data is "published unrestricted with every release". Check the release step
   publishes the basic pack's river data (the pack itself in the release assets would do).
 
