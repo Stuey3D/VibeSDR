@@ -1326,7 +1326,25 @@
     }
     const onMoveEnd = () => { drawRings(); labelAt = 0; kick(); };
     if (gl) { gl.on('movestart', onMoveStart); gl.on('moveend', onMoveEnd); }
-    else { lm.on('movestart', onMoveStart); lm.on('moveend', onMoveEnd); }
+    else { lm.on('movestart', onMoveStart); lm.on('moveend', onMoveEnd); lm.on('moveend resize', () => llClamp()); }   // ★ beta96 the card kept on the map
+    /* ★★ beta96 A PIXEL-RATIO CHANGE (a window dragged to another screen, a browser zoom, device emulation): Leaflet's canvas
+     *  renderer only redraws on a move, so the range outline was drawn stale (at the old ratio) until the map was moved. The
+     *  ratio is watched and the canvas redrawn at once. The GPU map redraws itself. */
+    let dprMq = null;
+    function dprWatch() {
+      if (gl || typeof matchMedia !== 'function') return;
+      try {
+        if (dprMq) dprMq.removeEventListener('change', dprChanged);
+        dprMq = matchMedia('(resolution: ' + (window.devicePixelRatio || 1) + 'dppx)');
+        dprMq.addEventListener('change', dprChanged);
+      } catch (e) { dprMq = null; }
+    }
+    function dprChanged() {
+      if (destroyed) return;
+      dprWatch();
+      try { lm.invalidateSize(); lm.fire('moveend'); drawRange(); llClamp(); } catch (e) { console.error('adsblayer: pixel ratio redraw', e); }
+    }
+    dprWatch();
 
     /* ── range rings ────────────────────────────────────────────────────────────────────────── */
     let llRings = null;
@@ -1618,6 +1636,7 @@
           .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);
         p.on('remove', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.openOn(lm);
+        llClamp();
       }
       requestAnimationFrame(moreCue);   // ★ once it is laid out — and again if the photo arrives and grows it
       setTimeout(moreCue, 600);
@@ -1721,6 +1740,38 @@
      *  is refilled: MapLibre's x stays the node that was pressed. Leaflet keeps its x outside the content anyway; there
      *  setContent re-lays the popup's width (a folded card is narrow), and the scroll position is put back. */
     const SC_OPEN = '<div class="vsadsb-sc">', SC_CLOSE = '</div>';
+    /* ★★ beta96 THE LEAFLET CARD STAYS ON THE MAP (a 390 px map: a card over an aircraft near the left edge sat partly off
+     *  it, under the zoom keys). autoPan stays off — the card is refreshed every report and would drag the map each time —
+     *  so the card's box (never its tip, which keeps pointing at the aircraft) is slid sideways to fit inside the map. */
+    let llClampAt = 0;
+    function llClamp() {
+      if (gl || !popup || !lm) return;
+      try {
+        const el = popup.getElement && popup.getElement();
+        const w = el && el.querySelector('.leaflet-popup-content-wrapper');
+        if (!w) return;
+        w.style.transform = '';
+        const sc = w.querySelector('.vsadsb-sc');
+        if (sc) sc.style.maxHeight = '';
+        const mr = lm.getContainer().getBoundingClientRect(), pad = 8;
+        let r = w.getBoundingClientRect();
+        if (!r.width || !mr.width) return;
+        // ★ never taller than the room above the aircraft: the card scrolls inside (its own scroller) instead of running
+        //   up under the map's top bar
+        const room = r.bottom - (mr.top + pad);
+        if (sc && r.height > room) { sc.style.maxHeight = Math.max(60, sc.getBoundingClientRect().height - (r.height - room)) + 'px'; r = w.getBoundingClientRect(); }
+        // ★ and clear of the zoom keys (top-left) where the card reaches down beside them
+        const zk = lm.getContainer().querySelector('.leaflet-top.leaflet-left .leaflet-control');
+        const zr = zk && zk.getBoundingClientRect();
+        let left = mr.left + pad;
+        if (zr && zr.width && r.top < zr.bottom && zr.right + 6 + r.width <= mr.right - pad) left = zr.right + 6;
+        let dx = 0;
+        if (r.width > mr.right - pad - left) dx = left - r.left;
+        else if (r.left < left) dx = left - r.left;
+        else if (r.right > mr.right - pad) dx = mr.right - pad - r.right;
+        if (dx) w.style.transform = 'translateX(' + Math.round(dx) + 'px)';
+      } catch (e) { console.error('adsblayer: card clamp', e); }
+    }
     function renderCard(h) {
       if (!popup) return;
       const el = popup.getElement ? popup.getElement() : null;
@@ -1732,6 +1783,7 @@
         const sc2 = top && popup.getElement ? popup.getElement().querySelector('.vsadsb-sc') : null;
         if (sc2) sc2.scrollTop = top;
       }
+      llClamp();
       moreCue();
     }
     function onMinClick(e) {
@@ -1888,7 +1940,7 @@
       if (drawTrail(t)) animating = true;
       if (popup && selected && ac.has(selected)) {
         const s = ac.get(selected);
-        if (s.disp) { if (gl) popup.setLngLat([s.disp.lon, s.disp.lat]); else popup.setLatLng([s.disp.lat, s.disp.lon]); }
+        if (s.disp) { if (gl) popup.setLngLat([s.disp.lon, s.disp.lat]); else { popup.setLatLng([s.disp.lat, s.disp.lon]); if (t - llClampAt > 200) { llClampAt = t; llClamp(); } } }
       }
       if (animating) kick();
     }
@@ -2100,6 +2152,7 @@
       },
       destroy() {
         destroyed = true;
+        try { if (dprMq) dprMq.removeEventListener('change', dprChanged); } catch (e) { /* gone */ }
         if (rafId) cancelAnimationFrame(rafId);
         if (rangeTimer) clearInterval(rangeTimer);
         if (rangeDrawTimer) clearTimeout(rangeDrawTimer);

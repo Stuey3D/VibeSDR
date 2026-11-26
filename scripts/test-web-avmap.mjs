@@ -336,6 +336,18 @@ try {
       await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
       await sleep(1500);
       ok(await ev(`document.documentElement.scrollWidth <= 390`), `no sideways scroll at 390 px (${await ev('document.documentElement.scrollWidth')})`);
+      // ★ beta96 polish: an aircraft's card stays inside a 390 px map (the Leaflet card sat partly off its left edge)
+      for (const pick of ['first', 'last']) {
+        await ev(`(() => { const rs = [...${V}.querySelectorAll('#adsbList .adsbRow')].filter(x => !x.classList.contains('nopos')); const r = ${pick === 'first' ? 'rs[0]' : 'rs[rs.length - 1]'}; r && r.click(); return !!r; })()`);
+        await sleep(1500);
+        const fit = await ev(`(() => { const w = document.querySelector('.vsadsb-pop-dark .leaflet-popup-content-wrapper, .vsadsb-pop-dark .maplibregl-popup-content'); const m = ${V}.querySelector('.trkMapHost');
+          if (!w || !m) return 'no card'; const a = w.getBoundingClientRect(), b = m.getBoundingClientRect();
+          const z = ${V}.querySelector('.leaflet-top.leaflet-left .leaflet-control')?.getBoundingClientRect();
+          const underZoom = !!z && a.left < z.right && a.top < z.bottom && a.bottom > z.top;
+          return a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && !underZoom ? 'in'
+            : 'out ' + Math.round(a.left) + '–' + Math.round(a.right) + ' × ' + Math.round(a.top) + '–' + Math.round(a.bottom) + ' of ' + Math.round(b.left) + '–' + Math.round(b.right) + ' × ' + Math.round(b.top) + (underZoom ? ' (under the zoom keys)' : ''); })()`);
+        ok(fit === 'in', `the ${pick} aircraft's card is inside the 390 px map (${fit})`);
+      }
       console.log('   screenshot', await shot('adsb-mode-phone'));
       await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
       await sleep(800);
