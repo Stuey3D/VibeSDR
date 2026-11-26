@@ -768,7 +768,10 @@ export class TrackView {
     if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
   }
+  /** ★ beta96 the selection changed (an icon tapped, a row pressed) — the AIR & SEA map filters its MESSAGES by it. */
+  onSel: ((key: string) => void) | null = null;
   private markSel(k: string) {
+    if (k !== this.sel) try { this.onSel?.(k); } catch (e) { console.error('[tracks] onSel', e); }
     this.sel = k;
     for (const el of Array.from(this.rowsEl.querySelectorAll('.trkRow.sel'))) el.classList.remove('sel');
     const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;

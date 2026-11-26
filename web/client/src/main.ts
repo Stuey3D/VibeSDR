@@ -36,7 +36,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
-import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
+import { rangeBearing as adsbRangeBearing, adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
@@ -55,6 +55,11 @@ import { seaCompose, seaAreasFor, seaAreasInView, seaPlaceMet, seaLegendHtml, se
 import { avRanges, avStatus } from './avdata';   // ★ V12 the aircraft datalink
 import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
          type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
+// ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules
+import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProfile, liveTabs, liveTabPick, avLayersFrom, avLayerOf, shipLayerOf,
+         aircraftOrder, msgFeedUpdate, msgFilter, MAP_TITLE, TAB_LABEL, SHIP_ID, LIVE_ROW_CAP,
+         type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../../../src/services/liveMaps';
+import { avMerge, avNowRule, avHave, avName, type AvLayerId } from '../../../src/services/aviationMap';
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
@@ -10013,7 +10018,6 @@ async function ismStoredLoad_(band: string) {
  *  the NAVTEX box's MAP and the gallery. ★ LIVE: refetched every 30 s while open (the server caches; a scan of the index
  *  only when it changed), so a message saved by a listener's decoder or background decoding appears, pulsing. */
 const NAV_RANGE_KEY = 'vibesdr.navMapRange', NAV_LAYERS_KEY = 'vibesdr.navMapLayers', SHIP_LAYERS_KEY = 'vibesdr.shipMapLayers';
-let navView: TrackView | null = null;
 let navTimer: ReturnType<typeof setTimeout> | null = null;
 let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_KEY); } catch { return null; } })());
 /* ★★ V12 2026-11-02 THE SHIPPING MAP (src/services/shippingMap.ts, docs/v12/SHIPPING-MAP.md) — the NAVTEX map became ONE
@@ -10118,23 +10122,27 @@ function shipKeyHtml(present: ShipLayerId[]): string {
     + NAV_MARK_ROWS.map((x) => `<div class="kr">${navMarkRowSvg(x, 16)}<span>${escapeHtml(x.words)}</span></div>`).join('');   // ★ v10 the not-working marks, as the app's legend
   if (present.includes('weather')) h += windLegendRows().map(([g, w]) => `<div class="kr">${g}<span>${escapeHtml(w)}</span></div>`).join('');
   // ★ beta95 the attribution follows the areas in VIEW (they are drawn worldwide now), the near set before the map is made
-  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasInView((navView?.open ? navView : aisView)?.viewBox() ?? null, myPos() ?? navLast.st?.rx ?? null, navLast.m)));
+  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasInView(asView?.viewBox() ?? null, myPos() ?? navLast.st?.rx ?? null, navLast.m)));
   return h;
 }
 /** ★★ ONE COMPOSITION for both views: the items, the RECEIVED list (a section per layer shown) and the status line.
  *  `liveView`: AIS mode's own view — its live ships are drawn by that view exactly as before (raw vessels), so only the
  *  store's ships it is not hearing now are added here. */
-function shipCompose(focus: ShipFocus, liveView: boolean) {
+function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: ShipLayerId[]; on: (id: ShipLayerId) => boolean; many?: boolean }) {
   const { st: r, w, m } = navLast;
   const rx = myPos() ?? r?.rx ?? null;
   const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
-  const present = shipLayersPresent(shipHave(now), focus);
-  const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
-  const items: any[] = [], out: string[] = [], status: string[] = [];
-  const many = present.length > 1;
+  // ★★ beta96 the AIR & SEA map passes its own presence and toggles (liveMaps.ts) and reads the rows per layer (its tabs)
+  const present = over?.present ?? shipLayersPresent(shipHave(now), focus);
+  const on = over?.on ?? ((id: ShipLayerId) => shipOn(id, present, shipLayers));
+  const items: any[] = [], status: string[] = [];
+  const rowsBy: Partial<Record<ShipLayerId, string[]>> = {};
+  let out: string[] = [];
+  const many = over?.many ?? present.length > 1;
   const sec = (t: string) => (many ? `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>` : '');
   for (const id of present) {
     if (!on(id)) continue;
+    out = rowsBy[id] = [];
     if (id === 'ships') {
       const live = aisOn ? aisReport as any : null;
       const all = shipShips(live, navLast.ships);
@@ -10187,20 +10195,12 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
   }
   const building = navBuilding(w);
   if (building) status.push(building);
-  return { items, rows: out.join(''), status: status.filter(Boolean).join(' · '), present, rx, building };
+  const by = (ids: ShipLayerId[]) => ids.map((id) => (rowsBy[id] ?? []).join('')).join('');
+  return { items, rows: by(present), rowsBy: Object.fromEntries(Object.entries(rowsBy).map(([k, v]) => [k, (v ?? []).join('')])) as Partial<Record<ShipLayerId, string>>,
+           status: status.filter(Boolean).join(' · '), present, rx, building, by };
 }
-function shipSetChrome(v: TrackView, present: ShipLayerId[]) {
-  v.setToggles(shipToggles(present), shipLayers);
-  v.setLegend(shipKeyHtml(present));
-}
-function navDraw() {
-  if (aisView?.open) aisRender();
-  if (!navView?.open) return;
-  const c = shipCompose(shipFocus, false);
-  shipSetChrome(navView, c.present);
-  navView.update(c.items, c.rows, c.status, c.items.filter((i: any) => !i._nofit).length, c.rx);   // ★ beta95 the count is what was heard, not the chart (the sea areas are worldwide)
-  navView.note(c.building);
-}
+/** ★ beta96 the shipping layers changed (a poll, the DSC box): the AIR & SEA map redraws (it holds them now). */
+function navDraw() { asRender(); }
 /** ★ The view options both shipping views share: items carry their own icon, label and card (_ic, _lb, _cd); AIS mode's
  *  live ships are raw vessels and use the AIS layer's own. */
 function shipViewOpts() {
@@ -10212,7 +10212,7 @@ function shipViewOpts() {
     yieldGroups: ['m'],
     onCard: navCardFill,
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
-    onRange: (id: string) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } navView?.setRange?.(id); aisView?.setRange?.(id); void navPoll(true); },
+    onRange: (id: string) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } asView?.setRange?.(id); void navPoll(true); },
     onToggle: (id: string, on: boolean) => {
       shipLayers = { ...shipLayers, [id]: on };
       try { localStorage.setItem(SHIP_LAYERS_KEY, JSON.stringify(shipLayers)); } catch { /* private */ }
@@ -10230,18 +10230,8 @@ function shipViewOpts() {
 /** ★★ Open the SHIPPING MAP with `focus`'s layer first (NAVTEX's MAP: 'navtex'; a DSC call: 'dsc'; an AIS gallery row:
  *  'ships'), on `key` when given (a DSC call pressed). */
 async function navMapOpen(focus: ShipFocus = 'navtex', key = '') {
-  shipFocus = focus;
-  if (!navView) navView = new TrackView({
-    title: SHIPPING_TITLE, profile: 'marine', exitLabel: 'CLOSE MAP', listTitle: 'RECEIVED',
-    onExit: () => { navView?.hide(); if (navTimer && !aisView?.open) { clearTimeout(navTimer); navTimer = null; } },
-    labelZoom: 3, focusZoom: 6,
-    ...shipViewOpts(),
-  });
-  navView.show(myPos());
-  navLast = { st: null, w: null, m: null, ships: null, dscG: [] };
-  navDraw();
-  await navPoll(true);
-  if (key) navView.focus(key);
+  // ★★ beta96 the AIR & SEA map, on its SHIPS / NAVTEX tab (the box it came from is live while the map is open from it)
+  asOpen({ box: focus === 'navtex' ? 'navtex' : focus === 'dsc' ? 'dsc' : '', tab: focus === 'navtex' ? 'navtex' : 'ships', key });
 }
 /** ★ LIVE: every 30 s while open (2 s while the server is still building the index) — a message saved by a listener's
  *  decoder or background decoding appears, pulsing, without the map being reloaded. AIS mode's map polls too (its
@@ -10249,11 +10239,11 @@ async function navMapOpen(focus: ShipFocus = 'navtex', key = '') {
 let navPollSeq = 0;
 async function navPoll(now = false) {
   if (navTimer) { clearTimeout(navTimer); navTimer = null; }
-  if (!navView?.open && !aisView?.open) return;
+  if (!asView?.open) return;
   const seq = ++navPollSeq;
-  if (now) navView?.note(navBuilding(navLast.w) || '');
+  if (now) asView?.note(navBuilding(navLast.w) || '');
   const got = await navFetchAll(navRange);
-  if (seq !== navPollSeq || (!navView?.open && !aisView?.open)) return;
+  if (seq !== navPollSeq || !asView?.open) return;
   navLast = { st: got.st ?? navLast.st, w: got.w ?? navLast.w, m: got.m ?? navLast.m, ships: got.ships ?? navLast.ships, dscG: got.dscG.length ? got.dscG : navLast.dscG };
   navDraw();
   navTimer = setTimeout(() => { void navPoll(); }, navLast.w && navLast.w.pending > 0 ? 2000 : 30_000);
@@ -10347,9 +10337,8 @@ function ismMapRender() {
 let aisCap: { ok: boolean; why: string } | null = null;
 let aisOn = false;
 let aisReport: AisReport | null = null;
-let aisView: TrackView | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
-function trackViewUp(): boolean { return !!aisView?.open || !!vmView?.open; }   // ★ V12 + the VOR map: nothing drawn behind it, as NDB
+function trackViewUp(): boolean { return !!asView?.open || !!vmView?.open; }   // ★ V12 + the VOR map: nothing drawn behind it, as NDB
 function aisReadCap(j: any) {
   if (j?.ais === true) aisCap = { ok: true, why: '' };
   else if (j?.ais === false) {
@@ -10366,21 +10355,15 @@ function aisUiOn() {
   /* ★★ V12 2026-11-02: AIS mode's map IS the SHIPPING MAP (title, the RECEIVED list, the time filter, the layers) — its
    *  live ships exactly as before (EXIT AIS gives the receiver back), and the NAVTEX, DSC and stored-ship layers beside
    *  them where this server has them. */
-  if (!aisView) aisView = new TrackView({
-    title: `${SHIPPING_TITLE} · AIS 161.975 + 162.025 MHz`, profile: 'marine', exitLabel: 'EXIT AIS', listTitle: 'RECEIVED', onExit: () => aisSetMode(false),
-    ...shipViewOpts(),
-  });
-  aisView.show(myPos());
-  aisRender();
-  void navPoll(true);
+  asOpen({ by: 'mode', tab: 'ships', sort: 'nearest' });   // ★★ beta96 the AIR & SEA map, AIS live
 }
 function aisUiOff() {
   aisOn = false; setTimeout(drmBoxSync, 0);
   syncAudioQuiet();
   aisReport = null;
   if (spec) spec.aisHeld = false;
-  aisView?.hide();
   aisTrailWait.clear();
+  asModeEnded();
   renderFreq();
 }
 function aisSetMode(on: boolean) {
@@ -10398,20 +10381,7 @@ function aisSetMode(on: boolean) {
     aisUiOff();
   }
 }
-function aisRender() {
-  if (!aisView) return;
-  const r = aisReport;
-  const items: any[] = r ? r.vessels.filter((v) => v.lat != null && v.lon != null).map((v) => ({ ...v, key: String(v.mmsi) })) : [];
-  // ★ the other layers (stored ships not heard now, DSC, NAVTEX) — the SHIPPING MAP's own composition
-  const c = shipCompose('ships', true);
-  shipSetChrome(aisView, c.present);
-  const live = r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>';
-  const many = c.present.length > 1;
-  const rows = (many && shipOn('ships', c.present, shipLayers) ? '<div class="sec" role="heading" aria-level="3">SHIPS — HEARD NOW</div>' : '')
-    + (shipOn('ships', c.present, shipLayers) ? live : '') + c.rows;
-  aisView.update(shipOn('ships', c.present, shipLayers) ? [...items, ...c.items] : c.items, rows,
-                 [aisStatus(r), c.status].filter(Boolean).join(' · '), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
-}
+function aisRender() { asRender(); }
 /** ★ A report (on) or the server's `ais_off` (null). */
 function onAisReport(r: AisReport | null) {
   if (!r) { if (aisOn) { audio?.holdHealing(6000); aisUiOff(); } return; }
@@ -10428,7 +10398,6 @@ let avCap: { ok: boolean; why: string } | null = null;
 let avBands: AvBand[] = [];
 let avOn = false;
 let avReport: AvReport | null = null;
-let avView: TrackView | null = null;
 function avReadCap(j: any) {
   if (j?.avdata === true) avCap = { ok: true, why: '' };
   else if (j?.avdata === false) {
@@ -10443,10 +10412,7 @@ function avReadCap(j: any) {
  *  mode's own view IS this map (its live list first, EXIT gives the receiver back); the HFDL decoder's MAP and ADS-B's
  *  AVIATION MAP open it standalone (CLOSE MAP). Layers with no aircraft are absent; AIRPORTS is on by default. */
 const AV_LAYERS_KEY = 'vibesdr.avMapLayers';
-let avLayers: AvLayers = avLayersOf(lsGet(AV_LAYERS_KEY));
 let avShared: SharedAircraft | null = null;
-let avMapView: TrackView | null = null;
-let avMapFocus: AvFocus = 'datalink';
 let avPollT: ReturnType<typeof setTimeout> | null = null;
 let avPollSeq = 0;
 async function avSharedFetch(): Promise<SharedAircraft | null> {
@@ -10458,67 +10424,26 @@ async function avSharedFetch(): Promise<SharedAircraft | null> {
 /** ★ LIVE: every 3 s while either view is open (the server's table is rewritten every 2 s by each radio). */
 async function avPoll() {
   if (avPollT) { clearTimeout(avPollT); avPollT = null; }
-  if (!avView?.open && !avMapView?.open) return;
+  if (!asView?.open) return;
   const seq = ++avPollSeq;
   const got = await avSharedFetch();
-  if (seq !== avPollSeq || (!avView?.open && !avMapView?.open)) return;
+  if (seq !== avPollSeq || !asView?.open) return;
   if (got) avShared = got;
-  avRender();
-  avMapRender();
+  asRender();
   avPollT = setTimeout(() => { void avPoll(); }, 3000);
-}
-/** The view options both aviation views share: every item carries its own icon, label and card. */
-function avViewOpts() {
-  return {
-    icon: (it: any) => it._ic, label: (it: any) => it._lb || '', card: (it: any) => it._cd || '',
-    labelRank: (it: any) => it._rk ?? 0, aria: (it: any) => it._aria || it._lb || '',
-    labelZoom: 5, focusZoom: 8, profile: avLayers.airports ? 'aero' : 'aero-plain', nautical: true,   // ★ beta90 NM on the scale bar
-    aircraft: true,   // ★★ beta90 every aircraft drawn by the ADS-B layer (rings, AUTO / FIT, the glide, heading from its fixes)
-    imageBase: adsbImageBase() || null,   // ★ beta91 the owner's logos / silhouettes — every source's aircraft carries the keys now
-    onToggle: (id: string, on: boolean) => {
-      avLayers = { ...avLayers, [id]: on };
-      try { localStorage.setItem(AV_LAYERS_KEY, JSON.stringify(avLayers)); } catch { /* private */ }
-      avRender(); avMapRender();
-    },
-  };
-}
-/** The list: sections per kind (this radio's live datalink first, with the owner's message text where the server sent it). */
-function avListHtml(c: ReturnType<typeof avCompose>, bodies: Map<string, string>): string {
-  if (!c.rows.length) return '';
-  const liveKeys = new Set(c.planes.filter((p) => p.live).map((p) => `a:${p.key}`));
-  const row = (x: (typeof c.rows)[number]) => trkRowHtml(x).replace('</small></span>', `</small>${bodies.get(x.key) ? `<small class="avText">${escapeHtml(bodies.get(x.key) as string)}</small>` : ''}</span>`);
-  const live = c.rows.filter((r) => liveKeys.has(r.key)), rest = c.rows.filter((r) => !liveKeys.has(r.key));
-  const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
-  // ★★ beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the aircraft data (the card's words)
-  const credit = c.credit ? `<div class="avCredit">${avCreditHtml()}</div>` : '';
-  if (!live.length) return rest.map(row).join('') + credit;
-  return sec('THIS RADIO — HEARD NOW') + live.map(row).join('') + (rest.length ? sec('OTHER SOURCES ON THIS SERVER') + rest.map(row).join('') : '') + credit;
-}
-function avChrome(v: TrackView, c: ReturnType<typeof avCompose>) {
-  v.setToggles(c.toggles, avLayers as Record<string, boolean>);
-  v.setLegend(avLegendHtml(c.present, true));   // ★ beta90 the aircraft are the ADS-B layer's
-  v.setProfile(c.profile);
 }
 function avUiOn() {
   avOn = true;
   setTimeout(syncOnlyMode, 0);   // ★★ V12 the only mode: no EXIT, the note (once its view is drawn)
   syncAudioQuiet();
   closePanels();
-  if (!avView) avView = new TrackView({
-    title: `${AVIATION_TITLE} · DATALINK`, exitLabel: 'EXIT DATALINK', listTitle: 'AIRCRAFT', onExit: () => avSetMode(false),
-    ranges: avRanges(avBands), range: avReport?.band || '', rangeHint: 'The band: ACARS (131 MHz) or VDL2 (136 MHz)', rangeLabel: 'The band',
-    onRange: (id: string) => { if (spec && avReport?.band !== id) spec.avdata(true, id); },
-    ...avViewOpts(),
-  });
-  avView.show(myPos());
-  avRender();
-  void avPoll();
+  asOpen({ by: 'mode', tab: 'messages', sort: 'latest' });   // ★★ beta96 the AIR & SEA map, the DATALINK live
 }
 function avUiOff() {
   avOn = false;
   syncAudioQuiet();
   avReport = null;
-  avView?.hide();
+  asModeEnded();
   renderFreq();
 }
 function avSetMode(on: boolean) {
@@ -10535,40 +10460,12 @@ function avSetMode(on: boolean) {
     avUiOff();
   }
 }
-function avRender() {
-  if (!avView?.open) return;
-  const r = avReport;
-  const c = avCompose(r, avShared, 'datalink', avLayers, myPos(), 'web');
-  avChrome(avView, c);
-  // ★ the owner's message text (only where the server sent it: the opt-in, on the owner's own session)
-  const bodies = new Map<string, string>();
-  for (const p of c.planes) if (p.live) { const a = r?.aircraft.find((x) => (x.icao && x.icao === p.icao) || (x.reg && x.reg === p.reg)); if (a?.text) bodies.set(`a:${p.key}`, a.text); }
-  const rows = avListHtml(c, bodies) || (r && !r.aircraft.length
-    ? `<div class="trkEmpty">Listening on every ${escapeHtml(r.bandName)} channel. Aircraft appear here as they are heard — ACARS and VDL2 are bursts, so a quiet minute is normal; a receiver near an airport or under a flight path hears the most.</div>`
-    : `<div class="trkEmpty">${r ? escapeHtml(AV_EMPTY) : 'Taking the receiver to the aircraft datalink…'}</div>`);
-  avView.update(c.items, rows, [avStatus(r), c.status].filter(Boolean).join(' · '), c.planes.length, myPos());
-  // ★ the server owns the band: the control shows where the radio IS (a refused pick snaps back with the next report)
-  if (r) for (const b of Array.from(document.querySelectorAll('.trkView:not([hidden]) [data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === r.band));
-}
+function avRender() { asRender(); }
 /** ★ The standalone AVIATION MAP: the HFDL decoder's MAP ('hfdl') and ADS-B's AVIATION MAP ('adsb') — the same map,
  *  that source first. CLOSE MAP goes back; nothing is tuned. */
 function avMapOpen(focus: AvFocus) {
-  avMapFocus = focus;
-  if (!avMapView) avMapView = new TrackView({
-    title: AVIATION_TITLE, exitLabel: 'CLOSE MAP', listTitle: 'AIRCRAFT',
-    onExit: () => { avMapView?.hide(); if (avPollT && !avView?.open) { clearTimeout(avPollT); avPollT = null; } },
-    ...avViewOpts(),
-  });
-  avMapView.show(myPos());
-  avMapRender();
-  void avPoll();
-}
-function avMapRender() {
-  if (!avMapView?.open) return;
-  const c = avCompose(avOn ? avReport : null, avShared, avMapFocus, avLayers, myPos(), 'web');
-  avChrome(avMapView, c);
-  avMapView.update(c.items, avListHtml(c, new Map()) || `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : AV_EMPTY)}</div>`,
-                   c.status, c.planes.length, myPos());
+  // ★★ beta96 the AIR & SEA map: HFDL's MAP on its messages (HFDL live while open from the box), the others on AIRCRAFT
+  asOpen(focus === 'hfdl' ? { box: 'hfdl', tab: 'messages', sort: 'latest' } : { box: '', tab: focus === 'datalink' ? 'messages' : 'aircraft' });
 }
 /** ★ ADS-B's AVIATION MAP key: drawn only when another source (a second radio's datalink, HFDL) has aircraft here — the
  *  map would otherwise be the ADS-B map again (AGENTS.md: no dead controls). Asked every 20 s while ADS-B is on. */
@@ -10585,6 +10482,196 @@ function avAdsbProbe(on: boolean) {
   void ask();
   avAdsbProbeT = setInterval(() => { void ask(); }, 20_000);
 }
+/* ★★★ V12 beta96 THE AIR & SEA MAP (docs/v12/ONE-MAP.md, src/services/liveMaps.ts) — ONE view for everything aviation and
+ *  maritime this server holds: the aviation map (aircraft.json — ADS-B, ACARS, VDL2, HFDL, ADS-C, the ground stations,
+ *  airports) and the shipping map (ships, DSC, NAVTEX stations / warnings / weather, sea areas) together, with the lists
+ *  as TABS (AIRCRAFT · MESSAGES · SHIPS · NAVTEX). It replaced four views (the shipping map, AIS mode's, the DATALINK
+ *  mode's and the standalone aviation map).
+ *  ★★★ THE CURRENT MODE IS THE LIVE LAYER: AIS mode's ships come every second over the socket, the DATALINK's report
+ *  likewise; the rest is what the server stored (the shared aircraft table, the ship store, the gallery), faded by age.
+ *  The TITLE, the EXIT key, the live chip and the tab are COMPUTED from the current mode on EVERY render (liveChrome) —
+ *  never set when the view is made — so a mode change while the map is open can never leave it wearing the old one
+ *  (Mac Ha 11-26: the AIS map kept "SHIPPING MAP" after an exit to ADS-B). */
+const AS_LAYERS_KEY = 'vibesdr.airSeaLayers';
+const AS_SORT_KEY = 'vibesdr.airSeaSort';
+let asToggled: Partial<Record<LiveLayerId, boolean>> = liveLayersOf(lsGet(AS_LAYERS_KEY),
+  { json: lsGet(AV_LAYERS_KEY), map: { adsb: 'adsb', acars: 'acars', vdl2: 'vdl2', hfdl: 'hfdl', adsc: 'adsc', stations: 'hfdlst', airports: 'airports' } },
+  { json: lsGet(SHIP_LAYERS_KEY) ?? lsGet(NAV_LAYERS_KEY), map: { ships: 'ships', dsc: 'dsc', stations: 'navst', warnings: 'warnings', weather: 'weather', areas: 'areas' } });
+let asView: TrackView | null = null;
+/** ★ How the map is up: 'mode' = it is a mode's own screen (AIS, DATALINK) — leaving the mode puts it away; 'map' = opened
+ *  from a key or a box (CLOSE MAP, the mode carries on). */
+let asBy: 'mode' | 'map' = 'map';
+/** ★ The box the map was opened from (NAVTEX, DSC, HFDL) — live while the map is open from it; '' = none. */
+let asBox: LiveMode = '';
+let asOpenedTab: LiveTab | null = null;
+let asPicked: LiveTab | null = null;
+let asSort: AircraftSort = lsGet(AS_SORT_KEY) === 'latest' ? 'latest' : 'nearest';
+let asMsgKey = '';
+let asMsgs: LiveMsg[] = [];
+const asMsgSeen = new Map<string, number>();
+/** ★★ The receiver's current mode, as the maps see it (a whole-radio mode first; else the box the map was opened from). */
+function asMode(): LiveMode {
+  return adsbOn ? 'adsb' : aisOn ? 'ais' : avOn ? 'datalink' : sdOn ? 'sondes' : ndbOn ? 'ndb' : vmOn ? 'vormap' : asBox;
+}
+/** For drivers (scripts/test-web-live-maps.mjs): the map's computed state, read-only. */
+(window as any).__vibeAirSea = () => asView ? { open: asView.open, title: asView.title, exit: asView.exitLabel, tab: asView.tab, mode: asMode() } : null;
+/** The view's options: every item carries its own icon, label and card; AIS mode's live ships are raw vessels (the AIS
+ *  layer's own); aircraft (`_adsb`) go to the ADS-B layer. */
+function asViewOpts() {
+  const ship = shipViewOpts();
+  return {
+    ...ship,
+    title: MAP_TITLE.airsea, exitLabel: 'CLOSE MAP', listTitle: 'AIRCRAFT',
+    onExit: () => asExit(),
+    labelZoom: 5, focusZoom: 8, nautical: true, profile: 'airsea',
+    aircraft: true, mixed: true, imageBase: adsbImageBase() || null,
+    labelRank: (it: any) => it._rk ?? 0,
+    onRange: (id: string) => {
+      // ★ one segmented control, two meanings: the DATALINK's band while that mode is on, else the maritime time filter
+      if (avOn) { if (spec && avReport?.band !== id) spec.avdata(true, id); return; }
+      navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true);
+    },
+    onToggle: (id: string, on: boolean) => {
+      asToggled = { ...asToggled, [id]: on };
+      try { localStorage.setItem(AS_LAYERS_KEY, JSON.stringify(asToggled)); } catch { /* private */ }
+      asRender();
+    },
+  };
+}
+/** ★★ Open the AIR & SEA map: `by` the mode (its own screen) or a key / box; on `tab`; on `key` when given. */
+function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; key?: string; sort?: AircraftSort }) {
+  const wasOpen = !!asView?.open;
+  if (o.by === 'mode') asBy = 'mode'; else if (!wasOpen) asBy = 'map';
+  if (o.box !== undefined) asBox = o.box;
+  if (o.tab) { asOpenedTab = o.tab; asPicked = null; }
+  if (o.sort) asSort = o.sort;
+  if (!asView) {
+    asView = new TrackView(asViewOpts());
+    // ★★ tap an aircraft (its row or its icon) → MESSAGES shows its messages only; a message row finds its aircraft
+    asView.onSel = (k) => { if (k.startsWith('a:') && k !== asMsgKey) { asMsgKey = k; if (asView?.tab === 'messages') asRender(); } };
+  }
+  closePanels();
+  asView.show(myPos());
+  asRender();
+  void avPoll();
+  void navPoll(true);
+  if (o.key) asView.focus(o.key);
+}
+/** EXIT <MODE> leaves the mode (the map goes with it); CLOSE MAP puts the map away and the mode carries on. */
+function asExit() {
+  const c = liveChrome('airsea', asMode());
+  if (c.exitLeavesMode && asBy === 'mode') {
+    if (aisOn) { aisSetMode(false); return; }
+    if (avOn) { avSetMode(false); return; }
+  }
+  asClose();
+}
+function asClose() {
+  asView?.hide();
+  asBox = ''; asPicked = null; asMsgKey = '';
+  if (navTimer) { clearTimeout(navTimer); navTimer = null; }
+  if (avPollT) { clearTimeout(avPollT); avPollT = null; }
+  renderFreq();
+}
+/** ★ A mode that was the map's screen has ended: the map goes if the mode brought it, else it just stops being live. */
+function asModeEnded() {
+  if (!asView?.open) return;
+  if (asBy === 'mode') asClose(); else asRender();
+}
+function asSec(t: string): string { return `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`; }
+/** ★★ THE ONE RENDER: chrome (computed), chips, tabs, the items of every layer on, the rows of the tab shown. */
+function asRender() {
+  const v = asView;
+  if (!v?.open) return;
+  const mode = asMode();
+  const chrome = liveChrome('airsea', mode);
+  const live = chrome.live;
+  const rx = myPos();
+  v.setChrome(chrome.title, chrome.exitLabel);
+  // ── what each layer has ──
+  const planesAll = avNowRule(avMerge(avOn ? avReport : null, avShared), avShared).planes;
+  const avh = avHave(planesAll, avShared?.stations ?? []);
+  const nowS = navLast.w?.now ?? navLast.m?.now ?? navLast.st?.now ?? Math.floor(Date.now() / 1000);
+  const sh = shipHave(nowS);
+  const have: Partial<Record<LiveLayerId, number>> = {
+    adsb: avh.adsb, acars: avh.acars, vdl2: avh.vdl2, hfdl: avh.hfdl, adsc: avh.adsc, hfdlst: avh.stations,
+    ships: sh.ships, dsc: sh.dsc, navst: sh.stations, warnings: sh.warnings, weather: sh.weather, areas: sh.areas ?? 0,
+  };
+  const aviationAny = planesAll.length > 0 || avh.stations > 0 || live.layers.some((l) => AV_ID_SET.has(l));
+  const present = livePresent('airsea', have, live, aviationAny ? ['airports'] : []);
+  const on = (id: LiveLayerId) => liveLayerOn(id, present, asToggled, live);
+  v.setToggles(liveChips(present, live), Object.fromEntries(present.map((id) => [id, on(id)])));
+  v.setProfile(liveProfile('airsea', present, on));
+  v.setCamera(live.layers.some((l) => SEA_ID_SET.has(l)) ? 'track' : 'aircraft');
+  // ── aviation (aviationMap.ts avCompose, unchanged: our toggles in its terms) ──
+  const avFocus: AvFocus = mode === 'datalink' ? 'datalink' : mode === 'hfdl' ? 'hfdl' : 'adsb';
+  const avc = avCompose(avOn ? avReport : null, avShared, avFocus, avLayersFrom(asToggled, present, live) as AvLayers, rx, 'web');
+  // ── maritime (shipCompose, our presence and toggles) ──
+  const shipPresent = present.map((id) => shipLayerOf(id)).filter((x): x is ShipLayerId => !!x);
+  const shipOnF = (id: ShipLayerId) => on(SHIP_ID[id]);
+  const sc = shipCompose(mode === 'navtex' ? 'navtex' : mode === 'dsc' ? 'dsc' : 'ships', aisOn, { present: shipPresent, on: shipOnF, many: true });
+  const liveShips: any[] = aisOn && aisReport && shipOnF('ships') ? aisReport.vessels.filter((x) => x.lat != null && x.lon != null).map((x) => ({ ...x, key: String(x.mmsi), _rk: 1e12 })) : [];
+  // ★ the live layer's names win the declutter
+  const liveAv = live.layers.some((l) => AV_ID_SET.has(l));
+  const avItems = liveAv ? avc.items.map((it: any) => ({ ...it, _rk: (it._rk ?? 0) + 1e12 })) : avc.items;
+  const items = [...avItems, ...liveShips, ...sc.items];
+  // ── the MESSAGES feed (every aircraft's last message as it changes; the owner's text where the server sent it) ──
+  const bodies = new Map<string, string>();
+  if (avOn && avReport) for (const a of avReport.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
+  asMsgs = msgFeedUpdate(asMsgs, asMsgSeen, planesAll.map((p) => ({ key: `a:${p.key}`, who: avName(p), src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age,
+    label: p.label, labelName: p.labelName, text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || '') })), Date.now());
+  // ── the tabs ──
+  const aircraftN = avc.planes.length;
+  const shipsN = (on('ships') ? sh.ships : 0) + (on('dsc') ? sh.dsc : 0);
+  const navN = (on('navst') ? sh.stations : 0) + (on('warnings') ? sh.warnings : 0) + (on('weather') ? sh.weather : 0);
+  const tabHave: Partial<Record<LiveTab, number>> = { aircraft: aircraftN, messages: asMsgs.length, ships: shipsN || (aisOn ? 1 : 0), navtex: navN };
+  const tabs = liveTabs('airsea', tabHave, live, asOpenedTab);
+  const tab = liveTabPick(tabs, asPicked, live, asOpenedTab) ?? 'aircraft';
+  v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
+  v.setSort(tab === 'aircraft' ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
+  const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
+  v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
+  // ── the ranges: the DATALINK's bands while it is on, else the time filter where a maritime layer is drawn ──
+  if (avOn) v.setRanges(avRanges(avBands), avReport?.band || '', 'The band', 'The band: ACARS (131 MHz) or VDL2 (136 MHz)');
+  else if (shipPresent.some((id) => id !== 'areas')) v.setRanges(NAV_RANGES, navRange, '', NAV_RANGE_HINT);
+  else v.setRanges([], '');
+  // ── the rows of the tab shown (capped — the 1 GB phones) ──
+  let rows = '';
+  if (tab === 'aircraft') {
+    const byKey = new Map(avc.rows.map((r) => [r.key, r]));
+    const sorted = aircraftOrder(avc.planes.map((p) => {
+      const nm = rx && p.lat != null && p.lon != null ? adsbRangeBearing(rx, p.lat, p.lon).nm : null;
+      return { key: `a:${p.key}`, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
+    }), asSort).slice(0, LIVE_ROW_CAP);
+    rows = sorted.map((x) => byKey.get(x.key)).filter(Boolean).map((r) => trkRowHtml(r!)).join('');
+    if (rows && avc.credit) rows += `<div class="avCredit">${avCreditHtml()}</div>`;
+    if (!rows) rows = `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : avOn && !avReport ? 'Taking the receiver to the aircraft datalink…' : AV_EMPTY)}</div>`;
+  } else if (tab === 'messages') {
+    const list = msgFilter(asMsgs, asMsgKey).slice(0, LIVE_ROW_CAP);
+    rows = list.map((m) => `<div class="trkRow trkMsg" role="button" tabindex="0" data-key="m:${escapeHtml(m.id)}" data-focus="${escapeHtml(m.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${avSrcColour(m.src)}"></i>${escapeHtml(m.who)}</b><small><span class="lbl">${escapeHtml(m.label)}</span>${m.labelName ? ' · ' + escapeHtml(m.labelName) : ''} · ${escapeHtml(m.src)}</small>`
+      + (m.text ? `<small class="avText">${escapeHtml(m.text)}</small>` : '') + `</span><span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(utcHm(m.t))}</span></div>`).join('')
+      || `<div class="trkEmpty">${avOn ? `Listening on every ${escapeHtml(avReport?.bandName || 'datalink')} channel. Messages appear here as they are heard — ACARS and VDL2 are bursts, so a quiet minute is normal.` : 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs — on any radio of this server.'}</div>`;
+  } else if (tab === 'ships') {
+    const liveRows = aisOn ? (aisReport ? aisRows(aisReport, rx) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>') : '';
+    rows = (liveRows ? asSec('SHIPS — HEARD NOW') + liveRows : '') + (sc.rowsBy.ships || '') + (sc.rowsBy.dsc || '');
+  } else if (tab === 'navtex') {
+    rows = sc.by(['stations', 'weather', 'warnings']);
+  }
+  // ── the KEY: the aircraft's, the ships' and NAVTEX's for the layers present ──
+  const avPresent = present.map((id) => avLayerOf(id)).filter((x): x is AvLayerId => !!x);
+  v.setLegend((avPresent.length ? avLegendHtml(avPresent, true) : '') + (shipPresent.length ? shipKeyHtml(shipPresent) : ''));
+  const status = [aisOn ? aisStatus(aisReport) : '', avOn ? avStatus(avReport) : '', aviationAny ? avc.status : '', sc.status].filter(Boolean).join(' · ');
+  v.update(items, rows, status, aircraftN + shipsN, rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
+  v.note(sc.building);
+  if (avOn && avReport) for (const b of Array.from(v.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === avReport.band));
+  syncOnlyMode();
+}
+const AV_ID_SET = new Set<LiveLayerId>(['adsb', 'acars', 'vdl2', 'hfdl', 'adsc', 'hfdlst']);
+const SEA_ID_SET = new Set<LiveLayerId>(['ships', 'dsc', 'navst', 'warnings', 'weather']);
+function avSrcColour(src: string): string { return ({ 'ADS-B': '#ffd34d', VDL2: '#7ee787', ACARS: '#79c0ff', HFDL: '#ffa657', 'ADS-C': '#d2a8ff' } as Record<string, string>)[src.split(' + ')[0]] ?? '#9fb0c2'; }
+function utcHm(t: number): string { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
+
 /* ★★★ RADIOSONDES (V12, docs/v12/RS41.md) — the datalink's shape (sondes.ts): a TrackView, the bands in its top bar, EXIT
  *  gives the receiver back; a chosen sonde draws its track from the report. ★ Offered only where vibeserver.json says so:
  *  `sondes` true (live) / false (greyed, `sondesWhy` on a tap) / absent (no 400 MHz reach — no control at all). */
@@ -23858,7 +23945,8 @@ function onlyModeRefuses(m: string): boolean {
 function onlyModeExits(): Array<[string, HTMLElement | null]> {
   const trk = (v: TrackView | null) => (v?.root.querySelector('.exit') as HTMLElement | null) ?? null;
   return [['adsb', document.getElementById('adsbExit')], ['ndb', document.getElementById('ndbExit')], ['ism', document.getElementById('ismExit')],
-          ['ais', trk(aisView)], ['avdata', trk(avView)], ['sondes', trk(sdView)], ['vormap', trk(vmView)]];
+          // ★ beta96 AIS and the DATALINK share the AIR & SEA map's one EXIT key — whichever is live owns it
+          ['ais', aisOn ? trk(asView) : null], ['avdata', avOn ? trk(asView) : null], ['sondes', trk(sdView)], ['vormap', trk(vmView)]];
 }
 function syncOnlyMode() {
   const only = onlyModeNow();
