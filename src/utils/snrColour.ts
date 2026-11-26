@@ -69,6 +69,12 @@ export const SNR_SCALES = {
   /** ORBCOMM: the carrier's M2M4 estimate, Es/N0 (vibe_orbcomm.h snrDb) — reads the transmitted Es/N0 to 0.1 dB. */
   orbcomm: { thr: 5.5, what: 'Es/N0 of the satellite carrier (M2M4 estimate)',
              src: 'test-orbcomm: 69 % of packets at Es/N0 6 dB (reported 6.0), 93 % at 8; ORBCOMM.md: 50 % at ~6' },
+  /** Radiosondes: S/N in the scan's box (vibe_rs41_rx.h Chan::snr — 10 kHz; 20 kHz for an M10/M20), per type: the box
+   *  reads a type-dependent offset from a bench's "SNR in 10 kHz", so each type's threshold is read off its own sweep. */
+  rs41: { thr: 4.5, what: 'sonde power over the floor in a 10 kHz box', src: 'test-rs41: 2/12 frames at 6 dB (reported 3.9), 11/12 at 7 (4.9)' },
+  dfm: { thr: 5, what: 'sonde power over the floor in a 10 kHz box', src: 'test-sondes-types: 0 at 4 dB, 12 of 15 at 6 (reported 6.0)' },
+  m10: { thr: 1.5, what: 'sonde power over the floor in a 20 kHz box', src: 'test-sondes-types: 0 at 10 dB, 14 of 19 at 12 (reported 2.2)' },
+  m20: { thr: 0, what: 'sonde power over the floor in a 20 kHz box', src: 'test-sondes-types: 1 at 10 dB (−1.4), 16 of 19 at 12 (0.6)' },
 } satisfies Record<string, SnrScale>;
 export type SnrMode = keyof typeof SNR_SCALES;
 

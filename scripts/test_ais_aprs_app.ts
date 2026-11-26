@@ -71,7 +71,11 @@ for (const r of ar) {
   if (r.snr == null) { ok(`AIS row ${r.key}: no SNR, no chip`, r.snrMode === undefined); continue; }
   ok(`AIS row ${r.key}: the web's row carries the same ${Math.round(r.snr)} dB chip`, r.snrMode === 'ais' && wr.includes(`>${Math.round(r.snr) < 0 ? '\u2212' : ''}${Math.abs(Math.round(r.snr))} dB</span>`));
 }
-ok('AIS: at least one row has an SNR in the sample', ar.some((r) => r.snr != null));
+ok('AIS: an older server (no snrv): no chips — its "snr" read the floor after the frame', ar.every((r) => r.snr == null) && !wr.includes('snrChip'));
+{ const aa2 = app.aisSanitise({ ...aisMsg, snrv: 2 })!, wa2 = web.aisSanitise({ ...aisMsg, snrv: 2 })!;
+  const ar2 = app.aisListRows(aa2, rx), wr2 = web.aisRows(wa2, rx);
+  ok('AIS snrv 2: rows carry the SNR chip', ar2.some((r) => r.snr != null && r.snrMode === 'ais'));
+  for (const r of ar2) if (r.snr != null) ok(`AIS row ${r.key}: the web's row has the same ${Math.round(r.snr)} dB chip`, wr2.includes(`>${Math.round(r.snr) < 0 ? '\u2212' : ''}${Math.abs(Math.round(r.snr))} dB</span>`)); }
 for (const r of ar) {
   ok(`AIS row ${r.key}: name in the web's row`, wr.includes(web.esc(r.name)));
   ok(`AIS row ${r.key}: second line in the web's row`, wr.includes(web.esc(r.second.split(' · ')[0])));

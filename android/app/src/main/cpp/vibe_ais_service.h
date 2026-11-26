@@ -262,10 +262,11 @@ public:
         prune_(t);
         while (!rateWin_.empty() && t - rateWin_.front() > 60) rateWin_.pop_front();
         const double span = std::min(60.0, std::max(1.0, t));
-        char b[400];
+        char b[448];   // ★ beta96 +snrv
         std::snprintf(b, sizeof b, "{\"type\":\"ais\",\"centre\":%.0f,\"rate\":%.0f,\"now\":%.1f,\"msgs\":%llu,\"msgRate\":%.2f,"
                       "\"chA\":%llu,\"chB\":%llu,\"repaired\":%llu,\"other\":%llu,\"dropped\":%llu,\"capture\":%d,\"noise\":%.1f,\"afc\":%.0f,"
-                      "\"implausible\":%llu,\"heldPos\":%llu,\"vessels\":[",
+                      "\"implausible\":%llu,\"heldPos\":%llu,\"snrv\":2,\"vessels\":[",   // ★ beta96 snrv 2: a vessel's "snr" is the frame's (burstSnr_); before, the floor after it
+
                       kCentreHz, rate_, t, (unsigned long long)msgs_, rateWin_.size() / span * 60.0,
                       (unsigned long long)perCh_[0], (unsigned long long)perCh_[1], (unsigned long long)repaired_,
                       (unsigned long long)other_, (unsigned long long)dropped_, cap_.percent(t), health_.noiseDb, afcHz_,

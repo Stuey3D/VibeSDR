@@ -70,6 +70,9 @@ export interface AisReport {
   notices?: AisNotice[];
   /** ★★★ beta96 the maritime combination: "ais+dsc" while AIS runs with DSC channel 70 (vibe_maritime_combo.h); its calls so far. */
   combo?: 'ais+dsc'; dscCalls?: number;
+  /** ★ beta96 2 = a vessel's "snr" is its last frame's (vibe_ais.h burstSnr_); older servers read the floor AFTER the
+   *  frame (~3 dB whatever the ship) — no chip from them. */
+  snrv?: number;
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
@@ -115,7 +118,7 @@ export function aisSanitise(m: any): AisReport | null {
   return { notices, type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
            chA: num(m.chA) ?? 0, chB: num(m.chB) ?? 0, repaired: num(m.repaired) ?? 0, dropped: num(m.dropped) ?? 0,
            capture: num(m.capture) ?? -1, noise: num(m.noise) ?? 0, vessels: vs, safety,
-           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined,
+           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined, snrv: num(m.snrv) ?? undefined,
            ...(m.combo === 'ais+dsc' ? { combo: 'ais+dsc' as const, dscCalls: num(m.dsc?.calls) ?? 0 } : {}) };
 }
 export function aprsSanitise(d: any): AprsList | null {
@@ -301,7 +304,7 @@ export function aisRows(r: AisReport, rx: LatLon | null): string {
     // ★★ beta95 DX (aisDx.ts): the tag in the range column, which never truncates; unconfirmed / implausible say so there
     const dxs = aisDxState(v);
     const ub = dxs === 'unconf' && rx && v.uLat != null && v.uLon != null ? rangeBearing(rx, v.uLat, v.uLon) : null;
-    const where = snrChipHtml('ais', v.snr) + (rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
+    const where = snrChipHtml('ais', (r.snrv ?? 0) >= 2 ? v.snr : undefined) + (rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
       : v.lat != null ? (dxs === 'dx' ? '<span class="dxTag">DX</span>' : '')
       : dxs === 'unconf' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.unconf}${ub ? ` ${Math.round(ub.nm)} NM ${compass8(ub.brg)}` : ''}</span>`
       : dxs === 'implausible' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.implausible}</span>`

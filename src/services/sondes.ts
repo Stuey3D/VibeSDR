@@ -18,6 +18,9 @@ export interface Sonde {
   age: number; n: number; frame: number; cal: number; calOf: number;
   lat?: number; lon?: number; alt?: number; climb?: number; speed?: number; heading?: number; sats?: number;
   posAge?: number; maxAlt?: number; temp?: number; batt?: number; enc?: boolean; gpsTime?: number;
+  /** ★ beta96 the last frame's SNR: S/N in the scan's box (dB) — only from a server that says so (report snrv ≥ 2; an
+   *  older one sent the demodulator's eye figure, which saturates near 5 dB) */
+  snr?: number;
   track: [number, number, number][];
 }
 /** A band the server steps through (hwinfo / vibeserver.json sondesBands). */
@@ -40,6 +43,7 @@ export function parseSondeReport(m: unknown): SondeReport | null {
   const o = m as Record<string, unknown> | null;
   if (!o || o.type !== 'sondes' || !Array.isArray(o.sondes)) return null;
   const sondes: Sonde[] = [];
+  const snrOk = (num(o.snrv) ?? 0) >= 2;
   for (const s0 of (o.sondes as unknown[]).slice(0, 64)) {
     const s = s0 as Record<string, unknown>;
     if (!s || typeof s !== 'object') continue;
@@ -63,6 +67,7 @@ export function parseSondeReport(m: unknown): SondeReport | null {
       posAge: num(s.posAge), maxAlt: num(s.maxAlt),
       temp: calOf > 0 && cal >= calOf ? num(s.temp) : undefined,   // ★ a temperature with an incomplete calibration is not shown
       batt: num(s.batt), enc: s.enc === true, gpsTime: num(s.gpsTime), track,
+      ...(snrOk && num(s.snr) != null ? { snr: num(s.snr) } : {}),
     });
   }
   const chans: SondeReport['chans'] = [];
@@ -102,6 +107,12 @@ export function sondeAge(s: number): string {
 export function sondeClimb(v?: number): string {
   if (v == null) return '';
   return `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)} m/s`;
+}
+/** ★ beta96 the SNR scale for a sonde's type (src/utils/snrColour.ts: each type's own threshold, read off test-rs41 /
+ *  test-sondes-types). */
+export function sondeSnrMode(s: Sonde): 'rs41' | 'dfm' | 'm10' | 'm20' | null {
+  const k = (s.kind || 'RS41').toUpperCase();
+  return k === 'RS41' ? 'rs41' : k === 'DFM' ? 'dfm' : k === 'M10' ? 'm10' : k === 'M20' ? 'm20' : null;
 }
 /** The sonde's type as the list shows it: the finer model where the server knows it ("DFM-09", "M10+"), else the kind. */
 export function sondeType(s: Sonde): string { return s.model || s.kind || 'RS41'; }
@@ -185,5 +196,6 @@ export function sondeTrackRows(r: SondeReport | null, rx: LatLon | null): TrackR
     sp: s.speed != null ? `${s.speed.toFixed(0)} m/s` : '', trend: (s.climb == null ? 0 : s.climb > 1 ? 1 : s.climb < -1 ? -1 : 0) as -1 | 0 | 1,
     range: rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km` : s.lat == null ? 'no position' : '',
     brg: rb ? COMPASS[Math.round(rb.brg / 45) % 8] : '', noPos: s.lat == null, age: sondeAge(s.age), em: false,
+    ...(s.snr != null && sondeSnrMode(s) ? { snr: s.snr, snrMode: sondeSnrMode(s)! } : {}),   // ★ beta96 the last frame's SNR
   }));
 }

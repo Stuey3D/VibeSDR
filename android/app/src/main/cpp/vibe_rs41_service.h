@@ -187,7 +187,7 @@ public:
         for (const auto& r : rows_) if (now - r.last <= maxAge) v.push_back(&r);
         std::sort(v.begin(), v.end(), [](const SondeRow* a, const SondeRow* b) { return a->last > b->last; });
         char b[512];
-        std::snprintf(b, sizeof b, "\"frames\":%llu,\"sondes\":[", (unsigned long long)frames_);
+        std::snprintf(b, sizeof b, "\"frames\":%llu,\"snrv\":2,\"sondes\":[", (unsigned long long)frames_);   // ★ beta96 snrv 2: "snr" = S/N in the scan box (before: the eye figure)
         std::string o = b;
         bool first = true;
         for (const SondeRow* r : v) {

@@ -5,7 +5,7 @@
 import { sondeRanges } from '../src/services/sondes';
 import { sondeRanges as webSondeRanges } from '../web/client/src/sondes';
 import { readFileSync } from 'node:fs';
-import { parseSondeBands, parseSondeReport, sondeCard, sondeClimb, sondeDetail, sondeEmpty, sondeLine, sondeStatus, sondeTemp,
+import { sondeSnrMode, parseSondeBands, parseSondeReport, sondeCard, sondeClimb, sondeDetail, sondeEmpty, sondeLine, sondeStatus, sondeTemp,
          sondeTrackItems, sondeTrackRows, sondeTrail, sondeMHz } from '../src/services/sondes';
 
 let fail = 0;
@@ -80,5 +80,15 @@ ok(!!t && t.sondes[2].temp === undefined && sondeTemp(t.sondes[2]) === 'temperat
    `★ an M10's temperature is never shown (calOf 0): ${t && sondeTemp(t.sondes[2])}`);
 ok(!!t && sondeLine(t.sondes[3]).startsWith('M20 504-2-01234'), 'an M20');
 ok(!!t && t.sondes[4].calOf === 51 && sondeTemp(t.sondes[4]) === '−3.0 °C', 'an older server (no calOf) is an RS41');
+{ // ★★ beta96 the frame SNR (S/N in the scan box) — only from a server that says snrv 2; each type its own scale
+  const old = parseSondeReport({ type: 'sondes', sondes: [{ serial: 'S1', kind: 'RS41', snr: 5.4, track: [] }] });
+  ok(!!old && old.sondes[0].snr === undefined, 'an older server\'s eye figure is not shown');
+  const nw = parseSondeReport({ type: 'sondes', snrv: 2, sondes: [{ serial: 'S1', kind: 'RS41', snr: 12.5, track: [] }, { serial: 'M1', kind: 'M20', snr: 'x', track: [] },
+    { serial: 'D1', kind: 'DFM', snr: 7, track: [] }] });
+  ok(!!nw && nw.sondes[0].snr === 12.5 && nw.sondes[1].snr === undefined && nw.sondes[2].snr === 7, 'snrv 2: the number, bad ones dropped');
+  ok(!!nw && sondeSnrMode(nw.sondes[0]) === 'rs41' && sondeSnrMode(nw.sondes[1]) === 'm20' && sondeSnrMode(nw.sondes[2]) === 'dfm', 'each type its scale');
+  const rows = nw ? sondeTrackRows(nw, null) : [];
+  ok(rows[0]?.snr === 12.5 && rows[0]?.snrMode === 'rs41' && rows[1]?.snrMode === undefined, 'the app\'s rows carry the chip');
+}
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);

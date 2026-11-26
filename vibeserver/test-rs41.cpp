@@ -9,6 +9,7 @@
 #include "vibe_rs41_tx.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -313,7 +314,12 @@ int main(int argc, char** argv) {
             ss[0].offHz = 295e3; ss[0].snrDb = snr; ss[0].s.serial = "S7000001";
             SimResult r = simulate(fs, hw, ss, 12, uint32_t(snr * 10));
             const int g = r.good["S7000001"];
-            std::printf("   %4.1f dB: %2d of 12 frames, wrong %d\n", snr, g, r.wrong);
+            std::vector<float> sn; for (const auto& f : r.frames) sn.push_back(float(f.snrDb));
+            std::sort(sn.begin(), sn.end());
+            const float med = sn.empty() ? -99.f : sn[sn.size() / 2];
+            std::printf("   %4.1f dB: %2d of 12 frames, wrong %d, reported SNR %.1f dB\n", snr, g, r.wrong, med);
+            // ★ beta96 the frame's reported SNR (S/N in the scan's 10 kHz box, docs/v12/MESSAGE-SNR.md) = the bench's own SNR
+            if (snr >= 7 && snr <= 30 && sn.size() >= 5) CHECK(std::fabs(med - float(snr)) <= 2.5f, "%.0f dB: reported SNR %.1f dB (S/N in the 10 kHz box)", snr, med);
             CHECK(r.wrong == 0, "%.0f dB: %d wrong", snr, r.wrong);
             if (snr >= 9) CHECK(g >= 10, "%.0f dB: %d of 12 (≥ 10: the first second goes to the scan)", snr, g);
         }

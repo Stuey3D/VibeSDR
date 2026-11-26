@@ -14,6 +14,7 @@
 #include "vibe_sonde_tx.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -264,14 +265,23 @@ int main(int argc, char** argv) {
         const std::vector<double> snrs = quick ? std::vector<double>{ 8, 12, 20 } : std::vector<double>{ 4, 6, 8, 10, 12, 15, 20, 30 };
         int wrong = 0;
         std::map<double, int> got;
+        std::map<double, float> meds;
         for (double snr : snrs) {
             std::vector<Sim> ss(1); ss[0].kind = kind; ss[0].offHz = 297e3; ss[0].snrDb = snr; ss[0].seed = 3;
             const Result r = simulate(fs, hw, ss, secs, 100 + uint32_t(snr));
             got[snr] = goodOf(r, ss[0]); wrong += r.wrong;
-            std::printf(" %.0f dB %d", snr, got[snr]);
+            std::vector<float> sn; for (const auto& f : r.frames) sn.push_back(float(f.snrDb));
+            std::sort(sn.begin(), sn.end());
+            const float med = sn.empty() ? -99.f : sn[sn.size() / 2];
+            std::printf(" %.0f dB %d (snr %.1f)", snr, got[snr], med);   // ★ beta96 the frames' reported SNR (S/N in the scan box)
+            meds[snr] = med;
         }
         std::printf(" (positions of %d s)\n", secs);
         CHECK(wrong == 0, "%s: %d wrong frames in the sweep", kind, wrong);
+        /* ★ beta96 the frame SNR is the scan box's S/N (docs/v12/MESSAGE-SNR.md): it moves dB for dB with the signal. Its
+         *  offset from this bench's "SNR in 10 kHz" differs by type (DFM ≈ 0, M10 ≈ −10, M20 ≈ −11: the 20 kHz box, the
+         *  spread) — so each type has its own colour threshold, read off this sweep. */
+        if (!quick && meds.count(15) && meds.count(30) && meds[15] > -90) CHECK(std::fabs((meds[30] - meds[15]) - 15) <= 2, "%s: the reported SNR moves with the signal (%.1f → %.1f dB for 15 → 30)", kind, meds[15], meds[30]);
         CHECK(got[20] >= secs - 6, "%s: 20 dB gave %d positions", kind, got[20]);
         CHECK(got[12] >= secs - 8, "%s: 12 dB gave %d positions", kind, got[12]);
     }

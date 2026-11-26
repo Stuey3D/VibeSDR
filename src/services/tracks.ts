@@ -74,6 +74,9 @@ export interface AisReport {
   notices?: AisNotice[];
   /** ★★★ beta96 the maritime combination: "ais+dsc" while AIS runs with DSC channel 70 (vibe_maritime_combo.h); its calls so far. */
   combo?: 'ais+dsc'; dscCalls?: number;
+  /** ★ beta96 2 = a vessel's "snr" is its last frame's (vibe_ais.h burstSnr_); older servers read the floor AFTER the
+   *  frame (~3 dB whatever the ship) — no chip from them. */
+  snrv?: number;
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
@@ -121,7 +124,7 @@ export function aisSanitise(m: any): AisReport | null {
   return { notices, type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
            chA: num(m.chA) ?? 0, chB: num(m.chB) ?? 0, repaired: num(m.repaired) ?? 0, dropped: num(m.dropped) ?? 0,
            capture: num(m.capture) ?? -1, noise: num(m.noise) ?? 0, vessels: vs, safety,
-           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined,
+           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined, snrv: num(m.snrv) ?? undefined,
            ...(m.combo === 'ais+dsc' ? { combo: 'ais+dsc' as const, dscCalls: num(m.dsc?.calls) ?? 0 } : {}) };
 }
 export function aprsSanitise(d: any): AprsList | null {
@@ -392,7 +395,7 @@ export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] 
       : dxs === 'implausible' ? AIS_DX_SHORT.implausible : 'no position',
     brg: rb ? compass8(rb.brg) : ub ? compass8(ub.brg) : '',
     noPos: v.lat == null, age: '', em: v.kind === 'sart',
-    ...(v.snr != null ? { snr: v.snr, snrMode: 'ais' } : {}),   // ★ beta96 the ship's last frame's SNR
+    ...(v.snr != null && (r.snrv ?? 0) >= 2 ? { snr: v.snr, snrMode: 'ais' } : {}),   // ★ beta96 the ship's last frame's SNR
   }; });
 }
 /** ★ The safety strip: the newest safety-related broadcasts (types 12/14), at most three, newest first. */

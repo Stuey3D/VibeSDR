@@ -272,6 +272,7 @@ private:
         std::unique_ptr<vibemxx::Chan> mxx;
         const char* lock = nullptr;
         double opened = 0, seen = 0, lastFrame = -1; int frames = 0; float level = 0;
+        float snr = 0;   ///< ★ beta96 S/N in the scan's box (10 kHz; 20 kHz for an M10/M20), dB — each frame's SNR (got)
         double recentre = 0; bool want = false;
         std::complex<double> phW{1, 0};
     };
@@ -294,6 +295,12 @@ private:
                 if (c.lock && std::strcmp(c.lock, fr.kind)) return;       // ★ locked to another type: not this one's
                 c.lock = fr.kind;
                 fr.hz = c.hz + fr.offsetHz;
+                /* ★★ beta96 (Stuart 11-26: a colour-coded SNR per message, for antenna comparisons) THE FRAME'S SNR = the
+                 *  sonde's power over the floor in the scan's box (S/N in 10 kHz — the benches' own definition; 20 kHz for an
+                 *  M10/M20), from the last scan (twice a second). The demodulators' eye figure (amplitude over residual on
+                 *  the discriminator) saturates at ~5 dB from GFSK's own ISI — test-rs41 read 5.4 dB from 8 to 20 dB — so
+                 *  it stays the decoders' business, not the row's. Nothing per sample: one log a candidate a scan. */
+                fr.snrDb = c.snr;
                 ++c.frames; c.lastFrame = now_;
                 c.recentre = std::max(-3000.0, std::min(3000.0, fr.offsetHz)); c.want = true;
                 onFrame(static_cast<const Frame&>(fr));
@@ -332,7 +339,7 @@ private:
         const double fl = std::max(1e-20, double(srt_[size_t(L / 2)]));
         cum_.assign(size_t(L) + 1, 0.0);
         for (int i = 0; i < L; ++i) cum_[size_t(i) + 1] = cum_[size_t(i)] + P_[size_t(i)];
-        struct Cand { double hz; float db; double near; };
+        struct Cand { double hz; float db; double near; float snr; };
         std::vector<Cand> cands;
         // ★ two passes: a 10 kHz box (RS41, DFM) and — V12 — a 20 kHz box for the M10 / M20, whose ≈ ±10 kHz spread the
         //   narrow pass calls a "broad block" (its flanks hold too much). The same three tests in each, scaled.
@@ -357,14 +364,14 @@ private:
                 const double hz = hw_ + k * bin_;
                 bool dup = false;
                 for (const auto& x : cands) if (std::fabs(x.hz - hz) < std::max(nearHz, x.near)) dup = true;
-                if (!dup) cands.push_back({ hz, float(10 * std::log10(1 + b / (fl * W))), nearHz });
+                if (!dup) cands.push_back({ hz, float(10 * std::log10(1 + b / (fl * W))), nearHz, float(10 * std::log10(b / (fl * W))) });
             }
         };
         pass(10e3, 6e3, 0.6);
         pass(20e3, 10e3, 0.3);
         std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.db > b.db; });
         // the channels: seen again, closed, merged
-        for (auto& cp : ch_) for (const auto& x : cands) if (std::fabs(x.hz - cp->hz) < x.near) { cp->seen = now_; cp->level = x.db; break; }
+        for (auto& cp : ch_) for (const auto& x : cands) if (std::fabs(x.hz - cp->hz) < x.near) { cp->seen = now_; cp->level = x.db; cp->snr = x.snr; break; }
         for (size_t i = 0; i < ch_.size(); ++i)
             for (size_t j = i + 1; j < ch_.size(); ++j)
                 if (std::fabs(ch_[i]->hz - ch_[j]->hz) < ((narrowKind(ch_[i]->lock) && narrowKind(ch_[j]->lock)) ? 3e3 : 10e3)) { ch_[ch_[i]->frames >= ch_[j]->frames ? j : i]->seen = -1e9; ch_[ch_[i]->frames >= ch_[j]->frames ? j : i]->lastFrame = -1e9; }
@@ -390,7 +397,7 @@ private:
             c->dfm.reset(new vibedfm::Chan(chRate_));
             c->mxx.reset(new vibemxx::Chan(chRateW_));
             place_(*c, x.hz);
-            c->opened = c->seen = now_; c->level = x.db;
+            c->opened = c->seen = now_; c->level = x.db; c->snr = x.snr;
             ch_.push_back(std::move(c));
             ++opened_;
         }
