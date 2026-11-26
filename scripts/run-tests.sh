@@ -1894,6 +1894,13 @@ printf '\n\033[1m── RTL-TCP front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-rtltcp.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ beta96 VIBESERVER SIMPLE: HOME NETWORK ONLY, enforced by the engine (lanOnly — the RTL-TCP door's isPrivateIp rule on
+#     every request; --lan-only on the daemon): 8.8.8.8 refused (page and JSON, logged), 192.168 / 169.254 / 10 / fd00:: served,
+#     without the switch as before, a request through the tunnel refused. Loopback, silent. ~20 s.
+printf '\n\033[1m── VibeServer Simple: home network only (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-lanonly.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ beta94 A CLEAN STOP WITH BACKGROUND DECODING EXITS CLEANLY: ~BgRunner published to the shim's BgRegistry after it
 #     was destroyed — SIGABRT on every apt upgrade / restart once background decoding had run (beta93 too). Running, and
 #     stopped by a listener first; exit 0, no std::terminate. Same VIBESERVER_BIN rule. ~40 s.
