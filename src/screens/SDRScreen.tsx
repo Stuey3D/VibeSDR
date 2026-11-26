@@ -236,7 +236,8 @@ import KeyboardShortcuts from '../components/KeyboardShortcuts';
 import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus, useListNav, NavRing, revealIn, useOverlay, useOverlayOpen, overlayOpenNow } from '../components/PanelNav';
 import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type ChooserRadio } from '../utils/radioChooserNav';
-import { airSeaOffer, type AirSeaOffer } from '../services/airSeaViewer';   // ★★★ beta96 the landing's AIR & SEA MAP (the standalone map)
+import { airSeaOffer, type AirSeaOffer } from '../services/airSeaViewer';
+import { AircraftDeltaStore } from '../services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★★ beta96 the landing's AIR & SEA MAP (the standalone map)
 import { openAirSeaScreen } from './AirSeaScreen';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
 import { NavCard, CardKey } from '../components/NavCard';
@@ -8367,13 +8368,6 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  to one already there — so the MAP opens on the TRANSITION (a map put away by a refused exit stays away until
        *  the key brings it back). `null` = the mode ended (adsb_off; the server sends the restored config after it):
        *  the map closes and the receiver screen is back exactly as before. `why` = the refusal. */
-      /* ★★ beta96 THE SHARED AIRCRAFT TABLE over the socket (acd=1): the AIR & SEA map's aircraft without the 3-second
-       *  aircraft.json poll — the server builds the table once for every socket and viewer (vibe_aircraft_delta.h). */
-      onAircraftShared: (j) => {
-        if (destroyed.current) return;
-        const sa = sharedSanitise(j);
-        if (sa) { avSharedAt.current = Date.now(); setAvShared(sa); }
-      },
       onAdsb: (r, why) => {
         if (destroyed.current) return;
         if (why) {
@@ -12497,19 +12491,20 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [avLayers, setAvLayers] = useState<AvLayers>(avLayersOf(null));
   useEffect(() => { AsyncStorage.getItem('lsv_av_map_layers').then((v) => setAvLayers(avLayersOf(v))).catch(() => {}); }, []);
   const [avShared, setAvShared] = useState<SharedAircraft | null>(null);
-  /** ★★ beta96 when the socket last brought the table (acd=1) — while it keeps coming, no aircraft.json poll */
-  const avSharedAt = useRef(0);
+  /** ★★ beta96 the table as DELTAS over HTTP (aircraft.json?d=<cursor>, gzip on the wire — aircraftDelta.ts): measured at 150
+   *  aircraft, the whole table every 3 s 9.8 KB/s → 1.4 KB/s (test-server-aircraft-delta). */
+  const avDelta = useRef(new AircraftDeltaStore());
   // ★★ beta96 and whenever the AIR & SEA map is up (AIS mode's, the shipping map's): its aircraft are this table
   const avSharedPolling = airSeaShown;   // ★ beta90 standalone too; beta96 whenever the AIR & SEA map is up (ADS-B, SONDES, VOR too)
   useEffect(() => {
     if (!avSharedPolling) return;
     let live = true, t: ReturnType<typeof setTimeout> | null = null;
     const go = async () => {
-      // ★★ beta96 the socket brings the table (acd=1): nothing to fetch while it does (an older server never does)
-      if (Date.now() - avSharedAt.current < 8000) { if (live) t = setTimeout(() => { void go(); }, 3000); return; }
       try {
-        const r = await fetch(`${connectBase.replace(/\/+$/, '')}/vibeserver/aircraft.json`, { cache: 'no-store' } as any);
-        const j = r.ok ? sharedSanitise(await r.json()) : null;
+        const r = await fetch(`${connectBase.replace(/\/+$/, '')}/vibeserver/aircraft.json?d=${encodeURIComponent(avDelta.current.cursor)}`, { cache: 'no-store' } as any);
+        const res = r.ok ? avDelta.current.apply(await r.json()) : null;
+        if (res && !res.json) avDelta.current.reset();   // ★ lost its place: the next poll asks for everything
+        const j = res?.json ? sharedSanitise(res.json) : null;
         if (live && j) setAvShared(j);
       } catch { /* the next poll */ }
       if (live) t = setTimeout(() => { void go(); }, 3000);

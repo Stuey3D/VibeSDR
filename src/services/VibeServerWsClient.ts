@@ -1830,7 +1830,7 @@ export abstract class VibeServerWsClient {
 
     // ★★ V12 `&wide=1` — the full-capture row (SPWB, utils/wfWide.ts) — ONLY for a server whose hwinfo said "wide" ≥ 2
     //    (remembered per server, wideCapsCore.ts). An older server gets exactly the URL it always got.
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${listenerIdQuery()}${wideSuffix(this.baseUrl)}&span=1&adsbd=1&acd=1`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${listenerIdQuery()}${wideSuffix(this.baseUrl)}&span=1&adsbd=1`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while

@@ -31337,7 +31337,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int64_t now = vibeavshare::wallMs();
             std::string body;
             if (reqLine.rfind("GET /vibeserver/airsea/join", 0) == 0) {
-                const bool owner = isLoopback(sock->peerAddress()) || adminOkFor(reqLine, sock);
+                // ★ the OWNER = the admin credential on the request (the admin ticket). Not "loopback": a tunnel's visitors
+                //   and any web page open on this machine arrive from 127.0.0.1 too (the 2026-10-03 audit's rule)
+                const bool owner = adminOkFor(reqLine, sock);
                 const vibeasview::Join j = vibeasview::gate().join(sock->peerAddress(), now, owner);
                 if (j.ok) body = "{\"ok\":true,\"vt\":\"" + j.ticket + "\",\"n\":" + std::to_string(j.n) + ",\"max\":" + std::to_string(j.max)
                                + ",\"limit\":" + std::to_string(j.limitSec) + ",\"left\":" + std::to_string(j.left) + ",\"warn\":" + std::to_string(vibeasview::kWarnSec) + "}";
@@ -31872,7 +31874,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  (loopback = the owner, vsAdminHttpOk), as adsb-range above. GET /vibeserver/adsb-feed. */
         } else if (reqLine.rfind("GET /vibeserver/adsb-feed", 0) == 0 && (reqLine.size() == 25 || reqLine[25] == '?' || reqLine[25] == ' ')) {
             if (!vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ it already said 401
-            const std::string body = LocalSdrShim::adsbFeedStatusJson();
+            std::string body = LocalSdrShim::adsbFeedStatusJson();
+            // ★★ beta96 the phone's server screen: its feed sources' lines and the standalone map's viewers, in the same read
+            if (!body.empty() && body.back() == '}') { body.pop_back(); body += ",\"sources\":" + LocalSdrShim::aircraftFeedsStatusJson() + ",\"mapViewers\":" + LocalSdrShim::airSeaViewersJson() + "}"; }
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n"
                           "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
             sock->close(); return;

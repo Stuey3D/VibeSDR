@@ -64,7 +64,8 @@ import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } f
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
-import { airSeaOffer, AirSeaViewer, type AirSeaOffer } from '../../../src/services/airSeaViewer';   // ★★ beta96 the standalone AIR & SEA map: its gate, tickets, deltas
+import { airSeaOffer, AirSeaViewer, type AirSeaOffer } from '../../../src/services/airSeaViewer';
+import { AircraftDeltaStore } from '../../../src/services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★ beta96 the standalone AIR & SEA map: its gate, tickets, deltas
 import { vorMapItems, vorMapRows, vorMapStatus, VORMAP_LEGEND, VORMAP_ROW_CSS } from './vormap';   // ★ V12 the VOR / ILS map
 import { storedLoader, storedSondeItems, storedVorItems, storedSondeRows, storedVorRows, storedStatus, STORED_SONDE_LEGEND, STORED_VOR_LEGEND,
          type GalPos, type StoredKind } from '../../../src/services/storedLayers';   // ★★★ beta96 maps2 the stored sondes / VOR stations
@@ -1599,7 +1600,7 @@ async function connect(host: string, pin: string) {
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
   // ★ `dab=2`: the DAB report in pieces (src/services/dabAssemble.ts) — a server that predates it ignores the flag.
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2&wide=1&span=1&adsbd=1&acd=1', auth)}`;   // ★ V12 wide=1: the full-capture row (wfWide.ts) · span=1: each frame's own span (beta83)
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2&wide=1&span=1&adsbd=1', auth)}`;   // ★ V12 wide=1: the full-capture row (wfWide.ts) · span=1: each frame's own span (beta83)
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -2064,9 +2065,6 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
      *  sent entire rather than as deltas. A null means the server left DAB mode. */
     /* ★ ADS-B (V12): a report means the receiver is in ADS-B; null = it left. See onAdsbReport. */
     onAdsb: (r) => onAdsbReport(r),
-    /* ★★ beta96 the shared aircraft table over the socket (acd=1, aircraftDelta.ts): the AIR & SEA map's aircraft without the
-     *  3-second aircraft.json poll — one table build on the server for every socket and viewer. */
-    onAircraftShared: (j) => { const sa = sharedSanitise(j); if (sa) { avShared = sa; avSharedAt = Date.now(); if (asView?.open) asRender(); } },
     onIsm: (r) => onIsmReport(r),
     onIsmError: (why: string) => { showPill(why, 7000); if (ismOn && !ismReport) ismUiOff(); },
     onNdb: (r) => onNdbReport(r),
@@ -7212,7 +7210,10 @@ let asOffer: AirSeaOffer | null = null;
 /** ★ This server's own HTTP read (the landing page's P(), the gallery's read auth) → parsed JSON or null. */
 async function asGet(path: string): Promise<any | null> {
   try {
-    const r = await fetch(path.startsWith('/vibeserver/gallery') ? galUrl(path) : readAuthUrl(P(path)), { cache: 'no-store' });
+    // ★ the owner's admin ticket rides the join: the owner is counted, never turned away (vibe_airsea_viewers.h)
+    const tq = path.startsWith('/vibeserver/airsea/join') ? adminTicketQuery() : '';
+    const p2 = tq ? `${path}${path.includes('?') ? '&' : '?'}${tq}` : path;
+    const r = await fetch(path.startsWith('/vibeserver/gallery') ? galUrl(p2) : readAuthUrl(P(p2)), { cache: 'no-store' });
     return r.ok ? await r.json() : null;
   } catch { return null; }
 }
@@ -10399,16 +10400,21 @@ function avReadCap(j: any) {
  *  AVIATION MAP open it standalone (CLOSE MAP). Layers with no aircraft are absent; AIRPORTS is on by default. */
 const AV_LAYERS_KEY = 'vibesdr.avMapLayers';
 let avShared: SharedAircraft | null = null;
-/** ★★ beta96 when the socket last brought the table (acd=1) — while it keeps coming, no aircraft.json poll */
-let avSharedAt = 0;
 let avPollT: ReturnType<typeof setTimeout> | null = null;
 let avPollSeq = 0;
+/** ★★ beta96 a radio's map: the table as DELTAS over HTTP (aircraft.json?d=<cursor>, gzip on the wire — aircraftDelta.ts).
+ *  Measured at 150 aircraft (test-server-aircraft-delta): the whole table every 3 s 9.8 KB/s → this 1.4 KB/s. (The socket's
+ *  acs deltas were 7.1 KB/s: WebSocket frames are not compressed — so the map polls, it does not subscribe.) */
+const avDelta = new AircraftDeltaStore();
 async function avSharedFetch(): Promise<SharedAircraft | null> {
   // ★★ beta96 the standalone viewer: its ticket and the table as deltas (airSeaViewer.ts); null at its time limit's end
   if (asStandalone && asViewer) { const j = await asViewer.poll(); return j ? sharedSanitise(j) : null; }
   try {
-    const r = await fetch(P('/vibeserver/aircraft.json'), { cache: 'no-store' });
-    return r.ok ? sharedSanitise(await r.json()) : null;
+    const r = await fetch(P(`/vibeserver/aircraft.json?d=${encodeURIComponent(avDelta.cursor)}`), { cache: 'no-store' });
+    if (!r.ok) return null;
+    const res = avDelta.apply(await r.json());
+    if (!res.json) { avDelta.reset(); return null; }   // ★ lost its place: the next poll asks for everything
+    return sharedSanitise(res.json);
   } catch { return null; }
 }
 /** ★ LIVE: every 3 s while either view is open (the server's table is rewritten every 2 s by each radio). */
@@ -10416,9 +10422,7 @@ async function avPoll() {
   if (avPollT) { clearTimeout(avPollT); avPollT = null; }
   if (!asView?.open) return;
   const seq = ++avPollSeq;
-  // ★★ beta96 a radio's socket brings the table (acd=1): nothing to fetch while it does (an older server: it never does)
-  const viaSocket = !asStandalone && Date.now() - avSharedAt < 8000;
-  const got = viaSocket ? null : await avSharedFetch();
+  const got = await avSharedFetch();
   if (seq !== avPollSeq || !asView?.open) return;
   if (got) avShared = got;
   asRender();

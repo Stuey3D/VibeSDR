@@ -16,7 +16,6 @@
 //    copy, so a fix to the shared half still reaches both — which is the good half of the old
 //    arrangement and worth keeping. Only the divergence is below.
 import { AdsbDeltaStore } from './adsbDelta';   // ★★ V12 beta96 ADS-B as deltas
-import { AircraftDeltaStore } from './aircraftDelta';   // ★★ V12 beta96 the shared aircraft table as deltas (acd=1)
 import { VibeServerWsClient, LADDERS_FOR } from './VibeServerWsClient';
 import { parseDabMessage, dabSafeText, type DabState } from './dabTypes';
 import { holdNativeHealing } from '../components/AudioPlayer';
@@ -192,8 +191,6 @@ export class VibeServerClient extends VibeServerWsClient {
   private adsbExit = new DabExitGuard();
   /** ★★ V12 beta96 the ADS-B table as the delta listener holds it (adsbDelta.ts). */
   private adsbDelta = new AdsbDeltaStore();
-  /** ★★ V12 beta96 the shared aircraft table as the socket keeps it (aircraftDelta.ts). */
-  private acsDelta = new AircraftDeltaStore();
   /** ★ What each aircraft is (adsb_info), per hex, merged into every report — adsbInfo.ts. */
   private adsbInfo = new AdsbInfoStore();
   /** Date.now() of the last report — see adsbSilentMs. */
@@ -431,12 +428,6 @@ export class VibeServerClient extends VibeServerWsClient {
       msg = r.report;
     }
     if (msg.type === 'adsb_off') this.adsbDelta.clear();
-    if (msg.type === 'acs') {   // ★★ beta96 the shared aircraft table as a delta (aircraftDelta.ts, shared with the web)
-      const r = this.acsDelta.apply(msg);
-      if (!r.json) { this.sendSpectrum({ type: 'acs_resync' }); return true; }
-      this.callbacks.onAircraftShared?.(r.json);
-      return true;
-    }
     switch (msg.type) {
       case 'dab': {
         /* ★★★ NOT A REPORT WE ASKED TO STOP. Dropped before it touches anything — dabHeld above all,

@@ -472,9 +472,6 @@ export interface SDRCallbacks {
   /** ★ V12 ADS-B, VIBESERVER-ONLY like onDab: a report about once a second while the receiver is in
    *  the mode (its arrival MEANS it is on — open the box); null = it ended; `err` = the refusal. */
   onAdsb?:      (r: AdsbReport | null, err?: string) => void;
-  /** ★★ V12 beta96 THE SHARED AIRCRAFT TABLE over the spectrum socket (`acd=1`, {"type":"acs"} every 3 s — aircraftDelta.ts):
-   *  aircraft.json's object, rebuilt from deltas — the AIR & SEA map needs no aircraft.json poll while these arrive. */
-  onAircraftShared?: (j: Record<string, unknown>) => void;
   /** ★ V12 ISM, VIBESERVER-ONLY: a report about once a second while the receiver is in ISM (its arrival MEANS ISM is on,
    *  on the band it names); null = it ended (`ism_off`); `err` = the refusal (`ism_error`). */
   onIsm?:       (r: IsmReport | null, err?: string) => void;
