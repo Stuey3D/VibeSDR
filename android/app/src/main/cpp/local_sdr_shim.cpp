@@ -954,6 +954,11 @@ static std::atomic<double> g_specGovCeil{0.0};
 // address in a browser gets nothing. The WS endpoints stay up (the app uses them);
 // only the human-facing page is withheld.
 static std::atomic<bool>   g_vsWebEnabled{true};
+// ★★★ beta96 VIBESERVER SIMPLE — LOCAL NETWORK ONLY (Stuart 11-26): every client that is not on the home network is refused,
+//     exactly as the RTL-TCP door refuses one (isPrivateIp: private IPv4, 169.254 link-local, IPv6 link-local / ULA, the
+//     box's own IPv6 prefixes) — and nothing through the tunnel. false = as before (Full, the Linux daemon).
+static std::atomic<bool>   g_vsLanOnly{false};
+static std::atomic<long long> g_vsLanOnlyRefused{0};
 // Pinned capture rate (Hz). 0 = client-controlled. When pinned, a client's
 // {"type":"sampleRate"} is IGNORED and the rate is advertised as locked, so the
 // client can hide a control it isn't allowed to use.
@@ -28814,6 +28819,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (real != sock->socketPeerAddress()) sock->setEffectiveAddress(real);
         }
 
+        /* ★★★ beta96 VIBESERVER SIMPLE: LOCAL NETWORK ONLY — the RTL-TCP door's rule (rtlDoorAcceptLoop), on every request. The
+         *  REAL socket peer is judged (a proxy cannot nominate a local address), and a request through the tunnel is refused
+         *  even though cloudflared connects from loopback. Said in plain words, once a minute in the log. */
+        if (g_vsLanOnly.load(std::memory_order_relaxed)) {
+            static const char* testPeer = std::getenv("VIBE_TEST_LANONLY_PEER");   // ★ TESTS ONLY: pretend the client is there
+            const std::string peer = testPeer && *testPeer ? std::string(testPeer) : sock->socketPeerAddress();
+            if (!isPrivateIp(peer) || viaTunnel(*sock)) {
+                g_vsLanOnlyRefused.fetch_add(1);
+                static std::atomic<int64_t> lastSay{0};
+                const int64_t now = (int64_t)time(nullptr);
+                if (now - lastSay.load() >= 60) { lastSay = now; LOGI("local network only: refused %s (not on the home network)", peer.c_str()); }
+                const std::string body = "This VibeServer is local network only: it answers devices on its own home network.";
+                sock->sendstr("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: "
+                              + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close(); return;
+            }
+        }
+
         /* ★★★ A WEB PAGE ON THIS MACHINE IS NOT THE PERSON AT THIS MACHINE (audit 2026-10-03). A local request
          *  skips the PIN, and with no admin password (or not serving on the LAN) it is admin — so ANY website
          *  open in a browser on the host (the phone running the app, the TV box, the Mac) could open a socket to
@@ -46493,6 +46516,9 @@ int LocalSdrShim::occupantSecsLeft(int adminOverride) const {
 }
 
 void LocalSdrShim::setVibeServerWebEnabled(bool on) { g_vsWebEnabled.store(on); }
+void LocalSdrShim::setVibeServerLanOnly(bool on) {
+    if (g_vsLanOnly.exchange(on) != on) LOGI("local network only: %s", on ? "ON (VibeServer Simple)" : "off");
+}
 void LocalSdrShim::setVibeServerLockedRate(double rate) { g_vsLockedRate.store(rate > 0 ? rate : 0.0); }
 /* ★★★ PINNED, NOT CAPPED — and they are different promises. `lockedRate` is a CEILING: a listener
  *   may still choose anything below it, which is fine on a personal receiver and wrong on a shared
@@ -48095,6 +48121,9 @@ static std::string vsTunableJson() {
         const std::string d = LocalSdrShim::instance().rtlTcpDoorStatus();
         if (d.find("\"running\":true") != std::string::npos) j += ",\"rtltcp\":" + d;
     }
+    // ★★★ beta96 VibeServer Simple: local network only (absent otherwise) — and how many it has turned away.
+    if (g_vsLanOnly.load(std::memory_order_relaxed))
+        j += ",\"lanOnly\":{\"refused\":" + std::to_string(g_vsLanOnlyRefused.load()) + "}";
     /* ★★★ WHAT THIS RECEIVER OFFERS, BY NAME — so a directory can badge and filter on it. The
      *  owner's "Modes and decoders" switches (blockedModes) were enforced here and published
      *  nowhere: a visitor searching for a WEFAX-capable receiver in Europe had no way to ask

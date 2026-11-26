@@ -22,18 +22,23 @@ export async function setMdnsName(v: string): Promise<void> {
 }
 
 /** What the server's one settings store says (VibeRemoteSetup) — null where there is no server process API. */
-export async function storeFacts(): Promise<{ hasAdminPassword: boolean; remote: boolean; simple: boolean; hasStore: boolean } | null> {
+export type StoreFacts = { hasAdminPassword: boolean; remote: boolean; simple: boolean; hasStore: boolean;
+                           /** ★ beta96 Simple's own PIN and RAW IQ OUT choice, as stored (serverChoice.ts SIMPLE_KEYS). */
+                           simplePin: string; simpleRawIq: number };
+export async function storeFacts(): Promise<StoreFacts | null> {
   if (Platform.OS !== 'android' || typeof Local?.serverSettingsGet !== 'function') return null;
   try {
     const j = JSON.parse(await Local.serverSettingsGet());
     const s = j?.settings ?? {};
     return { hasAdminPassword: !!j?.hasAdminPassword, remote: !!j?.remote, simple: s.simple === true,
-             hasStore: !!s && Object.keys(s).length > 0 };
+             hasStore: !!s && Object.keys(s).length > 0,
+             simplePin: typeof s.simplePin === 'string' ? s.simplePin : '', simpleRawIq: Number(s.simpleRawIq) === 1 ? 1 : 0 };
   } catch { return null; }
 }
 
 /** ★ Start a VibeServer Simple: only its four go to the server, which merges them into the store (VibeServerOps). */
-export async function startSimpleServer(o: { name: string; mdnsName: string; rate: number; topRate: number; fps: number }) {
+export async function startSimpleServer(o: { name: string; mdnsName: string; rate: number; topRate: number; fps: number;
+                                             pin: string; rawIq: number }) {
   const cfg = simpleStartConfig(o);
   return await Local.startVibeServer(cfg) as { ip: string; port: number; name: string };
 }
