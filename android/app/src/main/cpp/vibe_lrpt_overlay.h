@@ -139,6 +139,20 @@ inline int chooseSatellite(const std::vector<Candidate>& cs, const vibe::sat::Ob
     return -1;
 }
 
+/** ★★★ beta96 NORTH UP: which way the satellite was going at `tUnix` — 1 northbound (its picture comes south-up and is
+ *  turned round), 0 southbound (as scanned), −1 not known (no orbit, or nothing says which METEOR). The same choice of
+ *  satellite as the outline's; the sign of the velocity along the Earth's axis (TEME z — the frame's rotation about z
+ *  does not change it). */
+inline int northbound(const std::vector<Candidate>& cs, const vibe::sat::Observer* obs, double tUnix) {
+    std::string why;
+    const int si = chooseSatellite(cs, obs, tUnix, why);
+    if (si < 0) return -1;
+    vibe::sat::Sgp4 s; if (!s.init(cs[size_t(si)].el)) return -1;
+    double r[3], v[3];
+    if (s.propagateUnix(tUnix, r, v) != 0) return -1;
+    if (std::fabs(v[2]) < 0.3) return -1;   // km/s: at the turn over a pole, neither
+    return v[2] > 0 ? 1 : 0;
+}
 /** The output: `ok` + the JSON, or why not. */
 struct Overlay { bool ok = false; std::string why, json; double latC = 0, lonC = 0; int points = 0; };
 
@@ -156,7 +170,7 @@ inline std::string gridLabel(double deg, bool lat) {
  *  shrinks the output coordinates (the live preview is a quarter size: 0.25). */
 inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double wallUnix, int32_t wallStampMs,
                            const std::vector<Candidate>& cands, const vibe::sat::Observer* obs, double scale = 1.0,
-                           const Instrument& ins = Instrument{}) {
+                           const Instrument& ins = Instrument{}, bool rot180 = false) {
     Overlay ov;
     if (rows < 16) { ov.why = "too little of the pass to place it on the map"; return ov; }
     Clock clk;
@@ -169,6 +183,13 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
     Georef g; g.ins = ins;
     if (!g.build(cands[size_t(si)].el, t, ov.why)) return ov;
     const int W = ins.width;
+    /* ★★★ beta96 a picture turned round (renderPictures rot180): the same geometry, drawn in the TURNED picture's pixels —
+     *  (x, y) → (W − x, rows − y) in pixel-edge coordinates (pixel c spans [c, c+1)). The geo maths is untouched. */
+    auto toImg = [&](double la, double lo, double& x, double& y, double slack) {
+        if (!g.toImage(la, lo, x, y, slack)) return false;
+        if (rot180) { x = W - x; y = rows - y; }
+        return true;
+    };
 
     // ── the footprint, for culling the coast table: lat range and lon range around the centre ──
     double cLat, cLon;
@@ -212,7 +233,7 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
     };
     auto add = [&](int kind, double la, double lo) {
         double x, y;
-        const bool in = g.toImage(la, lo, x, y, 2.0) && x >= -2 && x <= W + 2 && y >= -2 && y <= rows + 2;
+        const bool in = toImg(la, lo, x, y, 2.0) && x >= -2 && x <= W + 2 && y >= -2 && y <= rows + 2;
         if (!in) { flush(kind); return; }
         if (!run.empty()) {
             const double dx = x - run.back().first, dy = y - run.back().second;
@@ -262,7 +283,7 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
         flush(3);
         if (js[3].size() != before) {   // label where the parallel is nearest the picture's left edge
             double bx = 1e9, by = 0;
-            for (double lo = lo0; lo <= lo1; lo += 0.25) { double x, y; if (g.toImage(la, lo, x, y) && x >= 0 && x < W && y >= 0 && y < rows && x < bx) { bx = x; by = y; } }
+            for (double lo = lo0; lo <= lo1; lo += 0.25) { double x, y; if (toImg(la, lo, x, y, 0.0) && x >= 0 && x < W && y >= 0 && y < rows && x < bx) { bx = x; by = y; } }
             if (bx < 1e9) label(bx, by, detail::gridLabel(la, true));
         }
     }
@@ -276,7 +297,7 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
             flush(3);
             if (js[3].size() != before) {   // label where the meridian is nearest the picture's top
                 double bx = 0, by = 1e9;
-                for (double la = std::max(-89.0, laMin); la <= std::min(89.0, laMax); la += 0.25) { double x, y; if (g.toImage(la, lon, x, y) && x >= 0 && x < W && y >= 0 && y < rows && y < by) { bx = x; by = y; } }
+                for (double la = std::max(-89.0, laMin); la <= std::min(89.0, laMax); la += 0.25) { double x, y; if (toImg(la, lon, x, y, 0.0) && x >= 0 && x < W && y >= 0 && y < rows && y < by) { bx = x; by = y; } }
                 if (by < 1e9) label(bx, by, detail::gridLabel(lon, false));
             }
         }
@@ -288,6 +309,7 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
     std::string o = "{\"v\":1,\"w\":";
     o += std::to_string(int(std::lround(W * scale))) + ",\"h\":" + std::to_string(int(std::lround(rows * scale)));
     o += ",\"scale\":"; detail::num(o, scale);
+    if (rot180) o += ",\"rot\":180";   // ★ beta96 drawn for the turned picture (north up)
     std::string nm; for (char ch : c.name) if (ch != '"' && ch != '\\' && (unsigned char)ch >= 0x20) nm += ch;
     o += ",\"sat\":\"" + nm + "\",\"norad\":" + std::to_string(c.norad);
     char b[200];
@@ -298,7 +320,8 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
     o += ",\"corners\":[";
     const double cx[4] = { 0, double(W - 1), 0, double(W - 1) }, cy[4] = { 0, 0, double(rows - 1), double(rows - 1) };
     for (int k = 0; k < 4; k++) {
-        double la = 0, lo = 0; g.toGround(cx[k], cy[k], la, lo);
+        double la = 0, lo = 0;
+        if (rot180) g.toGround(W - 1 - cx[k], rows - 1 - cy[k], la, lo); else g.toGround(cx[k], cy[k], la, lo);
         if (k) o += ',';
         o += '['; detail::num(o, la); o += ','; detail::num(o, lo); o += ']';
     }

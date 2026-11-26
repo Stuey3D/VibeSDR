@@ -237,6 +237,104 @@ int main() {
         }
     }
 
+    /* ★★★ beta96 NORTH UP (Stuart 11-26, Meteor-M2-4 with MAP OUTLINE on: a northbound pass came out south-up). A northbound
+     *  pass's pictures are turned round ONCE (renderPictures), say so (PNG Comment, name, outline "rot"), and the outline
+     *  is drawn for the turned picture — the same ground at the turned pixel. A southbound pass is left as scanned. */
+    std::printf("── north up: a northbound pass turned round once, a southbound one not ──\n");
+    {
+        const double tN = day + ms0 / 1000.0 + 50;
+        CHECK(northbound(cands, &obs, tN) == 1, "Stuart's 23 Nov 14:06 pass is northbound (%d)", northbound(cands, &obs, tN));
+        // a southbound METEOR-M2-4 pass over the same place, found from the orbit
+        double tS = -1;
+        for (double t = tN - 86400; t < tN + 86400 && tS < 0; t += 60) {
+            std::string w; const int i = chooseSatellite(cands, &obs, t, w);
+            if (i < 0 || cands[size_t(i)].norad != 59051) continue;
+            vibe::sat::Sgp4 sg; sg.init(cands[size_t(i)].el);
+            if (vibe::sat::look(sg, obs, t).elDeg > 30 && northbound(cands, &obs, t) == 0) tS = t;
+        }
+        CHECK(tS > 0 && northbound(cands, &obs, tS) == 0, "a southbound pass found and said southbound (%.0f)", tS);
+        CHECK(northbound(cands, nullptr, tN) == -1, "no location, two METEORs, no pick: not known (left as scanned)");
+
+        // the outline for the turned picture: every point is the scanned outline's turned (W − x, rows − y)
+        auto v = strips(1231.14, 100, ms0);
+        const Overlay a = makeOverlay(v, 800, day + ms0 / 1000.0 + 100, int32_t(ms0 + 98500), cands, &obs);
+        const Overlay b = makeOverlay(v, 800, day + ms0 / 1000.0 + 100, int32_t(ms0 + 98500), cands, &obs, 1.0, Instrument{}, true);
+        CHECK(a.ok && b.ok && b.json.find("\"rot\":180") != std::string::npos && a.json.find("\"rot\"") == std::string::npos, "the turned outline says rot 180, the scanned one nothing");
+        auto firstCoast = [](const std::string& j, long& x, long& y) { size_t p = j.find("\"coast\":[["); if (p == std::string::npos) return false; char* e; x = std::strtol(j.c_str() + p + 10, &e, 10); y = std::strtol(e + 1, &e, 10); return true; };
+        // the same ground point both ways: a coast vertex's lat/lon, placed in each
+        Georef gr; std::vector<double> tt(800); Clock ck; std::string w2; checkClock(v, day + ms0 / 1000.0 + 100, int32_t(ms0 + 98500), ck, w2);
+        for (int r = 0; r < 800; r++) tt[size_t(r)] = ck.unixAt(r / 8.0);
+        gr.build(m24->el, tt, w2);
+        double la = 0, lo = 0; const bool g1 = gr.toGround(300.5, 400.5, la, lo);
+        double x = 0, y = 0; const bool g2 = gr.toImage(la, lo, x, y);
+        CHECK(g1 && g2 && std::fabs((1568 - x) - (1568 - 300.5)) < 0.1 && std::fabs((800 - y) - (800 - 400.5)) < 0.1, "a ground point's turned pixel is (W − x, rows − y)");
+        long ax, ay, bx, by;
+        const bool fa = firstCoast(a.json, ax, ay), fb = firstCoast(b.json, bx, by);
+        // the corners: the turned picture's top-left is the scanned bottom-right, i.e. NORTH-west on a northbound pass
+        auto corner = [](const std::string& j, int k, double& la, double& lo) { size_t p = j.find("\"corners\":[["); if (p == std::string::npos) return false; const char* q = j.c_str() + p + 12; for (int i = 0; i < k; i++) q = std::strchr(q, '[') + 1; char* e; la = std::strtod(q, &e); lo = std::strtod(e + 1, &e); return true; };
+        double aLa0, aLo0, aLa2, aLo2, aLa3, aLo3, bLa0, bLo0, bLa2, bLo2;
+        corner(a.json, 0, aLa0, aLo0); corner(a.json, 2, aLa2, aLo2); corner(a.json, 3, aLa3, aLo3); corner(b.json, 0, bLa0, bLo0); corner(b.json, 2, bLa2, bLo2);
+        CHECK(std::fabs(bLa0 - aLa3) < 1e-3 && std::fabs(bLo0 - aLo3) < 1e-3, "the turned top-left corner is the scanned bottom-right");
+        CHECK(bLa0 > bLa2 + 3, "north up: the turned picture's top is north of its bottom (%.2f vs %.2f)", bLa0, bLa2);
+        CHECK(aLa0 < aLa2 - 3, "…the scanned one's was south-up (%.2f vs %.2f)", aLa0, aLa2);
+        (void)aLo2;
+        (void)fa; (void)fb; (void)ax; (void)ay; (void)bx; (void)by;
+
+        // the pictures through Run: a northbound pass turned once; the same signal on a southbound pass left alone
+        for (int south = 0; south < 2; south++) {
+            const double dayX = south ? std::floor(tS / 86400.0) * 86400.0 : day;
+            const int32_t msX = south ? int32_t(std::lround((tS - 30 - dayX) * 1000.0)) : ms0;
+            tx::TxConfig tc; tc.esn0Db = 25; tc.startMs = uint32_t(msX);
+            const auto iq = tx::modulate(tc, tx::codeBits(tc, tx::buildVcdus(tc, 8)));
+            Run::Opts o; o.symbolRate = 72000; double fed = 0;
+            o.geoCandidates = [&] { return cands; };
+            o.geoObserver = [&](vibe::sat::Observer& ob) { ob = obs; return true; };
+            o.nowUnix = [&] { return dayX + msX / 1000.0 + fed + 1.5; };
+            std::vector<Picture> got; std::string lastStatus;
+            o.pictures = [&](const std::vector<Picture>& ps, bool) { got = ps; };
+            o.json = [&](const std::string& j) { if (j.find("lrpt_status") != std::string::npos) lastStatus = j; };
+            o.frame = [](const uint8_t*, size_t) {};
+            // the same pass as scanned, for comparison
+            std::vector<Picture> plain;
+            {
+                Run run(o);
+                const size_t blk = size_t(tc.sampleRate / 20);
+                for (size_t at = 0; at < iq.size() / 2; at += blk) {
+                    const size_t n = std::min(blk, iq.size() / 2 - at);
+                    run.feedIq(reinterpret_cast<const std::complex<float>*>(&iq[at * 2]), int(n), tc.sampleRate, 0);
+                    fed += n / tc.sampleRate;
+                }
+                if (run.receiver()) plain = renderPictures(*run.receiver(), false);
+                run.finish(false);
+            }
+            const char* what = south ? "southbound" : "northbound";
+            CHECK(!got.empty() && got.size() == plain.size(), "%s: pictures at the end (%zu)", what, got.size());
+            if (got.empty() || plain.empty()) continue;
+            const Picture& p = got[0]; const Picture& q = plain[0];
+            const bool noted = p.png.find("tEXtComment") != std::string::npos && p.png.find(kRotatedNote) != std::string::npos;
+            int pw, ph, qw, qh; std::vector<uint8_t> pr, qr;
+            const bool dec = burn::decodeRgb(p.png, pw, ph, pr).empty() && burn::decodeRgb(q.png, qw, qh, qr).empty() && pw == qw && ph == qh;
+            bool turned = dec, same = dec;
+            if (dec) for (int yy = 0; yy < ph; yy += 7) for (int xx = 0; xx < pw; xx += 5) {
+                const uint8_t* a1 = &pr[(size_t(yy) * pw + xx) * 3]; const uint8_t* b1 = &qr[(size_t(ph - 1 - yy) * pw + (pw - 1 - xx)) * 3]; const uint8_t* c1 = &qr[(size_t(yy) * pw + xx) * 3];
+                if (a1[0] != b1[0] || a1[2] != b1[2]) turned = false;
+                if (a1[0] != c1[0] || a1[2] != c1[2]) same = false;
+            }
+            int rotted = 0; for (auto& g : got) rotted += g.rot == 180;
+            if (!south) {
+                CHECK(rotted == int(got.size()) && noted && p.name.find("north up") != std::string::npos, "northbound: every picture turned (%d of %zu), the PNG says so, the name says north up", rotted, got.size());
+                CHECK(dec && turned && !same, "northbound: the gallery picture is the scanned one turned round EXACTLY ONCE (pixel for pixel)");
+                CHECK(p.geoJson.find("\"rot\":180") != std::string::npos, "northbound: its outline is drawn for the turned picture (rot 180)");
+                CHECK(lastStatus.find("\"rot\":180") != std::string::npos, "northbound: lrpt_status tells the clients to turn the live preview");
+            } else {
+                CHECK(rotted == 0 && !noted && p.name.find("north up") == std::string::npos, "southbound: nothing turned, no note");
+                CHECK(dec && same, "southbound: the gallery picture is as scanned (pixel for pixel)");
+                CHECK(p.geoJson.empty() || p.geoJson.find("\"rot\"") == std::string::npos, "southbound: the outline is the scanned one");
+                CHECK(lastStatus.find("\"rot\":0") != std::string::npos, "southbound: lrpt_status says rot 0");
+            }
+        }
+    }
+
     std::printf("── DOWNLOAD with the outline: burnt into a copy (vibe_lrpt_burn.h, ?outline=1) ──\n");
     {
         const int w = 64, h = 40;

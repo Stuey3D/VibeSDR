@@ -360,7 +360,7 @@ private:
         rx_ = std::make_unique<Receiver>(c);
         if (o_.made) o_.made(*rx_);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
-        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0;
+        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0; heading_ = -1; headingAsked_ = -1;
         lastSignalSec_ = fedSec_; snrAcc_ = 0; snrN_ = 0;
         if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
                            + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
@@ -369,10 +369,13 @@ private:
         if (!rx_ || !havePictures_) return;
         preview(true);
         if (sentRows_ > 0 && o_.frame) { std::vector<uint8_t> m{ 0x05, 0, 0, 0, 0 }; o_.frame(m.data(), m.size()); }
-        auto pics = renderPictures(*rx_);
+        decideHeading(true);
+        const bool rot = heading_ == 1;   // ★★★ beta96 a northbound pass: north up, turned ONCE, here
+        auto pics = renderPictures(*rx_, rot);
+        if (rot && o_.log) o_.log("lrpt: northbound pass \xe2\x80\x94 the pictures are turned round, north up");
         if (!pics.empty() && o_.geoCandidates) {
             int s0, s1; rx_->stripRange(s0, s1);
-            const geo::Overlay ov = overlay(s0, s1, 1.0);
+            const geo::Overlay ov = overlay(s0, s1, 1.0, rot);
             for (auto& p : pics) { if (ov.ok) p.geoJson = ov.json; else p.geoWhy = ov.why; }
             if (o_.log) o_.log(ov.ok ? "lrpt: map outline made (" + std::to_string(ov.points) + " points)" : "lrpt: no map outline \xe2\x80\x94 " + ov.why);
         }
@@ -384,12 +387,23 @@ private:
         return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
     /** The outline for strips [s0, s1) — the full picture (scale 1) or the live preview (a quarter). */
-    geo::Overlay overlay(int s0, int s1, double scale) const {
+    geo::Overlay overlay(int s0, int s1, double scale, bool rot180 = false) const {
         std::vector<int32_t> ms;
         for (int s = s0; s < s1; s++) ms.push_back(rx_->stripTimeMs(s));
         std::vector<geo::Candidate> cs = o_.geoCandidates ? o_.geoCandidates() : std::vector<geo::Candidate>{};
         vibe::sat::Observer ob; const bool haveObs = o_.geoObserver && o_.geoObserver(ob) && ob.valid;
-        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale);
+        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale, geo::Instrument{}, rot180);
+    }
+    /** ★★★ beta96 NORTH UP: which way this pass goes (geo::northbound), decided once a picture exists and then kept for the
+     *  pass — the clients turn the live preview by it (lrpt_status "rot"), the gallery's pictures are turned by it. Asked
+     *  at most every 5 s until known (an SGP4 call); `force` = the pass is ending, ask now. */
+    void decideHeading(bool force = false) {
+        if (heading_ >= 0 || !o_.geoCandidates || !rx_) return;
+        if (!force && headingAsked_ >= 0 && fedSec_ - headingAsked_ < 5.0) return;
+        headingAsked_ = fedSec_;
+        const std::vector<geo::Candidate> cs = o_.geoCandidates();
+        vibe::sat::Observer ob; const bool haveObs = o_.geoObserver && o_.geoObserver(ob) && ob.valid;
+        heading_ = geo::northbound(cs, haveObs ? &ob : nullptr, wallAt_ > 0 ? wallAt_ : now());
     }
     /** ★★ THE LIVE OUTLINE: {"type":"lrpt_geo","data":{…}} in the PREVIEW's coordinates (a quarter size, from the
      *  preview's first strip), every kLiveGeoSec while the picture grows — the clients draw it over the growing picture
@@ -468,6 +482,7 @@ private:
             o_.frame(m.data(), m.size());
             sentRows_ = y + 1;
         }
+        decideHeading();
         liveGeo();
     }
     /** ★★★ beta96 the preview's gaps (gapart::mergeGaps) as ,"gaps":[[r0,r1,msA,msB,lines,patchy],…] in PREVIEW rows
@@ -519,6 +534,7 @@ private:
             { int dec = 0; for (int k = s0; k < s1; k++) if (stripDecoded(k)) dec++;
               j += ",\"decoded\":" + std::to_string(dec * 8) + ",\"gapLines\":" + std::to_string((s1 - s0 - dec) * 8); }
             j += previewGapsJson();
+            if (heading_ >= 0) j += heading_ == 1 ? ",\"rot\":180" : ",\"rot\":0";   // ★★★ beta96 north up: turn the preview
             j += ",\"channels\":[";
             bool first = true;
             for (int a : rx_->liveApids()) { j += std::string(first ? "" : ",") + "\"" + channelName(a) + "\""; first = false; }
@@ -538,6 +554,7 @@ private:
     bool havePictures_ = false, previewOpen_ = false, done_ = false, rateWarned_ = false;
     int sentRows_ = 0, previewS0_ = 0;
     double wallAt_ = 0, lastGeoSec_ = -1; int32_t wallStamp_ = -1; int geoStrips_ = 0;   // ★ the map outline
+    int heading_ = -1; double headingAsked_ = -1;   // ★★★ beta96 1 northbound (north up = turned), 0 southbound, −1 not known
 };
 
 } // namespace vibelrpt
