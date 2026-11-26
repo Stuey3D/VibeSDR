@@ -9,7 +9,7 @@
 //
 // ★ WHAT THIS DOES: the real shim, in this process, against fake-rtl-tcp replaying a 2.56 MS/s 1090 MHz clip (three
 //   aircraft). START → kept-running ADS-B enters → STOP → START … N times. After EVERY start it asks the server, not
-//   the log: the radio's rate (hwinfo rateNow = 2 560 000), and fresh ADS-B aircraft in /vibeserver/aircraft.json
+//   the log: the radio's rate (captureSpanHz = 2 560 000), and fresh ADS-B aircraft in /vibeserver/aircraft.json
 //   (?since=3: heard in the last 3 s, so a row left over from the previous start cannot pass); and from the fake's own
 //   log, that THIS start tuned the radio to 1090 MHz and asked for 2.56 MS/s (entered through the listener's door).
 //
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         const auto t0 = std::chrono::steady_clock::now();
         while (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(12)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            rateNow = jsonNum(httpGet(port, "/vibeserver/hardware"), "rateNow");
+            rateNow = (long long)LocalSdrShim::instance().captureSpanHz();   // ★ the rate the radio runs (p->sampleRate)
             count = jsonNum(httpGet(port, "/vibeserver/aircraft.json?since=3"), "count");
             const std::string fl = fileFrom(fakeLog, mark);
             tuned = fl.find("tune 1090.") != std::string::npos;
