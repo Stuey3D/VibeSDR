@@ -198,7 +198,7 @@ import { mediaSkipEnabled } from '../../../src/services/blindTuneGate';
 import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
-import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, type AskState } from '../../../src/services/dialChat';
+import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, mapSharedLine, type AskState } from '../../../src/services/dialChat';
 // ★ Through the doorway, so the panel's code is fetched only when an admin opens it (adminLazy.ts).
 import { initAdmin, closeAdmin, openAdmin, startAdminTicketRenewal } from './adminLazy';
 import { httpBase, wsBase, isValidServerHost, dataUrl, dataOrigin, assetOrigin, watchDirectFetches, relearnDirectHost } from './origin';
@@ -1212,6 +1212,7 @@ function flashSharedBanner(text: string) {
  *  listenerCount includes you. */
 function updateSharedBanner() {
   updateSharedBannerText();
+  mapSharedSync();   // ★★★ beta96 the full-screen maps' SHARED TUNER line follows the bar's
   /* ★★★ THE BANNER'S ROW GOES WITH THE BANNER, NOT WITH THE SHARED DIAL (2026-11-04, Saber's IC-7300 as a listener:
    *  "…NERS FOLLOW THE RADIO", the unit clipped to "kH" and no mode key). #mShared is a full-width, no-wrap box; it
    *  gets its own row only under #mPillIn.shared, which was set from srvSharedDial alone. An Icom's own banners (the
@@ -9574,6 +9575,101 @@ function adsbSyncChat() {
   if (su && du) { du.textContent = su.textContent; du.hidden = su.hidden; }
 }
 
+/* ★★★ beta96 THE SHARED TUNER ON EVERY FULL-SCREEN MAP (Stuart 11-26, "big issue" — Listen-Amateur-VLD's SHIPPING MAP on a
+ *  shared dial covered the controls bar: no shared-tuner state, no CHAT). Whichever track map is open (the AIR & SEA map in
+ *  every live state, the ISM mesh map, the ISM gallery map) gets, first in its top bar ('share' slot): the SHARED TUNER
+ *  line and a CHAT key beside it, while the dial is shared. ★★ ONE SOURCE: the bar's own state (srvSharedDial, the count,
+ *  askNow, the scan lock, a tuning line in chat) read through dialChat.mapSharedLine — run from updateSharedBanner, so it
+ *  changes when the bar does (a join, a leave, the ask lock lifting). The line opens the chat (where the asking is done);
+ *  CHAT is the bar's CHAT (same panel, same unread count, greyed when it is). ★★ Locked (askLocked / the owner's scan):
+ *  EXIT (when it leaves a whole-radio mode) and the controls marked data-dial (the DATALINK / SONDES band keys, ADS-B GAIN)
+ *  are greyed with the reason (TrackView.setDialLock); the map itself never is (Stuart 11-26: the map is per listener). */
+let mapShEl: HTMLElement | null = null;
+function mapShBuild(): HTMLElement {
+  if (mapShEl) return mapShEl;
+  const g = document.createElement('span');
+  g.id = 'mapShared'; g.className = 'mapShared'; g.hidden = true;
+  g.style.cssText = 'display:inline-flex;align-items:center;gap:6px';
+  g.innerHTML = '<button type="button" class="btn mapShLine" id="mapShLine"></button>'
+    + '<button type="button" class="btn" id="mapChat" title="Chat">CHAT<span class="unread" id="mapChatUnread" hidden></span></button>';
+  const openChat = () => {
+    if (($('mChat') as HTMLButtonElement).disabled) return;
+    if (!isPanelOpen('chatPanel')) togglePanel('chatPanel');
+    chatOpened(isPanelOpen('chatPanel')); mapShChatSync();
+  };
+  (g.querySelector('#mapShLine') as HTMLElement).onclick = openChat;
+  (g.querySelector('#mapChat') as HTMLElement).onclick = () => {
+    if (($('mChat') as HTMLButtonElement).disabled) return;
+    togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); mapShChatSync();
+  };
+  // ★ the bar's CHAT is the truth for greyed / unread / breathing — copied whenever it changes
+  const src = document.getElementById('mChat');
+  if (src && typeof MutationObserver !== 'undefined')
+    new MutationObserver(() => mapShChatSync()).observe(src, { attributes: true, subtree: true, childList: true, characterData: true });
+  mapShEl = g;
+  return g;
+}
+function mapShChatSync() {
+  const src = document.getElementById('mChat') as HTMLButtonElement | null;
+  const b = document.getElementById('mapChat') as HTMLButtonElement | null;
+  if (!src || !b) return;
+  b.disabled = src.disabled; b.title = src.title || 'Chat';
+  b.classList.toggle('chatBreathing', src.classList.contains('chatBreathing'));
+  b.classList.toggle('askNudge', src.classList.contains('askNudge'));
+  const su = document.getElementById('mChatUnread'), du = document.getElementById('mapChatUnread');
+  if (su && du) { du.textContent = su.textContent; du.hidden = su.hidden; }
+}
+/** The open full-screen track map, and whether its EXIT leaves a whole-radio mode (retunes the shared radio). */
+function mapShOpenView(): { v: TrackView; exitMoves: boolean } | null {
+  if (asView?.open) return { v: asView, exitMoves: asBy === 'mode' && liveChrome('airsea', asMode()).exitLeavesMode };
+  if (ismMapView?.open) return { v: ismMapView, exitMoves: false };
+  if (ismGalView?.open) return { v: ismGalView, exitMoves: false };
+  return null;
+}
+function mapSharedSync() {
+  const o = mapShOpenView();
+  if (!o) return;
+  const g = mapShBuild();
+  const slot = o.v.slot('share');
+  if (g.parentElement !== slot) slot.appendChild(g);
+  const st = mapSharedLine({
+    shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true,
+    listeners: listenerCount, max: listenerMax, ask: askNow, scanLocked: scanLockOn,
+    said: scanLockOn ? scanLockLine(scanLockPhase, scanLockDone, scanLockTotal) : bannerSaidText || null,
+    exitMoves: o.exitMoves,
+  });
+  g.hidden = !st.show;
+  // ★ ADS-B's own CHAT key gives way to this one (one CHAT on the map, beside the line)
+  const ac = document.getElementById('adsbChat'); if (ac) ac.hidden = st.show;
+  const line = $('mapShLine') as HTMLButtonElement;
+  if (st.show) {
+    const alone = listenerCount === 1 && !st.dialLocked && !bannerSaidText && !scanLockOn;
+    line.classList.toggle('alone', alone);
+    line.classList.toggle('locked', st.dialLocked);
+    // ★ as the bar: the words as TEXT, the person glyph as markup (no translated string is parsed as HTML)
+    const person = / 👤$/.test(st.text);
+    line.textContent = person ? st.text.replace(/ 👤$/, ' ') : st.text;
+    if (person) line.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>');
+    line.title = st.why || (alone ? 'Nobody else is listening — free to tune' : 'Others share this dial — ask in the chat before you change it');
+    line.setAttribute('aria-label', st.text.replace(/👤/, 'listening') + ' — open the chat');
+    mapShChatSync();
+  }
+  // ★ what on this map moves the shared radio: the DATALINK / SONDES band keys, ADS-B's GAIN (never the time filter)
+  if (o.v === asView) {
+    const rng = o.v.root.querySelector('.trkTop .rng:not(.tgl)') as HTMLElement | null;
+    if (rng) { if (avOn || sdOn) rng.dataset.dial = '1'; else delete rng.dataset.dial; }
+    const gain = document.getElementById('adsbGain'); if (gain) { if (adsbOn) gain.dataset.dial = '1'; else delete gain.dataset.dial; }
+  }
+  if (!o.v.onDialLocked) o.v.onDialLocked = (why) => { nudgeAsk(); showPill(why, 4000); };
+  o.v.setDialLock(st.show || scanLockOn ? st.why : '', o.exitMoves);
+}
+(window as any).__vibeMapShared = () => {
+  const o = mapShOpenView(); const g = document.getElementById('mapShared');
+  const x = o?.v.root.querySelector('.trkTop .exit') as HTMLElement | null;
+  return o ? { shown: !!g && !g.hidden && !!g.closest('.trkView'), text: document.getElementById('mapShLine')?.textContent || '',
+               exitLocked: x?.getAttribute('aria-disabled') === 'true', exitTitle: x?.title || '', lock: o.v.dialLocked } : null;
+};
+
 /** A listener's press: in or out. ★ From DAB the server leaves DAB itself (`dab_off`), so only DAB's
  *  UI is unwound here — sending dab:0 too would arm DAB's restore and race the ADS-B tune. */
 function adsbSetMode(on: boolean) {
@@ -9882,6 +9978,7 @@ let ismMapRange = ismRangeOf(lsGet(ISM_RANGE_LIVE_KEY), true);
 function ismMapOpen(key = '') {
   if (!ismMapView) ismMapView = new TrackView({
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(), fitOnOpen: true,   // ★ 11-21 auto fit
+    liveIds: ['chatPanel'],   // ★★★ beta96 the SHARED TUNER line's CHAT opens its panel over the map
     icon: ismMapIcon, label: ismMapLabel, labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     // ★ beta92 a node remembered from the gallery (no longer in this ISM session) gets the gallery's card: first / last heard
     card: (d) => ('first' in d && 'origin' in d ? ismGalCard(d as IsmGalNode, myPos()) : ismMapCard(d, myPos())),
@@ -10218,13 +10315,14 @@ async function ismGalMapOpen(it0: GalleryItem) {
   const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; };
   const t = `LoRa nodes heard · ${band ? band + ' MHz' : ''}`;
   ismGalView = new TrackView({ fitOnOpen: true,   // ★ 11-21 AUTO fit, as the live mesh map
-    title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close,
+    title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close, liveIds: ['chatPanel'],   // ★★★ beta96 the shared line's CHAT
     icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
     ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,
     onRange: (id) => { range = id; lsSet(ISM_RANGE_GAL_KEY, id); draw(); },
   });
   ismGalView.show(rx);
   draw();
+  mapSharedSync();   // ★★★ beta96 the SHARED TUNER line + CHAT
   /* ★ LIVE: today's card is rewritten at most once a minute while ISM runs (a listener, or background decoding) — while
    *  this map is open it is fetched again each minute, and a node heard since pulses (the layer's `heard`). */
   const today = cards.find((c) => Math.floor(c.t / 86400) === Math.floor(Date.now() / 86400000));
@@ -10248,6 +10346,7 @@ function ismMapRender() {
   const r = r0 ? { ...r0, devices: ismInRange([...r0.devices, ...stored], ismMapRange) } : null;   // ★ the time filter
   const items = r ? r.devices.filter(ismOnMap) : [];
   ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
+  mapSharedSync();   // ★★★ beta96 the SHARED TUNER line + CHAT on the mesh map too
 }
 
 /* ★★★ AIS MODE (V12, docs/v12/AIS-APRS.md) — ADS-B's shape on the page: the map IS the mode. The server puts the whole radio
@@ -10680,6 +10779,7 @@ function asRender() {
   v.note(sc.building);
   if (avOn && avReport) for (const b of Array.from(v.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === avReport.band));
   syncOnlyMode();
+  mapSharedSync();   // ★★★ beta96 the SHARED TUNER line + CHAT, and the dial lock on EXIT / the band keys (after setRanges redrew them)
 }
 /** ★ beta96 stage 8 the KEY's NDB rows (the beacon marker: dot + 3-bar meter, ndblayer.js's colours). */
 const NDB_LEGEND = '<div><b>NDB beacons</b></div><div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ffb000;margin-right:6px"></i>Beacon heard, at its published position — bars: signal (1 red · 2 amber · 3 green)</div>'

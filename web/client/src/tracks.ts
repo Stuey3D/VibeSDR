@@ -395,6 +395,12 @@ const CSS = `
 .trkTop .ttl{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkTop .st{color:#9fb0c2;font-size:12px;flex:1 1 200px;min-width:0}
 .trkTop .scr{display:contents}
+.trkTop .slot-share{display:inline-flex;align-items:center;gap:6px;flex:none}
+.trkTop .slot-share:empty,.trkTop .slot-share>[hidden]{display:none}
+.trkTop .mapShLine{background:rgba(255,190,80,.10);color:#ffcf7a;border-color:rgba(255,190,80,.45);font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;white-space:nowrap}
+.trkTop .mapShLine.alone{color:#7bd88f;border-color:rgba(123,216,143,.45);background:rgba(123,216,143,.08)}
+.trkTop .mapShLine.locked{color:#ff9d8a;border-color:rgba(255,120,100,.55);background:rgba(255,90,70,.10)}
+.trkTop .btn.dialLocked{opacity:.4;filter:grayscale(.7);cursor:not-allowed}
 .trkKey{position:absolute;right:10px;bottom:30px;z-index:900;background:rgba(11,20,32,.92);border:1px solid #2c3e52;border-radius:8px;color:#d7dee6;font:12px/1.3 inherit;max-height:60%;overflow:auto}
 .trkKey>summary{cursor:pointer;padding:6px 10px;font-weight:600;letter-spacing:.08em;list-style:none}
 .trkKey>summary::-webkit-details-marker{display:none}
@@ -640,7 +646,12 @@ export class TrackView {
       this.rowPick(e);
     });
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
-    r.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (this.sel) this.select(''); else o.onExit(); } });
+    r.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (this.sel) this.select(''); else if (this.dialExit) this.onDialLocked?.(this.dialWhy); else o.onExit(); } });
+    // ★★★ beta96 the dial lock (setDialLock): captured before EXIT's / a band key's own handler sees the press
+    for (const ev of ['click', 'keydown'] as const) r.addEventListener(ev, (e) => {
+      if (ev === 'keydown' && (e as KeyboardEvent).key !== 'Enter' && (e as KeyboardEvent).key !== ' ') return;
+      if (this.dialRefuses(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, { capture: true });
     document.body.appendChild(r);
     let min = false; try { min = localStorage.getItem(MIN_KEY) === '1'; } catch { /* private window */ }
     this.setMin(min, false);
@@ -649,13 +660,16 @@ export class TrackView {
   /** ★★ beta96 a host's own chrome in this view (ADS-B mode's GAIN, CHAT, capture warning; its list chips; its feed
    *  warning and gain pop-over): 'top' = in the top bar before the status line, 'head' = under the list's header, 'over' =
    *  over the map. Made on first use; the host moves its elements in and hides them when they do not apply. */
-  slot(where: 'top' | 'head' | 'over'): HTMLElement {
+  slot(where: 'top' | 'head' | 'over' | 'share'): HTMLElement {
     const cls = `slot-${where}`;
     let el = this.root.querySelector(`.${cls}`) as HTMLElement | null;
     if (el) return el;
-    el = document.createElement(where === 'top' ? 'span' : 'div');
+    el = document.createElement(where === 'top' || where === 'share' ? 'span' : 'div');
     el.className = `trkSlot ${cls}`;
-    if (where === 'top') this.fitBtn.before(el);
+    // ★★★ beta96 'share' = the SHARED TUNER line + CHAT, right after the title: first in the sideways row, so a phone
+    //   shows it without scrolling (main.ts mapSharedSync)
+    if (where === 'share') (this.root.querySelector('.ttl') as HTMLElement).after(el);
+    else if (where === 'top') this.fitBtn.before(el);
     else if (where === 'head') this.rowsEl.before(el);
     else this.mapHost.appendChild(el);
     return el;
@@ -712,6 +726,37 @@ export class TrackView {
     const t = this.root.querySelector('.ttl') as HTMLElement, x = this.root.querySelector('.exit') as HTMLElement;
     if (t.textContent !== title) { t.textContent = title; this.root.setAttribute('aria-label', title + ' map'); }
     if (x.textContent !== exitLabel) x.textContent = exitLabel;
+  }
+  /** ★★★ beta96 THE DIAL LOCK ON A MAP (Stuart 11-26): while the server says this listener may not move the shared radio
+   *  (ask before tuning, the owner's scan), the controls that WOULD move it are greyed with `why` — EXIT when `exitToo`
+   *  (it leaves a whole-radio mode, which retunes the radio) and every element the host marked `data-dial` (band keys,
+   *  GAIN). A press on one is refused here and handed to `onDialLocked` (the host's nudge: the line flashes, CHAT pulses).
+   *  ✗ NEVER the map itself: pan, zoom, FIT, layer chips, tabs, sort, cards, KEY, labels and the time filter are each
+   *  listener's own view and stay live. '' = unlocked. */
+  private dialWhy = '';
+  private dialExit = false;
+  onDialLocked: ((why: string) => void) | null = null;
+  setDialLock(why: string, exitToo: boolean) {
+    this.dialWhy = why; this.dialExit = !!why && exitToo;
+    const x = this.root.querySelector('.exit') as HTMLElement;
+    const mark = (el: HTMLElement, on: boolean) => {
+      el.classList.toggle('dialLocked', on);
+      if (on) { el.setAttribute('aria-disabled', 'true'); if (el.dataset.dialTitle === undefined) el.dataset.dialTitle = el.title || ''; el.title = why; }
+      else if (el.getAttribute('aria-disabled') === 'true') { el.removeAttribute('aria-disabled'); el.title = el.dataset.dialTitle || ''; delete el.dataset.dialTitle; }
+    };
+    mark(x, this.dialExit);
+    for (const el of Array.from(this.root.querySelectorAll('[data-dial], [data-dial] button')) as HTMLElement[]) if (el.tagName === 'BUTTON' || el.tagName === 'SELECT' || el.tagName === 'INPUT') mark(el, !!why);
+  }
+  get dialLocked(): { why: string; exit: boolean } { return { why: this.dialWhy, exit: this.dialExit }; }
+  /** A press the lock refuses: true = refused (the host was told). */
+  private dialRefuses(t: EventTarget | null): boolean {
+    if (!this.dialWhy) return false;
+    const el = t as HTMLElement | null;
+    if (!el?.closest) return false;
+    const hit = (this.dialExit && el.closest('.trkTop .exit')) || el.closest('[data-dial]');
+    if (!hit) return false;
+    this.onDialLocked?.(this.dialWhy);
+    return true;
   }
   get title(): string { return (this.root.querySelector('.ttl') as HTMLElement).textContent || ''; }
   get exitLabel(): string { return (this.root.querySelector('.exit') as HTMLElement).textContent || ''; }
