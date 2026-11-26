@@ -45,6 +45,9 @@ export function useLinkedList(upperH: number, lowerH: number, lowerRef?: React.R
   const geoRef = useRef(geo); geoRef.current = geo;
   const pending = useRef(false);
   const dims = useRef({ upperH, lowerH }); dims.current = { upperH, lowerH };
+  // ★ The callback in a ref: the caller passes a fresh arrow each render, and Panel's identity must NOT follow it (a new
+  //   component type would remount both ScrollViews and lose the offset on every decoder update).
+  const onYRef = useRef(onY); onYRef.current = onY;
 
   const recompute = useCallback(() => {
     pending.current = false;
@@ -88,8 +91,8 @@ export function useLinkedList(upperH: number, lowerH: number, lowerRef?: React.R
     driver.current = null;
     try { upper.current?.scrollTo({ y: to, animated: false }); } catch { /* detached */ }
     try { lower.current?.scrollTo({ y: to, animated: false }); } catch { /* detached */ }
-    onY?.(to);
-  }, [lower, onY]);
+    onYRef.current?.(to);
+  }, [lower]);
   const reveal = useCallback((k: number) => {
     const g = geoRef.current;
     const to = linkedReveal(rows.current, k, y.current, g.seam, dims.current.lowerH, g.offs);
@@ -102,8 +105,8 @@ export function useLinkedList(upperH: number, lowerH: number, lowerRef?: React.R
     y.current = at;
     const other = from === 'upper' ? lower : upper;
     try { other.current?.scrollTo({ y: at, animated: false }); } catch { /* detached */ }
-    onY?.(at);
-  }, [lower, onY]);
+    onYRef.current?.(at);
+  }, [lower]);
 
   const Panel = useMemo(() => function LinkedPanel({ part, style, contentStyle, children }: {
     part: 'upper' | 'lower'; style?: StyleProp<ViewStyle>; contentStyle?: StyleProp<ViewStyle>; children: React.ReactNode;
