@@ -9,6 +9,15 @@ Stuart, 11-26, on the Sony TV: scrolling the long Setup screen with a remote "to
 
 ## RESUME HERE
 
+**★★★ Superseded in part by b96-appserver2 (2026-11-26, Stuart):** the red "!" is no longer shown while browsing. Headers
+have **three states** — green (set up), amber (worth setting: location, PSK Reporter with no callsign, a radio not detected,
+on the app remote settings off; a blocking reason before any Save/Start also reads amber) and **red "!" only after a SAVE
+(web) or START (app) it stopped**: that tab selected, the section opened, the save/start refused with one line, red until
+fixed. Web: `SEC_BLOCK` / `SEC_ADVISE` / `secSaveStops` / `SEC_TRIED` (vibe_setup_page.h); app: `secState`, `startRefusal`,
+`startBlocks` (setupSections.ts, ServerModeScreen). The app's server screen is now **tabbed SERVER | RADIO** and its
+Simple / Advanced row is gone. Details: SERVER-CHOICE.md RESUME HERE. Tests: test-setup-sections.mjs 63/0,
+test_setup_sections.ts 89/0. The table below is the b96-setupux record (its "red" rows now read "red after a refused save").
+
 | Piece | Where | State |
 |---|---|---|
 | Web sections: a `<button class="secHead">` put in front of every `.card` of `#serverPane` / `#radioPane` (title + one line), closed by default, CSS hides the rest of a closed card — **nothing is moved**, every id and show/hide keeps working | `vibe_setup_page.h` `secEnsure`, `secRefresh`, `SEC_SUM`, CSS `.secHead` / `.card.sec` | built, headless-tested |
