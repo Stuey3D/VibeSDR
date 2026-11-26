@@ -18,28 +18,34 @@ import android.os.Build
  */
 class VibeWifiLock(private val context: Context, private val tag: String) {
 
-    private var lock: WifiManager.WifiLock? = null
+    /* ★★ beta96 (Sloper 11-26: RTL-TCP "stutters a bit … blocks dropped"): hold BOTH locks. LOW_LATENCY only takes effect
+     *  while the app is in the foreground with the screen on, and a phone server usually runs screen-off, where it does
+     *  nothing; HIGH_PERF still keeps power-save off in the background up to Android 13 (it is non-functional from 14).
+     *  Each is tagged and released with the other. */
+    private var lowLatency: WifiManager.WifiLock? = null
+    private var highPerf: WifiManager.WifiLock? = null
 
     fun acquire() {
-        if (lock != null) return
-        try {
-            val wm = context.applicationContext
-                .getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-            else
-                @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
-            lock = wm.createWifiLock(mode, tag).apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        } catch (_: Throwable) {
-            lock = null
+        if (lowLatency != null || highPerf != null) return
+        val wm = try {
+            context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        } catch (_: Throwable) { null } ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            lowLatency = take(wm, WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "$tag:lowlatency")
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            @Suppress("DEPRECATION")
+            highPerf = take(wm, WifiManager.WIFI_MODE_FULL_HIGH_PERF, "$tag:highperf")
         }
     }
 
+    private fun take(wm: WifiManager, mode: Int, name: String): WifiManager.WifiLock? = try {
+        wm.createWifiLock(mode, name).apply { setReferenceCounted(false); acquire() }
+    } catch (_: Throwable) { null }
+
     fun release() {
-        try { lock?.let { if (it.isHeld) it.release() } } catch (_: Throwable) {}
-        lock = null
+        for (l in listOf(lowLatency, highPerf)) try { l?.let { if (it.isHeld) it.release() } } catch (_: Throwable) {}
+        lowLatency = null
+        highPerf = null
     }
 }
