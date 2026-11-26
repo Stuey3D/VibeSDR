@@ -772,6 +772,9 @@ export class TrackView {
     try { this.onRow?.(row.dataset.key || ''); } catch (e) { console.error('[tracks] onRow', e); }
     if (row.dataset.nofocus) { this.markSel(row.dataset.key || ''); return; }
     const hex = this.acKeys.get(k);
+    // ★ beta96 a row chosen is where the person wants the map (mapAutoFit's own rule): the auto fit pauses, or its next
+    //   tick glides straight back out to everything (the AIR & SEA map pokes it on every feed) — FIT brings AUTO back
+    if (!hex || !this.acLayer) try { this.af?.pause(); } catch { /* none */ }
     if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
   }
