@@ -145,13 +145,24 @@ try {
   ok(await until(async () => (await ticked()) === 'adsb', 10000), `reopened: still ADS-B only (ticked: ${await ticked()})`);
   ok(await js(`document.getElementById("newModesNote").classList.contains("hide")`), 'reopened: no notice (everything seen now)');
 
+  // ★★★ beta96 (b96-keeprun, docs/v12/KEEP-RUNNING.md): Paul's ADS-B radio is SINGLE MODE (worked out from its ticks on
+  //     first open, saved by the save above). Single mode decides, the ticks are underneath — the server enforces "everything
+  //     but ADS-B" whatever they say — so every tick off there is NOT "no modes": it saves, and stays ADS-B single mode.
+  //     The "no modes" refusal is driven on a General radio (the HackRF) instead.
   console.log('── never a radio with no modes ──');
+  ok(String(savedOf(ADSB).singleMode || '') === 'adsb', `the ADS-B radio was saved as single mode: ADS-B (singleMode ${JSON.stringify(savedOf(ADSB).singleMode)})`);
   await js(`radio().blockedModes = Object.keys(MODE_GENS).join(","); modeBlockRender(); modeBlockSummary(); 1`);
   const m1 = fs.statSync(cfgPath).mtimeMs;
   await js(`document.getElementById("saveRadioBtn").click(); 1`);
+  ok(await until(() => fs.statSync(cfgPath).mtimeMs > m1, 10000) && savedOf(ADSB).singleMode === 'adsb',
+     'single mode (ADS-B) with every tick off: saved, still single mode ADS-B (the ticks are underneath)');
+  ok(await tab('HackRF') && await until(async () => (await js(`radio().serial`)) === 'HACKRF1'), 'the HackRF tab (General)');
+  await js(`radio().blockedModes = Object.keys(MODE_GENS).join(","); modeBlockRender(); modeBlockSummary(); 1`);
+  const m2 = fs.statSync(cfgPath).mtimeMs;
+  await js(`document.getElementById("saveRadioBtn").click(); 1`);
   await sleep(1200);
-  ok(fs.statSync(cfgPath).mtimeMs === m1 && /every mode switched off/.test(await js(`document.getElementById("saveErr").textContent`) || ''),
-     'a radio with every mode off is not saved, and the page says why');
+  ok(fs.statSync(cfgPath).mtimeMs === m2 && /every mode switched off/.test(await js(`document.getElementById("saveErr").textContent`) || ''),
+     'a General radio with every mode off is not saved, and the page says why');
 } catch (e) {
   fail++; console.log(`   FAIL threw: ${e && e.stack || e}`);
 } finally {
