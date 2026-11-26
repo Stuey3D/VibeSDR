@@ -2856,6 +2856,9 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── ADS-B RANGE outline on the web map (test-web-adsb-range) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-web-adsb-range.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96 the right GLYPH for every aircraft, any source (test-web-ac-icons) ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-web-ac-icons.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this

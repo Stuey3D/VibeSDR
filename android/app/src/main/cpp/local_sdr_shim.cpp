@@ -7907,7 +7907,7 @@ static CommunitySec communitySection(const std::string& k, int64_t now, const st
         auto rows = aircraftRows(vibeavshare::table().read(nowMs, nowMs - std::max(kAircraftAgeSec, kAircraftDatalinkAgeSec) * 1000), nowMs);
         for (auto& w : rows) w.srcMask &= keep;
         rows.erase(std::remove_if(rows.begin(), rows.end(), [](const vibeavshare::Row& w) { return !(w.srcMask & 0x0F); }), rows.end());
-        const std::string c = aircraftCompact(rows, nowMs);
+        const std::string c = aircraftCompact(rows, nowMs, vibeavinfo::extraFn());   // ★ beta96 + the glyph's inputs
         if (!c.empty()) { r.json = "[" + c + "]"; r.layers = aircraftLayers(rows); }
     } else if (k == "s" && gal && communityLayerOk("ais", off)) {
         vibeais::store::Query q;

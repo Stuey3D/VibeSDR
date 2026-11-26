@@ -195,8 +195,22 @@ inline std::string ndbRows(std::vector<NdbRow> rows, int64_t now, size_t maxRows
 }
 
 /** ★ Compact aircraft rows — [key, lat, lon, position age s, alt ft|null, track|null, speed kt|null, sources (bit mask: 1 ADS-B,
- *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type]. The rows as aircraftRows() chose them. */
-inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, int64_t nowMs) {
+ *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type, what]. The rows as aircraftRows() chose them.
+ *  ★★ beta96 `what` (field 11; Stuart 11-26: "the correct icon for the aircraft type like the ADS-B map") — what the aircraft
+ *  data says the glyph needs, "wake|description letter|engines|m" (e.g. "H|L|4J|", "L|H|1T|", "M|L|2J|m" military), "" when
+ *  nothing is known. The page picks the glyph with the ADS-B map's own rule (iconClassOf, adsblayer.js) — the rule lives
+ *  in ONE place, not here. Older pages ignore the extra field. `extra` (vibe_aircraft_info.h's Cache — a map lookup, never a
+ *  table read) also fills the type where the row has none. */
+inline std::string aircraftWhat(const vibeavshare::Extra& ex) {
+    auto one = [](const std::string& v, size_t n) {
+        std::string o;
+        for (char c : v.substr(0, n)) if (std::isalnum((unsigned char)c)) o += c;   // ★ the separator never inside a part
+        return o;
+    };
+    if (ex.wtc.empty() && ex.species.empty() && ex.eng.empty() && !ex.mil) return "";
+    return one(ex.wtc, 1) + "|" + one(ex.species, 1) + "|" + one(ex.eng, 2) + "|" + (ex.mil ? "m" : "");
+}
+inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, int64_t nowMs, const vibeavshare::ExtraFn& extra = nullptr) {
     std::string o;
     char b[200];
     for (size_t i = 0; i < rows.size(); i++) {
@@ -210,7 +224,11 @@ inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, in
         std::snprintf(b, sizeof b, "%s[\"%s\",%.4f,%.4f,%lld,%s,%s,%s,%u,\"", i ? "," : "", key, w.lat, w.lon,
                       (long long)std::max<int64_t>(0, (nowMs - w.posMs) / 1000), alt, trk, gs, (unsigned)w.srcMask);
         o += b;
-        o += jsonEsc(w.flight.substr(0, 10)) + "\",\"" + jsonEsc(w.reg.substr(0, 10)) + "\",\"" + jsonEsc(w.type.substr(0, 8)) + "\"]";
+        vibeavshare::Extra ex;
+        if (extra) extra(w, ex);
+        const std::string& type = w.type.empty() ? ex.type : w.type;
+        o += jsonEsc(w.flight.substr(0, 10)) + "\",\"" + jsonEsc(w.reg.substr(0, 10)) + "\",\"" + jsonEsc(type.substr(0, 8)) + "\",\""
+           + jsonEsc(aircraftWhat(ex)) + "\"]";
     }
     return o;
 }

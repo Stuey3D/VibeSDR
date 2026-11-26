@@ -20,3 +20,7 @@ export { shipLegendRows, windLegendRows } from '../../src/services/shippingMap';
 export { seaLegendRows } from '../../src/services/seaAreas';
 export { NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../../src/services/navtexIcons';
 export { AIS_COLOURS } from '../../src/services/tracks';
+// ★★ V12 beta96 THE AIRCRAFT GLYPHS (Stuart 11-26: "the correct icon for the aircraft type like the ADS-B map"): the ADS-B
+//    layer's own class silhouettes and its ONE rule (iconClassOf — the emitter category, else the aircraft data, else the
+//    type's family, else the jet), lifted from web/mapkit/adsblayer.js's ACICONS block by build-community-kit.mjs.
+export { iconClassOf as aircraftIconClass, acIconSvg as aircraftIconSvg, AC_CLASS_NAME as AIRCRAFT_CLASS_NAMES, ICONS as AIRCRAFT_ICONS } from 'vibe:acicons';

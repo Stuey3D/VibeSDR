@@ -119,19 +119,10 @@
     return destination(fix.lat, fix.lon, fix.track, fix.gs * dt / 3600);
   }
 
-  /** ★ DO-260B emitter category → icon (docs/v12/ADSB.md). A0 / none / anything unknown = the generic
-   *  jet: most of the sky that does not say what it is, is an airliner. */
-  const CAT_ICON = { A1: 'light', A2: 'regional', A3: 'jet', A4: 'b757', A5: 'heavy', A6: 'fighter',
-                     A7: 'heli', B1: 'glider', B2: 'balloon', B3: 'parachute', B4: 'ultralight',
-                     B6: 'uav', B7: 'space', C1: 'ground', C2: 'ground', C3: 'obstacle' };
   const CAT_NAME = { A1: 'Light aircraft', A2: 'Small aircraft', A3: 'Large aircraft', A4: 'High-vortex large (B757)',
                      A5: 'Heavy', A6: 'High performance', A7: 'Rotorcraft', B1: 'Glider', B2: 'Lighter than air',
                      B3: 'Parachutist', B4: 'Ultralight', B6: 'Unmanned aerial vehicle', B7: 'Space vehicle',
                      C1: 'Emergency vehicle', C2: 'Service vehicle', C3: 'Obstacle' };
-  function iconFor(category) {
-    const c = typeof category === 'string' ? category.trim().toUpperCase() : '';
-    return CAT_ICON[c] || 'jet';
-  }
 
   function onGround(a) { return a && a.alt_baro === 'ground'; }
   /** ★★ FEET, ALWAYS (Stuart, 2026-10-24: "we have the space to fit the altitude in as ft"): "12,200 ft", to the nearest
@@ -681,11 +672,73 @@
   }
 
   const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
-                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, rangeShape, RANGE_GAP_DEG, RANGE_CLOSE_DEG, RANGE_TAPER, RANGE_SPREAD_DEG, RANGE_BINS, cardinal, deadReckon, iconFor, altText, altShort,
+                  wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, rangeShape, RANGE_GAP_DEG, RANGE_CLOSE_DEG, RANGE_TAPER, RANGE_SPREAD_DEG, RANGE_BINS, cardinal, deadReckon, iconFor, iconClassOf, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
                   engText, flagEmoji, routeShort, opBadge, imgKey, WAKE, shortAirport,
                   trailPush, trailGradient, trailAlt, TRAIL_STEP_NM, TRAIL_STEP_FT, TRAIL_MAX, commbRows };
+
+  /* ══ ACICONS — BEGIN ═══════════════════════════════════════════════════════════════════════════
+   * ★★ beta96 THE AIRCRAFT GLYPHS AND THE ONE RULE THAT PICKS THEM — self-contained on purpose: scripts/build-community-kit.mjs
+   *    lifts everything between BEGIN and END into the community map's kit (directory/public/community-kit.js), so the
+   *    directory draws the very shapes this layer draws, chosen by the very same rule. Nothing in here may use a name defined
+   *    outside it (test_adsb_layer.mjs evaluates the block on its own). */
+  /** ★ DO-260B emitter category → icon (docs/v12/ADSB.md). A0 / none / anything unknown = the generic
+   *  jet: most of the sky that does not say what it is, is an airliner. */
+  const CAT_ICON = { A1: 'light', A2: 'regional', A3: 'jet', A4: 'b757', A5: 'heavy', A6: 'fighter',
+                     A7: 'heli', B1: 'glider', B2: 'balloon', B3: 'parachute', B4: 'ultralight',
+                     B6: 'uav', B7: 'space', C1: 'ground', C2: 'ground', C3: 'obstacle' };
+  function iconFor(category) {
+    const c = typeof category === 'string' ? category.trim().toUpperCase() : '';
+    return CAT_ICON[c] || 'jet';
+  }
+
+  /** ★★ beta96 WHICH GLYPH AN AIRCRAFT DRAWS — ONE RULE, EVERY SOURCE, EVERY MAP (Stuart 11-26: "the correct icon for the
+   *  aircraft type like the ADS-B map … I hope it's not just a generic plane icon"). Before this only an aircraft whose
+   *  ADS-B said its emitter category got a class glyph; a VDL2 / ACARS / HFDL / ADS-C aircraft, a remembered one and every
+   *  aircraft on the community map drew the generic jet.
+   *  A is an ADS-B aircraft object (category, t, desc, wtc, eng, species, mil) or an aviation-map / community row (type in
+   *  place of t). In order:
+   *   1. the DO-260B emitter category, when it says something (A0 / none / unknown says nothing);
+   *   2. the aircraft data (ICAO Doc 8643, as the server's tables carry it): GLID → glider, BALL / SHIP → balloon,
+   *      description letter H / G → helicopter, a known fast-jet designator → fighter, B752 / B753 → the 757, wake J or H →
+   *      heavy, engines "…T" → regional (the turboprop class), "…P" / "…E" → light, wake L → light (a light JET → regional);
+   *   3. with no wake / engines / description (an older server sends the type alone): the designator's own family —
+   *      wide-bodies heavy, the common helicopters, turboprops and light singles;
+   *   4. else the generic jet: most of the sky that does not say what it is, is an airliner. */
+  const FIGHTER_TYPES = /^(F4|F5|F14|F15|F16|F18[A-Z]?|F22|F35|F1|A10|AV8B|HARR|EUFI|TOR|RFAL|MIR2|M2KF?|JAGR|GRIF|JS39|HAWK|T38|T50|L39|L159|M346|AJET|K8|MG2[39]|MG31|SU2[457]|SU3[0-5]|SU57|J10|JF17)$/;
+  const HEAVY_TYPES = /^(A3[3-5]\d|A38\d|B74\w|B76\w|B77\w|B78\w|MD11|DC10|L101|IL62|IL76|IL86|IL96|A124|A225|C5M?|C17|K35R|KC10|A400|E3TF|E3CF|B52)$/;
+  const HELI_TYPES = /^(EC\d\d|H1[2-7]\d|H160|AS\d\d|A1[0-9]9|A119|S76|S92|S61|R22|R44|R66|B06|B47G|B4[0-2]\d|B505|B212|B412|NH90|EH10|LYNX|WILD|H60|UH1|CH47|H47|MI8|MI17|MI24|MI26|KA\d\d|GAZL|PUMA|SUPU|EXPL|AW09|GYRO)$/;
+  const PROP_TYPES = /^(AT4\d|AT7\d|DH8\w|SF34|SB20|JS31|JS32|JS41|D328|F50|E120|SW4|BE20|BE30|B350|BE9L|PC12|DHC6|C208|C130|C30J|AN2\d|AN12|AN26|AN30|AN32|L410|DO28|P180|TBM\d|PC21|CN35|C295)$/;
+  const LIGHT_TYPES = /^(C1[5-9]\d|C2[0-1]\d|P28\w|PA\d\d\w?|SR2[02]|DA[24]\d\w?|DR40|BE3[356]|BE55|BE58|M20P|M20T|RV\d+\w?|TB\d\d|AA5|C42|CTSW|PIVI|ULAC)$/;
+  function iconClassOf(a) {
+    if (!a || typeof a !== 'object') return 'jet';
+    const cat = typeof a.category === 'string' ? a.category.trim().toUpperCase() : '';
+    if (CAT_ICON[cat]) return CAT_ICON[cat];
+    const t = String(a.t || a.type || '').trim().toUpperCase();
+    const desc = String(a.desc || '').toLowerCase();
+    const wtc = String(a.wtc || '').trim().toUpperCase();
+    const sp = String(a.species || '').trim().toUpperCase();
+    const em = /^[1-8C]?([JTPER])$/.exec(String(a.eng || '').trim().toUpperCase());
+    const eng = em ? em[1] : '';
+    if (t === 'GLID' || /\b(glider|sailplane)\b/.test(desc)) return 'glider';
+    if (t === 'BALL' || t === 'SHIP' || /\b(balloon|airship)\b/.test(desc)) return 'balloon';
+    if (sp === 'H' || sp === 'G') return 'heli';
+    if (FIGHTER_TYPES.test(t)) return 'fighter';
+    if (t === 'B752' || t === 'B753') return 'b757';
+    if (t === 'ULAC') return 'ultralight';
+    if (wtc === 'J' || wtc === 'H') return 'heavy';
+    if (eng === 'T') return 'regional';
+    if (eng === 'P' || eng === 'E') return 'light';
+    if (wtc === 'L') return eng === 'J' ? 'regional' : 'light';
+    if (!wtc && !eng && !sp && t) {
+      if (HEAVY_TYPES.test(t)) return 'heavy';
+      if (HELI_TYPES.test(t)) return 'heli';
+      if (PROP_TYPES.test(t)) return 'regional';
+      if (LIGHT_TYPES.test(t)) return 'light';
+    }
+    return 'jet';
+  }
 
   /* ══ ICONS — one geometry, two renderers ═══════════════════════════════════════════════════════
    * Every icon is a list of parts in a 40×40 box, nose up (north), centre (20,20): f = filled path,
@@ -780,17 +833,28 @@
   /** Icons that keep their own "up": a balloon or a mast has no nose to point. */
   const NO_ROTATE = { balloon: 1, parachute: 1, obstacle: 1 };
 
-  function iconSvg(kind, rgb, alpha, rot) {
+  /** One icon as SVG: FILL any CSS colour, SIZE CSS px square (the 40-unit box scaled), rotated ROT° about its centre
+   *  (never for the NO_ROTATE ones). The parts as iconImage paints them: filled paths with a faint dark edge, strokes plain. */
+  function acIconSvg(kind, fill, size, rot) {
     const parts = ICONS[kind] || ICONS.jet;
-    const c = 'rgba(' + rgb + ',' + alpha + ')';
-    let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + ICON_BOX + '" height="' + ICON_BOX + '" viewBox="0 0 40 40">'
+    let s = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 40 40">'
           + '<g transform="rotate(' + (NO_ROTATE[kind] ? 0 : (rot || 0).toFixed(1)) + ',20,20)">';
     for (const p of parts) {
       const op = p.o != null ? ' opacity="' + p.o + '"' : '';
-      if (p.f) s += '<path d="' + p.f + '" fill="' + (p.dark ? 'rgba(0,0,0,0.55)' : c) + '" stroke="rgba(0,0,0,0.3)" stroke-width="0.6"' + op + '/>';
-      else s += '<path d="' + p.s + '" fill="none" stroke="' + c + '" stroke-width="' + p.w + '" stroke-linecap="round"' + op + '/>';
+      if (p.f) s += '<path d="' + p.f + '" fill="' + (p.dark ? 'rgba(0,0,0,0.55)' : fill) + '" stroke="rgba(0,0,0,0.3)" stroke-width="0.6"' + op + '/>';
+      else s += '<path d="' + p.s + '" fill="none" stroke="' + fill + '" stroke-width="' + p.w + '" stroke-linecap="round"' + op + '/>';
     }
     return s + '</g></svg>';
+  }
+  /** What each class is, in words — the KEY's rows (the community map's legend; ADSB.md's table). */
+  const AC_CLASS_NAME = { jet: 'Airliner', regional: 'Regional jet or turboprop', b757: 'Boeing 757', heavy: 'Heavy (wide-body)',
+                          light: 'Light aircraft', fighter: 'Fast jet', heli: 'Helicopter or gyroplane', glider: 'Glider',
+                          balloon: 'Balloon or airship', parachute: 'Parachutist', ultralight: 'Ultralight', uav: 'Drone (UAV)',
+                          space: 'Space vehicle', ground: 'Ground vehicle', obstacle: 'Obstacle' };
+  /* ══ ACICONS — END ══ */
+
+  function iconSvg(kind, rgb, alpha, rot) {
+    return acIconSvg(kind, 'rgba(' + rgb + ',' + alpha + ')', ICON_BOX, rot);
   }
   /** Rasterise an icon for the GPU map. glow = the HFDL selection glow baked in (as compat's symImage). */
   function iconImage(kind, rgb, alpha, glow, dpr) {
@@ -1847,7 +1911,7 @@
         const hasPos = lat != null && lon != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
         let s = ac.get(hex);
         if (!s) { s = { hex, a: raw, fix: null, disp: null, corr: null, hdg: null, bornAt: 0, goneAt: 0, shownAt: 0, kind: 'jet' }; ac.set(hex, s); }
-        s.a = raw; s.kind = iconFor(raw.category);
+        s.a = raw; s.kind = iconClassOf(raw);   // ★ beta96 the one rule: category, else the aircraft data
         /* ★ Heard, but its position has aged out (the server keeps one 60 s): off the map, gently — it stays
          *  in the box's list. Back with a position before it has faded = it simply carries on. */
         if (!hasPos) { if (s.disp && !s.goneAt) s.goneAt = t; continue; }
@@ -2184,5 +2248,5 @@
   /* ★ What the NDB layer (ndblayer.js) borrows so its map looks and measures exactly like this one: the rings, the
    *  theme, the receiver's house, the camera and the CSS (its ring labels' classes). */
   const shared = { ringsFor, addRingLayers, setRingData, leafletRings, THEME, RX_SVG, injectCss };
-  global.VibeAdsbLayer = { create, maths, shared, ICONS: Object.keys(ICONS), iconSvg };
+  global.VibeAdsbLayer = { create, maths, shared, ICONS: Object.keys(ICONS), iconSvg, iconClassOf, acIconSvg, AC_CLASS_NAME };
 })(typeof window !== 'undefined' ? window : globalThis);
