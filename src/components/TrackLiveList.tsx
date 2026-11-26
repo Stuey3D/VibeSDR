@@ -115,7 +115,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
   const tabs = (p.tabs?.length ?? 0) >= 2 ? p.tabs! : [];
-  const ab = useAdsbBody(p.adsb ?? null, p.ink);
+  const ab = useAdsbBody(p.adsb ?? null, p.ink, width);   // ★ beta96 the rows laid out from the list's width (adsbRowLayout)
   const nb = useNdbBody(p.ndb ?? null, p.ink, p.insets, innerW);
   const credit = !!p.credit || ab.credit;
   const total = ab.count + nb.count + p.rows.length;

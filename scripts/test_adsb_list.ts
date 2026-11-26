@@ -88,6 +88,32 @@ eq('320 leaves the right 60 + margins', 320 - 10 - adsbListWidth(320) >= 60 + 10
 eq('wide: capped at 300', adsbListWidth(1366), 300);
 eq('never below 160', adsbListWidth(100), 160);
 
+// ★★★ beta96 the row by the list's own width (Stuart 11-26: "the signal hides the aircraft details") — at every width the
+//     list can be (160–300 pt), the callsign column holds a flag + 7 characters, and the chip too when it sits beside it;
+//     the columns give way in the web's order: speed, then the chip moves under, then altitude over range.
+{
+  const { adsbRowLayout, adsbCallRoom, CALL_MIN, CHIP_ROOM } = await import('../src/services/adsbList.ts');
+  const old = (w: number) => w - 2 - 16 - 12 - (50 + 40 + 60) - CHIP_ROOM;   // the beta96 row before: the callsign's room beside the chip
+  eq('before: the SE in Display Zoom (240) left the callsign under 3 characters beside the chip', old(240) < 25, true);
+  let worst = 1e9, order = true, prev: ReturnType<typeof adsbRowLayout> | null = null;
+  for (let w = 160; w <= 300; w++) {
+    const l = adsbRowLayout(w), room = adsbCallRoom(w, l) - (l.chipUnder ? 0 : CHIP_ROOM);
+    worst = Math.min(worst, room);
+    // narrower never brings a column back: kt only shows when nothing else has given; stacked implies chip under
+    if (l.kt && (l.chipUnder || l.stacked)) order = false;
+    if (l.stacked && !l.chipUnder) order = false;
+    if (prev && ((prev.kt && !l.kt) || (!prev.chipUnder && l.chipUnder) || (!prev.stacked && l.stacked))) order = false;   // prev is NARROWER: wider never loses what it had
+    prev = l;
+  }
+  eq(`every width 160–300 pt: the callsign keeps >= ${CALL_MIN} pt (worst ${worst})`, worst >= CALL_MIN, true);
+  eq('…and the columns give way in order (speed, chip under, stacked)', order, true);
+  eq('300 pt (a phone): every column, the chip beside', adsbRowLayout(300), { kt: true, chipUnder: false, stacked: false });
+  eq('240 pt (an SE in Display Zoom): speed gone, the chip under the callsign', adsbRowLayout(240), { kt: false, chipUnder: true, stacked: false });
+  eq('160 pt: altitude over range', adsbRowLayout(160).stacked, true);
+  eq('the list widths the app makes (320 / 375 / 390 / 768 pt windows) all hold the callsign',
+     [320, 375, 390, 768].every((W) => { const w = adsbListWidth(W), l = adsbRowLayout(w); return adsbCallRoom(w, l) - (l.chipUnder ? 0 : CHIP_ROOM) >= CALL_MIN; }), true);
+}
+
 // ── collapse state ──────────────────────────────────────────────────────────────────────────────
 eq('open unless shut', [parseListOpen(null), parseListOpen('1'), parseListOpen('0'), parseListOpen('x')], [true, true, false, true]);
 

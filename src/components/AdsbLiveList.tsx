@@ -25,8 +25,8 @@ import { NavRow, NavRing, useNavButton, useNavFocus } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import { SnrChip } from './SnrChip';   // ★ beta96 the reply SNR, colour-coded (replaced the 3-bar meter)
 import type { Aircraft } from '../services/SDRBackend';
-import { adsbListRows, adsbChips, LIST_HEAD_H, LIST_ROW_H,
-         type AdsbListRow, type AdsbChip, type AdsbChipSrc } from '../services/adsbList';
+import { adsbListRows, adsbChips, adsbRowLayout, LIST_HEAD_H, LIST_ROW_H, COL_ALT, COL_KT, COL_RNG, ROW_GAP,
+         type AdsbListRow, type AdsbChip, type AdsbChipSrc, type AdsbRowLayout } from '../services/adsbList';
 import { adsbGainStep, type AdsbGainView } from '../services/adsbTypes';
 
 /** ★ The GAIN card's height when open (its keys row and the note). */
@@ -73,8 +73,10 @@ export interface AdsbBody {
 }
 
 /** ★★ The ADS-B list's body as a hook, so the host (TrackLiveList) can size itself around it. Always called (hooks);
- *  `p` null = nothing (ADS-B not live, or another tab shown). */
-export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string; kt: string }): AdsbBody {
+ *  `p` null = nothing (ADS-B not live, or another tab shown). ★★★ beta96 `listW`: the list's width (pt) — the rows are laid
+ *  out from it (adsbRowLayout: speed goes, then the chip moves under the callsign, then altitude over range), so the
+ *  callsign is never what gives (Stuart 11-26: "the signal hides the aircraft details"). */
+export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string; kt: string }, listW = 300): AdsbBody {
   const rows = useMemo(() => (p ? adsbListRows(p.aircraft) : []), [p?.aircraft]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ When each aircraft first appeared (NEWEST) — kept across reports, forgotten with the report (leaving ADS-B). */
   const firstSeen = useRef(new Map<string, number>());
@@ -84,6 +86,7 @@ export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string
   const [gainOpen, setGainOpen] = useState(false);
   const gainLast = useRef<{ idx: number; at: number } | null>(null);
   const s = useMemo(() => makeStyles(ink), [ink]);
+  const lay = useMemo(() => adsbRowLayout(listW), [listW]);
   if (!p) return { extra: 0, count: 0, placed: 0, credit: false, head: null, rows: [], empty: '' };
   const g = p.gain ?? null;
   const chipRow = chips.length > 0 || !!g;
@@ -131,7 +134,7 @@ export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string
   return {
     extra: (chipRow ? CHIP_ROW_H : 0) + cardH, count: rows.length, placed: rows.filter((r) => r.placed).length, credit, head,
     rows: rows.map((r) => (
-      <NavRow key={`adsb:${r.hex}`}><Row s={s} r={r} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
+      <NavRow key={`adsb:${r.hex}`}><Row s={s} r={r} lay={lay} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
     )),
     empty: p.started ? 'Listening on 1090 MHz — no aircraft yet.' : 'Taking the receiver to 1090 MHz…',
   };
@@ -183,9 +186,19 @@ function Chip({ s, c, onPress }: { s: S; c: AdsbChip; onPress: () => void }) {
   );
 }
 
-function Row({ s, r, sel, onPress, logoBase }: { s: S; r: AdsbListRow; sel: boolean; onPress: () => void; logoBase: string | null }) {
+function Row({ s, r, lay, sel, onPress, logoBase }: { s: S; r: AdsbListRow; lay: AdsbRowLayout; sel: boolean; onPress: () => void; logoBase: string | null }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
+  // ★ the SNR chip and a MIL / emergency tag: beside the callsign, or (a narrow list) at the head of the second line
+  const ex = (
+    <>
+      <SnrChip mode="adsb" db={r.snr} />
+      {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
+        : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
+    </>
+  );
+  const alt = <Text style={[s.cell, lay.stacked ? s.stackTxt : s.alt, !!r.altCol && { color: r.altCol }]} numberOfLines={1}>{r.alt}{r.trend ? ` ${r.trend}` : ''}</Text>;
+  const rng = <Text style={[s.cell, lay.stacked ? s.stackTxt : s.rng]} numberOfLines={1}>{r.range}</Text>;
   return (
     <TouchableOpacity ref={viewRef as never} style={[s.row, !r.placed && s.rowUnplaced, sel && s.rowSel]} onPress={onPress}
                       disabled={!r.placed} activeOpacity={0.7} accessibilityRole="button"
@@ -195,31 +208,30 @@ function Row({ s, r, sel, onPress, logoBase }: { s: S; r: AdsbListRow; sel: bool
         <View style={s.callBox}>
           {!!r.flag && <Text style={s.flag}>{r.flag}</Text>}
           <Text style={[s.call, r.emergency && s.emerg, r.military && !r.emergency && s.mil]} numberOfLines={1}>{r.label}</Text>
-          <SnrChip mode="adsb" db={r.snr} />
-          {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
-            : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
+          {!lay.chipUnder && ex}
         </View>
         {/* ★ V12 aircraft data: operator (the owner's logo, else its code as a badge) · type · registration · route */}
-        {!!r.info && <InfoLine s={s} r={r} logoBase={logoBase} />}
+        {(!!r.info || lay.chipUnder) && <InfoLine s={s} r={r} logoBase={logoBase} lead={lay.chipUnder ? ex : null} />}
       </View>
-      <Text style={[s.cell, s.alt, !!r.altCol && { color: r.altCol }]} numberOfLines={1}>{r.alt}{r.trend ? ` ${r.trend}` : ''}</Text>
-      <Text style={[s.cell, s.kt]} numberOfLines={1}>{r.kt}</Text>
-      <Text style={[s.cell, s.rng]} numberOfLines={1}>{r.range}</Text>
+      {lay.stacked ? <View style={s.stack}>{alt}{rng}</View> : alt}
+      {lay.kt && <Text style={[s.cell, s.kt]} numberOfLines={1}>{r.kt}</Text>}
+      {!lay.stacked && rng}
       <NavRing on={focused} color={ring} radius={4} />
     </TouchableOpacity>
   );
 }
 
-function InfoLine({ s, r, logoBase }: { s: S; r: AdsbListRow; logoBase: string | null }) {
+function InfoLine({ s, r, logoBase, lead }: { s: S; r: AdsbListRow; logoBase: string | null; lead?: React.ReactNode }) {
   const [logoOk, setLogoOk] = useState(true);
   const head = r.op && r.info.startsWith(r.op) ? r.op : '';
   const rest = head ? r.info.slice(head.length).replace(/^ \u00b7 /, '') : r.info;
   const uri = logoBase && r.logo && logoOk ? logoBase + 'logo/' + encodeURIComponent(r.logo) : '';
   return (
     <View style={s.infoBox}>
+      {lead ? <View style={s.lead}>{lead}</View> : null}
       {uri ? <Image source={{ uri }} style={s.logo} resizeMode="contain" onError={() => setLogoOk(false)} accessibilityLabel={r.op} />
         : head ? <Text style={s.opBadge}>{head}</Text> : null}
-      <Text style={s.info} numberOfLines={1}>{rest}</Text>
+      {!!rest && <Text style={s.info} numberOfLines={1}>{rest}</Text>}
     </View>
   );
 }
@@ -258,8 +270,9 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   headTxt:{ fontFamily: F, fontSize: 11, letterSpacing: 1.5, color: `rgba(${ink.x},0.75)` },
   headCnt:{ fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)` },
   chev:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.kt},0.80)` },
-  // ★ Sized for 240 pt (an SE in Display Zoom): 8 + 4·3 + 50 + 40 + 60 + 8 leaves the callsign ~62 pt, 8–9 characters.
-  row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 4 },
+  // ★★★ beta96 the columns come from adsbRowLayout (the list's width): at 240 pt the old fixed set left the callsign 62 pt,
+  //     and the SNR chip beside it took two thirds of that.
+  row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: ROW_GAP },
   // ★ the web list's .adsbRow.sel: a faint amber wash and a bar on the left
   rowSel: { backgroundColor: 'rgba(255,229,102,0.12)', borderLeftWidth: 2, borderLeftColor: 'rgba(255,229,102,0.7)', paddingLeft: 6 },
   rowUnplaced: { opacity: 0.5 },
@@ -279,9 +292,14 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   tagEm:  { backgroundColor: '#e04040', color: '#fff' },
   tagMil: { backgroundColor: 'rgba(90,170,255,0.85)', color: '#06121f' },
   cell:   { fontFamily: F, fontSize: 11, color: `rgba(${ink.x},0.70)`, textAlign: 'right' },
-  alt:    { width: 50 },
-  kt:     { width: 40 },
-  rng:    { width: 60 },
+  alt:    { width: COL_ALT },
+  kt:     { width: COL_KT },
+  rng:    { width: COL_RNG },
+  // ★ a narrow list: altitude over range in one column at the end
+  stack:  { width: Math.max(COL_ALT, COL_RNG), justifyContent: 'center' },
+  stackTxt: { lineHeight: 13 },
+  // ★ the chip (and a tag) at the head of the second line when the list is too narrow for it beside the callsign
+  lead:   { flexDirection: 'row', alignItems: 'center', marginLeft: -5, marginRight: 5, flexShrink: 0 },   // -5: the chip's / tag's own left margin
   note:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.60)`, padding: 10, lineHeight: 17 },
   // ★ the page's old #far key, as chips: the map's controls colour, the key's word dimmed
   chipRow:{ height: CHIP_ROW_H, flexGrow: 0, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: `rgba(${ink.k},0.25)` },
