@@ -435,6 +435,7 @@ private:
             if (safety_.size() > 20) safety_.erase(safety_.begin());
             if (heard) heard->push_back({ std::to_string(m.mmsi) + "#txt", "safety", displayName(v),
                                           displayName(v) + " (MMSI " + std::to_string(m.mmsi) + ") \xc2\xb7 safety message: " + m.text, kChanHz[ch & 1] });
+            if (heard) heard->back().snr = f.snrDb;   // ★ beta96
             return;
         }
         if (!m.name.empty()) v.name = m.name;
@@ -483,6 +484,7 @@ private:
                 std::string full = line + " \xc2\xb7 MMSI " + std::to_string(v.mmsi);
                 if (v.lat == v.lat) full += " \xc2\xb7 " + fmtNum(v.lat, 4) + " " + fmtNum(v.lon, 4);
                 heard->push_back({ std::to_string(v.mmsi), v.kind, displayName(v), full, kChanHz[ch & 1] });
+                heard->back().snr = f.snrDb;   // ★ beta96 the frame's SNR into the day log
                 v.logLine = line; v.loggedAt = t; v.loggedName = displayName(v);
             }
         }

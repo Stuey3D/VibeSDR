@@ -368,7 +368,7 @@ private:
         if (!aprs && o_.heard) {
             vibestation::Heard h;
             h.key = e.from; h.kind = "frame"; h.name = e.sat.empty() ? e.from : e.sat + " " + e.from;
-            h.freqHz = o_.rfHz ? o_.rfHz() : 0;
+            h.freqHz = o_.rfHz ? o_.rfHz() : 0; h.snr = e.snr;   // ★ beta96 into the day log
             h.line = e.from + ">" + e.to + (e.path.empty() ? "" : "," + e.path) + " " + e.ctl
                    + (e.sat.empty() ? "" : " \xc2\xb7 " + e.sat) + (e.fec ? std::string(" \xc2\xb7 ") + (e.fec == vibepkt::kFx25 ? "FX.25" : "IL2P") : "")
                    + " \xc2\xb7 " + std::to_string(e.len) + " bytes: " + e.hex.substr(0, 64) + (e.hex.size() > 64 ? "\xe2\x80\xa6" : "");
@@ -457,7 +457,7 @@ private:
         telemetry_(p, curSat_);
         if (o_.heard) {
             vibestation::Heard h;
-            h.key = s.key; h.kind = p.kind; h.name = s.key; h.freqHz = o_.rfHz ? o_.rfHz() : 0;
+            h.key = s.key; h.kind = p.kind; h.name = s.key; h.freqHz = o_.rfHz ? o_.rfHz() : 0; h.snr = curSnr_;   // ★ beta96
             h.line = utf8Clean(s.line);
             if (p.hasPos) h.line += " \xc2\xb7 " + fmt(p.lat, 4) + " " + fmt(p.lon, 4);
             // ★ V12 beta90 1.9: "via ISS" — the satellite that carried it (with the digipeater's call when it differs)

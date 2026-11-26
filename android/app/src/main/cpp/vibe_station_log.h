@@ -62,7 +62,7 @@ public:
         if (t / 86400 != day_) { flushLocked(true); newDayLocked(t); }
         char ts[16]; const time_t tt = time_t(t); struct tm g{}; gmtime_r(&tt, &g);
         std::snprintf(ts, sizeof ts, "%02d:%02d:%02d  ", g.tm_hour, g.tm_min, g.tm_sec);
-        Pending p; p.text = std::string(ts) + h.line; p.key = h.key; p.kind = h.kind; p.name = h.name; p.line = h.line; p.t = t;
+        Pending p; p.text = std::string(ts) + h.line + snrToken(h.snr); p.key = h.key; p.kind = h.kind; p.name = h.name; p.line = h.line; p.t = t;
         bufBytes_ += p.text.size() + 1;
         pending_.push_back(std::move(p));
         seen_.insert(h.key);

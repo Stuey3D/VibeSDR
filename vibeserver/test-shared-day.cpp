@@ -86,7 +86,9 @@ static void testDayLog() {
         o.profile = p == 0 ? "Profile 1" : ""; o.clock = [&now] { return now; };
         vibestation::DayLog log(st, o);
         auto heard = [&](const char* key, const char* name, const std::string& line) {
-            vibestation::Heard h; h.key = key; h.kind = "A"; h.name = name; h.line = line; log.heard(h);
+            vibestation::Heard h; h.key = key; h.kind = "A"; h.name = name; h.line = line;
+            h.snr = p == 0 ? 21.4 : 8.6;   // ★ beta96 each radio hears it at its own strength
+            log.heard(h);
         };
         heard("235000001", "BOTH SEEN", "BOTH SEEN · 50.1N 1.2W · 12 kn");          // both radios hear this one
         heard(p == 0 ? "235000002" : "235000003", p == 0 ? "ONLY HF" : "ONLY VHF", p == 0 ? "ONLY HF · moored" : "ONLY VHF · 3 kn");
@@ -108,6 +110,10 @@ static void testDayLog() {
     ok(all.size() == 2, "ONE log + ONE card for the server (" + std::to_string(all.size()) + " items)");
     ok(countOf(logT, "BOTH SEEN · 50.1N") == 1 && countOf(logT, "BOTH SEEN · 50.2N") == 1, "the message both heard: once each\n" + logT);
     ok(countOf(logT, "ONLY HF") == 1 && countOf(logT, "ONLY VHF") == 1, "each radio's own message is in it");
+    // ★★ beta96 the SNR is kept with each line, and a message both heard at different strengths is still once
+    ok(countOf(logT, " \xc2\xb7 SNR ") == 4 && (countOf(logT, "SNR 21 dB") + countOf(logT, "SNR 9 dB")) == 4, "every line keeps its SNR (" + std::to_string(countOf(logT, " \xc2\xb7 SNR ")) + ")");
+    ok(gallery::sharedday::lineText("17:01:12  X \xc2\xb7 SNR 21 dB") == "X" && gallery::sharedday::lineText("17:01:12  X \xc2\xb7 SNR \xe2\x88\x92" "7 dB") == "X"
+       && gallery::sharedday::lineText("17:01:12  X \xc2\xb7 SNR high") == "X \xc2\xb7 SNR high", "the dedupe reads a line without its SNR token");
     ok(bothRadios(r, logN) && bothRadios(r, cardN), "log and card list both radios (ri " + r.field(logN, "ri") + ")");
     ok(cardT.find("3 ships and stations") != std::string::npos && cardT.find("4 messages logged") != std::string::npos,
        "the card is the server's: 3 stations, 4 distinct messages\n" + cardT);

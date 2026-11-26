@@ -7,6 +7,7 @@
 //     "Suspected key fob" is its anonymous per-server name ("TPMS #2"); there is no field here an ID, a code or a bit
 //     could travel in.
 #pragma once
+#include <cmath>
 #include <string>
 
 namespace vibeism {
@@ -22,6 +23,9 @@ struct Heard {
     /** ★ V12 meters (kind "meter"): the line WITHOUT its signal and interval — the meter's own news. The day's log writes a
      *  meter only when this changes, or once per 15 minutes (vibe_ism_gallery.h). Empty for every other kind. */
     std::string core;
+    /** ★ beta96 (Stuart 11-26: "yes save snr history") the burst's SNR, dB (vibe_ism.h level − noise); NAN = none. The day
+     *  log writes it as " · SNR 18 dB" at the line's end, which the gallery viewers draw as the colour-coded chip. */
+    double snr = NAN;
 };
 
 /** ★ V12 2026-11-01 (the ISM map, "stations received" in the gallery): one packet from a MESH NODE WITH A POSITION.
