@@ -95,6 +95,15 @@ try {
   { const S = await server(onlyLeaves('adsb'), 2400000);
     const L = await landsAndStays(S, 'adsb', 'lst', 'ADS-B');
     ok(/ADS-B only — its owner has set it up for ADS-B listeners/.test(L.msgs.find((m) => m.type === 'adsb_error')?.why || ''), 'the words: "this receiver is ADS-B only — its owner has set it up for ADS-B listeners"');
+    // ★★★ beta95-2 (Stuart 11-26, Almere): SATELLITE was a way out of the only mode — a listener's pick / doppler / lock is refused
+    { const n2 = L.msgs.length;
+      L.send({ type: 'sat', op: 'pick', norad: 25544, tx: 0 });
+      L.send({ type: 'sat', op: 'lock', norad: 25544 });
+      ok(await until(() => L.msgs.slice(n2).filter((m) => m.type === 'sat' && m.state === 'OFF' && /ADS-B only/.test(m.why || '')).length >= 2, 5000),
+         '★ a listener\'s SATELLITE pick and lock are refused with the only mode\'s words');
+      ok(/\[sat\] only mode adsb: a listener's "pick" refused/.test(S.log()), '…logged');
+      await sleep(500);
+      ok(!L.has('adsb_off', n2), '…and ADS-B stays on'); }
     const A = listener(S.port, 'adm'); await A.opened;
     ok(await unlock(S.port, A), 'the admin unlocks');
     A.send({ type: 'hello' }); await sleep(1500);

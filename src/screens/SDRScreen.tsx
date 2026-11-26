@@ -17476,7 +17476,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           /*    ★★ beta94 (tester Mac Ha, Stuart 11-25): on THIS APP's own engine (Local Hardware) with no position, the key is
            *    SELECTABLE and the box opens on the position prompt (satPlace.ts satOffer) — elsewhere the rule above. */
           ...(() => {
-            const so = satOffer({ cap: satCap, on: satOn, isVibe: !!(client.current as any)?.isVibe, ownEngine: satOwnHere });
+            // ★★★ beta95 hotfix: no SATELLITE while an only mode holds this radio (the server refuses the pick too)
+            const so = satOffer({ cap: onlyModeHere && !satOn ? null : satCap, on: satOn, isVibe: !!(client.current as any)?.isVibe, ownEngine: satOwnHere });
             return { satAvail: so.avail, satWhy: !satOn && !so.prompt && satCap && !satCap.ok ? satCap.why : undefined };
           })(),
           satOn,
