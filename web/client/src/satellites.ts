@@ -170,6 +170,10 @@ const CSS = `
    view while the box is at its foot (main.ts satLendImage); scroll up and it stays where you put it. */
 #satPanel .sat-img #decImgWrap{max-height:min(52vh,440px);overflow:auto}
 #satPanel .sat-img #decImage{max-height:none;height:auto;object-fit:fill}
+/* ★★★ beta96 METEOR: the WHOLE pass in the box (its gaps squashed, it usually fits) — main.ts lrptFitApply; a click flips
+   it to following the newest lines at full width and back */
+#satPanel .sat-img #decImgWrap.lrptFit #decImage{height:min(52vh,440px);width:auto;max-width:100%;margin:0 auto;object-fit:contain;cursor:zoom-in}
+#satPanel .sat-img #decImgWrap:not(.lrptFit) #decImage[title]{cursor:zoom-out}
 /* ★★★ beta92 OPEN IN VFO B — the key(s) under the readout, B's line, and the line switch (a line is tappable only while
    both lines have a decoder view; the one shown is lit) */
 #satPanel .sat-vb{display:flex;flex-direction:column;gap:4px;margin-top:4px}

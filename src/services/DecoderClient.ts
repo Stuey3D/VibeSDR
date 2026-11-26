@@ -61,7 +61,7 @@ import { sameStateText, selcalStateText } from './alertDecoders';
 import { aleStateText, parseAleStatus, type AleStatus } from './aleDecoder';   // ★ V12 2G HF ALE
 import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
 import { lrptAttachParams, lrptStatusText, parseLrptStatus } from './lrpt';   // ★ V12 METEOR LRPT
-import { clearLiveOutline, setLiveOutline } from './lrptOutlineLive';   // ★ V12 METEOR LRPT's live MAP OUTLINE
+import { clearLiveOutline, setLiveGaps, setLiveOutline } from './lrptOutlineLive';   // ★ V12 METEOR LRPT's live MAP OUTLINE
 import { parseLiveOutline } from '../utils/lrptOutline';
 import { vorSanitise, vorStateText, vorHold, type VorHoldState, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from './navaids';   // ★ V12 VOR / ILS, 406 MHz
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
@@ -804,6 +804,7 @@ export class DecoderClient {
           } else if (m.type === 'lrpt_status' && m.data) {
             if (this.active !== 'lrpt') return;
             const st = parseLrptStatus(m.data);
+            if (st && this.outlineStore) setLiveGaps(st.gaps, st.rot);   // ★★★ beta96 the live picture's gaps (bands) + north up
             this.cb.onStatus(lrptStatusText(st));
             if (st) this.cb.onDot(st.lines > 0 || st.sync ? 'active' : st.carrier ? 'sync' : 'idle');
           } else if (m.type === 'vor' && m.data) {

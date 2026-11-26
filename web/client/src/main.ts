@@ -13,6 +13,8 @@ import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 // ★ V12 METEOR LRPT's MAP OUTLINE (the rule: src/utils/lrptOutline.ts; the drawing: lrptOutlineDom.ts)
 import { parseOutline, parseLiveOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl, type Outline } from '../../../src/utils/lrptOutline';
 import { drawOutline, outlineOn, setOutlineOn } from './lrptOutlineDom';
+// ★★★ beta96 METEOR LRPT's live preview: gaps squashed to short bands, FIT / FOLLOW in the SATELLITE box (shared with the app)
+import { bandPixels, lrptFitNow, lrptViewHint, lrptViewToggle, mapOutline, sameGaps, squashPlan, turnedTop, type LrptGap, type LrptView, type SquashPlan } from '../../../src/utils/lrptGaps';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
 import { initMenuCats, revealServerUnlock } from './menuCats';
@@ -11114,9 +11116,11 @@ let satImgFollow = true, satImgFollowOn = false;
 function satImgFollowStart(wrap: HTMLElement) {
   if (satImgFollowOn) return;
   satImgFollowOn = true;
-  wrap.addEventListener('scroll', () => { satImgFollow = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 24; }, { passive: true });
+  // ★★★ beta96 a turned (north-up) METEOR picture grows at its TOP: following it is staying at the top
+  const turned = () => decLrptRot && activeDec === 'lrpt';
+  wrap.addEventListener('scroll', () => { satImgFollow = turned() ? wrap.scrollTop <= 24 : wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 24; }, { passive: true });
   if (typeof ResizeObserver === 'undefined') return;
-  new ResizeObserver(() => { if (satImgFollow && wrap.closest('#satPanel')) wrap.scrollTop = wrap.scrollHeight; }).observe($('decImage'));
+  new ResizeObserver(() => { if (satImgFollow && wrap.closest('#satPanel')) wrap.scrollTop = turned() ? 0 : wrap.scrollHeight; }).observe($('decImage'));
 }
 /** Leave SATELLITE (another whole-radio mode is starting) — the drop is sent, the decoder stops. */
 function satModeOff() { if (satPanel?.active) satPanel.exit(); }
@@ -15417,6 +15421,9 @@ function initDecoders(host: string, auth: AuthState) {
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
       const st = parseLrptStatus(d);
+      // ★★★ beta96 the live picture's gaps (merged on the server): redrawn as short bands when they change
+      const gs = st?.gaps ?? [], rot = st?.rot === 180;
+      if (!sameGaps(gs, decLrptGaps) || rot !== decLrptRot) { decLrptGaps = gs; decLrptRot = rot; if (!decViewingPrev) blitToVisible(decLiveCv); decOutlinePaint(); }
       decStateText = lrptStatusText(st); $('decStatus').textContent = decStateText;
       if (satDec === 'lrpt') satPanel?.status(decStateText);   // ★★★ SATELLITE: the LRPT line in the window
       setDecLive(!!st && (st.sync || st.lines > 0));
@@ -17940,14 +17947,64 @@ function setDecLive(on: boolean) {
 function visibleRows(src: HTMLCanvasElement): number {
   return src === decLiveCv && activeDec === 'lrpt' && decLiveMaxY >= 0 ? Math.min(src.height, decLiveMaxY + 1) : src.height;
 }
+/* ★★★ beta96 METEOR LRPT: THE GAPS SQUASHED (Stuart 11-26, a Meteor-M2-4 pass: 616 rows of no signal took as much room as
+ *  the picture; near LOS a label for every short gap scrolled the good cloud out of view). The live canvas stays the
+ *  server's TRUE-geometry preview (SAVE writes it; the gallery's pictures are the server's); the visible canvas shows each
+ *  gap lrpt_status lists as one short hatched band with its label (src/utils/lrptGaps.ts — the app draws the same). */
+let decLrptGaps: LrptGap[] = [];
+let decLrptPlan: SquashPlan | null = null;      // the shown picture's squash (null = row for row)
+let decLrptView: LrptView = 'auto';             // the SATELLITE box: whole pass when it fits, else follow; a click flips it
+let decLrptBlitPending = 0;
+/* ★★★ beta96 NORTH UP: a northbound pass (lrpt_status "rot":180) is shown turned round — the picture's rows drawn under a
+ *  180° canvas transform, the bands put at their turned place UPRIGHT (putImageData ignores the transform: never turned
+ *  text), the outline's points turned with its label text upright (lrptGaps.ts mapOutline). Newest rows at the top. */
+let decLrptRot = false;
+function lrptSquashed(src: HTMLCanvasElement): boolean { return src === decLiveCv && activeDec === 'lrpt' && (decLrptGaps.length > 0 || decLrptRot); }
+/** Rows arriving while the gaps are squashed: one redraw a frame, not one per row. */
+function lrptBlitSoon() {
+  if (decLrptBlitPending) return;
+  decLrptBlitPending = requestAnimationFrame(() => { decLrptBlitPending = 0; if (!decViewingPrev) blitToVisible(decLiveCv); });
+}
+/** FIT (the whole pass in the SATELLITE box) or FOLLOW (full width, the box scrolls to the newest lines). */
+function lrptFitApply() {
+  const wrap = $('decImgWrap'), c = $<HTMLCanvasElement>('decImage');
+  const inSat = !!wrap.closest('#satPanel') && activeDec === 'lrpt' && !decViewingPrev;
+  const boxW = wrap.clientWidth, boxH = parseFloat(getComputedStyle(wrap).maxHeight) || 440;
+  // ★ only when it would not fit at the box's width anyway (then fitting changes nothing)
+  const tall = c.width > 0 && c.height * boxW / c.width > boxH;
+  const fit = inSat && tall && lrptFitNow(decLrptView, c.width, c.height, boxW, boxH);
+  wrap.classList.toggle('lrptFit', fit);
+  if (inSat && tall) c.title = lrptViewHint(fit); else c.removeAttribute('title');
+}
 function blitToVisible(src: HTMLCanvasElement | null) {
   const c = $<HTMLCanvasElement>('decImage');
   if (!src) return;
   const h = visibleRows(src);
+  if (lrptSquashed(src)) {
+    const plan = squashPlan(decLrptGaps, h);
+    if (plan.bands || decLrptRot) {
+      decLrptPlan = plan;
+      if (c.width !== src.width || c.height !== plan.h) { c.width = src.width; c.height = plan.h; }
+      const ctx = c.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      if (decLrptRot) ctx.setTransform(-1, 0, 0, -1, c.width, c.height);   // the picture turned round
+      for (const sg of plan.segs) {
+        if (sg.gap) ctx.putImageData(new ImageData(bandPixels(src.width, sg.dstH, sg.label), src.width, sg.dstH), 0, decLrptRot ? turnedTop(plan, sg.dst0, sg.dstH) : sg.dst0);
+        else ctx.drawImage(src, 0, sg.src0, src.width, sg.dstH, 0, sg.dst0, src.width, sg.dstH);
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      lrptFitApply();
+      return;
+    }
+  }
+  decLrptPlan = null;
   if (c.width !== src.width || c.height !== h) { c.width = src.width; c.height = h; }
   const ctx = c.getContext('2d');
   ctx?.clearRect(0, 0, c.width, c.height);
   ctx?.drawImage(src, 0, 0);
+  lrptFitApply();
 }
 
 /** ★ Picture zoom over FIT, as in the app: 1, 1.5, 2, 3, 4×. − only once zoomed; + stops at 4×. */
@@ -18017,7 +18074,7 @@ function decOutlinePaint() {
   svg.style.left = `${c.offsetLeft}px`; svg.style.top = `${c.offsetTop}px`;
   svg.style.width = `${c.offsetWidth}px`; svg.style.height = `${c.offsetHeight}px`;
   const scale = Math.min(c.offsetWidth / c.width, c.offsetHeight / Math.max(1, c.height));
-  drawOutline(svg, decOutline!, decOutline!.w * scale);
+  drawOutline(svg, decLrptPlan ? mapOutline(decOutline!, decLrptPlan, decLrptRot) : decOutline!, decOutline!.w * scale);   // ★ beta96 moved with the squash (and turned)
   svg.setAttribute('viewBox', `0 0 ${c.width} ${c.height}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   svg.removeAttribute('hidden');
@@ -18048,6 +18105,7 @@ function startDecImage(w: number, h: number) {
   decLiveCtx?.clearRect(0, 0, cv.width, cv.height);
   decLiveComplete = false;
   decLiveMaxY = -1;
+  decLrptGaps = []; decLrptPlan = null; decLrptView = 'auto'; decLrptRot = false;   // ★ beta96 a new picture: its own gaps, AUTO fit / follow
   decLiveRaw = []; decLiveAl = []; decLiveHist = newHist();
   decAuto = {}; decManualShift = null; decRaw = false;   // ★ a new chart finds its own margin / border, unRAW
   decSlantTouched = false;                                // …and measures its own slant (2026-10-07)
@@ -18352,7 +18410,8 @@ function drawDecLine(y: number, w: number, px: Uint8Array, rgb: boolean) {
   // Mirror the just-drawn line to the visible canvas when we're watching live.
   if (!decViewingPrev) {
     const vis = $<HTMLCanvasElement>('decImage');
-    if (vis.width !== cv.width || vis.height !== visibleRows(cv)) blitToVisible(cv);   // ★ beta95 LRPT: grows with its rows
+    if (lrptSquashed(cv)) lrptBlitSoon();   // ★ beta96 the gaps squashed: the shown rows are not the true ones
+    else if (vis.width !== cv.width || vis.height !== visibleRows(cv)) blitToVisible(cv);   // ★ beta95 LRPT: grows with its rows
     else vis.getContext('2d')?.putImageData(img, 0, y);
   }
 }
@@ -20569,6 +20628,15 @@ function initGallery() {
   $('galBack').onclick = () => { galTrReset(); galleryBack(); };
   $('galOutline').onclick = () => galOutlineToggle();   // ★ V12 METEOR LRPT's MAP OUTLINE switch
   $('decOutline').onclick = () => { setOutlineOn(!outlineOn()); decOutlinePaint(); };   // ★ …and the live picture's (the same choice)
+  // ★★★ beta96 METEOR in the SATELLITE box: a click on the picture flips WHOLE PASS / FOLLOW (lrptGaps.ts)
+  $('decImage').addEventListener('click', () => {
+    const wrap = $('decImgWrap');
+    if (activeDec !== 'lrpt' || decViewingPrev || !wrap.closest('#satPanel')) return;
+    decLrptView = lrptViewToggle(wrap.classList.contains('lrptFit'));
+    lrptFitApply();
+    satImgFollow = true; wrap.scrollTop = decLrptRot && activeDec === 'lrpt' ? 0 : wrap.scrollHeight;
+    decOutlinePaint();
+  });
   decOutlineWatch();
   for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
     b.onclick = () => {

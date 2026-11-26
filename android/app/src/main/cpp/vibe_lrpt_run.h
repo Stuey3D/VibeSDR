@@ -73,6 +73,57 @@ inline bool lit(const std::string& t, int scale, int x0, int y0, int x, int y) {
     const uint8_t* g = glyph(t[size_t(ci)]);
     return g && ((g[gy] >> (4 - col)) & 1);
 }
+/* ★★★ beta96 THE LIVE PREVIEW SQUASHES ITS GAPS (Stuart, 2026-11-26, Meteor-M2-4: 616 rows of no signal took as much
+ *  room as the decoded picture, and near LOS a fade of thin strips between short gaps pushed the clean cloud out of
+ *  view). The server keeps drawing the preview in TRUE geometry (the rows above — an older client shows those, the
+ *  live outline is in those coordinates); it ALSO lists the gaps in lrpt_status ("gaps"), merged here, and the clients
+ *  (src/utils/lrptGaps.ts) draw each listed gap as one short hatched band with its label. The gallery's pictures and
+ *  the outline are untouched.
+ *  MERGING: two gaps with only a short run of decoded strips between them (≤ kMergeStrips strips, or under kMergeMs of
+ *  satellite time) are ONE gap, "patchy" — so a fading tail is one band and one label, never "NO SIGNAL 14:42" ×6. */
+struct Gap {
+    int s0 = 0, s1 = 0;          ///< strips [s0, s1), the decoded slivers of a patchy gap included
+    int32_t msA = -1, msB = -1;  ///< the satellite time of the decoded strip before / after (−1 none)
+    int lines = 0;               ///< lines of no signal in it (8 a strip; a patchy gap's slivers not counted)
+    bool patchy = false;
+};
+constexpr int kMergeStrips = 1;        ///< a run of decoded strips this short (8 lines) never separates two gaps
+constexpr int32_t kMergeMs = 5000;     ///< …nor one shorter than this (≈ 4 strips at 1.232 s)
+constexpr size_t kMaxGaps = 64;        ///< the status carries at most this many (the closest pairs merge first)
+/** `raw`: each gap's strips [s0, s1) in order; `ms`: a strip's satellite time (−1 unknown). */
+inline std::vector<Gap> mergeGaps(const std::vector<std::pair<int, int>>& raw, const std::function<int32_t(int)>& ms) {
+    std::vector<Gap> out;
+    auto span = [&](int a, int b) -> int32_t {   // satellite time from strip a to strip b (−1 unknown); midnight wraps
+        const int32_t x = ms(a), y = ms(b);
+        if (x < 0 || y < 0) return -1;
+        return y >= x ? y - x : y + 86400000 - x;
+    };
+    for (const auto& r : raw) {
+        if (r.second <= r.first) continue;
+        if (!out.empty()) {
+            Gap& p = out.back();
+            const int run = r.first - p.s1;   // decoded strips between
+            // the run's own length in satellite time: first to last strip, plus one strip's period (span / (run − 1))
+            const int32_t sp = run > 1 ? span(p.s1, r.first - 1) : -1;
+            const int32_t t = sp >= 0 ? int32_t(int64_t(sp) * run / (run - 1)) : -1;
+            if (run <= kMergeStrips || (t >= 0 && t < kMergeMs)) {
+                p.s1 = r.second; p.lines += (r.second - r.first) * 8; p.patchy = true; p.msB = ms(r.second);
+                continue;
+            }
+        }
+        Gap g; g.s0 = r.first; g.s1 = r.second; g.lines = (r.second - r.first) * 8;
+        g.msA = r.first > 0 ? ms(r.first - 1) : -1; g.msB = ms(r.second);
+        out.push_back(g);
+    }
+    while (out.size() > kMaxGaps) {   // bounded: the two closest gaps become one (patchy)
+        size_t best = 1; int bestRun = 1 << 30;
+        for (size_t i = 1; i < out.size(); i++) { const int run = out[i].s0 - out[i - 1].s1; if (run < bestRun) { bestRun = run; best = i; } }
+        Gap& p = out[best - 1]; const Gap& q = out[best];
+        p.s1 = q.s1; p.lines += q.lines; p.patchy = true; p.msB = q.msB;
+        out.erase(out.begin() + long(best));
+    }
+    return out;
+}
 }   // namespace gapart
 
 class Run {
@@ -309,7 +360,7 @@ private:
         rx_ = std::make_unique<Receiver>(c);
         if (o_.made) o_.made(*rx_);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
-        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0;
+        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0; heading_ = -1; headingAsked_ = -1;
         lastSignalSec_ = fedSec_; snrAcc_ = 0; snrN_ = 0;
         if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
                            + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
@@ -318,10 +369,13 @@ private:
         if (!rx_ || !havePictures_) return;
         preview(true);
         if (sentRows_ > 0 && o_.frame) { std::vector<uint8_t> m{ 0x05, 0, 0, 0, 0 }; o_.frame(m.data(), m.size()); }
-        auto pics = renderPictures(*rx_);
+        decideHeading(true);
+        const bool rot = heading_ == 1;   // ★★★ beta96 a northbound pass: north up, turned ONCE, here
+        auto pics = renderPictures(*rx_, rot);
+        if (rot && o_.log) o_.log("lrpt: northbound pass \xe2\x80\x94 the pictures are turned round, north up");
         if (!pics.empty() && o_.geoCandidates) {
             int s0, s1; rx_->stripRange(s0, s1);
-            const geo::Overlay ov = overlay(s0, s1, 1.0);
+            const geo::Overlay ov = overlay(s0, s1, 1.0, rot);
             for (auto& p : pics) { if (ov.ok) p.geoJson = ov.json; else p.geoWhy = ov.why; }
             if (o_.log) o_.log(ov.ok ? "lrpt: map outline made (" + std::to_string(ov.points) + " points)" : "lrpt: no map outline \xe2\x80\x94 " + ov.why);
         }
@@ -333,12 +387,23 @@ private:
         return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
     }
     /** The outline for strips [s0, s1) — the full picture (scale 1) or the live preview (a quarter). */
-    geo::Overlay overlay(int s0, int s1, double scale) const {
+    geo::Overlay overlay(int s0, int s1, double scale, bool rot180 = false) const {
         std::vector<int32_t> ms;
         for (int s = s0; s < s1; s++) ms.push_back(rx_->stripTimeMs(s));
         std::vector<geo::Candidate> cs = o_.geoCandidates ? o_.geoCandidates() : std::vector<geo::Candidate>{};
         vibe::sat::Observer ob; const bool haveObs = o_.geoObserver && o_.geoObserver(ob) && ob.valid;
-        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale);
+        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale, geo::Instrument{}, rot180);
+    }
+    /** ★★★ beta96 NORTH UP: which way this pass goes (geo::northbound), decided once a picture exists and then kept for the
+     *  pass — the clients turn the live preview by it (lrpt_status "rot"), the gallery's pictures are turned by it. Asked
+     *  at most every 5 s until known (an SGP4 call); `force` = the pass is ending, ask now. */
+    void decideHeading(bool force = false) {
+        if (heading_ >= 0 || !o_.geoCandidates || !rx_) return;
+        if (!force && headingAsked_ >= 0 && fedSec_ - headingAsked_ < 5.0) return;
+        headingAsked_ = fedSec_;
+        const std::vector<geo::Candidate> cs = o_.geoCandidates();
+        vibe::sat::Observer ob; const bool haveObs = o_.geoObserver && o_.geoObserver(ob) && ob.valid;
+        heading_ = geo::northbound(cs, haveObs ? &ob : nullptr, wallAt_ > 0 ? wallAt_ : now());
     }
     /** ★★ THE LIVE OUTLINE: {"type":"lrpt_geo","data":{…}} in the PREVIEW's coordinates (a quarter size, from the
      *  preview's first strip), every kLiveGeoSec while the picture grows — the clients draw it over the growing picture
@@ -417,7 +482,31 @@ private:
             o_.frame(m.data(), m.size());
             sentRows_ = y + 1;
         }
+        decideHeading();
         liveGeo();
+    }
+    /** ★★★ beta96 the preview's gaps (gapart::mergeGaps) as ,"gaps":[[r0,r1,msA,msB,lines,patchy],…] in PREVIEW rows
+     *  [r0, r1) — only gaps whose rows have all been sent (a gap is closed by the decoded strip after it); "" for none. */
+    std::string previewGapsJson() const {
+        if (!rx_ || !previewOpen_ || sentRows_ <= 0) return std::string();
+        const int sEnd = previewS0_ + sentRows_ / kPreviewRowsPerStrip;
+        std::vector<std::pair<int, int>> raw;
+        for (int s = previewS0_; s < sEnd; s++) {
+            if (stripDecoded(s)) continue;
+            int e = s; while (e < sEnd && !stripDecoded(e)) e++;
+            if (e >= sEnd) break;            // not yet closed by a decoded strip that has been sent
+            raw.emplace_back(s, e); s = e;
+        }
+        if (raw.empty()) return std::string();
+        const auto gs = gapart::mergeGaps(raw, [this](int s) { return rx_->stripTimeMs(s); });
+        std::string j = ",\"gaps\":[";
+        for (size_t i = 0; i < gs.size(); i++) {
+            char b[96];
+            std::snprintf(b, sizeof b, "%s[%d,%d,%d,%d,%d,%d]", i ? "," : "", (gs[i].s0 - previewS0_) * kPreviewRowsPerStrip,
+                          (gs[i].s1 - previewS0_) * kPreviewRowsPerStrip, int(gs[i].msA), int(gs[i].msB), gs[i].lines, gs[i].patchy ? 1 : 0);
+            j += b;
+        }
+        return j + "]";
     }
     /** ★ beta95 strip `s` carries any picture in a live channel (else it is a gap: gapart). */
     bool stripDecoded(int s) const {
@@ -444,6 +533,8 @@ private:
             // ★★ beta95 decoded lines apart from the gap's (the "656 lines" of 11-25 held ~450 of no signal)
             { int dec = 0; for (int k = s0; k < s1; k++) if (stripDecoded(k)) dec++;
               j += ",\"decoded\":" + std::to_string(dec * 8) + ",\"gapLines\":" + std::to_string((s1 - s0 - dec) * 8); }
+            j += previewGapsJson();
+            if (heading_ >= 0) j += heading_ == 1 ? ",\"rot\":180" : ",\"rot\":0";   // ★★★ beta96 north up: turn the preview
             j += ",\"channels\":[";
             bool first = true;
             for (int a : rx_->liveApids()) { j += std::string(first ? "" : ",") + "\"" + channelName(a) + "\""; first = false; }
@@ -463,6 +554,7 @@ private:
     bool havePictures_ = false, previewOpen_ = false, done_ = false, rateWarned_ = false;
     int sentRows_ = 0, previewS0_ = 0;
     double wallAt_ = 0, lastGeoSec_ = -1; int32_t wallStamp_ = -1; int geoStrips_ = 0;   // ★ the map outline
+    int heading_ = -1; double headingAsked_ = -1;   // ★★★ beta96 1 northbound (north up = turned), 0 southbound, −1 not known
 };
 
 } // namespace vibelrpt

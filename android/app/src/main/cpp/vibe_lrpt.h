@@ -21,6 +21,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <utility>     // std::swap (rotate180)
 #include <string>
 #include <vector>
 
@@ -637,7 +638,18 @@ struct Picture {
     /** ★ V12 the MAP OUTLINE for this pass (vibe_lrpt_overlay.h): the vector JSON (same for every channel of the pass —
      *  they share the line grid), or empty with `geoWhy` saying why there is none. Both empty = not attempted. */
     std::string geoJson, geoWhy;
+    /** ★★★ beta96 NORTH UP: 180 = the picture was turned round (a northbound pass comes off the scanner south-up, east on
+     *  the left) — said in the PNG's own Comment, its name, and the outline's "rot". 0 = as scanned. Never turned twice:
+     *  only renderPictures turns it, once, and everything after reads the turned picture. */
+    int rot = 0;
 };
+/** ★★★ beta96 the note a turned picture carries (PNG tEXt Comment) — what says it was turned, so nothing turns it again. */
+constexpr const char* kRotatedNote = "VibeSDR: rotated 180 degrees (northbound pass), north up";
+/** Turn a picture (w × h × ch bytes) round 180° in place: the last pixel first. */
+inline void rotate180(std::vector<uint8_t>& px, int w, int h, int ch) {
+    const size_t n = size_t(w) * size_t(h);
+    for (size_t i = 0, j = n - 1; i < j; i++, j--) for (int k = 0; k < ch; k++) std::swap(px[i * ch + k], px[j * ch + k]);
+}
 /** ★ Channel names per MSU-MR (1: 0.5–0.7 µm … 6: 11.5–12.5 µm); APID 64 + n − 1. Channels 4–6 are thermal and drawn
  *  inverted (cloud white). */
 inline const char* channelName(int apid) {
@@ -646,7 +658,8 @@ inline const char* channelName(int apid) {
 }
 /** Greyscale per live channel, plus the RGB composite (R = ch2, G = ch2, B = ch1: the familiar false colour) when
  *  channels 1 and 2 are both live. Empty when nothing is worth showing. */
-inline std::vector<Picture> renderPictures(const Receiver& rx) {
+/** `rot180` (★ beta96): a northbound pass — every picture turned round so north is up (Picture::rot). */
+inline std::vector<Picture> renderPictures(const Receiver& rx, bool rot180 = false) {
     std::vector<Picture> out;
     int s0, s1; rx.stripRange(s0, s1);
     if (s1 <= s0) return out;
@@ -657,7 +670,11 @@ inline std::vector<Picture> renderPictures(const Receiver& rx) {
         auto g = channelImage(rx.channels().at(a), s0, s1, a >= 67, w, h);
         if (g.empty()) continue;
         Picture p; p.apid = a; p.w = w; p.h = h; p.name = std::string("channel ") + channelName(a);
-        p.png = vibe::png::encode(w, h, 1, g.data());
+        // ★ turned for its PNG and back (no second copy on a 256 MB board): the composite is built from the pictures as
+        //   scanned, then turned once itself
+        if (rot180) { rotate180(g, w, h, 1); p.rot = 180; p.name += " \xc2\xb7 north up"; }
+        p.png = vibe::png::encode(w, h, 1, g.data(), rot180 ? kRotatedNote : "");
+        if (rot180) rotate180(g, w, h, 1);
         out.push_back(std::move(p));
         grey[a] = std::move(g);
     }
@@ -675,7 +692,8 @@ inline std::vector<Picture> renderPictures(const Receiver& rx) {
             rgb[i * 3] = r[i]; rgb[i * 3 + 1] = r[i]; rgb[i * 3 + 2] = b[i];
         }
         Picture p; p.apid = 0; p.w = w; p.h = h; p.name = "RGB 221 false colour";
-        p.png = vibe::png::encode(w, h, 3, rgb.data());
+        if (rot180) { rotate180(rgb, w, h, 3); p.rot = 180; p.name += " \xc2\xb7 north up"; }
+        p.png = vibe::png::encode(w, h, 3, rgb.data(), rot180 ? kRotatedNote : "");
         out.insert(out.begin(), std::move(p));
     }
     return out;

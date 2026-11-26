@@ -405,7 +405,8 @@ static void testLivePass(bool quick) {
         Run::Opts o; o.symbolRate = 72000; o.mod = ReceiverConfig::Oqpsk;
         o.dopplerHz = [&] { return kDop0 + kRate * tNow; };
         o.satInRange = [&] { return c.inRange; };
-        o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; } };
+        int picH = 0;   // ★ beta96 the gallery's picture keeps TRUE geometry (the gap at full height)
+        o.pictures = [&](const std::vector<Picture>& ps, bool part) { if (!ps.empty()) { saves++; if (part) partial++; picH = ps[0].h; } };
         // ★★ beta95 the gap drawn AS a gap (gapart): the preview rows and the status, kept for the one-picture case
         std::map<uint32_t, std::vector<uint8_t>> rows; std::string lastJson;
         if (c.inRange == 1) {
@@ -453,7 +454,51 @@ static void testLivePass(bool quick) {
             CHECK(hatched >= 20, "beta95: the 35 s gap is drawn as a hatch (%d rows)", hatched);
             CHECK(labelled >= 10, "beta95: and labelled NO SIGNAL hh:mm-hh:mm in the picture (%d rows of text)", labelled);
             CHECK(decoded > 0 && gapLines >= 100, "beta95: the status counts decoded lines apart from the gap's (decoded %d, gap %d)", decoded, gapLines);
+            // ★★★ beta96 the status lists the gap for the clients' squashed band: one gap, not patchy, its lines = the gap's
+            const size_t gp = lastJson.find("\"gaps\":[[");
+            int r0 = -1, r1 = -1, ga = -2, gb = -2, gln = -1, patchy = -1;
+            if (gp != std::string::npos) std::sscanf(lastJson.c_str() + gp + 9, "%d,%d,%d,%d,%d,%d", &r0, &r1, &ga, &gb, &gln, &patchy);
+            const bool one = gp != std::string::npos && lastJson.find("],[", gp) == std::string::npos;
+            std::printf("  beta96 the status's gap: rows [%d, %d) times %d..%d, %d lines, patchy %d (one gap: %s)\n", r0, r1, ga, gb, gln, patchy, one ? "yes" : "no");
+            CHECK(one && r0 > 0 && r1 > r0, "beta96: the status lists the one gap in preview rows ([%d, %d))", r0, r1);
+            CHECK(gln == (r1 - r0) * 4 && gln >= 100 && patchy == 0, "beta96: its lines are the gap's (%d for %d rows), not patchy", gln, r1 - r0);
+            CHECK(ga >= 0 && gb > ga, "beta96: it carries the satellite times either side (%d, %d)", ga, gb);
+            // the rows it names are the hatched ones
+            int inGapHatched = 0; for (int y = r0; y < r1; y++) { auto it = rows.find(uint32_t(y)); if (it != rows.end() && it->second.size() >= 3 && (it->second[0] == 54 || it->second[0] == 26 || it->second[0] == 214)) inGapHatched++; }
+            CHECK(r1 > r0 && inGapHatched == r1 - r0, "beta96: every row the gap names is a hatched row (%d of %d)", inGapHatched, r1 - r0);
+            CHECK(picH == (decoded + gapLines) && picH >= gln + 8, "beta96: the gallery picture keeps true geometry — %d rows = decoded %d + gap %d", picH, decoded, gapLines);
         }
+    }
+}
+
+/* ★★★ beta96 THE GAP LIST the clients squash (gapart::mergeGaps): separate gaps stay separate; a fading tail of short
+ *  gaps between thin strips is ONE patchy gap; the list is bounded. */
+static void testGapMerge() {
+    std::printf("\nThe preview's gap list (beta96)\n");
+    auto ms = [](int s) { return int32_t(52800000 + s * 1232); };   // 14:40:00 + 1.232 s a strip
+    {   // two real gaps, 40 strips of picture between: two gaps
+        const auto g = gapart::mergeGaps({ { 10, 90 }, { 130, 150 } }, ms);
+        CHECK(g.size() == 2 && !g[0].patchy && !g[1].patchy, "two gaps 40 strips apart stay two (%zu)", g.size());
+        CHECK(g.size() == 2 && g[0].lines == 640 && g[1].lines == 160, "their lines: %d, %d", g.size() ? g[0].lines : -1, g.size() > 1 ? g[1].lines : -1);
+        CHECK(g.size() == 2 && g[0].msA == ms(9) && g[0].msB == ms(90), "times from the decoded strips either side");
+    }
+    {   // a fading tail: gaps of 3 strips between single / double decoded strips (8–16 lines, ≤ 2.5 s): one patchy gap
+        std::vector<std::pair<int, int>> raw; int s = 200;
+        for (int k = 0; k < 12; k++) { raw.emplace_back(s, s + 3); s += 3 + (k % 2 ? 1 : 2); }
+        const auto g = gapart::mergeGaps(raw, ms);
+        CHECK(g.size() == 1 && g[0].patchy, "a fading tail of 12 short gaps is ONE patchy gap (%zu)", g.size());
+        CHECK(g.size() == 1 && g[0].s0 == 200 && g[0].lines == 12 * 3 * 8, "its strips from the first, its lines only the no-signal ones (%d)", g.size() ? g[0].lines : -1);
+    }
+    {   // 4 decoded strips between (4.9 s < 5 s): merged; 5 strips (6.2 s): not
+        const auto a = gapart::mergeGaps({ { 10, 20 }, { 24, 30 } }, ms), b = gapart::mergeGaps({ { 10, 20 }, { 25, 30 } }, ms);
+        CHECK(a.size() == 1 && b.size() == 2, "under 5 s of picture between merges (%zu), over it does not (%zu)", a.size(), b.size());
+    }
+    {   // bounded
+        std::vector<std::pair<int, int>> raw; for (int k = 0; k < 200; k++) raw.emplace_back(k * 20, k * 20 + 5);
+        const auto g = gapart::mergeGaps(raw, ms);
+        CHECK(g.size() <= gapart::kMaxGaps, "at most %zu gaps listed (%zu)", gapart::kMaxGaps, g.size());
+        int lines = 0; for (const auto& x : g) lines += x.lines;
+        CHECK(lines == 200 * 5 * 8, "…and no gap line lost in the merging (%d)", lines);
     }
 }
 
@@ -553,6 +598,7 @@ int main(int argc, char** argv) {
     testSyncAndInterleave();
     testChain(quick);
     testNoise(quick);
+    testGapMerge();
     testLivePass(quick);
     testPassSummary();
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
