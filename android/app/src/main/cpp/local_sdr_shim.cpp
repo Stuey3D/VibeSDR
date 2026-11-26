@@ -46997,10 +46997,18 @@ void LocalSdrShim::healthTick() {
     }
     { static vibehealth::UsbWatch usbWatch;
       h.usb = usbWatch.note(g_usbReportedEvents.load(std::memory_order_relaxed), now); }
-    /* ★★ beta95 THE PILL AUDIT: the host's battery % is the OWNER's (the admin page's BATTERY card, with its suspend floor),
-     *  not a struggle a listener feels. What a listener does feel — connections suspended at the floor — is said to them
-     *  through the VTS line as it approaches (batteryTick). Read above (bgFullCpuTick) before it is taken off the pill. */
-    h.batPresent = false; h.batCharging = false; h.batPct = -1; h.bat = vibehealth::OK;
+    /* ★★★ beta96 — THE BATTERY IS BACK ON THE PILL (Stuart 11-26: "why is the battery level off the pill surely that is
+     *  useful info for battery powered servers and the listeners should know that info so they can work out how long they
+     *  have left"). beta95 took it off; that was wrong. The % stays on the pill (and on the admin BATTERY card, and the
+     *  VTS warnings before a suspend stay), and once the drain has been measured the card says how long is left — to the
+     *  owner's suspend floor when one is set, since that is when listening stops (vibehealth::BatteryEta). */
+    {
+        static vibehealth::BatteryEta eta;
+        const int floorPct = g_vsBatteryPauseAt.load();
+        h.batMins = h.batPresent ? eta.feed(h.batPct, !h.batCharging, now / 1000.0, floorPct) : (eta.reset(), -1);
+        const std::string line = vibehealth::batteryEtaText(h.batMins, floorPct > 0);
+        if (!line.empty()) h.notes.push_back(line);
+    }
     // ★ Tune pacing reads these on every socket reader — copied BEFORE the send-on-change early return,
     //   so they follow every sample, not only the ones that changed a level.
     g_healthCpuLevel.store((int)h.cpu, std::memory_order_relaxed);
