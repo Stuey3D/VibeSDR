@@ -546,6 +546,87 @@ static void runner() {
     ok(r.droppedSamples() == 0, "no IQ dropped at this pace (" + std::to_string((unsigned long long)r.droppedSamples()) + ")");
 }
 
+// ── 6b. ★★★ b95 — THE LENOVO'S NAVTEX COLLAPSE (Stuart 11-25: "why has my navtex dropped in performance?") ──────────
+//     beta92 (adf09a108) made BgRunner::feedIq TRY-lock its queue and DROP a chunk the worker held; b94 (3962c77a4) holds
+//     it instead. A NAVTEX VFO is an RxPipeline, NOT a Band VFO: a dropped chunk is never bridged, the samples either side
+//     just abut, so every miss pulls the 100-baud bit clock early by the chunk's length. The Lenovo (RSP1A, 3 MS/s,
+//     489.5 + 517.5 USB) went from ~85 % of files with a ZCZC header to ~10 % from the 11-24 01:08 beta92 install until
+//     the 11-25 22:11 beta94-2 install, and its bad files read "Start lost … 0% of characters lost" over garbage.
+//     Here: the Lenovo's rate, a USB packet a chunk (1 ms), the worker's queue busy for 1 chunk in kBusyEvery.
+static std::string navtexThroughBusyQueue(int busyEvery, uint64_t& held, uint64_t& dropped, int& files) {
+    gallery::Store s; s.setDir(tmpDir(busyEvery ? "busyq" : "quietq"));
+    FileSlots slots("", [] { return 4; });
+    const double fs = 3000000, centre = 1200000;   // ★ the Lenovo's rate and its profile's centre
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.slots = &slots; p.store = &s;
+    p.profile.centreHz = centre;
+    p.profile.vfos = { bg::Vfo{517500, "usb", "navtex"} };
+    r.start(p);
+    const std::string text = "ZCZC GA41\r\n251830 UTC NOV 26\r\nNITON NAVTEX WZ 1234\r\nDOVER STRAIT\r\n"
+                             "LIGHT BUOY 51-01.2N 001-31.8E UNLIT\r\nNNNN\r\n";
+    const auto bits = navBits(text);
+    const double spb = fs / 100.0;
+    const size_t chunk = (size_t)(fs / 1000);   // ★ 1 ms — the RSP's DSP-thread chunk (a USB packet or two)
+    std::vector<vibedsp::cf32> iq; iq.reserve(chunk);
+    double ph = 0, acc = 0; size_t made = 0; int nChunk = 0;
+    std::mt19937 g(11); std::normal_distribution<float> n(0.0f, 0.002f);
+    auto flush = [&] {
+        if (busyEvery > 0 && ++nChunk % busyEvery == 0) { auto lk = r.holdQueueForTest(); r.feedIq(iq.data(), (int)iq.size()); }
+        else r.feedIq(iq.data(), (int)iq.size());
+        iq.clear();
+        while (r.queuedForTest() > (size_t)(fs * 0.2)) std::this_thread::sleep_for(std::chrono::milliseconds(1));   // ★ paced: never the queue's own cap
+    };
+    auto emit = [&](double rf, double samples) {
+        acc += samples; const size_t k = (size_t)std::lround(acc);
+        const double w = 2 * M_PI * (rf - centre) / fs;
+        for (; made < k; made++) {
+            ph += w; if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
+            iq.push_back(vibedsp::cf32((float)(0.1 * std::cos(ph)) + n(g), (float)(0.1 * std::sin(ph)) + n(g)));
+            if (iq.size() == chunk) flush();
+        }
+    };
+    emit(518000 + 85, fs);
+    for (int b : bits) emit(518000 + (b > 0 ? 85 : -85), spb);
+    emit(518000 + 85, 2 * fs);
+    if (!iq.empty()) flush();
+    while (r.queuedForTest() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    held = r.busyHeld(); dropped = r.droppedSamples();
+    r.stop();
+    const std::string list = s.listJson("navtex", 20);
+    files = 0; std::string all;
+    for (size_t at = 0; (at = list.find("\"f\":", at)) != std::string::npos; at++) {
+        files++;
+        std::string p0, ct;
+        if (!s.resolve(gallery::lineStr(list.substr(at - 1), "f"), p0, ct)) continue;
+        FILE* f = std::fopen(p0.c_str(), "r"); char b[512]; size_t k;
+        while (f && (k = std::fread(b, 1, sizeof b, f)) > 0) all.append(b, k);
+        if (f) std::fclose(f);
+    }
+    return all;
+}
+static void lenovoBusyQueue() {
+    std::printf("── ★★★ b95: NAVTEX through a busy background queue — the Lenovo's 3 MS/s RSP, 1 ms chunks ──\n");
+    const int kBusyEvery = 50;   // ★ 2 % of chunks: ~1.2 s a minute (the Pi 500 measured 0.3–0.4 s at 8 MS/s)
+    uint64_t h0, d0, h1, d1; int f0, f1;
+    const std::string quiet = navtexThroughBusyQueue(0, h0, d0, f0);
+    /* ★★★ THE REAL FAULT NEEDS NO FORCED BUSY CHUNK: with the beta92 feedIq this very case failed — the worker popping
+     *  1 ms chunks collided with the feeder's try-lock by itself (54 chunks, 162 000 samples in ~10 s on the M5) and the
+     *  message came out "ZCZC GA41 … NITON N_KXYCQ_OFJFYV0_ … [end lost]". */
+    ok(d0 == 0, "a quiet queue: nothing dropped (" + std::to_string((unsigned long long)d0) + " samples; "
+       + std::to_string((unsigned long long)h0) + " chunk(s) found it busy by themselves and were held)");
+    ok(quiet.find("ZCZC GA41") != std::string::npos && quiet.find("LIGHT BUOY 51-01.2N 001-31.8E UNLIT") != std::string::npos,
+       "a quiet queue (no forced busy chunk): the message decodes (" + std::to_string(f0) + " file(s); the queue was busy by itself for "
+       + std::to_string((unsigned long long)h0) + " chunk(s), " + std::to_string((unsigned long long)d0) + " samples dropped):\n" + quiet.substr(0, 400));
+    const std::string busy = navtexThroughBusyQueue(kBusyEvery, h1, d1, f1);
+    ok(h1 > 0, "the queue WAS busy for some chunks (" + std::to_string((unsigned long long)h1) + " held)");
+    ok(d1 == 0, "★★★ none of them was dropped (" + std::to_string((unsigned long long)d1) + " samples) — beta92 dropped every one");
+    ok(busy.find("ZCZC GA41") != std::string::npos && busy.find("LIGHT BUOY 51-01.2N 001-31.8E UNLIT") != std::string::npos
+       && busy.find("Start lost") == std::string::npos,
+       "★★★ the SAME message, header and all, through the busy queue (" + std::to_string(f1) + " file(s)):\n" + busy.substr(0, 400));
+}
+
 // ── 7. phase 2: pictures, FT8 summaries, the decoders' demodulators ─────────────────────────────────────────────
 static std::vector<uint8_t> be32(uint32_t v) { return { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; }
 static std::string readFile(const std::string& p) {
@@ -1153,6 +1234,7 @@ int main() {
     wefaxStations();
     navtexStations();
     runner();
+    lenovoBusyQueue();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
