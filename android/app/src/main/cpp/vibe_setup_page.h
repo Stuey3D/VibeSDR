@@ -326,8 +326,9 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
           <input type="text" id="beastAddLabel" maxlength="40" placeholder="what listeners see, e.g. PiAware in the loft" style="max-width:280px"></label>
         <label><span class="lbl">How many users</span>
           <input type="number" id="beastAddUsers" min="1" max="200" step="1" value="10" style="max-width:100px">
-          <div class="hint" id="beastAddUsersHint">The most listeners at once on this feed. Each one on the map takes about 0.2&nbsp;KB/s of
-            upload per aircraft shown (about 12&nbsp;KB/s with 60 aircraft) &mdash; set it from your upload speed.</div></label>
+          <div class="hint" id="beastAddUsersHint">The most listeners at once on this feed. Each one on the map takes about 2.5&nbsp;KB/s of upload
+            with 150 aircraft (about 1&nbsp;KB/s with 60) in the current app and web page; an app or page from before beta96
+            takes about 0.2&nbsp;KB/s per aircraft (30&nbsp;KB/s with 150) &mdash; set it from your upload speed.</div></label>
         <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
           <button type="button" class="btn" id="beastAddGo">ADD</button>
           <span class="hint" id="beastAddMsg" style="margin:0"></span></div>

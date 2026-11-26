@@ -280,45 +280,27 @@ Our Beast stream against our own reader and a test client.
 
 ## Listener bandwidth on the ADS-B map (for "How many users")
 
-**What we know today (beta95 protocol, unchanged in this branch).** Stuart measured the Sony: 60 s as one listener on its
-ADS-B map with 45–66 aircraft used **12.7 KB/s** in total.
+**Before beta96.** Stuart measured the Sony (beta95): 60 s as one listener on its ADS-B map with 45–66 aircraft used
+**12.7 KB/s** in total.
 
 - 11.75 KB/s of that was the `adsb` report, which re-sends the full aircraft list every second;
-- 0.38 KB/s was `adsb_info`;
-- everything else was under 0.6 KB/s.
+- 0.38 KB/s was `adsb_info`.
 
-That is about **0.2 KB/s per aircraft per listener**. At 150 aircraft it is roughly 30 KB/s per listener, so 100 listeners
-would need about 25 Mbit/s of upload. The Setup box's "How many users" hint quotes the 0.2 KB/s-per-aircraft figure so an
-owner can size it.
+That is about **0.2 KB/s per aircraft per listener**.
 
-**The DELTA protocol: NOT BUILT in this branch.** Stuart approved it on 11-26 and it reached this agent late in the job. It
-needs:
+**Beta96: the DELTA protocol** (docs/v12/ADSB-DELTA.md, built on branch `b96-adsbdelta`). The app and the web page ask
+for `adsbd=1` and get the whole table once, then only what changed each second, with a keyframe every minute. This was
+measured through the real server on a synthetic Beast sky of about 150 aircraft, with both clients side by side for
+60 s:
 
-- a negotiated message;
-- changes in two clients (web `adsb.ts` / `main.ts` and the app);
-- a field-for-field replay test.
+- **Older client: 32.13 KB/s.**
+- **Delta client: 2.42 KB/s.** That is about **0.015 KB/s per aircraft per listener**.
+- **100 listeners at 150 aircraft:** about 1.9 Mbit/s of upload, instead of about 26 Mbit/s.
 
-Done in a hurry on the release branch, it would risk the ADS-B map for every listener. The proposed design is below so
-the next agent can start from it:
+Older apps and pages (and the watch, Jr and the R36S, which do not ask) still get the full list, at the old cost.
 
-- **Negotiation:** the spectrum socket's query adds `adsbd=1`. An older client gets today's `adsb` unchanged.
-- **Built once per tick per radio** in `sendAdsbAll` (it already builds one shared report string), then sent to every
-  `adsbd` socket.
-- **Keyframe `adsb_k`** (on join, on `{"type":"adsb_resync"}`, and every 60 s) carries every aircraft as a compact array.
-- **Delta `adsb_d`** carries:
-  - `u`: aircraft that changed beyond the quantisation, with only the fields that changed;
-  - `n`: new aircraft;
-  - `g`: hexes gone.
-- **Quantisation:** lat/lon to 1e-5°, alt to 25 ft, track to 1°, gs to 1 kt.
-- **Time-relative fields:** `seen` and `seen_pos` are sent as absolute "heard at" times only when they change, and the
-  client works out the ages.
-- **Fields left out of the delta:** `messages` and `rssi` only on the keyframe, or ≥ 3 dB. Static fields already come once
-  through `adsb_info`.
-
-Estimate at 150 aircraft: about 10–15 bytes per changed aircraft per second, which is within the 2–3 KB/s target. It has
-**not been measured**. The measuring method is ready: a ws client counting bytes per message type for 60 s against a
-synthetic 150-aircraft Beast replay (the `Feeder` in `test-adsb-feed.cpp` and `test-server-beast-feed.mjs` already
-drive a Beast feed radio).
+The Setup page's "How many users" hint quotes the new figure: about 2.5 KB/s per listener with 150 aircraft, and about
+1 KB/s with 60.
 
 ## Tests
 

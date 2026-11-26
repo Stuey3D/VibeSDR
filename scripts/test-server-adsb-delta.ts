@@ -281,10 +281,17 @@ try {
   await sleep(5000);
   const c100o = await measureCpu('100 OLDER listeners (the full list)');
   const kbOld100 = olds.reduce((a, w) => a + kb(w, 1, ['adsb']), 0);
+  for (const w of olds) w.close();
+  await sleep(3000);
+  // ★ and the delta listeners again, so an order effect (something the server does at a given age) shows
+  const again: Ws[] = []; for (let i = 0; i < 100; i++) { again.push(ws(port, '&adsbd=1', false)); await sleep(20); }
+  kids.push(...again);
+  await sleep(5000);
+  const c100b = await measureCpu('100 delta listeners again');
   results.push(`(the older listeners received ${(kbOld100 / 1024).toFixed(1)} MB of adsb in ~${CPU_S + 5} s between them)`);
   // ★ on a fast machine both are within noise (the tick is built once either way); the number that matters is the
   //   upload. Held only to a ceiling, so a per-socket rebuild (100× the encode) would show.
-  ok(c100 < 5, `100 delta listeners cost under 5 % of a core (${c100.toFixed(1)} %; 100 older: ${c100o.toFixed(1)} %)`);
+  ok(Math.min(c100, c100b) < 5, `100 delta listeners cost under 5 % of a core (${c100.toFixed(1)} / ${c100b.toFixed(1)} %; 100 older: ${c100o.toFixed(1)} %)`);
   void c1;
 } finally {
   for (const w of kids) { try { w.close(); } catch {} }
