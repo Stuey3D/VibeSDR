@@ -7194,7 +7194,34 @@ async function tryDoorPin(): Promise<void> {
   if (opened) void showSplashRadios();
 }
 
+/* ★★ V12 beta96 THE STANDALONE AIR & SEA MAP (Stuart 11-26) — ONE ENTRY POINT: openAirSeaViewer(). The landing page's
+ *  AIR & SEA MAP button calls it (and a menu entry beside GALLERY may: window.openAirSeaViewer). It opens the SAME AIR & SEA
+ *  map (asOpen) with no radio: no spectrum socket, no tuner — only this server's HTTP reads, as the map already makes them
+ *  (aircraft.json every 3 s, the ship store, the gallery's remembered sondes / VOR), so it is LIVE (new aircraft, ships
+ *  and positions as the radios and feeds hear them, faded by age) and works when every radio is busy or there are none
+ *  (a server with only feeds). It controls nothing: a history-and-live viewer. CLOSE MAP goes back to the landing. */
+let asStandalone = false;
+/** The button only where there is something to show: aircraft in the server's table, or an aircraft feed (AGENTS.md). One
+ *  small read each time the landing draws its radios — never polled. */
+async function splashAirSeaOffer(): Promise<void> {
+  const b = document.getElementById('splashAirSea') as HTMLButtonElement | null;
+  if (!b) return;
+  let show = false;
+  try {
+    const r = await fetch(P('/vibeserver/aircraft.json?since=3600'), { cache: 'no-store' });
+    if (r.ok) { const j = sharedSanitise(await r.json()); show = !!j && !j.off && (j.aircraft.length > 0 || j.feeds.length > 0); }
+  } catch { show = false; }
+  b.hidden = !show;
+  b.onclick = () => openAirSeaViewer();
+}
+function openAirSeaViewer(): void {
+  asStandalone = !document.getElementById('app')?.classList.contains('live');
+  if (asStandalone) $('splash').classList.add('hidden');
+  asOpen({ by: 'map', tab: 'aircraft' });
+}
+(window as any).openAirSeaViewer = openAirSeaViewer;
 async function showSplashRadios(): Promise<void> {
+  void splashAirSeaOffer();
   const host = document.getElementById('splashRadios');
   if (!host) return;
   let dir: any;
@@ -10534,6 +10561,7 @@ function asClose() {
   if (navTimer) { clearTimeout(navTimer); navTimer = null; }
   if (avPollT) { clearTimeout(avPollT); avPollT = null; }
   if (asStoredT) { clearInterval(asStoredT); asStoredT = null; }
+  if (asStandalone) { asStandalone = false; $('splash').classList.remove('hidden'); return; }   // ★ beta96 back to the landing
   renderFreq();
 }
 /** ★ A mode that was the map's screen has ended: the map goes if the mode brought it, else it just stops being live. */

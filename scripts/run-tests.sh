@@ -1701,6 +1701,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── server-level aircraft feeds (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-aircraft-feeds.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 THE STANDALONE AIR & SEA MAP (openAirSeaViewer): the landing's button, no radio and no WebSocket, live updates from
+#    a feed, CLOSE MAP back to the landing, no button with nothing to show. Headless Edge, --mute-audio. ~40 s.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-airsea-standalone.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta96 THE ADS-B DELTA PROTOCOL through the real server + its MEASUREMENT: an older client and a delta client side by
 #    side on a synthetic 150-aircraft Beast sky (KB/s per message type), the resync, 100 delta listeners' CPU. ~4 min.
 printf '\n\033[1m── ADS-B deltas: older vs delta listener, bytes and CPU (end to end) ──\033[0m\n'
