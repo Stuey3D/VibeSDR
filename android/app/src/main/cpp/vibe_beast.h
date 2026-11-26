@@ -312,6 +312,13 @@ public:
     ~Hub() { stop(); if (wakeR_ >= 0) ::close(wakeR_); if (wakeW_ >= 0) ::close(wakeW_); }
 
     void setTiming(const Timing& t) { std::lock_guard<std::mutex> lk(mtx_); timing_ = t; }
+    /** ★★ THE LOOP GUARD (beta96): the host this radio's ADS-B comes FROM, when it is a Beast feed radio. A push feed to
+     *  that same host is never sent (it would hand the receiver its own replies back, or an aggregator its own data):
+     *  shown as "skipped". Compared as written, case-insensitive — a different name for the same machine is not caught. */
+    void setInputHost(const std::string& h) {
+        std::string l; for (char c : h) l += char(std::tolower((unsigned char)c));
+        std::lock_guard<std::mutex> lk(mtx_); inputHost_ = l; ++gen_;
+    }
     /** For a log line, the radio's name in the status. */
     void setLabel(const std::string& s) { std::lock_guard<std::mutex> lk(mtx_); label_ = s; }
 
@@ -395,6 +402,7 @@ private:
         std::string err;
         double since = 0, nextTry = 0, backoff = 0, deadline = 0;
         long sinceUtc = 0;
+        bool loop = false;                // ★ the loop guard: this destination is where our ADS-B comes from
     };
 
     static double mono() {
@@ -557,7 +565,7 @@ private:
         for (;;) {
             const double now = mono();
             std::shared_ptr<const std::vector<uint8_t>> chunk, chunkR; uint32_t chunkMsgs = 0, chunkRMsgs = 0;
-            bool active; double lastActive;
+            bool active; double lastActive; std::string inHost;
             {
                 std::lock_guard<std::mutex> lk(mtx_);
                 if (!run_) break;
@@ -593,6 +601,7 @@ private:
                 }
                 active = active_.load(std::memory_order_relaxed);
                 lastActive = lastActive_;
+                inHost = inputHost_;
             }
             // ── hand the new frames to every connected link ──
             if (chunk) for (auto& r : readers) if (r.fd >= 0) enqueue(r, chunk, chunkMsgs, t.linkCap);
@@ -602,7 +611,9 @@ private:
             // ── the push links ──
             const bool pushWanted = c.push && (active || (lastActive > 0 && now - lastActive < t.activeGrace));
             for (auto& p : pushes) {
-                const bool want = pushWanted && p.d.on;
+                std::string ph; for (char ch : p.d.host) ph += char(std::tolower((unsigned char)ch));
+                p.loop = !inHost.empty() && ph == inHost;
+                const bool want = pushWanted && p.d.on && !p.loop;
                 if (!want) { if (p.st != Link::Off) { closeFd(p.fd); p.q.clear(); p.qBytes = 0; p.st = Link::Off; p.backoff = 0; p.err.clear(); } continue; }
                 if ((p.st == Link::Off || p.st == Link::Wait) && now >= p.nextTry) startConnect(p, now, t);
                 if (p.st == Link::Connecting && p.fd >= 0 && now > p.deadline) { p.err = "no answer (timed out)"; failPush(p, now, t); }
@@ -692,7 +703,7 @@ private:
         }
         for (size_t i = 0; i < pushes.size(); ++i) {
             const Link& p = pushes[i];
-            const char* st = p.st == Link::Up ? "connected" : p.st == Link::Connecting ? "connecting" : p.st == Link::Wait ? "waiting" : "off";
+            const char* st = p.loop ? "skipped" : p.st == Link::Up ? "connected" : p.st == Link::Connecting ? "connecting" : p.st == Link::Wait ? "waiting" : "off";
             if (i) j += ',';
             j += "{\"host\":\"" + jsonEsc(p.d.host) + "\",\"port\":" + std::to_string(p.d.port) + ",\"on\":" + (p.d.on ? "true" : "false")
                + ",\"uuid\":" + (p.d.uuid.empty() ? "false" : "true") + ",\"state\":\"" + st + "\",\"since\":" + std::to_string(p.st == Link::Up ? p.sinceUtc : 0)
@@ -701,7 +712,8 @@ private:
                + ",\"retryIn\":" + std::to_string(p.st == Link::Wait ? std::max(0L, std::lround(p.nextTry - now)) : 0L) + "}";
             if (!c.push || !p.d.on) continue;
             std::string w = p.d.host + ": ";
-            if (p.st == Link::Up) w += "connected, " + std::to_string(p.msgs) + " messages";
+            if (p.loop) w += "not sent \xe2\x80\x94 this radio's ADS-B comes from there";
+            else if (p.st == Link::Up) w += "connected, " + std::to_string(p.msgs) + " messages";
             else if (p.st == Link::Connecting) w += "connecting";
             else if (p.st == Link::Wait) w += "retrying in " + std::to_string(std::max(0L, std::lround(p.nextTry - now))) + " s (" + p.err + ")";
             else w += "waits for ADS-B";
@@ -722,7 +734,7 @@ private:
     }
 
     mutable std::mutex mtx_;
-    Config cfg_; uint64_t gen_ = 0; Timing timing_; std::string label_;
+    Config cfg_; uint64_t gen_ = 0; Timing timing_; std::string label_, inputHost_;
     std::atomic<bool> wanted_{false}, active_{false};
     double lastActive_ = 0;
     std::vector<uint8_t> pending_, pendingR_; uint32_t pendingMsgs_ = 0, pendingRMsgs_ = 0;
@@ -734,6 +746,221 @@ private:
     // network-thread state
     int listenFd_ = -1, listenPort_ = 0; double listenRetryAt_ = 0; std::string listenErr_;
     uint64_t refused_ = 0; std::string lastRefused_;
+    std::mt19937 rng_{std::random_device{}()};
+};
+
+
+// ══ 4. BEAST INPUT: an ADS-B source with no radio (V12 beta96, Stuart 11-26) ═══════════════════════════════════════════
+// ★★★ "ADS-B Beast feed (from another receiver)": a radio entry of its own that reads another receiver's Beast output —
+//     dump1090-fa beside PiAware on a Pi on the LAN (host:30005), so VibeServer never takes that dongle and the owner's
+//     FlightAware feed is untouched. Its replies go through the same Tracker as a local decode (its own CRC checks).
+// ★★ A LAN-FRIENDLY CLIENT: TCP keepalive, a connect deadline, reconnect with backoff (2 s doubling to 60 s, ±20 %,
+//    back to 2 s after a minute up — a Pi rebooting is back within a minute of it answering), garbage resynced and
+//    counted (Reader), a reply that is not a Mode S length dropped. Bounded: one 16 KB read at a time, the replies of one
+//    read handed on at once. On its OWN thread (Network), never audio/DSP.
+// ★ The error says what to check: "nothing is listening on 192.168.86.12:30005 — is dump1090's Beast output on?".
+
+/** "host:port", "[v6]:port", a bare host (→ 30005), or a bare IPv6 address. False (and `err`) if it is not one. */
+inline bool parseHostPort(const std::string& in, std::string& host, int& port, std::string& err) {
+    std::string t = in;
+    while (!t.empty() && std::isspace((unsigned char)t.back())) t.pop_back();
+    while (!t.empty() && std::isspace((unsigned char)t.front())) t.erase(t.begin());
+    host.clear(); port = kDefaultPort;
+    if (t.empty()) { err = "give the other receiver's address, e.g. 192.168.1.20:30005"; return false; }
+    std::string p;
+    if (t.front() == '[') {
+        const size_t e = t.find(']');
+        if (e == std::string::npos) { err = "an IPv6 address in [ ] needs its closing ]"; return false; }
+        host = t.substr(1, e - 1);
+        if (e + 1 < t.size()) { if (t[e + 1] != ':') { err = "after [address] comes :port"; return false; } p = t.substr(e + 2); }
+    } else if (std::count(t.begin(), t.end(), ':') > 1) {
+        host = t;                                   // a bare IPv6 address
+    } else {
+        const size_t c = t.find(':');
+        host = t.substr(0, c);
+        if (c != std::string::npos) p = t.substr(c + 1);
+    }
+    if (!p.empty()) {
+        for (char ch : p) if (!std::isdigit((unsigned char)ch)) { err = "the port must be a number"; return false; }
+        if (p.size() > 5 || std::atoi(p.c_str()) < 1 || std::atoi(p.c_str()) > 65535) { err = "the port must be 1 to 65535"; return false; }
+        port = std::atoi(p.c_str());
+    }
+    if (host.find(':') != std::string::npos) {
+        in6_addr a{};
+        if (::inet_pton(AF_INET6, host.c_str(), &a) != 1) { err = "\"" + host.substr(0, 60) + "\" is not an IPv6 address"; return false; }
+        return true;
+    }
+    if (!hostOk(host)) { err = "\"" + host.substr(0, 60) + "\" is not a host name or address"; return false; }
+    // all digits and dots: it must be a real dotted IPv4 address (catches 192.168.86 or 300.1.1.1)
+    if (host.find_first_not_of("0123456789.") == std::string::npos) {
+        in_addr a{};
+        if (::inet_pton(AF_INET, host.c_str(), &a) != 1) { err = "\"" + host + "\" is not an IPv4 address"; return false; }
+    }
+    return true;
+}
+inline std::string hostPortText(const std::string& h, int p) {
+    return (h.find(':') != std::string::npos ? "[" + h + "]" : h) + ":" + std::to_string(p);
+}
+
+struct InputTiming {
+    double backoffMin = 2, backoffMax = 60, stableAfter = 60, connectTimeout = 8;
+    double silentAfter = 120;    ///< connected but nothing for this long → reconnect (a half-open link after a reboot)
+};
+
+class BeastInput {
+public:
+    using Sink = std::function<void(const std::vector<Decoded>&)>;
+    ~BeastInput() { stop(); }
+    void setTiming(const InputTiming& t) { std::lock_guard<std::mutex> lk(mtx_); t_ = t; }
+    /** Start reading host:port; frames go to `sink` (on this class's thread). */
+    void start(const std::string& host, int port, Sink sink) {
+        stop();
+        std::lock_guard<std::mutex> lk(mtx_);
+        host_ = host; port_ = port; sink_ = std::move(sink);
+        run_ = true; st_ = "connecting"; err_.clear();
+        th_ = std::thread([this] { loop(); });
+    }
+    void stop() {
+        std::thread t;
+        { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; t = std::move(th_); }
+        if (t.joinable()) t.join();
+    }
+    std::string host() const { std::lock_guard<std::mutex> lk(mtx_); return host_; }
+    int port() const { std::lock_guard<std::mutex> lk(mtx_); return port_; }
+    /** {"host","port","state","since","msgs","perSec","bad","bytes","connects","error","retryIn","line"} */
+    std::string statusJson() const {
+        std::lock_guard<std::mutex> lk(mtx_);
+        const double now = mono();
+        char b[160];
+        std::snprintf(b, sizeof b, ",\"msgs\":%llu,\"perSec\":%.0f,\"bad\":%llu,\"bytes\":%llu,\"connects\":%llu,\"retryIn\":%ld",
+                      (unsigned long long)msgs_, perSec_, (unsigned long long)reader_.bad(), (unsigned long long)bytes_,
+                      (unsigned long long)connects_, st_ == "waiting" ? std::max(0L, std::lround(nextTry_ - now)) : 0L);
+        std::string line;
+        const std::string where = hostPortText(host_, port_);
+        if (st_ == "connected") { char x[96]; std::snprintf(x, sizeof x, "connected, %.0f messages a second", perSec_); line = "Beast feed from " + where + ": " + x; }
+        else if (st_ == "waiting") line = err_ + " \xe2\x80\x94 trying again in " + std::to_string(std::max(0L, std::lround(nextTry_ - now))) + " s";
+        else line = "connecting to " + where;
+        return "{\"host\":\"" + jsonEsc(host_) + "\",\"port\":" + std::to_string(port_) + ",\"state\":\"" + st_ + "\",\"since\":"
+             + std::to_string(sinceUtc_) + b + ",\"error\":\"" + jsonEsc(err_) + "\",\"line\":\"" + jsonEsc(line) + "\"}";
+    }
+    bool connected() const { std::lock_guard<std::mutex> lk(mtx_); return st_ == "connected"; }
+
+private:
+    static double mono() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+    bool running() { std::lock_guard<std::mutex> lk(mtx_); return run_; }
+    void setState(const char* st, const std::string& err = "") { std::lock_guard<std::mutex> lk(mtx_); st_ = st; err_ = err; }
+    /** In words an owner can act on. */
+    std::string why(int e) const {
+        const std::string where = hostPortText(host_, port_);
+        if (e == ECONNREFUSED) return "nothing is listening on " + where + " \xe2\x80\x94 is dump1090's Beast output on?";
+        if (e == ETIMEDOUT || e == EHOSTUNREACH || e == ENETUNREACH)
+            return "no answer from " + where + " \xe2\x80\x94 is that machine on and on this network?";
+        return where + ": " + std::strerror(e);
+    }
+    void fail(const std::string& err, double now, const InputTiming& t, double upSince) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (upSince > 0 && now - upSince >= t.stableAfter) backoff_ = 0;
+        backoff_ = backoff_ <= 0 ? t.backoffMin : std::min(t.backoffMax, backoff_ * 2);
+        std::uniform_real_distribution<double> jit(0.8, 1.2);
+        nextTry_ = now + backoff_ * jit(rng_);
+        st_ = "waiting"; err_ = err; perSec_ = 0;
+    }
+    void loop() {
+        std::vector<uint8_t> buf(16 * 1024);
+        std::vector<Decoded> out;
+        while (running()) {
+            InputTiming t; std::string host; int port;
+            { std::lock_guard<std::mutex> lk(mtx_); t = t_; host = host_; port = port_; if (mono() < nextTry_) { } }
+            double wait;
+            { std::lock_guard<std::mutex> lk(mtx_); wait = nextTry_ - mono(); }
+            if (wait > 0) { std::this_thread::sleep_for(std::chrono::milliseconds(long(std::min(wait, 0.2) * 1000))); continue; }
+            setState("connecting");
+            // ── resolve + connect, with a deadline ──
+            addrinfo hints{}; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+            addrinfo* res = nullptr;
+            const int rc = ::getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res);
+            if (rc != 0 || !res) {
+                if (res) ::freeaddrinfo(res);
+                fail("cannot find " + host + " (" + gai_strerror(rc) + ")", mono(), t, 0); continue;
+            }
+            int fd = -1; int lastErr = ECONNREFUSED;
+            { std::lock_guard<std::mutex> lk(mtx_); ++connects_; }
+            for (addrinfo* a = res; a && fd < 0 && running(); a = a->ai_next) {
+                fd = ::socket(a->ai_family, a->ai_socktype, a->ai_protocol);
+                if (fd < 0) continue;
+                const int fl = fcntl(fd, F_GETFL, 0); fcntl(fd, F_SETFL, fl | O_NONBLOCK); fcntl(fd, F_SETFD, FD_CLOEXEC);
+                int one = 1; setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof one);
+#ifdef SO_NOSIGPIPE
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+#ifdef TCP_KEEPIDLE
+                { int idle = 30, intvl = 10, cnt = 3;
+                  setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle);
+                  setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof intvl);
+                  setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof cnt); }
+#elif defined(TCP_KEEPALIVE)
+                { int idle = 30; setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof idle); }
+#endif
+                if (::connect(fd, a->ai_addr, a->ai_addrlen) != 0 && errno != EINPROGRESS) { lastErr = errno; ::close(fd); fd = -1; continue; }
+                const double end = mono() + t.connectTimeout;
+                bool done = false;
+                while (!done && running() && mono() < end) {
+                    pollfd p{fd, POLLOUT, 0};
+                    if (::poll(&p, 1, 100) <= 0) continue;
+                    int e = 0; socklen_t el = sizeof e; getsockopt(fd, SOL_SOCKET, SO_ERROR, &e, &el);
+                    if (e) { lastErr = e; ::close(fd); fd = -1; }
+                    done = true;
+                }
+                if (!done && fd >= 0) { lastErr = ETIMEDOUT; ::close(fd); fd = -1; }
+            }
+            ::freeaddrinfo(res);
+            if (fd < 0) { if (running()) fail(why(lastErr), mono(), t, 0); continue; }
+            const double up = mono();
+            {
+                std::lock_guard<std::mutex> lk(mtx_);
+                st_ = "connected"; err_.clear(); sinceUtc_ = (long)std::time(nullptr);
+                reader_ = Reader();
+            }
+            double lastData = up, rateT = up; uint64_t rateN = 0;
+            std::string endWhy;
+            while (running()) {
+                pollfd p{fd, POLLIN, 0};
+                const int pr = ::poll(&p, 1, 200);
+                const double now = mono();
+                if (now - rateT >= 2.0) { std::lock_guard<std::mutex> lk(mtx_); perSec_ = rateN / (now - rateT); rateN = 0; rateT = now; }
+                if (pr <= 0) {
+                    if (now - lastData > t.silentAfter) { endWhy = hostPortText(host, port) + " sent nothing for " + std::to_string(int(t.silentAfter)) + " s"; break; }
+                    continue;
+                }
+                const ssize_t n = ::recv(fd, buf.data(), buf.size(), 0);
+                if (n == 0) { endWhy = hostPortText(host, port) + " closed the connection (restarting?)"; break; }
+                if (n < 0) { if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue; endWhy = why(errno); break; }
+                lastData = now;
+                out.clear();
+                { std::lock_guard<std::mutex> lk(mtx_); reader_.feed(buf.data(), size_t(n), out); bytes_ += uint64_t(n); }
+                // Mode A/C (type '1') is not ADS-B: left out
+                out.erase(std::remove_if(out.begin(), out.end(), [](const Decoded& d) { return d.type == '1'; }), out.end());
+                if (out.empty()) continue;
+                { std::lock_guard<std::mutex> lk(mtx_); msgs_ += out.size(); }
+                rateN += out.size();
+                Sink s; { std::lock_guard<std::mutex> lk(mtx_); s = sink_; }
+                if (s) s(out);
+            }
+            ::close(fd);
+            if (running()) fail(endWhy, mono(), t, up);
+        }
+        setState("off");
+    }
+    mutable std::mutex mtx_;
+    InputTiming t_;
+    std::string host_; int port_ = kDefaultPort;
+    Sink sink_;
+    bool run_ = false; std::thread th_;
+    std::string st_ = "off", err_;
+    double nextTry_ = 0, backoff_ = 0, perSec_ = 0;
+    long sinceUtc_ = 0;
+    uint64_t msgs_ = 0, bytes_ = 0, connects_ = 0;
+    Reader reader_;
     std::mt19937 rng_{std::random_device{}()};
 };
 

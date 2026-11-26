@@ -28,6 +28,18 @@
 
 namespace vibeadsb {
 
+/** ★ beta96 a reply read from another receiver's Beast output → a Frame as our demodulator would have cut it: the 12 MHz
+ *  counter back onto the 125 ns grid (÷ 1.5), the signal byte (amplitude, 255 = full scale) back to a power in dBFS. Only
+ *  7- and 14-byte Mode S replies; anything else gives len 0 (skip it). The Tracker still judges its CRC. */
+inline Frame frameFromBeast(const uint8_t* msg, int len, uint64_t ts12, uint8_t sig) {
+    Frame f;
+    if (len != 7 && len != 14) return f;
+    std::memcpy(f.b, msg, size_t(len)); f.len = len;
+    f.sample = ts12 * 2 / 3;
+    f.level = sig ? float(20.0 * std::log10(sig / 255.0)) : -60.0f;
+    return f;
+}
+
 /** One second's measurements, for the gain rule and the status line. */
 struct Health {
     double   noiseDbfs = -99;     ///< the demodulator's noise floor (mean power)
@@ -62,7 +74,8 @@ public:
         stop();
         std::lock_guard<std::mutex> lk(mtx_);
         rate_ = rateHz;
-        demod_.reset(new Demod(rateHz));
+        demod_.reset(rateHz > 0 ? new Demod(rateHz) : nullptr);   // ★ beta96 rate 0 = replies come from injectFrames
+        frameQ_.clear();
         tracker_ = Tracker();
         tracker_.setMaxRangeNm(360);
         tracker_.setCommB(commb);                      // as dump1090-fa: a position further than this is a bad decode
@@ -99,9 +112,29 @@ public:
     bool running() const { return run_.load(std::memory_order_relaxed); }
     double rate() const { return rate_; }
 
+    /** ★★ V12 beta96 AN ADS-B SOURCE WITH NO RADIO: replies read from another receiver's Beast output (vibe_beast.h
+     *  BeastInput — dump1090-fa beside PiAware, say). start() with rate 0 makes no demodulator; the replies arrive here,
+     *  already cut, and go through the SAME Tracker (its own CRC checks: a reply that fails is dropped and counted in
+     *  rejected()), report, range outline, shared table and sink as a local decode. From the input's network thread:
+     *  copy and return. Bounded: 30 000 replies (~20 s of a busy sky) waiting, the oldest dropped and counted. */
+    void injectFrames(const std::vector<Frame>& fs) {
+        if (!run_.load(std::memory_order_relaxed) || fs.empty()) return;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            const double t = now();
+            for (const Frame& f : fs) {
+                frameQ_.push_back({f, t});
+                if (frameQ_.size() > kMaxFrames) { frameQ_.pop_front(); ++dropped_; }
+            }
+        }
+        cv_.notify_one();
+    }
+    bool inputOnly() const { return rate_ <= 0; }
+    uint64_t rejected() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.rejected(); }
+
     /** From the DSP thread: copy and return. Never blocks on the decoder. */
     void feed(const std::complex<float>* iq, size_t n) {
-        if (!run_.load(std::memory_order_relaxed) || !n) return;
+        if (!run_.load(std::memory_order_relaxed) || !n || rate_ <= 0) return;   // ★ beta96 an input has no IQ
         std::vector<std::complex<float>> b(iq, iq + n);
         {
             std::lock_guard<std::mutex> lk(mtx_);
@@ -220,7 +253,24 @@ private:
     void loop() {
         std::unique_lock<std::mutex> lk(mtx_);
         while (run_) {
-            cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });
+            cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty() || !frameQ_.empty(); });
+            // ★ beta96 replies from another receiver (injectFrames): judged one by one under the lock, as a local decode is
+            while (run_ && !frameQ_.empty()) {
+                const QFrame q = frameQ_.front(); frameQ_.pop_front();
+                const Frame& f = q.f;
+                if (tracker_.accept(f, q.t)) {
+                    ++winMsgs_; ++msgsTotal_; if (f.level > -3.0f) ++winStrong_;
+                    if (sink_) {
+                        const uint8_t* m = tracker_.lastBytes();
+                        const int df = m[0] >> 3;
+                        const uint32_t addr = (df == 11 || df == 17 || df == 18)
+                            ? (uint32_t(m[1]) << 16 | uint32_t(m[2]) << 8 | m[3]) : syndrome(m, tracker_.lastLen());
+                        sink_(m, tracker_.lastLen(), f.sample, f.level, addr, q.t);
+                    }
+                } else if (sink_ && f.len == 14 && (f.b[0] >> 3) == 18 && syndrome(f.b, f.len) == 0) {
+                    sink_(f.b, f.len, f.sample, f.level, uint32_t(f.b[1]) << 16 | uint32_t(f.b[2]) << 8 | f.b[3], q.t);
+                }
+            }
             while (run_ && !queue_.empty()) {
                 std::vector<std::complex<float>> b = std::move(queue_.front().iq);
                 const double t = queue_.front().arrived;
@@ -373,6 +423,9 @@ private:
     Tracker tracker_;
     struct Block { std::vector<std::complex<float>> iq; double arrived; };   // arrived = now() in feed()
     std::deque<Block> queue_;
+    struct QFrame { Frame f; double t; };
+    std::deque<QFrame> frameQ_;                             // ★ beta96 injectFrames (an input with no radio)
+    static constexpr size_t kMaxFrames = 30000;
     size_t queued_ = 0;                                     // samples in queue_
     uint64_t dropped_ = 0;
     CaptureMeter cap_;                                      // under mtx_

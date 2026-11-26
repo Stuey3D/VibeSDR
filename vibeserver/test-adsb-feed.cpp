@@ -16,6 +16,10 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <atomic>
+#include <functional>
 
 #include <chrono>
 #include <cmath>
@@ -360,12 +364,230 @@ static void testService() {
     }
 }
 
+
+// ── 6-9. THE BEAST INPUT (a radio with no SDR: another receiver's Beast output, Stuart 11-26) ──
+static std::vector<uint8_t> posBytes(uint32_t icao, double lat, double lon, int altFt, bool odd) {
+    auto mod = [](double x, double y) { return x - y * std::floor(x / y); };
+    const double i = odd ? 1 : 0, dLat = 360.0 / (60 - i);
+    const double yz = std::floor(131072.0 * mod(lat, dLat) / dLat + 0.5);
+    const double rLat = dLat * (yz / 131072.0 + std::floor(lat / dLat));
+    const double dLon = 360.0 / std::max(1.0, double(vibeadsb::cprNL(rLat)) - i);
+    const double xz = std::floor(131072.0 * mod(lon, dLon) / dLon + 0.5);
+    const uint32_t la = uint32_t(yz) & 0x1FFFF, lo = uint32_t(xz) & 0x1FFFF;
+    const uint32_t n = uint32_t((altFt + 1000) / 25);
+    const uint32_t alt = ((n >> 4) << 5) | 0x10 | (n & 0xF);
+    uint64_t me = (uint64_t(11) << 51) | (uint64_t(alt) << 36) | (uint64_t(odd) << 34) | (uint64_t(la) << 17) | lo;
+    std::vector<uint8_t> f(14, 0);
+    f[0] = 0x8D; f[1] = uint8_t(icao >> 16); f[2] = uint8_t(icao >> 8); f[3] = uint8_t(icao);
+    for (int k = 0; k < 7; ++k) f[4 + k] = uint8_t(me >> (48 - 8 * k));
+    const uint32_t p = vibeadsb::syndrome(f.data(), 14);
+    f[11] = uint8_t(p >> 16); f[12] = uint8_t(p >> 8); f[13] = uint8_t(p);
+    return f;
+}
+
+static void testHostPort() {
+    std::printf("6. the Beast feed radio's address\n");
+    std::string h, e; int p = 0;
+    CHECK(parseHostPort("192.168.86.12:30005", h, p, e) && h == "192.168.86.12" && p == 30005, "IPv4:port");
+    CHECK(parseHostPort(" 192.168.86.12 ", h, p, e) && p == 30005, "a bare address → port 30005");
+    CHECK(parseHostPort("piaware.local:30005", h, p, e) && h == "piaware.local", "a host name");
+    CHECK(parseHostPort("[fd00::12]:30005", h, p, e) && h == "fd00::12" && p == 30005, "[IPv6]:port");
+    CHECK(parseHostPort("fe80::1", h, p, e) && h == "fe80::1" && p == 30005, "a bare IPv6 address");
+    e.clear(); CHECK(!parseHostPort("192.168.86:30005", h, p, e) && e.find("IPv4") != std::string::npos, "192.168.86 refused: %s", e.c_str());
+    e.clear(); CHECK(!parseHostPort("300.1.1.1", h, p, e), "300.1.1.1 refused");
+    e.clear(); CHECK(!parseHostPort("pi:99999", h, p, e) && !parseHostPort("pi:abc", h, p, e), "bad ports refused");
+    e.clear(); CHECK(!parseHostPort("", h, p, e) && e.find("e.g.") != std::string::npos, "empty: says what to give");
+    e.clear(); CHECK(!parseHostPort("[fd00::1", h, p, e) && !parseHostPort("my host", h, p, e), "a broken [v6] and a space refused");
+    CHECK(hostPortText("fd00::1", 30005) == "[fd00::1]:30005", "an IPv6 address is shown in [ ]");
+}
+
+/** A synthetic dump1090: listens, and on each connection sends `perSec` replies a second (two aircraft flying, ids,
+ *  a DF11, now and then a broken frame or line noise) until told to stop. */
+struct Feeder {
+    int lfd = -1, port = 0; std::atomic<bool> run{true}; std::thread th; std::atomic<int> conns{0}; int perSec;
+    bool junk;
+    explicit Feeder(int rate, bool withJunk = true, int fixedPort = 0) : perSec(rate), junk(withJunk) {
+        port = fixedPort; lfd = listenLocal(port);
+        th = std::thread([this] { loop(); });
+    }
+    ~Feeder() { stop(); }
+    void stop() { run = false; if (th.joinable()) th.join(); if (lfd >= 0) { ::close(lfd); lfd = -1; } }
+    void loop() {
+        while (run) {
+            const int c = acceptWithin(lfd, 0.2);
+            if (c < 0) continue;
+            ++conns;
+            serve(c);
+            ::close(c);
+        }
+    }
+    void serve(int c) {
+        const auto id = hexBytes(kId);
+        uint64_t ts = 0; int k = 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (run) {
+            std::vector<uint8_t> o;
+            for (int i = 0; i < perSec / 50; ++i, ++k) {
+                ts += 12000 * 3 + (k % 7);
+                const double lat = 52.0 + 0.0001 * (k / 2), lon = -1.0;
+                if (k % 10 == 0) appendFrame(o, id.data(), 14, ts, 120);
+                else if (k % 10 == 1) { auto d = hexBytes(kDf11); appendFrame(o, d.data(), 7, ts, 90); }
+                else { auto f = posBytes(k % 4 < 2 ? 0x4840D6 : 0x400F01, lat, lon, 35000, k % 2); appendFrame(o, f.data(), 14, ts, 0x1A); }
+                if (junk && k % 97 == 0) { const uint8_t g[] = {0x55, 0x1A, 0x99, 0x00, 0x1A, '3', 1, 2}; o.insert(o.end(), g, g + 8); }
+                if (junk && k % 89 == 0) { auto f = posBytes(0x4840D6, 52, -1, 35000, 0); f[9] ^= 0x18; appendFrame(o, f.data(), 14, ts, 50); }   // 2 bits: bad CRC
+            }
+            if (::send(c, o.data(), o.size(), 0) < 0) return;
+            const auto due = t0 + std::chrono::milliseconds(20 * (k / std::max(1, perSec / 50)));
+            std::this_thread::sleep_until(due);
+        }
+    }
+};
+
+static std::vector<vibeadsb::Frame> toFrames(const std::vector<Decoded>& ds) {
+    std::vector<vibeadsb::Frame> fs;
+    for (const auto& d : ds) { auto f = vibeadsb::frameFromBeast(d.msg.data(), int(d.msg.size()), d.ts, d.sig); if (f.len) fs.push_back(f); }
+    return fs;
+}
+
+static void testInput() {
+    std::printf("7. the Beast input against a local synthetic dump1090\n");
+    // nothing listening → the owner's words, and backoff
+    {
+        const int port = freePort();
+        BeastInput in; InputTiming t; t.backoffMin = 0.2; t.backoffMax = 0.4; in.setTiming(t);
+        in.start("127.0.0.1", port, [](const std::vector<Decoded>&) {});
+        CHECK(waitFor([&] { return in.statusJson().find("\"state\":\"waiting\"") != std::string::npos; }, 3), "nothing listening → waiting");
+        const std::string st = in.statusJson();
+        CHECK(field(st, "error") == "nothing is listening on 127.0.0.1:" + std::to_string(port) + " \xe2\x80\x94 is dump1090's Beast output on?",
+              "the error says what to check: %s", field(st, "error").c_str());
+        CHECK(field(st, "line").find("trying again in") != std::string::npos, "and when it tries again");
+        in.stop();
+    }
+    // the feed through the Service: aircraft appear, bad CRC and junk dropped and counted
+    {
+        Feeder fd(1500);
+        vibeadsb::Service svc;
+        std::atomic<uint64_t> sunk{0};
+        svc.setFeed([&](const uint8_t*, int, uint64_t, float, uint32_t, double) { ++sunk; }, [](bool) {});
+        svc.start(0, 52.0, -1.0, true);
+        CHECK(svc.inputOnly(), "rate 0 = an input with no radio (no demodulator)");
+        BeastInput in;
+        in.start("127.0.0.1", fd.port, [&](const std::vector<Decoded>& ds) { svc.injectFrames(toFrames(ds)); });
+        CHECK(waitFor([&] { return in.connected(); }, 3), "connected");
+        sleepMs(2600);
+        const std::string rep = svc.report();
+        CHECK(rep.find("\"hex\":\"4840d6\"") != std::string::npos && rep.find("\"hex\":\"400f01\"") != std::string::npos, "both aircraft in the report");
+        CHECK(rep.find("\"lat\":52") != std::string::npos, "with a position (CPR pairs from the feed)");
+        CHECK(rep.find("KLM1023") != std::string::npos, "and the callsign");
+        const std::string st = in.statusJson();
+        const double ps = std::atof(field(st, "perSec").c_str());
+        CHECK(ps > 1200 && ps < 1900, "about 1,500 messages a second counted (%.0f)", ps);
+        CHECK(std::atoll(field(st, "bad").c_str()) > 0, "line noise resynced and counted (%s)", field(st, "bad").c_str());
+        CHECK(svc.rejected() > 0, "bad-CRC replies dropped by our own check (%llu)", (unsigned long long)svc.rejected());
+        CHECK(sunk.load() > 2000, "believed replies reach the share sink like a local decode (%llu)", (unsigned long long)sunk.load());
+        // the feeder restarts (a Pi rebooting): the input comes back on its own
+        const int port = fd.port;
+        fd.stop();
+        CHECK(waitFor([&] { return in.statusJson().find("\"state\":\"waiting\"") != std::string::npos; }, 3), "the far end gone → waiting: %s",
+              field(in.statusJson(), "error").c_str());
+        Feeder again(500, false, port);
+        CHECK(again.port == port, "(the feeder is back on the same port)");
+        CHECK(waitFor([&] { return in.connected(); }, 6), "…and reconnected when it came back");
+        in.stop(); svc.stop(); again.stop();
+    }
+    // silence on an open link (a half-open TCP after the far end lost power) → reconnect
+    {
+        int port = 0; const int lfd = listenLocal(port);
+        BeastInput in; InputTiming t; t.silentAfter = 0.6; t.backoffMin = 0.2; in.setTiming(t);
+        in.start("127.0.0.1", port, [](const std::vector<Decoded>&) {});
+        const int c = acceptWithin(lfd, 3);
+        CHECK(waitFor([&] { return field(in.statusJson(), "error").find("sent nothing") != std::string::npos; }, 3), "a silent link is dropped: %s",
+              field(in.statusJson(), "error").c_str());
+        in.stop(); if (c >= 0) ::close(c); ::close(lfd);
+    }
+}
+
+static void testLoopGuard() {
+    std::printf("8. the loop guard\n");
+    int port = 0; const int lfd = listenLocal(port);
+    Hub h; Timing t; t.backoffMin = 0.2; h.setTiming(t);
+    h.setInputHost("127.0.0.1");
+    Config c; c.push = true; c.feeds.push_back({"127.0.0.1", port, true, ""});
+    h.configure(c); h.setActive(true);
+    sleepMs(600);
+    pollfd p{lfd, POLLIN, 0};
+    CHECK(::poll(&p, 1, 0) == 0, "a push feed to the host this radio's ADS-B comes from is never connected");
+    CHECK(waitFor([&] { return h.statusJson().find("\"state\":\"skipped\"") != std::string::npos; }, 2), "status: skipped");
+    CHECK(field(h.statusJson(), "line").find("comes from there") != std::string::npos, "and the line says why");
+    h.setInputHost("");
+    CHECK(acceptWithin(lfd, 3) >= 0, "another source: the same feed connects");
+    h.stop(); ::close(lfd);
+}
+
+static long rssKb() { rusage u{}; getrusage(RUSAGE_SELF, &u);
+#ifdef __APPLE__
+    return u.ru_maxrss / 1024;
+#else
+    return u.ru_maxrss;
+#endif
+}
+static double cpuSec() { rusage u{}; getrusage(RUSAGE_SELF, &u); return u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6; }
+
+static void testBudget() {
+    std::printf("9. the cost at ~1,500 messages a second (feeder in a child process; this process = input + tracker + Beast server + push)\n");
+    int fds[2]; if (::pipe(fds) != 0) return;
+    const pid_t kid = fork();
+    if (kid == 0) {   // the synthetic dump1090, in its own process so its cost is not counted
+        ::close(fds[0]);
+        Feeder f(1500);
+        const int pt = f.port; (void)!::write(fds[1], &pt, sizeof pt);
+        sleepMs(14000);
+        f.stop(); _exit(0);
+    }
+    ::close(fds[1]);
+    int port = 0; (void)!::read(fds[0], &port, sizeof port); ::close(fds[0]);
+    int sink = 0; const int sfd = listenLocal(sink);
+    Hub& hub = Hub::shared();
+    Config c; c.serve = true; c.port = freePort(); c.push = true; c.feeds.push_back({"127.0.0.1", sink, true, ""});
+    hub.configure(c);
+    vibeadsb::Service svc;
+    svc.setFeed([&](const uint8_t* m, int len, uint64_t fine, float db, uint32_t a, double t) { hub.frame(m, len, ts12FromFine(fine), db, a, t); },
+                [&](bool on) { hub.setActive(on); });
+    svc.start(0, 52.0, -1.0, true);
+    BeastInput in;
+    in.start("127.0.0.1", port, [&](const std::vector<Decoded>& ds) { svc.injectFrames(toFrames(ds)); });
+    const int reader = dialLocal(c.port);
+    const int agg = acceptWithin(sfd, 3);
+    std::atomic<bool> drainRun{true};
+    std::thread drainer([&] { uint8_t b[8192]; while (drainRun) { pollfd p[2] = {{reader, POLLIN, 0}, {agg, POLLIN, 0}};
+        if (::poll(p, 2, 100) > 0) { if (p[0].revents) (void)::recv(reader, b, sizeof b, 0); if (p[1].revents) (void)::recv(agg, b, sizeof b, 0); } } });
+    sleepMs(2000);   // warm up
+    const double c0 = cpuSec(); const auto w0 = std::chrono::steady_clock::now();
+    std::string rep;
+    for (int i = 0; i < 10; ++i) { sleepMs(1000); rep = svc.report(); }   // the 1 fps report a listener would cause
+    const double cpu = cpuSec() - c0;
+    const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count();
+    const double ps = std::atof(field(in.statusJson(), "perSec").c_str());
+    std::printf("   measured: %.0f msg/s in, %.2f %% of one core on this Mac, peak RSS %ld MB (whole test process)\n",
+                ps, 100.0 * cpu / wall, rssKb() / 1024);
+    CHECK(ps > 1200, "the feed ran at ~1,500 msg/s (%.0f)", ps);
+    CHECK(100.0 * cpu / wall < 5.0, "under 5 %% of a core here (%.2f %%) — a Pi 3 core is roughly 5-8x slower", 100.0 * cpu / wall);
+    drainRun = false; drainer.join();
+    in.stop(); svc.stop(); hub.configure(Config{});
+    ::close(reader); ::close(agg); ::close(sfd);
+    int stv = 0; waitpid(kid, &stv, 0);
+}
+
 int main() {
     testEncoding();
     testConfig();
     testServer();
     testPush();
     testService();
+    testHostPort();
+    testInput();
+    testLoopGuard();
+    testBudget();
     std::printf("test-adsb-feed: %d/%d passed\n", checks - fails, checks);
     return fails ? 1 : 0;
 }
