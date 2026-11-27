@@ -643,8 +643,8 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
 // ═════ B. one radio, no feed: ONE source → no SOURCES ═════
 {
   const dir = mkdir('one');
-  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Map cards single', locator: 'IO92nh', adminPass: 'map-cards-admin',
-    radios: [{ serial: 'mc-one', label: 'Only radio', enabled: true, configured: true, users: 1 }] }));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Map cards single', locator: 'IO92nh', adminPass: 'map-cards-admin', gainLock: true,
+    radios: [{ serial: 'mc-one', label: 'Only radio', enabled: true, configured: true, users: 1, gainLock: true }] }));   // ★ the owner's gain lock: the 🔒 flow below
   const rtlPort = await freePort(), port = await freePort();
   kids.push(spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', CLIP, '--hf-centre', '136850000'], { stdio: 'ignore' }));
   await sleep(400);
@@ -658,6 +658,21 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await sleep(4000);   // ★ aircraft.json polled (every 3 s): long enough for a second source to show if there were one
     await p.size(1440, 900, false);
     ok(await p.ev(`${V}.querySelector('.srcSect').hidden`), `one source: no SOURCES section (${await p.ev(`${V}.querySelectorAll('.srcRow').length`)} rows)`);
+    // ★★ Stuart 15:01: the owner's gain lock in the TUNE card — 🔒 read-only; a wrong password refused; the right one → 🔓
+    { await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="tune"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(800);
+      const lk = await p.ev(`(() => { const r = ${V}.querySelector('.mapGainHost .gRow'); return r ? JSON.stringify({ lock: !!r.querySelector('button.gLock'), slider: !!r.querySelector('.gSl') }) : 'none'; })()`);
+      ok(/"lock":true/.test(lk || '') && /"slider":false/.test(lk || ''), `gain locked by the owner: the row is read-only with its padlock (${lk})`);
+      if (/"lock":true/.test(lk || '')) {
+        await p.ev(`${V}.querySelector('.mapGainHost button.gLock').click(); 1`); await sleep(300);
+        await p.ev(`(() => { const i = ${V}.querySelector('.mapGainHost .gPwIn'); i.value = 'not-the-password'; ${V}.querySelector('.mapGainHost .gPwGo').click(); return 1; })()`); await sleep(2500);
+        const wrong = await p.ev(`(() => { const m = ${V}.querySelector('.mapGainHost .gPwMsg'); return (m ? m.textContent : '') + '|' + !!${V}.querySelector('.mapGainHost button.gLock'); })()`);
+        ok(/Not accepted\|true/.test(wrong || ''), `…a wrong password is refused, still locked (${wrong})`);
+        await sleep(1500);
+        await p.ev(`(() => { const i = ${V}.querySelector('.mapGainHost .gPwIn'); i.value = 'map-cards-admin'; ${V}.querySelector('.mapGainHost .gPwGo').click(); return 1; })()`);
+        ok(await p.until(`!!${V}.querySelector('.mapGainHost .gLock.open') || !${V}.querySelector('.mapGainHost button.gLock')`, 8000), '…the right one unlocks it (🔓)');
+        await p.ev(`(() => { const a = ${V}.querySelector('.mapGainHost .gAgc'); if (a && a.classList.contains('on')) a.click(); return 1; })()`); await sleep(800);
+        ok(await p.ev(`!!${V}.querySelector('.mapGainHost .gSl')`), '…and the gain is the slider again');
+      } }
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
   } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
   finally { p.close(); }
