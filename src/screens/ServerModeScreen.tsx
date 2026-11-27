@@ -256,7 +256,7 @@ import {
 import { androidIcomFacts, icomAskForAudio, type AndroidIcomFacts, type AndroidConnectedRadio } from '../services/androidIcom';
 import { advertiseServer, stopAdvertiseRtlTcp } from '../services/mdns';
 import { keepAvailLocal, keepGate, keepMirror, keepMigrate, keepName, keepParse, keepSatWords, keepRateWords, keepBase, keepModeSwitch, singleOptionsLocal, singleFromTicks, singleWords, MAP_AVMAR, MAP_AMATEUR, KEEP_GROUP_WORDS, type KeepMap,
-         keepBgMigrate, keepBgNormal, keepMapKeepMirror, keepIsmOrder, keepIsmDefault } from '../utils/keepRun';
+         keepBgMigrate, keepBgNormal, keepMapKeepMirror, keepIsmOrder, keepIsmDefault, keepIsCombo } from '../utils/keepRun';
 import { rateGuardIsBad, rateGuardLine, type RateGuardState } from '../services/rateGuard';
 import * as NM from '../utils/newModes';   // ★★★ beta96 new modes off on a restricted radio
 // ★★★ beta96 SERVER CHOICE (b96-serverchoice, docs/v12/SERVER-CHOICE.md): START/STOP at the top, the device-only password /
@@ -2465,6 +2465,26 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const bgOffers = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, keepParse(bgWhole), '');
   const bgChosen = bgOffers.filter((o) => o.on).map((o) => o.tok);
   const bgWholeOffered = !!radio && bgOffers.some((o) => o.drawn);
+  /* ★★★ b96-wholeradio-pick (Stuart 11-27) — as the Setup page: a radio that runs ONE mode at a time draws radio dots (picking
+   * another switches straight to it); a row is greyed only for a REAL reason (the gate with nothing chosen), never for another
+   * mode being on; a wide radio keeps switches, where a new one joins ACARS/VDL2 as the pair or replaces the rest, and the last
+   * one cannot be switched off (that would silently be Manual — the line above says Manual is how it stops). */
+  const bgOne = !keepFacts.comboOk;
+  const bgFree = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, [], '');
+  const bgPick = (id: string, on: boolean) => {
+    const cur = keepParse(bgWhole);
+    const tok = id !== 'ism' ? id : (cur.find((t) => keepBase(t) === 'ism') ?? 'ism:' + ismDefault);
+    if (on) {
+      const both = [...cur.filter((x) => keepBase(x) !== id), tok];
+      const next = !bgOne && keepIsCombo(both.map(keepBase)) ? both : [tok];
+      const g = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, next, '');
+      setBg(g.filter((x) => x.on).map((x) => x.tok).join(',') || tok);
+      return;
+    }
+    const next = cur.filter((x) => keepBase(x) !== id);
+    if (bgOne || !next.length) return;   // ★ the mode stays chosen
+    setBg(next.join(','));
+  };
   const ismOwn = bgCaps?.ismOwn ?? [];
   const ismOrder = keepIsmOrder(mapIsmBands, ismOwn);
   const ismDefault = keepIsmDefault(mapIsmBands, ismOwn) || mapIsmBands[0] || '433';
@@ -5056,31 +5076,40 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   })}
                 </View>
                 {!!bgWhole && (<>
-                  {rate > 0 && (
-                    <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                      {keepFacts.comboOk ? `${keepRateWords(rate)} detected: one mode at a time, or ACARS & VDL2 together (this capture holds both).`
-                                         : `${keepRateWords(rate)} detected: you can choose one of these modes.`}
-                    </Text>
-                  )}
-                  {bgOffers.filter((o) => o.drawn).map((o, i, arr) => (
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                    {bgOne ? (rate > 0 ? `${keepRateWords(rate)}: this radio runs one of these at a time.` : 'This radio runs one of these at a time.')
+                           : `${rate > 0 ? keepRateWords(rate) + ': ' : ''}one of these at a time, or ACARS & VDL2 together (this capture holds both). `
+                             + 'A new one replaces what it cannot run beside; to stop, choose Manual above.'}
+                  </Text>
+                  {bgOffers.filter((o) => o.drawn).map((o, i, arr) => {
+                    const fr = bgFree.find((x) => x.id === o.id) ?? o;
+                    return (
                     <React.Fragment key={'bg' + o.id}>
                       {(i === 0 || arr[i - 1].group !== o.group) && (
                         <Text style={{ color: C.section, fontFamily: F, fontSize: 11, marginTop: 8 }}>{KEEP_GROUP_WORDS[o.group] ?? o.group}</Text>
                       )}
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, opacity: o.enabled ? 1 : 0.5 }}>
+                      {bgOne ? (
+                        <TouchableOpacity disabled={!fr.enabled} onPress={() => bgPick(o.id, true)} accessibilityRole="radio"
+                          accessibilityState={{ checked: o.on, disabled: !fr.enabled }}
+                          style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, opacity: fr.enabled ? 1 : 0.5 }}>
+                          <View style={{ width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: o.on ? C.keySelBorder : C.border,
+                                         alignItems: 'center', justifyContent: 'center' }}>
+                            {o.on && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: C.keySel }} />}
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>{o.name}</Text>
+                            {!!fr.why && <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>{fr.why}</Text>}
+                          </View>
+                        </TouchableOpacity>
+                      ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, opacity: fr.enabled ? 1 : 0.5 }}>
                         <View style={{ flex: 1 }}>
                           <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>{o.name}</Text>
-                          {!!o.why && <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>{o.why}</Text>}
+                          {!!fr.why && <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>{fr.why}</Text>}
                         </View>
-                        <Switch value={o.on} disabled={!o.enabled}
-                          onValueChange={(v) => {
-                            const cur = keepParse(bgWhole);
-                            const tok = o.id !== 'ism' ? o.id : 'ism:' + ismDefault;
-                            const next = v ? [tok, ...cur.filter((x) => keepBase(x) !== o.id)] : cur.filter((x) => keepBase(x) !== o.id);
-                            const g = keepGate(keepFacts.avail, keepFacts.comboOk, keepFacts.comboWhy, rate, next, '');
-                            setBg(g.filter((x) => x.on).map((x) => x.tok).join(',') || (v ? '' : bgWhole === tok ? '' : bgWhole));
-                          }} />
+                        <Switch value={o.on} disabled={!fr.enabled} onValueChange={(v) => bgPick(o.id, v)} />
                       </View>
+                      )}
                       {o.id === 'ism' && o.on && (
                         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4, marginLeft: 12 }}>
                           {ismOrder.map(({ id: b, own }) => (
@@ -5092,12 +5121,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                         </View>
                       )}
                     </React.Fragment>
-                  ))}
+                    );
+                  })}
                   <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 8 }]}>
                     {singleEff && singleEff !== 'general'
                       ? `This radio is single use (${singleWords(singleEff, BG_ISM_WORDS)}): that runs instead, whatever is chosen here.`
                       : !bgChosen.length
-                        ? (keepParse(bgWhole).length ? `This radio cannot run ${keepName(keepParse(bgWhole), BG_ISM_WORDS)} with these settings, so it idles until it can.` : 'Tick the mode the radio runs with nobody connected.')
+                        ? (keepParse(bgWhole).length ? `This radio cannot run ${keepName(keepParse(bgWhole), BG_ISM_WORDS)} with these settings, so it idles until it can.` : `${bgOne ? 'Choose' : 'Switch on'} the mode the radio runs with nobody connected.`)
                         : 'It costs CPU (and battery) all the time, and the radio never idles or powers down while it is chosen; the manual profiles do not run. '
                           + (mapLandOn && mapChosen.join(',') === bgChosen.join(',')
                             ? `New listeners land on the map in ${keepName(bgChosen, BG_ISM_WORDS)} too, so they join it already populated.`
