@@ -1268,6 +1268,9 @@ if node --no-warnings scripts/test_ndb_layer.mjs; then pass=$((pass+1)); else fa
 if node --no-warnings scripts/test_adsb_layer.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADS-B FURTHEST key: the web map and the app map page name the same aircraft (one rule, two readers).
 if npx tsx scripts/test_adsb_furthest.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 the map cards' rules and the drawer waterfall's model (mapCards.ts, mapWfModel.ts)
+if npx tsx scripts/test_map_cards.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_map_wf.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ …and V12 aircraft data on the clients (adsbInfo.ts): the adsb_info sanitiser + store, and the web list's rows with it.
 # ★★ V12 beta96 THE ADS-B DELTA PROTOCOL end to end (vibe_adsb_delta.h → src/services/adsbDelta.ts): the table rebuilt from
 #    the deltas equals the full report at every tick of a 150-aircraft sky — from the start, joining mid-stream, after a
@@ -2209,10 +2212,14 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   # ★★ V12 2026-11-16 the AVIATION MAP in the web client: two radio processes (ADS-B + DATALINK), one table, headless Edge
   VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-avmap.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-  # ★★★ beta96 the AIRCRAFT list sizes by its OWN width (Stuart 11-26: "the signal hides the aircraft details") — the real
-  #     page, the panel at 232 / 300 / 400 / 600 px and two phones: the callsign always shows >= 7 characters
-  VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-adsb-list-width.mjs; rc=$?
-  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★★ V12 THE MAP CONTROL CARDS (docs/v12/MAP-CONTROL-CARDS.md) — the real page from real vibeservers, headless Edge,
+  #     --mute-audio: the cards at three widths, the shared tuner on a map, the drawer's live waterfall (and the server's
+  #     display rate in a map mode), short landscape + safe areas + Android, and no old mode panel inside the LIST.
+  #     (The old ADS-B list's width test went with that list in the 11-27 map purge.)
+  for t in test-web-map-cards test-web-map-shared test-web-map-waterfall test-web-map-landscape test-web-map-leaks; do
+    VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_CLIP="$OUT/adsb-syn-clip.u8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/$t.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  done
   rm -f "$OUT/vdl2-clip.cu8" "$OUT/adsb-syn-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-vdl2 build'; notrun=$((notrun+1))

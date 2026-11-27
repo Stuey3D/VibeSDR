@@ -34,12 +34,13 @@ let wired = false;
 export function applyIslandSide() {
   const side = islandSideWeb();
   const st = document.documentElement.style;
-  /* ★★ Stuart 17:0x (a real iPhone, island left): the 20 px corner allowance on the other side let the right column run off
-   *  the glass. Both sides now take iOS's own env() inset (it reports both) — the side is still known (data-island) for
-   *  anything that wants to lean on it; the allowance stays the floor where env() says less. */
-  const floor = (k: string) => `max(env(safe-area-inset-${k},0px),${side === 'left' || side === 'right' ? CORNER_ALLOWANCE_PX : 0}px)`;
-  if (side === 'left' || side === 'right') { st.setProperty('--isl-l', floor('left')); st.setProperty('--isl-r', floor('right')); }
-  else { st.removeProperty('--isl-l'); st.removeProperty('--isl-r'); }
+  /* ★★★ Stuart 17:44, the APP's rule (EdgeChip.tsx RC16): the island side takes iOS's inset in full; the OTHER side only the
+   *  rounded corner's allowance, and only for a piece IN a corner — a tab in the middle of that edge sits on the glass.
+   *  --isl-le / --isl-re: an edge tab; --isl-lc / --isl-rc: a corner piece (tracks.ts --sai-le / -re / -lc / -rc). */
+  for (const k of ['--isl-l', '--isl-r', '--isl-le', '--isl-re', '--isl-lc', '--isl-rc']) st.removeProperty(k);
+  const corner = (k: string) => `min(env(safe-area-inset-${k},0px),${CORNER_ALLOWANCE_PX}px)`;
+  if (side === 'left') { st.setProperty('--isl-re', '0px'); st.setProperty('--isl-rc', corner('right')); }
+  else if (side === 'right') { st.setProperty('--isl-le', '0px'); st.setProperty('--isl-lc', corner('left')); }
   document.documentElement.dataset.island = side ?? '';
 }
 /** Once: now, and again on every rotation (the 180° flip moves neither the window nor the insets — orientationchange sees it). */

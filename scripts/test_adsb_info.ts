@@ -1,11 +1,7 @@
 /* test_adsb_info.ts — V12 aircraft data on the CLIENTS: the adsb_info sanitiser and per-hex store
- * (src/services/adsbInfo.ts — the app and the web client both import it), and the web list's rows with it
- * (web/client/src/adsb.ts adsbListHtml, bundled here with esbuild because it imports the page's map modules).
+ * (src/services/adsbInfo.ts — the app and the web client both import it).
  * ★ Somebody else's server's JSON: markup, wrong types and path characters must never come through. */
-import { build } from 'esbuild';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-const { cleanAdsbInfo, AdsbInfoStore, adsbInfoLine, routeShort, flagEmoji, adsbShowsData, adsbCreditHtml, ADSB_DATA_CREDIT } = await import('../src/services/adsbInfo.ts');
+import { cleanAdsbInfo, AdsbInfoStore, adsbInfoLine, routeShort, flagEmoji, adsbShowsData, adsbCreditHtml, ADSB_DATA_CREDIT } from '../src/services/adsbInfo.ts';
 
 let pass = 0, fail = 0;
 function eq(what: string, got: unknown, want: unknown) {
@@ -50,33 +46,8 @@ eq('implausible: no short route', routeShort({ from: 'EGLL', to: 'KJFK', plausib
 eq('info line', adsbInfoLine(full), 'RYR · B738 · ACE → BHX · EI-DLJ');
 eq('flag', [flagEmoji('IE'), flagEmoji('I'), flagEmoji(null)], ['\u{1F1EE}\u{1F1EA}', '', '']);
 
-// ── the web list's rows (web/client/src/adsb.ts), bundled ──
-{
-  const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-  const out = await build({ entryPoints: [path.join(root, 'web/client/src/adsb.ts')], bundle: true, write: false, format: 'esm',
-                            platform: 'neutral', logLevel: 'silent', loader: { '.ts': 'ts' } });
-  const mod = await import('data:text/javascript;base64,' + Buffer.from(out.outputFiles[0].text).toString('base64'));
-  const report = { aircraft: [
-    { hex: '4ca2d6', flight: 'RYR8CK', lat: 52, lon: -2, alt_baro: 36000, ...full, mil: undefined },
-    { hex: '3f0001', lat: 51, lon: 0, mil: 1, country: 'DE' },
-    { hex: '400123', flight: 'BAW1', lat: 51.5, lon: -0.5 },
-  ] };
-  const html: string = mod.adsbListHtml(report, { lat: 52, lon: -1 }, 'http://srv/adsb/');
-  ok('flag before the callsign', html.includes('<span class="flag" title="IE">\u{1F1EE}\u{1F1EA}</span>RYR8CK'));
-  ok('the owner\'s logo replaces the badge', html.includes('<img class="oplogo" src="http://srv/adsb/logo/RYR-B738" alt="RYR">'));
-  ok('type · route · registration on the second line', html.includes('B738 · ACE → BHX · EI-DLJ'));
-  ok('server-military row is military', /data-hex="3f0001"/.test(html) && html.indexOf('3f0001') < html.indexOf('4ca2d6') && html.includes('adsbRow mil'));
-  ok('no data: hex on the second line as before', html.includes('<small>400123</small>'));
-  // ★★ beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the data — never otherwise
-  ok('the notice at the foot of the list', html.endsWith('(CC0)</div>') && html.includes('<div class="adsbCredit">Aircraft data: <a href="https://github.com/Mictronics/aircraft-database"')
-     && html.includes('href="https://opendatacommons.org/licenses/by/1-0/"') && html.lastIndexOf('adsbRow') < html.indexOf('adsbCredit'));
-  const bare: string = mod.adsbListHtml({ aircraft: [{ hex: '400123', flight: 'TEST1' }] }, null, '');
-  ok('no row shows the data → no notice', !bare.includes('adsbCredit'));
-  const noLogo: string = mod.adsbListHtml(report, null, '');
-  ok('no image base: the ICAO code as a badge', noLogo.includes('<span class="op">RYR</span> B738'));
-  const evil: string = mod.adsbListHtml({ aircraft: [{ hex: '400999', ...cleanAdsbInfo({ r: '"><script>x</script>', op: 'ABC' }) }] }, null, '');
-  ok('escaped', !evil.includes('<script>'));
-}
+// ★ V12 map purge (Stuart 11-27): the web's old ADS-B list (adsb.ts adsbListHtml) is gone — the map's LIST rows are the
+//   aviation map's (trkRowHtml, scripts/test_aviation_map.ts), the licence words HELP's (test-web-avmap.mjs)
 
 // ── beta91 the notice's rule and words (adsbInfo.ts — the ADS-B list, the aviation list and the layer card's text) ──
 ok('shows data: a registration / type / operator', adsbShowsData([{ r: 'G-ABCD' }]) && adsbShowsData([null, { op: 'RYR' }]) && !adsbShowsData([{}, null]));

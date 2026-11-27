@@ -409,22 +409,12 @@ const CSS = `
 .trkTop .btn.exit{background:#5a1f1f;border-color:#8a3434}
 .trkTop .ttl{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkTop .st{color:#9fb0c2;font-size:12px;flex:1 1 200px;min-width:0}
-.trkTop .scopeNote{color:#ffd34d;font-size:12px;flex:1 0 100%}
-.trkTop .scopeNote[hidden]{display:none}
-.trkTop .scr{display:contents}
 .trkTop .slot-share{display:inline-flex;align-items:center;gap:6px;flex:none}
 .trkTop .slot-share:empty,.trkTop .slot-share>[hidden]{display:none}
 .trkTop .mapShLine{background:rgba(255,190,80,.10);color:#ffcf7a;border-color:rgba(255,190,80,.45);font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;white-space:nowrap}
 .trkTop .mapShLine.alone{color:#7bd88f;border-color:rgba(123,216,143,.45);background:rgba(123,216,143,.08)}
 .trkTop .mapShLine.locked{color:#ff9d8a;border-color:rgba(255,120,100,.55);background:rgba(255,90,70,.10)}
 .trkTop .btn.dialLocked{opacity:.4;filter:grayscale(.7);cursor:not-allowed}
-.trkTop .tune[hidden]{display:none}
-.trkTop .tune{display:inline-flex;flex:none}
-.trkTop .tgl{align-items:center}
-.trkTop .tgl .lbl{align-self:center;margin-right:6px;font:800 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;padding:3px 5px;border-radius:4px;flex:none;background:#1d3347;color:#bfe3ff}
-.trkTop .tgl .lbl+.grp{margin-left:0}
-.trkTop .tuneChip{background:#3a1814;border-color:#a3473a;color:#ffd9d2;font:700 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;white-space:nowrap}
-.trkTop .tuneChip:hover,.trkTop .tuneChip:focus-visible{background:#4d1f19}
 .tunePop{position:fixed;z-index:950;max-height:min(70vh,520px);overflow:auto;background:#101820;border:1px solid #2c3e52;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.55);padding:6px}
 .tunePop[hidden]{display:none}
 .tunePop .tpG{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#7f93a7;padding:8px 8px 4px}
@@ -436,31 +426,10 @@ const CSS = `
 
 .tunePop .tpRow.live{background:rgba(91,227,107,.10)}
 .tunePop .tpRow[aria-disabled="true"]{opacity:.42;cursor:not-allowed}
-.trkTop .tgl .btn.chip{border-radius:999px!important;margin-left:3px!important;display:inline-flex;align-items:center;gap:5px;padding:5px 9px}
-.trkTop .tgl .btn.chip .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-.trkTop .tgl .btn.chip[aria-pressed="true"]{background:#1e2a36;color:#e8eef5;border-color:#7fc8ff}
-.trkTop .tgl .btn.chip[aria-pressed="false"]{opacity:.45}
-.trkTop .tgl .btn.chip[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
-.trkTop .tgl .btn.chip .n{font-size:9.5px;opacity:.7;font-variant-numeric:tabular-nums}
-.trkTop .tgl .btn.chip .n:empty{display:none}
 .trkKey{position:absolute;right:10px;bottom:30px;z-index:900;background:rgba(11,20,32,.92);border:1px solid #2c3e52;border-radius:8px;color:#d7dee6;font:12px/1.3 inherit;max-height:60%;overflow:auto}
-.trkKey>summary{cursor:pointer;padding:6px 10px;font-weight:600;letter-spacing:.08em;list-style:none}
-.trkKey>summary::-webkit-details-marker{display:none}
 .trkKey .kb{padding:2px 10px 8px}
 .trkKey .kr{display:flex;align-items:center;gap:8px;padding:2px 0;white-space:nowrap}
 .trkKey .kr svg{flex:none}
-.trkTop .rng{display:inline-flex;gap:0}
-.trkTop .rng .btn{border-radius:0;margin-left:-1px;padding:6px 8px}
-.trkTop .rng .btn:first-child{border-radius:6px 0 0 6px;margin-left:0}
-.trkTop .rng .btn:last-child{border-radius:0 6px 6px 0}
-.trkTop .rng .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
-.trkTop .tgl .btn[aria-pressed="true"]{background:#7fc8ff;border-color:#7fc8ff}
-.trkTop .rng[hidden],.trkKey[hidden]{display:none}
-.trkTop .tgl{max-width:100%;overflow-x:auto;scrollbar-width:none}
-.trkTop .tgl::-webkit-scrollbar{display:none}
-.trkTop .tgl .btn{flex:none}
-.trkTop .tgl .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
-.trkTop .tgl .grp:first-child{margin-left:0}
 @keyframes trkLive{50%{opacity:.35}}
 .trkList .hd .tabs{display:inline-flex;gap:2px;flex-wrap:wrap}
 .trkList .hd .tab{background:none;border:0;border-bottom:2px solid transparent;color:#8fa2b5;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.05em;padding:2px 5px;cursor:pointer}
@@ -486,9 +455,6 @@ const CSS = `
 .trkList .hd{display:flex;align-items:center;gap:8px;padding:6px 10px;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.05em;
   color:#b9c7d5;cursor:pointer;user-select:none;border-bottom:1px solid #22303d}
 .trkList .hd .n{color:#ffd34d}
-.trkList .hd .mn{margin-left:auto;background:none;border:0;color:#9fb0c2;font-size:15px;cursor:pointer;padding:0 4px}
-.trkList.min .rows,.trkList.min .safety{display:none}
-.trkList.min .hd{border-bottom:0}
 .trkList .rows{overflow:auto;flex:1 1 auto;min-height:0}
 .trkList .safety{padding:6px 10px;background:#3a2a10;color:#ffe2a8;font-size:12px;border-bottom:1px solid #5a4316}
 .trkRow{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:2px 10px;align-items:center;padding:5px 10px;cursor:pointer;border-bottom:1px solid #151f29}
@@ -553,28 +519,13 @@ const CSS = `
  *  and the app's SERVERS button's shape). How many may be open follows the WINDOW (cardLimit). */
 .trkTop{flex-wrap:nowrap;gap:6px;min-height:40px;box-sizing:border-box}
 .trkTop .st{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;flex:none}
-.trkTop .scopeNote{display:none}
-.trkTop .ttl{display:none}
-.trkMapHost .cardBtns{position:absolute;top:8px;right:8px;z-index:790;display:flex;flex-direction:column;align-items:stretch;gap:6px}
-.trkMapHost .cbtn{justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.45);display:inline-flex;align-items:center;gap:5px;background:rgba(30,42,54,.9);color:#cfd9e3;border:1px solid #33475a;border-radius:999px;
-  padding:5px 10px;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;cursor:pointer;white-space:nowrap}
-.trkMapHost .cbtn:hover,.trkMapHost .cbtn:focus-visible{background:#2a3a4a;outline:none;border-color:#7fc8ff}
-.trkMapHost .cbtn[aria-expanded="true"]{background:#e8eef5;color:#0b1014;border-color:#e8eef5}
-.trkMapHost .cbtn[hidden]{display:none}
-.trkMapHost .cbtn .cn{font-weight:600;opacity:.75;font-variant-numeric:tabular-nums}
-.trkMapHost .cbtn .cn:empty{display:none}
-.trkMapHost .cbtn .lv{width:6px;height:6px;border-radius:50%;background:#ff3b2f;animation:trkLive 1.6s ease-in-out infinite}
-.trkTop .spacer{flex:1 1 auto;min-width:0}
-.trkTop .rate{flex:none;font:700 11.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;color:#ffd34d;white-space:nowrap;font-variant-numeric:tabular-nums}
-.trkTop .rate:empty{display:none}
 .trkTop .slot-top{display:inline-flex;align-items:center;gap:6px;flex:none}
 .trkTop .slot-top:empty{display:none}
 .trkCards{position:absolute;right:var(--trk-rail-w,84px);top:8px;bottom:8px;z-index:760;display:flex;flex-direction:row-reverse;gap:8px;align-items:flex-start;pointer-events:none;max-width:calc(100% - var(--trk-rail-w,84px) - 8px)}
-.trkCards .col{display:flex;flex-direction:column;gap:8px;max-height:100%;min-height:0;width:var(--trk-card-w,340px)}
 .trkCard2{pointer-events:auto;display:flex;flex-direction:column;min-height:0;flex:0 1 auto;background:rgba(10,14,20,.94);border:1px solid #2c3a4a;
   border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.45);overflow:hidden;transform-origin:top right;animation:trkCardIn .16s ease-out}
 @keyframes trkCardIn{from{opacity:0;transform:scale(.92) translateX(8px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.trkCard2{animation:none}.trkMapHost .cbtn .lv{animation:none}}
+@media (prefers-reduced-motion:reduce){.trkCard2{animation:none}}
 .trkCard2[hidden]{display:none}
 .trkCard2>.ch{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;border-bottom:1px solid #22303d;flex:none;
   font:800 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#9fb0c2}
@@ -657,27 +608,21 @@ const CSS = `
 .trkCard2[data-card="list"] .trkList{position:static;width:auto;max-height:none;border:0;border-radius:0;background:none;flex:1 1 auto;min-height:0}
 .trkCard2[data-card="list"]{flex:1 1 auto}
 .trkCard2[data-card="list"] .trkList .hd{cursor:default}
-.trkCard2[data-card="list"] .trkList .hd .mn{display:none}
 .trkTop .slot-share{min-width:0;flex:0 1 auto}
 .trkTop .slot-share .mapShLine{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;text-transform:none;letter-spacing:.02em}
 .trkTop .slot-share>span{min-width:0}
-.trkTop .rate{order:0}
 /* ★ a phone: the bar may WRAP the shared line (never reorder it) — EXIT, the line, CHAT, the rate */
 .trkView[data-narrow] .trkTop{flex-wrap:wrap;row-gap:6px}
 .trkView[data-narrow] .trkTop .slot-share>span{flex-wrap:wrap}
 .trkView[data-narrow] .trkTop .slot-share .mapShLine{white-space:normal;text-align:left;line-height:1.25}
-.trkView[data-narrow] .trkTop .rate{font-size:10.5px}
-.trkView[data-narrow] .cbtn{padding:5px 8px;font-size:10px;letter-spacing:.06em}
-.trkView[data-narrow] .cardBtns{top:6px;right:6px}
 .trkView[data-narrow] .trkCards{left:6px;right:var(--trk-rail-w,76px);top:6px;bottom:6px;max-width:none}
-.trkView[data-narrow] .trkCards .col{width:100%}
 .trkView[data-narrow] .trkCard2{max-height:58%}
 /* ★★★ TWEAK 3+ (Stuart 11-27): the chips are EDGE DOCKS (index.html .edgeDock — the SERVER HEALTH pill's own look and
  *  slide): TUNE and LAYERS down the LEFT edge, MAP CONTROLS top RIGHT, LIST bottom RIGHT (the health pill's side). */
 /* ★★★ V12 SAFE AREAS (Stuart 11-27, iPhone landscape): the map runs edge to edge (viewport-fit=cover while a map is up —
  *  TrackView.show) and every control is padded in by the inset on ITS side only (the app's islandSide rule). One set of
  *  vars, so a driver can simulate a notch (scripts/test-web-map-landscape.mjs). */
-.trkView{--sai-l:var(--isl-l,env(safe-area-inset-left,0px));--sai-r:var(--isl-r,env(safe-area-inset-right,0px));--sai-t:env(safe-area-inset-top,0px);--sai-b:env(safe-area-inset-bottom,0px)}
+.trkView{--sai-l:var(--isl-l,env(safe-area-inset-left,0px));--sai-r:var(--isl-r,env(safe-area-inset-right,0px));--sai-le:var(--isl-le,var(--sai-l));--sai-re:var(--isl-re,var(--sai-r));--sai-lc:var(--isl-lc,var(--sai-l));--sai-rc:var(--isl-rc,var(--sai-r));--sai-t:env(safe-area-inset-top,0px);--sai-b:env(safe-area-inset-bottom,0px)}
 .mChips{position:absolute;z-index:790;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 /* ★ tweak 4: SERVERS top-left where the app has it, then TUNE, LAYERS; the zoom ± step over to the right, under MAP */
 .mChipsL{left:0;top:8px}
@@ -715,7 +660,6 @@ const CSS = `
 .trkCards .sideL{left:var(--trk-chip-l,70px);top:84px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
 .trkCards .sideR{right:var(--trk-chip-r,70px);top:8px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
 .trkCards .sideB{right:var(--trk-chip-rb,70px);top:40%;bottom:calc(var(--trk-attrib-h,0px) + 8px);justify-content:flex-end}
-.trkCards.both .sideR{bottom:62%}
 .trkCards .cSide>.trkCard2{max-height:100%}
 .trkCards .sideB>.trkCard2{flex:0 1 auto}
 .trkView[data-narrow] .trkCards .sideL{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto;top:6px}
@@ -905,7 +849,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★★★ Stuart 13:20 ("the row at the top … moves next to the collapse button at the bottom, no covering of the lines at
  *  all"): ONE slim bar at the drawer's foot — the chip (in the corner, as ever), the tab scroller, ‖ +N, the sort — and
  *  the rows above it from the drawer's top edge; nothing ever covers a row */
-.trkCard2[data-card="list"] .trkList .hd{order:9;min-height:var(--trk-lchip-h,31px);box-sizing:border-box;padding:0 8px 0 calc(var(--trk-lchip-w,76px) + 4px - var(--sai-l,0px))!important;border-top:1px solid #1b2733;border-bottom:0!important;flex:none}
+.trkCard2[data-card="list"] .trkList .hd{order:9;min-height:var(--trk-lchip-h,31px);box-sizing:border-box;padding:0 8px 0 calc(var(--trk-lchip-w,76px) + 4px - var(--sai-lc,0px))!important;border-top:1px solid #1b2733;border-bottom:0!important;flex:none}
 .trkCard2[data-card="list"] .trkList .rows{order:1}
 .trkCard2[data-card="list"] .trkList .safety,.trkCard2[data-card="list"] .trkList .filt{order:2}
 .trkView .mChipsBL{z-index:800}
@@ -973,13 +917,13 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
  *  whole map on every width; only the drawer's CONTENT takes the safe area */
 .trkView[data-narrow] .trkCards{left:0!important;right:0!important;top:0!important;bottom:0!important}
 .trkCards .sideB>.trkCard2[data-card="list"]{border-left-width:0!important;border-bottom-width:0!important;border-radius:0 12px 0 0!important;
-  padding-left:var(--sai-l);padding-bottom:var(--sai-b);box-sizing:border-box}
+  padding-left:var(--sai-lc);padding-bottom:var(--sai-b);box-sizing:border-box}
 .trkCards .trkCard2.gpFocus,.trkCards .trkCard2 .gpFocus{outline-offset:-3px!important}
 /* ★★★ V12 SHORT LANDSCAPE (mapCards shortMap; Stuart 11-27): the drawer is a LEFT SIDE PANEL, full height under the ✕;
  *  its tabs (swap · maximise) a pair on its RIGHT edge's top; the left family a row of edge tabs along the BOTTOM edge,
  *  right of the panel, each card popping UP from its tab. The right column as ever. */
 .trkCard2[data-card="list"] .trkList .hd{flex-wrap:nowrap!important;white-space:nowrap}   /* ★ the bar is ONE line at every size (Stuart 15:51) */
-.trkView[data-short] .trkCards .sideB{left:0!important;right:auto!important;top:auto!important;bottom:0!important;width:calc(clamp(300px,34vw,360px) + var(--sai-l))!important;max-width:none!important}
+.trkView[data-short] .trkCards .sideB{left:0!important;right:auto!important;top:auto!important;bottom:0!important;width:calc(clamp(300px,34vw,360px) + var(--sai-lc))!important;max-width:none!important}
 .trkView[data-short].lMax .trkCards .sideB{width:calc(100% - var(--trk-chip-r,70px) - 8px)!important}
 .trkView[data-short] .trkCards .sideB>.trkCard2[data-card="list"]{border-radius:0 12px 0 0!important}
 .trkView[data-short] .trkCard2[data-card="list"] .lMax,.trkView[data-short] .trkCard2[data-card="list"] .lSwap{top:22px;right:-19px;left:auto;width:19px;height:44px;border:1px solid #2c3a4a;border-left:0;border-radius:0 9px 9px 0;padding:0 0 0 2px;align-items:center;justify-content:flex-start}
@@ -988,17 +932,37 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .trkCard2[data-card="list"] .lSwap::before,.trkView[data-short] .trkCard2[data-card="list"] .lSwap::after{display:none}
 .trkView[data-short] .trkCard2[data-card="list"] .lMax svg{transform:rotate(90deg)}
 .trkView[data-short] .trkCard2[data-card="list"] .lMax[aria-pressed="true"] svg{transform:rotate(-90deg)}
-.trkView[data-short] .mChipsL{top:auto!important;bottom:0!important;left:var(--trk-row-l,96px)!important;flex-direction:row!important;align-items:flex-end!important;gap:8px!important}
-.trkView[data-short] .mChipsL .mDock .hCard{border-left-width:1px!important;border-bottom-width:0!important;border-radius:12px 12px 0 0!important}
+.trkView[data-short] .mChipsL{top:0!important;bottom:auto!important;left:var(--trk-row-l,96px)!important;flex-direction:row!important;align-items:flex-start!important;gap:8px!important}
+.trkView[data-short] .mChipsL .mDock .hCard{border-left-width:1px!important;border-right-width:1px!important;border-top-width:0!important;border-bottom-width:1px!important;border-radius:0 0 12px 12px!important}
 .trkView[data-short] .mChipsL .mDock .mchip{flex-direction:column!important;align-items:center;min-height:40px!important}
 .trkView[data-short] .mChipsL .mDock .mchip .cap{display:none}
 .trkView[data-short] .mChipsL .mDock .lsum{flex-direction:row!important}
 .trkView[data-short] .mChipsL .mDock.open{visibility:hidden}
-.trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:auto!important;bottom:var(--sai-b)!important;max-height:calc(100% - 64px);justify-content:flex-end;width:min(320px,calc(100% - var(--trk-cl-left,96px) - var(--trk-chip-r,70px) - 8px))!important}
-.trkView[data-short] .trkCards .sideL>.trkCard2{border-left-width:1.5px!important;border-bottom-width:0!important;border-radius:12px 12px 0 0!important;transform-origin:bottom left!important;max-height:100%}
+.trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:0!important;bottom:auto!important;max-height:calc(100% - 8px);justify-content:flex-start;width:min(320px,calc(100% - var(--trk-cl-left,96px) - 8px))!important}
+/* ★★★ Stuart 17:5x — SHORT LANDSCAPE, his design: the top edge has no inset, so EVERY chip hangs from it. The family from the
+ *  ✕ rightwards; at the right end, before the RATE corner, CHAT and the health / time pair (rotated EdgeChips: the tab when
+ *  tucked, the card when out — both hanging from the top). Every card drops DOWN. The shared-tuner pill moves to the
+ *  bottom centre (information, not a control). Portrait is untouched: all of it is [data-short]. */
+.trkView[data-short] .mChipsR{top:0!important;flex-direction:row-reverse!important;align-items:flex-start!important;gap:8px!important}
+.trkView[data-short] .mChipsR .mDock:not([data-dock="rate"]) .hCard{border-top-width:0!important;border-right-width:1px!important;border-left-width:1px!important;border-bottom-width:1px!important;border-radius:0 0 12px 12px!important;padding:4px 6px!important}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock){position:relative!important;top:auto!important;right:auto!important;margin:0!important;align-self:flex-start!important;transform:none!important;width:52px;height:30px;flex:none}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab{top:0!important;right:0;margin:0!important;left:auto;width:52px!important;height:30px!important;padding:0!important;flex-direction:row;gap:4px;
+  border:1.5px solid var(--hc)!important;border-top-width:0!important;border-radius:0 0 12px 12px!important;transform:none!important}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{position:absolute;top:0;right:0;border-top-width:0!important;border-right-width:1.5px!important;border-radius:0 0 12px 12px!important;
+  transform:none!important;padding:4px 8px!important;z-index:2;white-space:nowrap}
+.trkView[data-short] .trkCards .sideR{top:var(--trk-row-h,48px)!important;right:8px!important;bottom:auto!important}
+.trkView[data-short] .trkCards .sideR>.trkCard2{border-radius:0 0 12px 12px!important;transform-origin:top right!important}
+/* the pill at the bottom centre, mirrored deck style: flat on the bottom edge, rounded on top; the span between the panel
+ *  and the bottom-right group (shortGeom --trk-pill-pl / -pr) */
+.trkView[data-short] .trkTop{top:auto!important;bottom:0!important;padding:0 var(--trk-pill-pr,140px) 0 var(--trk-pill-pl,140px)!important;align-items:flex-end!important}
+.trkView[data-short] .trkTop .slot-share .mapShLine{border-radius:12px 12px 0 0!important;border:1px solid var(--bar-border,rgba(255,255,255,.18))!important;border-bottom:0!important;
+  padding:6px 14px calc(var(--sai-b) + 5px)!important}
+/* a row too long for the window: the family's counts go, the glyphs stay (shortGeom toggles famCompact) */
+.trkView[data-short].famCompact .mChipsL .mDock .lsum .ln,.trkView[data-short].famCompact .mChipsL .mDock .mchip .cn{display:none!important}
+.trkView[data-short] .trkCards .sideL>.trkCard2{border-left-width:1.5px!important;border-top-width:0!important;border-bottom-width:1.5px!important;border-radius:0 0 12px 12px!important;transform-origin:top left!important;max-height:100%}
 /* ★★★ V12 SAFE AREAS: each edge control stands IN from its edge by that edge's inset (the drawer's and cards' plates may run
  *  under it — their content is padded); the ✕ off the notch side, the chips, the ? / scale stack, zoom and credits */
-.trkView .trkTop .exit{left:0!important;width:calc(52px + var(--sai-l))!important;padding:0 0 0 var(--sai-l)!important}
+.trkView .trkTop .exit{left:0!important;width:calc(52px + var(--sai-lc))!important;padding:0 0 0 var(--sai-lc)!important}
 /* ★ Stuart 16:0x ("health and time tabs appear twice, one off the edge"): a TUCKED card's own › sat past the edge beside its
  *  tab — only the tab shows while tucked */
 .trkView .edgeDock.tucked .hTuck,.trkView #srvHealth.tucked .hTuck{visibility:hidden}
@@ -1015,21 +979,19 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★★★ Stuart 17:1x ("chips don't go to the edge"): an EDGE piece sits on the PHYSICAL edge and pads its CONTENT in by that
  *  edge's inset — the app's EdgeChip rule (src/components/EdgeChip.tsx, edgeChipGeometry.ts): the ✕ corner piece, RATE's
  *  corner, the chips and their tabs, the LIST drawer. Free-standing controls (the ? and scale, zoom, credits) stand IN. */
-.trkView .mChipsR .mDock .hCard{padding-right:calc(4px + var(--sai-r))!important}
-.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard{padding-right:calc(8px + var(--sai-r))!important}
-.trkView .mDock[data-dock="rate"] .hCard{padding-right:var(--sai-r)!important}
-.trkView .mChipsL .mDock .hCard{padding-left:calc(4px + var(--sai-l))!important}
-.trkView .mChipsBL .mDock .hCard{padding-left:calc(6px + var(--sai-l))!important}
-.trkView .edgeDock .hTab{width:calc(26px + var(--sai-r));padding-right:var(--sai-r)}
-/* ★★ Stuart 17:3x ("the right side ones are huge when collapsed"): the drawn body stays PORTRAIT size; the inset is only a flush
- *  strip of frame reaching the physical edge — painted faint, not as more of the chip */
-.trkView .mChipsR .mDock .hCard,.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard,.trkView .mChipsR .edgeDock .hTab{
-  background-color:transparent!important;
-  background-image:linear-gradient(to left,transparent 0 var(--sai-r),var(--ov-health,rgba(8,12,8,.86)) var(--sai-r))!important}
-.trkView[data-short] .mChipsL .mDock .hCard{background-color:transparent!important;
-  background-image:linear-gradient(to top,transparent 0 var(--sai-b),var(--ov-health,rgba(8,12,8,.86)) var(--sai-b))!important}
-.trkView .edgeDock.left .hTab{width:calc(26px + var(--sai-l));padding-left:var(--sai-l);padding-right:0}
-.trkView[data-short] .mChipsL .mDock .hCard{padding-left:4px!important;padding-bottom:calc(4px + var(--sai-b))!important}
+.trkView .mChipsR .mDock .hCard{padding-right:calc(4px + var(--sai-re))!important}
+.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard{padding-right:calc(8px + var(--sai-re))!important}
+.trkView .mDock[data-dock="rate"] .hCard{padding-right:var(--sai-rc)!important}
+.trkView .mChipsL .mDock .hCard{padding-left:calc(4px + var(--sai-le))!important}
+.trkView .mChipsBL .mDock .hCard{padding-left:calc(6px + var(--sai-lc))!important}
+.trkView .edgeDock .hTab{width:calc(26px + var(--sai-re));padding-right:var(--sai-re)}
+/* ★★★ Stuart 17:44 (neither a dark strip nor a see-through one: "on stilts") — the APP's rule (EdgeChip.tsx, RC16): iOS gives
+ *  the landscape inset to BOTH sides; the ISLAND side takes it in full, the OTHER side only the rounded corner's allowance
+ *  and only for pieces IN a corner. So: --sai-le / --sai-re = a tab in the middle of an edge (0 on the side without the
+ *  island — the slim solid portrait tab on the glass), --sai-lc / --sai-rc = a corner piece (the ~20 px corner on the side
+ *  without the island). islandSide.ts sets them from the orientation; elsewhere (Android, desktop) both are env(). */
+.trkView .edgeDock.left .hTab{width:calc(26px + var(--sai-le));padding-left:var(--sai-le);padding-right:0}
+.trkView[data-short] .mChipsL .mDock .hCard{padding:4px!important}
 /* ★ Stuart 17:07 (the bar "wrapped" — ☰ 129 ⌄ dropped below the tabs): the drawer's content stands above the home bar
  *  (its padding-bottom is the inset) but the chip sat on the physical edge — a row lower. Shut, the chip is the edge piece
  *  (its content padded up by the inset); open, it rides up onto the drawer's bar, level with the tabs. */
@@ -1037,11 +999,11 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
  *  (Stuart's portrait check: ☰ n ⌃ sat in the 34 px gesture inset) */
 .trkView .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{padding-bottom:var(--sai-b)!important}
 .trkView[data-short] .mChipsBL .mDock[data-dock="list"].open{transform:translateY(calc(-1 * var(--sai-b)))}
-.trkView .mChipsScale{right:var(--sai-r);margin-bottom:var(--sai-b)}
-.trkView .mHelp{right:calc(10px + var(--sai-r));margin-bottom:var(--sai-b)}
-.trkMapHost .maplibregl-ctrl-top-left,.trkMapHost .leaflet-top.leaflet-left{right:var(--sai-r)!important}
-.trkMapHost .maplibregl-ctrl-bottom-right,.trkMapHost .leaflet-bottom.leaflet-right{right:var(--sai-r)!important;bottom:var(--sai-b)!important}
-.trkMapHost .maplibregl-ctrl-bottom-left,.trkMapHost .leaflet-bottom.leaflet-left{left:var(--sai-l)!important;bottom:var(--sai-b)!important}
+.trkView .mChipsScale{right:var(--sai-rc);margin-bottom:var(--sai-b)}
+.trkView .mHelp{right:calc(10px + var(--sai-rc));margin-bottom:var(--sai-b)}
+.trkMapHost .maplibregl-ctrl-top-left,.trkMapHost .leaflet-top.leaflet-left{right:var(--sai-re)!important}
+.trkMapHost .maplibregl-ctrl-bottom-right,.trkMapHost .leaflet-bottom.leaflet-right{right:var(--sai-rc)!important;bottom:var(--sai-b)!important}
+.trkMapHost .maplibregl-ctrl-bottom-left,.trkMapHost .leaflet-bottom.leaflet-left{left:var(--sai-lc)!important;bottom:var(--sai-b)!important}
 .trkCards .trkCard2[data-card="list"].stepAside{visibility:hidden;transform:translateY(105%);transition:transform .2s ease,visibility 0s linear .2s}
 .trkCards .trkCard2[data-card="list"]{transition:transform .2s ease}
 .mChipsBL .mDock.aside{visibility:visible!important;opacity:.55}
@@ -1070,7 +1032,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mScale .hCard{cursor:default!important;padding:6px 5px!important;min-width:0!important}
 .mScale[hidden]{display:none}
 .mScaleBody{display:flex;align-items:flex-start;gap:4px}
-.saiProbe{position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;padding:var(--sai-t) var(--sai-r) var(--sai-b) var(--sai-l)}
+.saiProbe{position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;padding:var(--sai-t) var(--sai-rc) var(--sai-b) var(--sai-lc)}
 /* ★ short landscape: the scale lies down in the bottom-right group (shortGeom) — the line across, its words beside it */
 .trkView.scaleH .mScaleBody{flex-direction:row;align-items:center}
 .trkView.scaleH .mScaleBody .vsLine{height:6px;border-width:0 2px 2px 2px}
@@ -1141,8 +1103,6 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mChipsBL .mDock .mchip{flex-direction:row;gap:8px;min-height:34px}
 /* ★ the old scale corner is empty now (its lines live in the SCALE chip) */
 .trkCards .sideB{left:0;right:auto;bottom:var(--trk-list-bottom,0px);top:30%;justify-content:flex-end;width:min(300px,calc(100% - 12px))}   /* ★ the LIST drawer: flush to the left edge and the bottom, as wide as its rows need */
-.trkCards.lAndB .sideL{bottom:47%}
-.trkCards.lAndB .sideB{top:55%}
 .trkCards .sideB>.trkCard2[data-card="list"]{height:var(--trk-list-card-h,320px);flex:none!important;max-height:none!important}
 .trkView[data-narrow] .trkCard2[data-card="list"]>.cb>.facts{display:none}
 .trkView[data-narrow] .trkList .hd{flex-wrap:nowrap;gap:6px;padding:5px 8px}
@@ -1193,7 +1153,6 @@ function addCss() {
   const st = document.createElement('style'); st.id = 'trk-style'; st.textContent = CSS; document.head.appendChild(st);
 }
 function runSource(src: string) { const el = document.createElement('script'); el.textContent = src; document.head.appendChild(el); }
-const MIN_KEY = 'vibesdr.trkListMin';
 /** ★★★ beta96 the map control cards (docs/v12/MAP-CONTROL-CARDS.md): their rules are shared with the app (mapCards.ts). */
 const CARDS_KEY = 'vibesdr.mapCards';
 /** ★ the chips' sides follow the window (mapCards.ts cardSide / oneSide) — MAP CONTROLS moves edge as it is resized. */
@@ -1377,7 +1336,7 @@ export class TrackView {
         + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
         + `<button class="lPause" type="button" hidden>\u2016 <span class="n"></span></button><span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
-        + `<span class="wfInfo" aria-live="off"></span><button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div><div class="wfPane" aria-label="Live waterfall"></div></div>`
+        + `<span class="wfInfo" aria-live="off"></span></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div><div class="wfPane" aria-label="Live waterfall"></div></div>`
         /* ★★★ V12 (Stuart 11-27): the LIST ↔ WATERFALL switch — a folder tab out of the drawer's TOP-LEFT, the mirror of the
          *  maximise tab at its top-right; it carries the OTHER view's glyph. Only on a live map over a radio (setWaterfall). */
         + `<button class="lSwap" type="button" hidden aria-label="Show the live waterfall" title="Live waterfall (W)">${WF_SVG}</button>`
@@ -1615,15 +1574,6 @@ export class TrackView {
     if (d) d.hidden = !on;
   }
   /** ★ A chip tucked into its edge (its card shuts with it) or brought back out (its card stays shut until pressed). */
-  dockTuck(id: CardId, tucked: boolean) {
-    const d = this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null;
-    if (!d) return;
-    edgeDockSet(d, !tucked);
-    if (tucked && this.isCardOpen(id)) this.cardOpen(id, false, true);
-    if (!tucked) (d.querySelector('.mchip') as HTMLElement | null)?.focus({ preventScroll: true });
-    this.layoutSig = ''; this.cardsLayout();
-  }
-  get tuckedDocks(): CardId[] { return (Array.from(this.root.querySelectorAll('.mDock.tucked')) as HTMLElement[]).map((d) => d.dataset.dock as CardId); }
   private oneSideNow = false;
   /** ★★★ V12 short landscape (mapCards shortMap): the drawer a left side panel, the family a bottom row */
   private shortNow = false;
@@ -1845,7 +1795,10 @@ export class TrackView {
       const lc = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
       const lOpen = !!lc && !lc.hidden && !this.listAside && !!lc.parentElement?.classList.contains('sideB') && lc.offsetWidth > 0;
       const ch = (this.root.querySelector('.mDock[data-dock="list"]:not([hidden]) .hCard') as HTMLElement | null)?.getBoundingClientRect();
-      const r = lOpen ? lc!.getBoundingClientRect().right : ch && ch.width ? ch.right : m.left;
+      void lOpen; void ch; void lc;
+      // ★ Stuart 17:5x: the family hangs from the TOP edge, starting right of the ✕ corner piece
+      const xb = (this.root.querySelector('.trkTop .exit') as HTMLElement | null)?.getBoundingClientRect();
+      const r = xb && xb.width ? xb.right : m.left + 52;
       const v = `${Math.max(0, Math.round(r - m.left + 8))}px`;
       if (this.root.style.getPropertyValue('--trk-row-l') !== v) this.root.style.setProperty('--trk-row-l', v);
     }
@@ -1946,13 +1899,27 @@ export class TrackView {
     if (this.scaleMaxPx !== 80) { this.scaleMaxPx = 80; this.scaleDraw(); }
     const size = (el: HTMLElement | null) => { if (!el) return { w: 0, h: 0 }; const kid = (el.firstElementChild as HTMLElement | null) ?? el; const b = (el === attrib || el === zoom ? kid : el).getBoundingClientRect(); return { w: Math.ceil(b.width), h: Math.ceil(b.height) }; };
     // the family row's right end (the row's left is right of the panel / chip) and the right column's foot
-    const famR = Math.max(0, ...(Array.from(this.root.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard')) as HTMLElement[]).map((e) => { const b = e.getBoundingClientRect(); return b.width ? b.right - m.left : 0; }));
+    // ★ the bottom edge now holds the panel (left), the pill (centre) and this group (right): the group keeps clear of the
+    //   panel's edge and leaves the pill at least 150 px
+    const pn = this.root.querySelector('.trkCards .sideB > .trkCard2[data-card="list"]') as HTMLElement | null, pb = pn && !pn.hidden ? pn.getBoundingClientRect() : null;
+    const ld = (this.root.querySelector('.mDock[data-dock="list"]:not([hidden]) .hCard') as HTMLElement | null)?.getBoundingClientRect();
+    const leftUsed = Math.max(pb && pb.width ? pb.right - m.left : 0, ld && ld.width ? ld.right - m.left : 0);
+    const famR = leftUsed + 150;
     const col = this.root.querySelector('.mChipsR') as HTMLElement | null, cb = col?.getBoundingClientRect();
     const colFoot = cb && cb.height ? cb.bottom - m.top : 0, colLeft = cb && cb.width ? cb.left - m.left : W;
     const pieces: Array<{ el: HTMLElement | null; w: number; h: number; optional?: boolean }> = [
       { el: attrib, ...size(attrib) }, { el: help, ...size(help) }, { el: zoom, ...size(zoom) }, { el: scale, ...size(scale), optional: true },
     ].filter((p) => p.el && p.w > 0);
-    let row = 0, x = W - ins.r - GAP, rowBottom = ins.b + 6, rowH = 0;
+    // ★ the top row: its height (the cards drop from it) and, when the family would run into the right end, compact glyphs
+    { const fam = this.root.querySelector('.mChipsL') as HTMLElement | null, fb = fam?.getBoundingClientRect(), rb = (this.root.querySelector('.mChipsR') as HTMLElement | null)?.getBoundingClientRect();
+      const rowH = Math.max(fb && fb.height ? fb.bottom - m.top : 0, rb && rb.height ? rb.bottom - m.top : 0);
+      this.root.style.setProperty('--trk-row-h', `${Math.round(rowH) + 6}px`);
+      if (fb && rb && fb.width && rb.width) {
+        const gap = rb.left - fb.right;
+        if (gap < 8 && !this.root.classList.contains('famCompact')) { this.root.classList.add('famCompact'); this.layoutSig = ''; }
+        else if (gap > 90 && this.root.classList.contains('famCompact')) { this.root.classList.remove('famCompact'); this.layoutSig = ''; }
+      } }
+    let row = 0, x = W - ins.r - GAP, rowBottom = ins.b + 6, rowH = 0, row0Left = W - ins.r;
     for (const p of pieces) {
       let left = x - p.w;
       if (left < famR + GAP && row === 0) {   // ★ would run into the family row: up a row, from the right again
@@ -1965,7 +1932,12 @@ export class TrackView {
       }
       if (p.optional) p.el!.style.removeProperty('visibility');
       put(p.el, W - (left + p.w), rowBottom);
+      if (row === 0) row0Left = left;
       x = left - GAP; rowH = Math.max(rowH, p.h);
+    }
+    { // the pill between the panel and the group (row 0's leftmost piece)
+      const pl = Math.round(leftUsed + GAP), pr = Math.round(W - row0Left + GAP);
+      this.root.style.setProperty('--trk-pill-pl', `${pl}px`); this.root.style.setProperty('--trk-pill-pr', `${Math.max(GAP, pr)}px`);
     }
   }
   private shortGeomClear() {
@@ -2824,11 +2796,6 @@ export class TrackView {
     if (!d) return;
     (d.querySelector('.kb') as HTMLElement).innerHTML = html;
     (this.root.querySelector('.keySect') as HTMLElement).hidden = !html;   // ★ tweak 3 the KEY is a fold in MAP CONTROLS
-  }
-  private setMin(min: boolean, save = true) {
-    this.list.classList.toggle('min', min);
-    (this.list.querySelector('.mn') as HTMLElement).textContent = min ? '▴' : '▾';
-    if (save) try { localStorage.setItem(MIN_KEY, min ? '1' : '0'); } catch { /* private window */ }
   }
   /** ★ the row under the last press — a list redrawn every second (ADS-B's live report) can replace it between the press
    *  and its click: found again by its key (the ADS-B view's rule, adsbDown, carried over in beta96). */

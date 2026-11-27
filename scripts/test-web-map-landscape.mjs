@@ -125,7 +125,7 @@ async function radioDatalink(p, url) {
       ok(R.cap >= 4, `${tag}: room for ≥ 4 rows (${R.cap.toFixed(1)})`);
       ok(R.hd && R.hd.b - R.hd.t <= 46, `${tag}: the panel's bar is one line (${R.hd ? R.hd.b - R.hd.t : '-'} px)`);
       const fam = Object.keys(R).filter((k) => k.startsWith('L:') && R[k]);
-      ok(fam.length >= 3 && fam.every((k) => onScreen(R[k], w, h) && R[k].b >= h - 2 && R[k].l >= R.panel.r - 1), `${tag}: the family along the bottom edge right of the panel, all on screen (${fam.map((k) => `${k.slice(2)} ${R[k].l}-${R[k].r}/${R[k].t}-${R[k].b}`).join(', ')})`);
+      ok(fam.length >= 3 && fam.every((k) => onScreen(R[k], w, h) && R[k].t <= 1 && R[k].l >= R.x.r - 1), `${tag}: the family hangs from the TOP edge right of the ✕, all on screen (${fam.map((k) => `${k.slice(2)} ${R[k].l}-${R[k].r}/${R[k].t}-${R[k].b}`).join(', ')})`);
       ok(fam.length && fam.every((k) => R[k].top), `${tag}: …every family chip on top at its centre (${fam.filter((k) => !R[k].top).join(',') || 'all'})`);
       { const lim = await p.ev(`(() => { const t = document.getElementById('rxTimeLeft'); return !!t && !t.hidden && /\\d/.test(t.textContent || ''); })()`);
         ok(!!R['R:time'] === !!lim, `${tag}: the TIME tab shows exactly when a limit is in force for this listener (limit ${lim}, tab ${!!R['R:time']})`); }
@@ -155,21 +155,21 @@ async function radioDatalink(p, url) {
       ok(RW.panel && R.panel && RW.panel.t === R.panel.t && RW.panel.r === R.panel.r, `${tag}: the waterfall view keeps the panel's frame`);
       ok(RW.x && RW.x.top && RW.pill && RW.pill.top, `${tag}: …the ✕ and the pill still visible`);
       await p.ev(`${V}.querySelector('.lSwap').click(); 1`); await sleep(600);
-      // each family card opens upward and stays on screen
+      // each family card drops DOWN from its tab and stays on screen (Stuart 17:5x)
       for (const k of fam) {
         const id = k.slice(2);
         // ★ a locked listener's TUNE is dimmed and opens nothing (the ask rule) — not this test's business
         if (await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="${id}"]'); return !!b.dataset.dial && Number(getComputedStyle(b.closest('.mDock')).opacity) * Number(getComputedStyle(b).opacity) < 0.7 || !!b.closest('.dialLocked, .locked, .off'); })()`)) { console.log(`   (${tag}: ${id} is locked for this listener — skipped)`); continue; }
         await p.ev(`${V}.querySelector('[data-cbtn="${id}"]').click(); 1`); await sleep(700);
         const c = JSON.parse(await p.ev(`JSON.stringify((() => { const e = ${V}.querySelector('.trkCards .trkCard2[data-card="${id}"]'); if (!e || e.hidden) return null; const b = e.getBoundingClientRect(); return { l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom) }; })())`));
-        ok(c && onScreen(c, w, h) && c.b >= h - 2, `${tag}: ${id}'s card opens upward from the bottom, on screen (${JSON.stringify(c)})`);
+        ok(c && onScreen(c, w, h) && c.t <= 2, `${tag}: ${id}'s card drops down from the top edge, on screen (${JSON.stringify(c)})`);
         if (id === fam[0].slice(2)) await shot(`landscape-${w}x${h}-${id}.png`);
         await p.ev(`(() => { const e = ${V}.querySelector('.trkCards .trkCard2[data-card="${id}"]'); if (e && !e.hidden) e.querySelector(':scope > .ch').click(); return 1; })()`); await sleep(500);
       }
       // collapsed: the ☰ chip at the left edge, the family right of it
       await p.ev(`${V}.querySelector('[data-cbtn="list"]').click(); 1`); await sleep(900);
       const C = JSON.parse(await p.ev(RECTS));
-      ok(!C.panel && C.listChip && C.listChip.l <= 1 && fam.every((k) => C[k] && C[k].l >= C.listChip.r - 1), `${tag}: collapsed, the ☰ chip at the left edge and the family right of it`);
+      ok(!C.panel && C.listChip && C.listChip.l <= 1 && fam.every((k) => C[k] && C[k].t <= 1), `${tag}: collapsed, the ☰ chip at the left edge; the family still hangs from the top`);
       await p.ev(`${V}.querySelector('[data-cbtn="list"]').click(); 1`); await sleep(700);
     }
     // ── ★★ a real iPhone 17 Pro Max on its side in Safari (Stuart 17:0x): 932×370, iOS reporting the inset on BOTH sides ──
@@ -177,27 +177,35 @@ async function radioDatalink(p, url) {
     const DW = 956, DH = 376, IL = 62, IR = 62, IB = 20;
     for (const island of ['left', 'right']) { await p.size(DW, DH, true); await sleep(1200);
       await p.ev(`document.documentElement.dataset.island = '${island}'; 1`);
-      await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-l', '${IL}px'); v.style.setProperty('--sai-r', '${IR}px'); v.style.setProperty('--sai-b', '${IB}px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1800);
+      // ★ the island rule as islandSide.ts sets it on iOS: the island side the full inset, the other only the corner allowance (20)
+      const ER = island === 'left' ? 0 : IR, CR = island === 'left' ? 20 : IR, EL = island === 'right' ? 0 : IL, CL = island === 'right' ? 20 : IL;
+      await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-l', '${IL}px'); v.style.setProperty('--sai-r', '${IR}px'); v.style.setProperty('--sai-b', '${IB}px'); v.style.setProperty('--sai-re', '${ER}px'); v.style.setProperty('--sai-rc', '${CR}px'); v.style.setProperty('--sai-le', '${EL}px'); v.style.setProperty('--sai-lc', '${CL}px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1800);
       await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); if (${V}.querySelector('.trkList').dataset.pane === 'wf') ${V}.querySelector('.lSwap').click(); return 1; })()`); await sleep(1200);
       const D = JSON.parse(await p.ev(RECTS));
       await shot(`landscape-${DW}x${DH}-device-island-${island}.png`);
       const vw = await p.ev(`Math.round(window.visualViewport ? visualViewport.width : innerWidth)`);
       // ★ Stuart 17:1x: the EDGE pieces sit on the physical edge, their content in by the inset (the app's EdgeChip)
       const edge = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mChipsR > .edgeDock:not([hidden]), .trkView:not([hidden]) .mChipsR > #srvHealth')].map((d) => { const show = [...d.querySelectorAll(':scope > .hCard, :scope > .hTab')].find((e) => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0); if (!show) return null; const b = show.getBoundingClientRect(); const kids = [...show.querySelectorAll('*')].filter((k) => k.getClientRects().length && !k.children.length && getComputedStyle(k).visibility !== 'hidden'); const cr = Math.max(...kids.map((k) => k.getBoundingClientRect().right), 0); return { id: d.dataset.dock || d.id, r: Math.round(b.right), cr: Math.round(cr) }; }).filter(Boolean))`));
-      ok(edge.length >= 2 && edge.every((e) => e.r >= vw - 1 && e.cr <= vw - IR + 1), `device ${DW}×${DH} (island ${island}): every right-edge chip on the physical edge, its content in by the inset (${JSON.stringify(edge)})`);
-      const stray = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mHelp, .trkView:not([hidden]) .mChipsScale .hCard, .trkView:not([hidden]) .maplibregl-ctrl-group, .trkView:not([hidden]) .maplibregl-ctrl-attrib-button')].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map((e) => { const b = e.getBoundingClientRect(); return { c: String(e.className || e.tagName).slice(0, 30), l: Math.round(b.left), r: Math.round(b.right) }; }).filter((b) => b.r - b.l > 2 && (b.l < ${IL - 1} || b.r > ${vw} - ${IR - 1})))`));
+      // ★ Stuart 17:5x: RATE is the top-right corner piece (flush, its content in by the corner allowance); CHAT, health and time
+      //   hang from the TOP edge at the row's right end
+      const rate = edge.find((e) => e.id === 'rate');
+      ok(!!rate && rate.r >= vw - 1 && rate.cr <= vw - CR + 1, `device ${DW}×${DH} (island ${island}): RATE on the top-right corner, its content clear of the corner (${JSON.stringify(rate)})`);
+      const tops = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mChipsR > :not([hidden])')].map((d) => { const show = [...d.querySelectorAll(':scope > .hCard, :scope > .hTab')].find((e) => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0); const b = (show || d).getBoundingClientRect(); return { id: d.dataset.dock || d.id, t: Math.round(b.top), r: Math.round(b.right) }; }))`));
+      ok(tops.filter((e) => e.id !== 'rate').length >= 2 && tops.filter((e) => e.id !== 'rate').every((e) => e.t <= 1), `device ${DW}×${DH} (island ${island}): CHAT, health and time hang from the top edge (${JSON.stringify(tops)})`);
+      const stray = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mHelp, .trkView:not([hidden]) .mChipsScale .hCard, .trkView:not([hidden]) .maplibregl-ctrl-group, .trkView:not([hidden]) .maplibregl-ctrl-attrib-button')].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map((e) => { const b = e.getBoundingClientRect(); return { c: String(e.className || e.tagName).slice(0, 30), l: Math.round(b.left), r: Math.round(b.right) }; }).filter((b) => b.r - b.l > 2 && (b.l < ${CL - 1} || b.r > ${vw} - ${CR - 1})))`));
       ok(!stray.length, `device ${DW}×${DH} (island ${island}): no free-standing control (?, scale, zoom, credits) in an inset (${JSON.stringify(stray).slice(0, 400)})`);
       const tabs = JSON.parse(await p.ev(`JSON.stringify(['#srvHealth', '.trkView:not([hidden]) [data-dock="time"]'].map((q) => { const d = document.querySelector(q); if (!d || d.hidden || !d.getClientRects().length) return 0; return [...d.querySelectorAll(':scope > .hCard, :scope > .hTab')].filter((e) => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0).length; }))`));
       ok(tabs.every((n) => n <= 1), `device ${DW}×${DH} (island ${island}): health and time each show once — card or tab, never both (${tabs.join(' / ')})`);
       { const bar = JSON.parse(await p.ev(`JSON.stringify((() => { const hd = ${V}.querySelector('.trkCard2[data-card="list"] .trkList .hd').getBoundingClientRect(), ch = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect(), tb = ${V}.querySelector('.trkCard2[data-card="list"] .trkList .hd .tabWrap'); const t = tb && tb.getClientRects().length ? tb.getBoundingClientRect() : null; return { hdT: Math.round(hd.top), hdB: Math.round(hd.bottom), chT: Math.round(ch.top), chB: Math.round(ch.bottom), chR: Math.round(ch.right), tT: t ? Math.round(t.top) : null, tL: t ? Math.round(t.left) : null }; })())`));
         ok(bar.hdB - bar.hdT <= 46 && bar.chT >= bar.hdT - 2 && bar.chB <= bar.hdB + 2 && (bar.tT == null || (bar.tT >= bar.hdT - 1 && bar.tL >= bar.chR - 1)), `device ${DW}×${DH} (home bar ${IB}): the drawer's bar is ONE row — ☰ n ⌄ then the tabs, level (${JSON.stringify(bar)})`); }
+      ok(D.pill && D.pill.b >= DH - 1 && D.panel && D.pill.l >= D.panel.r - 1, `device ${DW}×${DH} (island ${island}): the shared-tuner pill sits on the bottom edge, between the panel and the group (${JSON.stringify(D.pill)})`);
       ok(!!D.scale, `device ${DW}×${DH} (island ${island}): the scale strip is there (${JSON.stringify(D.scale)})`);
       ok(D.zoom && D.zoom.b >= DH - 50 && D.zoom.r - D.zoom.l > D.zoom.b - D.zoom.t, `device ${DW}×${DH} (island ${island}): the zoom is a horizontal pair on the bottom edge (${JSON.stringify(D.zoom)})`);
       const all = ['x', 'pill', 'zoom', 'scale', 'help', 'attrib', 'listChip', 'lMax', 'lSwap', ...Object.keys(D).filter((k) => (k.startsWith('L:') || k.startsWith('R:')) && D[k])].filter((k) => D[k]);
       const clash = []; for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (hit(D[all[i]], D[all[j]])) clash.push(`${all[i]}×${all[j]}`);
       for (const k of all) if (D[k] && D.panel && !['x', 'listChip', 'lMax', 'lSwap'].includes(k) && hit(D[k], D.panel)) clash.push(`${k}×panel`);
       ok(!clash.length, `device ${DW}×${DH} (island ${island}): nothing overlaps (${clash.join(' ') || 'clear'})`);
-      await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b']) v.style.removeProperty(k); return 1; })()`);
+      await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b', '--sai-re', '--sai-rc', '--sai-le', '--sai-lc']) v.style.removeProperty(k); return 1; })()`);
     }
     // ── ★ the no-regression check (Stuart: "portrait perfect"): 430×932 with the portrait insets — not the short layout ──
     { await p.size(430, 932, true); await sleep(1200);

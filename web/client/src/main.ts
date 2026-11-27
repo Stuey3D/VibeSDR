@@ -41,7 +41,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { recordingLabel } from '../../../src/services/recordingLabel';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport, type AfcState } from './spectrum';
-import { rangeBearing as adsbRangeBearing, adsbListHtml, adsbStatus, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, adsbImageBase } from './adsb';
+import { rangeBearing as adsbRangeBearing, adsbStatus, adsbCaptureWarning, cleanHex, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode,
@@ -9774,10 +9774,6 @@ let adsbReport: AdsbReport | null = null;
  *  the 1090 MHz readout would tune the radio straight back to 1090. */
 let adsbPendingMode: SDRMode | null = null;
 /** The furthest aircraft's address, for the top bar's FURTHEST key (adsbRender). */
-let adsbFarHex = '';
-/** ★ The list header's other two chips (adsb.ts adsbNewest / adsbLongestTracked) — the hex each one shows on a tap. */
-let adsbNewHex = '', adsbLongHex = '';
-const adsbFirstSeen = new Map<string, number>();
 
 /** Read the capability from a radio's own vibeserver.json (see loadAudioPolicy). */
 function adsbReadCap(j: any) {
@@ -9877,7 +9873,6 @@ function initWholeResume() {
 function adsbUiOff() {
   adsbOn = false; setTimeout(drmBoxSync, 0);
   adsbReport = null;
-  adsbFirstSeen.clear();   // ★ the next visit's first report is "already there", not new
   if (spec) spec.adsbHeld = false;
   setTimeout(syncDialTips, 0);
   wholeRadioLock(false, 'ADS-B');
@@ -9902,16 +9897,13 @@ function adsbChromeMount(v: TrackView, tab: string) {
   for (const id of ['adsbCapture', 'adsbGain']) { const el = $(id); if (el.parentElement !== tune) tune.appendChild(el); }
   { const el = $('adsbChat'); if (el.parentElement !== top) top.appendChild(el); }
   v.tuneSync();
-  /* ★★ Stuart 16:53 ("broke it" — the old panel leaking into the LIST): the FURTHEST / LONGEST chips are the STATS card's
-   *  now (asStatsSync, every source merged — the chips only knew this radio's own ADS-B), so they stay parked */
-  void head; void tab;
-  const chips = $('adsbChips'); const park = document.getElementById('adsbChrome'); if (park && chips.parentElement !== park) park.appendChild(chips);
+  void head; void tab;   // ★★ Stuart 16:53: NEWEST / FURTHEST / LONGEST are the STATS card's (asStatsSync, every source merged)
   for (const id of ['adsbFeedWarn', 'adsbGainPop']) { const el = $(id); if (el.parentElement !== over) over.appendChild(el); }
 }
 function adsbChromePark() {
   const park = document.getElementById('adsbChrome');
   if (!park) return;
-  for (const id of ['adsbCapture', 'adsbGain', 'adsbChat', 'adsbChips', 'adsbFeedWarn', 'adsbGainPop']) {
+  for (const id of ['adsbCapture', 'adsbGain', 'adsbChat', 'adsbFeedWarn', 'adsbGainPop']) {
     const el = document.getElementById(id);
     if (el && el.parentElement !== park) park.appendChild(el);
   }
@@ -10073,6 +10065,12 @@ function mapSharedSync() {
       const word = /ask/i.test(t) ? 'Ask' : /free/i.test(t) ? 'Free' : /lock/i.test(t) ? 'Locked' : '';
       if (head && word && head.length < 24) line.textContent = [head, word, n].filter(Boolean).join(' · ');
       else line.textContent = ['ASK IN CHAT', n].filter(Boolean).join(' · ');
+      /* ★ still too wide (the short-landscape pill between the panel and the bottom-right group at 667 px): the word and the
+       *  count alone — never an ellipsis through the count (Stuart 17:5x: "Ask · 3/4", "Locked · 3/4") */
+      requestAnimationFrame(() => {
+        if (!line.isConnected || line.scrollWidth <= line.clientWidth + 1) return;
+        line.textContent = [word || 'Ask', n].filter(Boolean).join(' · ');
+      });
     });
     line.setAttribute('aria-label', st.text.replace(/👤/, 'listening') + ' — open the chat');
     mapShChatSync();
@@ -11470,12 +11468,16 @@ function asRender() {
     /* ★★ Stuart 16:53: ONE list in ADS-B live too — the old ADS-B table (#adsbList) is gone from the card; every aircraft,
      *  this radio's own and the feeds', is a row of the same kind, nearest or latest. This radio's live ones keep the map
      *  item's key (adsb:<hex>), so a tap still finds the plane on the map. The licence credit is HELP's (setCredit). */
-    void adsbListHtml; void otherPlanes;
+    void otherPlanes;
     const sorted = aircraftOrder(avc.planes.map((p) => {
       const nm = rx && p.lat != null && p.lon != null ? adsbRangeBearing(rx, p.lat, p.lon).nm : null;
       return { key: `a:${p.key}`, icao: p.icao, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
     }), asSort).slice(0, LIVE_ROW_CAP);
-    rows = sorted.map((x) => { const r = byKey.get(x.key); if (!r) return ''; return trkRowHtml(isLiveAc(x.icao) ? { ...r, key: `adsb:${cleanHex(x.icao)}` } : r); }).join('');
+    // ★ this radio's live ADS-B rows keep their reply SNR chip (the old table's, beta96 message SNR)
+    const liveSnr = new Map<string, number>();
+    if (adsbOn && adsbR) for (const ac of adsbR.aircraft as any[]) { const h = cleanHex(ac.hex); const v = Number(ac.snr); if (h && Number.isFinite(v)) liveSnr.set(h, v); }
+    rows = sorted.map((x) => { const r = byKey.get(x.key); if (!r) return ''; if (!isLiveAc(x.icao)) return trkRowHtml(r); const h = cleanHex(x.icao);
+      return trkRowHtml({ ...r, key: `adsb:${h}`, ...(liveSnr.has(h) ? { snr: liveSnr.get(h), snrMode: 'adsb' } : {}) }); }).join('');
     if (!rows) rows = `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : avOn && !avReport ? 'Taking the receiver to the aircraft datalink…' : AV_EMPTY)}</div>`;
   } else if (tab === 'messages') {
     const list = msgFilter(asMsgs, asMsgKey).slice(0, LIVE_ROW_CAP);
@@ -12260,19 +12262,6 @@ function adsbGainRender() {
  *  The list and the count are the map's (asRender). */
 function adsbRender() {
   if (!adsbOn) return;
-  {
-    // ★ the list header's chips — written only when their text changes, so a tap or a highlight is not lost to a redraw
-    const put = (id: string, h: string) => { const b = $(id) as HTMLButtonElement; if (b.innerHTML !== h) b.innerHTML = h; b.hidden = !h; };
-    const nw = adsbNewest(adsbReport, adsbFirstSeen, Date.now());
-    adsbNewHex = nw ? nw.hex : '';
-    put('adsbNew', nw ? adsbChipHtml('NEWEST', '', nw.name) : '');
-    const far = adsbFurthest(adsbReport, myPos());
-    adsbFarHex = far ? far.hex : '';
-    put('adsbFar', adsbFurthestHtml(far));
-    const lg = adsbLongestTracked(adsbReport);
-    adsbLongHex = lg ? lg.hex : '';
-    put('adsbLong', lg ? adsbChipHtml('LONGEST TRACKED', `${Math.round(lg.nm)} NM`, lg.name) : '');
-  }
   adsbGainRender();
   {
     /* ★★ THE FEED WARNING (GainControl::warning): full gain, a noise floor far under where a working ADS-B feed sits,
@@ -12662,9 +12651,6 @@ function buildControls() {
     if (xb) (xb as HTMLElement).onclick = () => { if (dabOnlyNow()) { showPill(DAB_ONLY_WHY, 6000); return; } dabSetMode(false); }; }
   /* ★ ADS-B's chrome on the AIR & SEA map (beta96): the chips show their aircraft on the map, GAIN, CHAT (the card's key
    *  is under the map). EXIT ADS-B is the map's exit key (asExit); the rows are the map's (TrackView). */
-  $('adsbFar').onclick = () => { if (adsbFarHex) asFocusAircraft(adsbFarHex); };
-  $('adsbNew').onclick = () => { if (adsbNewHex) asFocusAircraft(adsbNewHex); };
-  $('adsbLong').onclick = () => { if (adsbLongHex) asFocusAircraft(adsbLongHex); };
   $('adsbGain').onclick = () => { const p = $('adsbGainPop'); p.hidden = !p.hidden; adsbGainRender(); };
   $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
   $('adsbFeedWarnX').onclick = () => {
