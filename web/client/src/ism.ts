@@ -7,11 +7,14 @@
  * ★ The server's `line` is metric with PSI for tyres. A listener who picks mph or kPa/bar gets the line rebuilt here from
  *   the numeric fields (ismLine) — one rule, the same order as the server's readable(). */
 
+import { meshSuspect, meshSuspectWords } from '../../../src/utils/meshPlausible';
 import { snrChipHtml, ismSnrMode, loraSnrMode } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml, meshSortRows,
          type MeshKnown, type MeshRoute, type MeshSort } from '../../../src/utils/meshRoute';
 
 export interface IsmDevice {
+  /** ★★ (set per render, meshPlausible.ts) its reported position looks wrong for its route; never framed (_nofit) */
+  _sus?: import('../../../src/utils/meshPlausible').MeshSuspect | null; _nofit?: boolean;
   key: string; kind: string; make: string; model: string; name: string; line: string;
   nick?: number; id?: string; ch?: number;
   temp?: number; hum?: number; wind?: number; gust?: number; dir?: number; rain?: number; rainNew?: number; rainRate?: number;
@@ -215,6 +218,14 @@ export function ismRouteKnown(devs: readonly IsmDevice[], rx: { lat: number; lon
     out.push({ id: d.node.toLowerCase(), name: ismMapLabel(d), lat: d.lat as number, lon: d.lon as number });
   }
   return out;
+}
+/** ★★ (Stuart 11-27) mark each mesh node whose reported position looks wrong for its route (meshPlausible.ts): `_sus`
+ *  for the badge, the card and the furthest, `_nofit` so FIT / AUTO never frame it. Run before the status / rows. */
+export function ismMarkSuspects(devs: readonly IsmDevice[], known: readonly MeshKnown[], rx: { lat: number; lon: number } | null): void {
+  for (const d of devs) {
+    d._sus = d.kind === 'meshcore' || d.kind === 'meshtastic' ? meshSuspect(d, known, rx) : null;
+    d._nofit = !!d._sus || undefined;
+  }
 }
 /** ★★ beta96 a node's route on the map (meshRoute), or null — only MeshCore nodes carry one. */
 export function ismRouteOf(d: IsmDevice, known: readonly MeshKnown[], rx: { lat: number; lon: number } | null): MeshRoute | null {
@@ -778,7 +789,10 @@ export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number }
     ? `<circle cx="11" cy="11" r="9.5" fill="${c}" stroke="#111" stroke-width="1.2"/>`
     : `<rect x="1.5" y="1.5" width="19" height="19" rx="4.5" fill="${c}" stroke="#111" stroke-width="1.2"/>`;
   const ring = d.approx ? `<circle cx="11" cy="11" r="10.6" fill="none" stroke="${c}" stroke-width="1" stroke-dasharray="2 2"/>` : '';
-  return { html: `<svg width="24" height="24" viewBox="-1 -1 24 24" style="opacity:${op}" aria-hidden="true">${shape}${GLYPH[t] || GLYPH.companion}${ring}</svg>`, w: 24, h: 24 };
+  // ★★ meshPlausible.ts: a suspect position wears a "?" badge, the whole icon dimmed
+  const sus = d._sus ? `<circle cx="18.5" cy="3.5" r="4.6" fill="#ffd34d" stroke="#111" stroke-width="1"/><text x="18.5" y="6.3" text-anchor="middle" font-size="7.5" font-weight="800" font-family="system-ui,sans-serif" fill="#111">?</text>` : '';
+  const o2 = d._sus ? Math.min(+op, 0.6).toFixed(2) : op;
+  return { html: `<svg width="24" height="24" viewBox="-1 -1 24 24" style="opacity:${o2}" aria-hidden="true">${shape}${GLYPH[t] || GLYPH.companion}${ring}${sus}</svg>`, w: 24, h: 24 };
 }
 /** ★ What the layer pulses on: a node heard again (its packet count grew). */
 export function ismMapHeard(d: IsmDevice): number { return d.count; }
@@ -790,12 +804,13 @@ export function ismMapRank(d: IsmDevice): number {
 }
 export function ismMapLabel(d: IsmDevice): string {
   const n = meshName(d.long) || meshName(d.short) || meshName(d.name) || d.node || d.key;
-  return d.approx ? `${n} (approximate)` : n;
+  return d.approx ? `${n} (approximate)` : d._sus ? `${n} ?` : n;
 }
 /** The card: the name, the network and what it is, how long ago it was heard, then the radio side and what it said about
  *  itself (ismLoraDetail WITHOUT its messages). */
 export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null, miles = false, route: MeshRoute | null = null): string {
-  const lines = [...ismLoraDetail(d, rx, false, miles), ...(route ? route.words : [])];   // ★★ beta96 the route card
+  const lines = [...(d._sus ? [meshSuspectWords(d._sus, rx && d.lat !== undefined && d.lon !== undefined ? meshKm(rx, d.lat, d.lon) : null, miles)] : []),
+                 ...ismLoraDetail(d, rx, false, miles), ...(route ? route.words : [])];   // ★★ beta96 the route card
   const t = NODE_TYPE_WORD[ismNodeType(d)];
   return `<div class="pop"><b>${escM(d.long || d.name)}</b>${d.short && d.short !== d.long ? ` (${escM(d.short)})` : ''}<br>`
     + `${escM(ismNetName(d.kind))} ${escM(t)} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
