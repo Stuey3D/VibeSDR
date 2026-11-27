@@ -209,7 +209,7 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'joining a radio in AIS opens the AIR & SEA map on AIS');
   ok(await until(`/^Shared VFO: (Locked|.*AWAITING|.*YOURS)/i.test((${MS})?.text || '')`, 10000), `locked: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
   const st = JSON.parse(await ev(`JSON.stringify(${MS})`)) || {};
-  ok(/ASK IN CHAT TO EXIT/.test(st.text) && /2\/4/.test(st.text), 'the line says ASK IN CHAT TO EXIT with the count');
+  ok(/Locked: ask in chat to change mode or exit/.test(st.text) && /2\/4$/.test(st.text), `the line says Locked: ask in chat to change mode or exit, with the count (${st.text})`);
   ok(st.exitLocked && /chat/i.test(st.exitTitle), `EXIT greyed with its reason — "${st.exitTitle}"`);
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.length > 0 && tune.every((t) => t.endsWith('!')), `every TUNE key greyed — ${tune.join(' ')}`);
