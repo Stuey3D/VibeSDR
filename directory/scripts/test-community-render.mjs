@@ -16,6 +16,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { answers, rebase, contributors, answerFor, radioAnswer, PI500_RADIOS } from './community-fixtures.mjs';
+import { chromeLayoutExpr, setInsetsExpr, MAP_SIZES } from '../../scripts/lib/map-chrome-layout.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUB = path.join(here, '..', 'public');
@@ -135,6 +136,15 @@ const resetHits = () => { for (const k of Object.keys(hits)) { hits[k] = 0; aske
 await call('Runtime.enable'); await call('Page.enable');
 await call('Network.enable'); await call('Network.setBlockedURLs', { urls: ['*adsbdb.com*', '*hexdb.io*'] });   // ★ never the live route source
 const mockRoutes = () => js(`CommunityMap.ROUTE.api = 'http://127.0.0.1:${RP}/v0/callsign/'; true`);
+// ★★★ b97 THE CARD SYSTEM (map-chrome.js): the old header rows, bars and panels are gone — the drivers press the chips' own
+//     buttons (they exist while a card is shut: parked, not removed). AUTO keeps the map framed, so a driver that moves the
+//     map by code holds it first (a code jumpTo is not a person's gesture — AUTO would glide straight back).
+const tgl = (id) => js(`(() => { const b = document.querySelector('.trkCard2 [data-tgl="${id}"]'); if (!b) return false; b.click(); return true; })()`);
+const tglOn = (id) => js(`document.querySelector('.trkCard2 [data-tgl="${id}"]')?.getAttribute('aria-pressed')`);
+const hold = () => js(`MC.fitPause(); true`);
+const card = (id, on = true) => js(`MC.card('${id}', ${on}); true`);
+const cardOpen = (id) => js(`(() => { const c = document.querySelector('.trkCards .trkCard2[data-card="${id}"]'); return !!c && !c.hidden && c.getBoundingClientRect().height > 0; })()`);
+const keyText = () => js(`document.querySelector('.trkKey .kb').textContent`);
 
 try {
   console.log('── 3 receivers: the page reads them directly; all three groups on together ──');
@@ -143,9 +153,9 @@ try {
   let c = await cm();
   await mockRoutes();
   ok(JSON.stringify(c.groups) === JSON.stringify(['aviation', 'maritime', 'misc']), 'AVIATION, MARITIME and MISC all on by default');
-  ok(await js(`[...document.querySelectorAll('#groups [data-group]')].map(b => b.getAttribute('aria-pressed')).join()`) === 'true,true,true', 'three independent group toggles');
+  ok(await js(`['aviation', 'maritime', 'misc'].map(g => document.querySelector('.trkCard2 [data-tgl="g:' + g + '"]')?.getAttribute('aria-pressed')).join()`) === 'true,true,true', 'three independent group toggles (in LAYERS)');
   ok(JSON.stringify(c.modes) === JSON.stringify(['adsb', 'hfdl', 'ndb', 'ais', 'dsc', 'navtex', 'sondes', 'aprs', 'mesh']), `a chip only for what is shared (${c.modes})`);
-  ok(await js(`[...document.querySelectorAll('#modes [data-mode]')].every(b => /shared for the last/.test(b.title))`), 'each chip’s tooltip says its window');
+  ok(await js(`CM.MODES.filter(m => window.__cm.modes.includes(m.id)).every(m => /shared for the last/.test(document.querySelector('.trkCard2 [data-tgl="' + m.id + '"]')?.title || ''))`), 'each LAYERS chip’s tooltip says its window');
   ok(c.heardBy['a:4CA000'] === 2 && Object.entries(c.heardBy).some(([k, n]) => k.startsWith('nw:') && n === 2) && c.heardBy['p:G4ABC-9'] === 2, '★ merged: BAW696, a NAVTEX warning and an APRS station each "heard by 2"');
   ok(['aircraft', 'ship', 'dsc', 'navst', 'navwarn', 'navmet', 'navmsg', 'ndb', 'sonde', 'aprs', 'mesh'].every((k) => c.byKind[k] > 0), `every kind drawn at once: ${JSON.stringify(c.byKind)}`);
   ok(c.gpu.shapes >= 2 && c.gpu.met > 0 && c.gpu.dense > 0, `GPU layers: ${JSON.stringify(c.gpu)} (warning areas + the sonde's track as shapes; forecasts as the NAVTEX map's pills)`);
@@ -172,22 +182,21 @@ try {
   ok(acs && acs['a:A1B2C3'].cls === 'heavy', `★ an older server's row (no field 11): its type alone, B77W → heavy (${JSON.stringify(acs && acs['a:A1B2C3'])})`);
   ok(acs && Object.values(acs).every((a) => a.glyph), '★ every one is DRAWN with its class\'s own shape from the kit, in its mode\'s colour, on the GPU layer');
   ok(acs && acs['a:4CA000'].rot === 92 && acs['a:4CA001'].rot === 90 && acs['a:A1B2C3'].rot === 0, `…pointing along its track (the newest fix's 92°; no track = north): ${acs && acs['a:4CA000'].rot}, ${acs && acs['a:A1B2C3'].rot}`);
-  await js(`document.getElementById('keyBtn').click()`); await sleep(200);
-  ok(await js(`(() => { const k = document.getElementById('key'); return !k.hidden && /Heavy \\(wide-body\\)/.test(k.textContent) && /Helicopter or gyroplane/.test(k.textContent) && /Light aircraft/.test(k.textContent) && k.querySelectorAll('svg[viewBox="0 0 40 40"]').length >= 11; })()`),
-     '★ the KEY shows the glyph classes, drawn from the kit');
-  await js(`document.getElementById('keyBtn').click()`); await sleep(100);
+  ok(await js(`(() => { const k = document.querySelector('.trkKey .kb'); return !document.querySelector('.keySect').hidden && /Heavy \\(wide-body\\)/.test(k.textContent) && /Helicopter or gyroplane/.test(k.textContent) && /Light aircraft/.test(k.textContent) && k.querySelectorAll('svg[viewBox="0 0 40 40"]').length >= 11; })()`),
+     '★ the KEY (in MAP CONTROLS) shows the glyph classes, drawn from the kit');
 
   await sleep(4000);
   await shot('community-all-groups-desktop.png');
 
   console.log('── the SEA AREAS: the server map\'s outlines and names, one static file, under the markers ──');
-  ok(await js(`(() => { const b = document.querySelector('#modes [data-sea]'); return !!b && b.getAttribute('aria-pressed') === 'true' && b.closest('.set') === document.querySelector('[data-mode=ais]').closest('.set') && /SEA AREAS/.test(b.textContent); })()`),
-     'a SEA AREAS chip in the MARITIME row, ON by default');
+  ok(await js(`(() => { const b = document.querySelector('.trkCard2 [data-tgl="sea"]'), all = [...document.querySelectorAll('.trkCard2 [data-tgl]')].map(x => x.dataset.tgl);
+     return !!b && b.getAttribute('aria-pressed') === 'true' && all.indexOf('sea') > all.indexOf('g:maritime') && all.indexOf('sea') < all.indexOf('g:misc') && /SEA AREAS/.test(b.textContent); })()`),
+     'a SEA AREAS chip in LAYERS, in MARITIME, ON by default');
   ok(await until(`window.__cm.sea && window.__cm.sea.drawn`, 10000), `drawn: ${JSON.stringify(await js('window.__cm.sea && { areas: __cm.sea.areas, bytes: __cm.sea.bytes }'))}`);
   ok(seaHits === 1, `the sea-areas file fetched ONCE, from beside the page (${seaHits})`);
   const order = await js(`gl.getStyle().layers.map(l => l.id)`);
   ok(order.indexOf('cm-sea-name-s') < order.indexOf('cm-area') && order.indexOf('cm-sea-line-s') < order.indexOf('cm-dense-pts') && order.indexOf('cm-sea-red') < order.indexOf('cm-rx'), 'its layers sit UNDER the warnings, the markers and the receivers');
-  await js(`gl.jumpTo({ center: [-4, 55.5], zoom: 4.6 }); true`); await sleep(2500);
+  await hold(); await js(`gl.jumpTo({ center: [-4, 55.5], zoom: 4.6 }); true`); await sleep(2500);
   const seaIds = await js(`[...new Set(gl.queryRenderedFeatures({ layers: ['cm-sea-line-s', 'cm-sea-line-c', 'cm-sea-red', 'cm-sea-amber'] }).map(f => f.properties.id))]`);
   ok(['dogger', 'fisher', 'shannon', 'rockall', 'malin', 'irishsea', 'gbight'].every((x) => seaIds.includes(x)), `around the UK, Ireland and the North Sea: ${seaIds.length} areas outlined (${seaIds.slice(0, 12).join(', ')}…)`);
   const names = await js(`gl.queryRenderedFeatures({ layers: ['cm-sea-name-s', 'cm-sea-name-o', 'cm-sea-name-c'] }).map(f => f.properties.id)`);
@@ -196,47 +205,48 @@ try {
   ok(/Met Office/.test(await js(`document.querySelector('.maplibregl-ctrl-attrib')?.textContent || ''`)), '…and the attribution line says so');
   await sleep(1500);
   await shot('community-sea-areas.png');
-  await js(`document.querySelector('#modes [data-sea]').click(); true`);
+  await tgl('sea');
   ok(await until(`window.__cm.sea && !window.__cm.sea.on && gl.getLayoutProperty('cm-sea-line-s', 'visibility') === 'none'`, 4000)
      && JSON.parse(await js(`localStorage.getItem('vibesdr.communityMap.v2')`)).seaAreas === false, 'SEA AREAS off: hidden, and remembered per viewer');
   await sleep(600);
   ok((await js(`gl.queryRenderedFeatures({ layers: ['cm-sea-line-s', 'cm-sea-name-s'] }).length`)) === 0, '…nothing of it drawn');
-  await js(`document.querySelector('#modes [data-sea]').click(); true`);
+  await tgl('sea');
   ok(await until(`window.__cm.sea.on && gl.getLayoutProperty('cm-sea-line-s', 'visibility') === 'visible'`, 4000) && seaHits === 1, '…on again, from the file already in (no second fetch)');
-  await js(`document.querySelector('[data-group=maritime]').click(); true`);
+  await tgl('g:maritime');
   ok(await until(`!window.__cm.sea.on`, 3000), 'MARITIME off takes the sea areas with it');
-  await js(`document.querySelector('[data-group=maritime]').click(); true`);
+  await tgl('g:maritime');
 
-  console.log('── FIT: every item drawn now, as the server maps\' key ──');
-  ok(await js(`(() => { const b = document.getElementById('fitBtn'), r = b.getBoundingClientRect(), m = document.getElementById('map').getBoundingClientRect(); return b.textContent === 'FIT' && Math.abs(m.right - r.right - 10) < 2 && Math.abs(r.top - m.top - 10) < 2; })()`), 'a FIT key, top right of the map');
-  const inBox = `(() => { const b = gl.getBounds(); const pts = fitPoints(); return pts.length > 0 && pts.every(([lo, la]) => b.contains([lo, la])); })()`;
-  await js(`gl.jumpTo({ center: [120, -30], zoom: 7 }); true`); await sleep(300);
+  console.log('── AUTO / FIT (MAP CONTROLS): every item drawn now, the shared auto fit of every server map ──');
+  ok(await js(`(() => { const a = document.querySelector('.trkCard2[data-card="map"] .fit'), f = document.querySelector('.trkCard2[data-card="map"] .fitOnce'); return !!a && !!f && !a.hidden && !f.hidden && f.textContent === 'FIT'; })()`), 'AUTO and FIT keys in MAP CONTROLS (the map\'s own auto fit)');
+  // ★ the auto fit leaves out the furthest few per cent and pads for the chips: "in view" = all but 5 % of the points
+  const inBox = `(() => { const b = gl.getBounds(); const pts = fitPoints(); const n = pts.filter(([lo, la]) => b.contains([lo, la])).length; return pts.length > 0 && n >= Math.floor(pts.length * 0.95); })()`;
+  await hold(); await js(`gl.jumpTo({ center: [120, -30], zoom: 7 }); true`); await sleep(300);
   ok(!(await js(inBox)), '(moved away: not everything in view)');
-  await js(`document.getElementById('fitBtn').click(); true`); await sleep(1200);
-  ok(await js(inBox), `FIT: all ${await js('fitPoints().length')} drawn points in view`);
-  await js(`document.querySelector('[data-group=aviation]').click(); document.querySelector('[data-group=misc]').click(); true`); await sleep(300);
-  await js(`document.getElementById('fitBtn').click(); true`); await sleep(1200);
-  const shipBox = await js(`window.__cmFit`);
-  ok(await js(inBox) && await js(`fitPoints().length < ${JSON.stringify(c.shown)}`), `…MARITIME alone: FIT frames only what it draws (${shipBox.n} points, box ${shipBox.box.map((x) => x.toFixed(1))})`);
-  await js(`document.querySelector('[data-age="900"]').click(); true`); await sleep(300);
+  await js(`document.querySelector('.trkCard2[data-card="map"] .fitOnce').click(); true`);
+  ok(await until(inBox, 6000), `FIT: the ${await js('fitPoints().length')} drawn points in view (the glide)`);
+  await tgl('g:aviation'); await tgl('g:misc'); await sleep(300);
+  await js(`document.querySelector('.trkCard2[data-card="map"] .fitOnce').click(); true`);
+  ok(await until(inBox, 6000) && await js(`fitPoints().length < ${JSON.stringify(c.shown)}`), `…MARITIME alone: FIT frames only what it draws (${await js('fitPoints().length')} points)`);
+  const nAll = await js(`fitPoints().length`);
+  await js(`document.querySelector('[data-rng="900"]').click(); true`); await sleep(300);
   const n15 = await js(`fitPoints().length`);
-  ok(n15 <= shipBox.n, `…and keeps to the HEARD IN window (15 min: ${n15} points)`);
-  await js(`document.querySelector('[data-age="86400"]').click(); document.querySelector('[data-group=aviation]').click(); document.querySelector('[data-group=misc]').click(); true`);
+  ok(n15 <= nAll && await js(`F.maxAge === 900`), `…and keeps to the HEARD IN window (TIME in MAP CONTROLS; 15 min: ${n15} points)`);
+  await js(`document.querySelector('[data-rng="86400"]').click(); true`); await tgl('g:aviation'); await tgl('g:misc');
 
   console.log('── the receivers wear the directory map\'s radio ──');
   ok(await js(`/M14\.2 11\.6v6\.4/.test(RX_SVG({ listeners: 0, maxListeners: 4 }, false)) && /#28A745/.test(RX_SVG({ listeners: 0, maxListeners: 4 }, false)) && /#e05050/.test(RX_SVG({ listeners: 4, maxListeners: 4 }, false))
      && /#ffd23f/.test(RX_SVG({ pin: true }, false)) && /#ffb833/.test(RX_SVG({}, true))`), 'the radio glyph, in the directory’s state colours (padlock for a PIN; amber plate when selected)');
-  await js(`gl.jumpTo({ center: [-1, 51.6], zoom: 6.3 }); true`); await sleep(1500);
+  await hold(); await js(`gl.jumpTo({ center: [-1, 51.6], zoom: 6.3 }); true`); await sleep(1500);
   ok((await js(`gl.queryRenderedFeatures({ layers: ['cm-rx'] }).length`)) === 3, 'three receivers drawn at their grid centres');
   await js(`pick('pi500', true); true`); await sleep(1500);
-  ok(await js(`document.querySelector('#rxList .row.sel')?.dataset.id === 'pi500' && !document.getElementById('rx').hidden`), 'a receiver chosen: selected in the RECEIVERS panel');
+  ok(await js(`document.querySelector('.trkCard2[data-card="servers"] .rxRow.sel')?.dataset.id === 'pi500'`) && await cardOpen('servers'), 'a receiver chosen: selected in the RECEIVERS card, which opens');
   await shot('community-receivers-radio-glyph.png');
-  await js(`document.querySelector('[data-close=rx]').click(); selected = ''; render(); true`);
+  await card('servers', false); await js(`selected = ''; render(); true`);
 
   console.log('── a click picks the point over the area under it ──');
   {
     // ★ Stuart 11-26: an aircraft over a NAVTEX area opened the AREA's card. Find any point drawn over an area and click it.
-    await js(`document.getElementById('fitBtn').click(); true`); await sleep(1500);
+    await js(`MC.fitNow(); true`); await sleep(3000); await hold();
     const r = await js(`(() => {
       const pts = gl.queryRenderedFeatures({ layers: ['cm-pts', 'cm-dense-pts'].filter(l => gl.getLayer(l)) });
       for (const f of pts) {
@@ -323,69 +333,70 @@ try {
     await shot('community-aircraft-datalink-track.png');
     await js(`document.querySelector('.maplibregl-popup-close-button').click(); true`); await sleep(200);
     ok(await js(`window.__cmTrail === null`), '…cleared on close');
-    await js(`document.getElementById('keyBtn').click(); true`); await sleep(200);
-    ok(/dashed across a gap of over five minutes/.test(await js(`document.getElementById('key').textContent`)), 'the KEY explains the track line and its dash');
-    await js(`document.getElementById('keyBtn').click(); true`);
+    ok(/dashed across a gap of over five minutes/.test(await keyText()), 'the KEY explains the track line and its dash');
   }
 
-  console.log('── the pills\' totals ──');
+  console.log('── the LAYERS chips\' totals, STATS and the LIST\'s facts (the old status line) ──');
   await sleep(500);
-  const pills = await js(`Object.fromEntries([...document.querySelectorAll('#modes [data-mode]')].map(b => [b.dataset.mode, b.querySelector('.n')?.textContent]))`);
+  const PILLS = `Object.fromEntries(CM.MODES.map(m => [m.id, document.querySelector('.trkCard2 [data-tgl="' + m.id + '"] .n')?.textContent]).filter(([, v]) => v !== undefined))`;
+  const pills = await js(PILLS);
   c = await cm();
   ok(Object.values(pills).every((v) => /^\d+$/.test(v)) && Number(pills.ais) === c.byKind.ship && Number(pills.dsc) === c.byKind.dsc && Number(pills.ndb) === c.byKind.ndb && Number(pills.sondes) === c.byKind.sonde
      && Number(pills.aprs) === c.byKind.aprs && Number(pills.mesh) === c.byKind.mesh && Number(pills.navtex) === (c.byKind.navst || 0) + (c.byKind.navwarn || 0) + (c.byKind.navmet || 0),
      `a total in every pill, the status line's numbers (${JSON.stringify(pills)})`);
-  const stl = await js(`document.getElementById('status').textContent`);
+  const stl = await js(`document.querySelector('.trkCard2[data-card="list"] .facts').textContent`);
   ok(/\b4 aircraft \(all sources combined\)/.test(stl) && new RegExp(`\\b${Number(pills.ais) + Number(pills.dsc)} ships \\(AIS \\+ DSC combined\\)`).test(stl) && !/\d DSC\b/.test(stl),
-     `the status line gives COMBINED totals, the pills their breakdown (${stl.slice(0, 120)}…)`);
+     `the LIST's facts give COMBINED totals, the chips their breakdown (${stl.slice(0, 120)}…)`);
+  ok(await js(`(() => { const s = MC.view.root.querySelector('.trkCard2[data-card="stats"] .stBody').textContent; return /RECEIVERS/.test(s) && /3\\/3/.test(s) && /AIRCRAFT \\(ALL SOURCES COMBINED\\)/.test(s); })()`), 'STATS: NOW — the receivers sharing and the combined totals');
+  ok(await js(`[...document.querySelectorAll('.trkCard2[data-card="stats"] .stTab')].map(b => b.textContent).join() .includes('ADS-B')`), '…and a tab per mode on the map (NEWEST, FURTHEST from the receiver that heard it)');
   ok(['adsb', 'acars', 'vdl2', 'hfdl'].reduce((a, m) => a + Number(pills[m] || 0), 0) === c.byKind.aircraft, `…the aviation pills add up to the aircraft on the map (${c.byKind.aircraft}) — each counted once`);
-  const navp = await js(`Object.fromEntries([...document.querySelectorAll('#navbar [data-navl]')].map(b => [b.dataset.navl, Number(b.querySelector('.n')?.textContent)]))`);
+  const navp = await js(`Object.fromEntries([...document.querySelectorAll('.trkCard2 [data-navl]')].map(b => [b.dataset.navl, Number(b.querySelector('.n')?.textContent)]))`);
   ok(navp.stations === c.byKind.navst && navp.warnings === c.byKind.navwarn && navp.weather === c.byKind.navmet && navp.messages === c.byKind.navmsg, `…and in NAVTEX's own (${JSON.stringify(navp)})`);
-  await js(`document.querySelector('[data-age="900"]').click(); true`); await sleep(400);
-  const p15 = await js(`Object.fromEntries([...document.querySelectorAll('#modes [data-mode]')].map(b => [b.dataset.mode, b.querySelector('.n')?.textContent]))`);
-  ok(Number(p15.ndb) <= Number(pills.ndb) && Number(p15.navtex) < Number(pills.navtex) && await js(`!!document.querySelector('#modes .n.z')`), `…live with HEARD IN (15 min: ${JSON.stringify(p15)}); a 0 is shown dim, the pill stays`);
-  await js(`document.querySelector('[data-age="86400"]').click(); document.querySelector('[data-mode=ais]').click(); true`); await sleep(300);
-  ok(await js(`document.querySelector('[data-mode=ais] .n').textContent`) === pills.ais, '…a pill switched off still says what it would show');
-  await js(`document.querySelector('[data-mode=ais]').click(); true`);
+  await js(`document.querySelector('[data-rng="900"]').click(); true`); await sleep(400);
+  const p15 = await js(PILLS);
+  ok(Number(p15.ndb) <= Number(pills.ndb) && Number(p15.navtex) < Number(pills.navtex) && Object.values(p15).some((v) => v === '0'), `…live with HEARD IN (15 min: ${JSON.stringify(p15)}); a 0 is shown, the chip stays`);
+  await js(`document.querySelector('[data-rng="86400"]').click(); true`); await tgl('ais'); await sleep(300);
+  ok(await js(`document.querySelector('.trkCard2 [data-tgl="ais"] .n').textContent`) === pills.ais, '…a chip switched off still says what it would show');
+  await tgl('ais');
 
   console.log('── the KEY ──');
-  ok(await js(`(() => { const b = document.getElementById('keyBtn'), r = b.getBoundingClientRect(), m = document.getElementById('map').getBoundingClientRect(); return b.textContent === 'KEY' && Math.abs(m.right - r.right - 10) < 2 && r.bottom > m.bottom - 80 && document.getElementById('key').hidden; })()`), 'a KEY button, bottom right; the key closed');
-  await js(`document.getElementById('keyBtn').click(); true`); await sleep(300);
-  const secs = await js(`[...document.querySelectorAll('#key .ks')].map(e => e.textContent)`);
+  ok(await js(`(() => { const k = document.querySelector('.trkCard2[data-card="map"] details.keySect'); return !!k && !k.hidden && !k.open; })()`), 'the KEY: a fold in MAP CONTROLS, shut');
+  await card('map'); await js(`document.querySelector('.trkCard2[data-card="map"] details.keySect').open = true; true`); await sleep(300);
+  const secs = await js(`[...document.querySelectorAll('.trkKey .ks')].map(e => e.textContent)`);
   ok(['RECEIVERS', 'AIRCRAFT', 'NDB', 'SHIPS (AIS)', 'DSC POSITIONS', 'NAVTEX STATIONS', 'NAVTEX WARNINGS', 'NAVTEX WEATHER', 'SEA AREAS', 'RADIOSONDES', 'APRS', 'MESHCORE'].every((x) => secs.includes(x)) && !secs.includes('VOR / ILS'),
      `a section for each layer on, none for one nobody shares (${secs.join(' · ')})`);
-  ok(await js(`document.querySelectorAll('#key .kr svg').length`) > 40 && /Gale force 8/.test(await js(`document.getElementById('key').textContent`)) && /Ship still/.test(await js(`document.getElementById('key').textContent`)),
+  ok(await js(`document.querySelectorAll('.trkKey .kr svg').length`) > 40 && /Gale force 8/.test(await keyText()) && /Ship still/.test(await keyText()),
      '…drawn with the server maps’ own rows and glyphs (ship, DSC, hazards, wind arrows, sea areas)');
   await shot('community-key-desktop.png');
-  await js(`document.querySelector('[data-group=aviation]').click(); true`); await sleep(300);
-  const secs2 = await js(`[...document.querySelectorAll('#key .ks')].map(e => e.textContent)`);
+  await tgl('g:aviation'); await sleep(300);
+  const secs2 = await js(`[...document.querySelectorAll('.trkKey .ks')].map(e => e.textContent)`);
   ok(!secs2.includes('AIRCRAFT') && !secs2.includes('NDB') && secs2.includes('SHIPS (AIS)'), 'AVIATION off: its sections leave the key');
-  await js(`document.querySelector('[data-group=aviation]').click(); document.getElementById('keyBtn').click(); true`);
-  ok(await js(`document.getElementById('key').hidden`), '…KEY again closes it');
+  await tgl('g:aviation');
+  await js(`document.querySelector('.trkCard2[data-card="map"] details.keySect').open = false; true`); await card('map', false);
 
   console.log('── the groups are independent; a group off keeps its chips ──');
-  await js(`document.querySelector('[data-group=maritime]').click(); true`);
+  await tgl('g:maritime');
   c = await cm();
   ok(!c.byKind.ship && !c.byKind.navwarn && !c.byKind.dsc && c.byKind.aircraft && c.byKind.aprs, `MARITIME off: aviation and misc stay (${JSON.stringify(c.byKind)})`);
-  await js(`document.querySelector('[data-mode=adsb]').click(); document.querySelector('[data-group=aviation]').click(); document.querySelector('[data-group=aviation]').click(); true`);
+  await tgl('adsb'); await tgl('g:aviation'); await tgl('g:aviation');
   c = await cm();
   ok(!c.on.includes('adsb') && c.on.includes('hfdl'), 'AVIATION off and on again: ADS-B stays off as it was left');
-  await js(`document.querySelector('[data-mode=adsb]').click(); document.querySelector('[data-group=maritime]').click(); document.querySelector('[data-group=aviation]').click(); document.querySelector('[data-group=misc]').click(); true`);
+  await tgl('adsb'); await tgl('g:maritime'); await tgl('g:aviation'); await tgl('g:misc');
   c = await cm();
   ok(JSON.stringify(c.groups) === '["maritime"]' && Object.keys(c.byKind).every((k) => ['ship', 'dsc', 'navst', 'navwarn', 'navmet', 'navmsg'].includes(k)), `MARITIME alone: ${Object.keys(c.byKind)}`);
   ok(await js(`localStorage.getItem('vibesdr.communityMap.v2')`) && JSON.parse(await js(`localStorage.getItem('vibesdr.communityMap.v2')`)).groups.join() === 'maritime', 'remembered per viewer (localStorage)');
 
   console.log('── NAVTEX: its own filters, a warning with its area, the text on opening, the MESSAGES list ──');
-  ok(await js(`!document.getElementById('navbar').hidden && document.querySelectorAll('#navbar [data-navt]').length >= 3 && !!document.getElementById('navSt')`), 'the NAVTEX bar: layers, message types, station');
+  ok(await js(`!document.querySelector('.ctlSect').hidden && document.querySelectorAll('.slot-ctl [data-navt]').length >= 3 && !!document.getElementById('navSt') && document.querySelectorAll('.slot-ctl [data-navl]').length === 4`), 'NAVTEX in MAP CONTROLS: its layers, message types, station');
   const area = await js(`(() => { const w = [...ITEM_BY_KEY.values()].find(i => i.kind === 'navwarn' && i.d.shape === 'area'); return w && { key: w.key, ll: [w.lon, w.lat], pts: w.d.pts }; })()`);
   ok(!!area, `a NAVTEX warning with an AREA is on the map (${area && area.key})`);
   ok(await js(`window.__cmShapes.some(f => f.type === 'Polygon' && f.id === ${JSON.stringify(area && area.key)})`) && await js(`gl.queryRenderedFeatures({ layers: ['cm-area'] }).length`) >= 0, '…its area drawn as a polygon on the GPU layer');
-  if (area) await js(`gl.fitBounds([[${Math.min(...area.pts.map((p) => p[1]))}, ${Math.min(...area.pts.map((p) => p[0]))}], [${Math.max(...area.pts.map((p) => p[1]))}, ${Math.max(...area.pts.map((p) => p[0]))}]], { padding: 160, duration: 0, maxZoom: 9 }); showCard(${JSON.stringify(area && area.key)}, ${JSON.stringify(area && area.ll)}); true`);
+  if (area) await hold(), await js(`gl.fitBounds([[${Math.min(...area.pts.map((p) => p[1]))}, ${Math.min(...area.pts.map((p) => p[0]))}], [${Math.max(...area.pts.map((p) => p[1]))}, ${Math.max(...area.pts.map((p) => p[0]))}]], { padding: 160, duration: 0, maxZoom: 9 }); showCard(${JSON.stringify(area && area.key)}, ${JSON.stringify(area && area.ll)}); true`);
   ok(await until(`/THE MESSAGE TEXT FROM/.test((document.querySelector('.maplibregl-popup .nvTx') || {}).textContent || '')`, 8000), 'its card (the NAVTEX map’s own) fetches the message text from the receiver when opened');
   await sleep(2500);
   await shot('community-navtex-warning-area.png');
   await js(`document.querySelector('.maplibregl-popup-close-button')?.click(); true`);
-  const types = await js(`[...document.querySelectorAll('#navbar [data-navt]')].map(b => b.dataset.navt)`);
+  const types = await js(`[...document.querySelectorAll('.slot-ctl [data-navt]')].map(b => b.dataset.navt)`);
   for (const t of types.filter((x) => x !== 'E')) await js(`document.querySelector('[data-navt="${t}"]').click(); true`);
   c = await cm();
   ok(c.byKind.navmet > 0 && !c.byKind.navwarn && (c.byKind.navmsg || 0) > 0, `TYPE E only: forecasts and their messages (${JSON.stringify(c.byKind)})`);
@@ -396,27 +407,37 @@ try {
   ok(c.byKind.navst >= 1 && c.byKind.navst < 10 && await js(`[...ITEM_BY_KEY.values()].filter(i => i.modes[0] === 'navtex').every(i => (i.kind === 'navst' ? i.d.name : i.station) === 'Niton')`),
      `STATION Niton: its letters, its warnings and messages only (${JSON.stringify(c.byKind)})`);
   await js(`(() => { const s = document.getElementById('navSt'); s.value = ''; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
-  await js(`document.getElementById('msgBtn').click(); true`);
-  ok(await until(`!document.getElementById('msgs').hidden && document.querySelectorAll('#msgList .msg[data-key]').length > 20`), 'MESSAGES lists the NAVTEX messages');
-  await js(`document.querySelector('#msgList .msg[data-key]').click(); true`);
-  ok(await until(`/THE MESSAGE TEXT FROM LENOVO/.test(document.querySelector('#msgList pre')?.textContent || '')`, 8000), '…a message opened shows its text, from the receiver with the CLEANEST copy');
+  await card('list');
+  ok(await until(`(() => { const t = document.querySelector('.trkCard2[data-card="list"] .hd .tab[aria-selected="true"]'); return (!t || t.dataset.tab === 'msgs') && document.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="nx:"], .trkCard2[data-card="list"] .rows .trkRow').length > 20; })()`), 'the LIST is the NAVTEX MESSAGES (its first tab)');
+  await js(`document.querySelector('.trkCard2[data-card="list"] .rows .trkRow').click(); true`);
+  ok(await until(`/THE MESSAGE TEXT FROM LENOVO/.test(document.querySelector('.trkCard2[data-card="list"] .rows .nvTx')?.textContent || '')`, 8000), '…a message opened shows its text in place, from the receiver with the CLEANEST copy');
   await shot('community-messages-desktop.png');
-  await js(`document.querySelector('[data-close=msgs]').click(); for (const g of ['aviation', 'misc']) document.querySelector('[data-group=' + g + ']').click(); true`);
+  await tgl('g:aviation'); await tgl('g:misc');
+  ok(await until(`[...document.querySelectorAll('.trkCard2[data-card="list"] .hd .tab')].map(t => t.dataset.tab).join() === 'msgs,air,sea,navtex,other'`, 4000), '…and a tab for each kind on the map: MESSAGES, AIRCRAFT, SHIPS, NAVTEX, OTHER');
+  await js(`document.querySelector('.trkCard2[data-card="list"] .hd .tab[data-tab="air"]').click(); true`);
+  ok(await until(`document.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="a:"]').length === window.__cm.byKind.aircraft`, 4000), '…AIRCRAFT: a row each');
+  await js(`window.__cmRoute = null; document.querySelector('.trkCard2[data-card="list"] .rows .trkRow[data-key="a:4CA000"]').click(); true`);
+  ok(await until(`/BAW696/.test(document.querySelector('.maplibregl-popup')?.textContent || '')`, 6000), '…a row pressed: the map goes to it and opens its card');
+  await js(`document.querySelector('.maplibregl-popup-close-button')?.click(); document.querySelector('.trkCard2[data-card="list"] .hd .tab[data-tab="msgs"]').click(); true`);
+  await card('list', false);
 
   console.log('── RECEIVERS: the list, LISTEN, picking one, ONLY THIS ──');
-  await js(`document.getElementById('rxBtn').click(); true`);
-  ok(await until(`!document.getElementById('rx').hidden && document.querySelectorAll('#rxList .row[data-id]').length === 3`), 'the list opens with three receivers');
-  const rows = await js(`[...document.querySelectorAll('#rxList .row[data-id]')].map(r => ({ id: r.dataset.id, text: r.textContent, href: r.querySelector('a.listen')?.href }))`);
+  ok(await js(`document.querySelector('[data-cbtn="servers"] .cap')?.textContent`) === 'RECEIVERS · 3', 'the SERVERS chip is RECEIVERS here');
+  await js(`document.querySelector('[data-cbtn="servers"]').click(); true`);
+  ok(await until(`document.querySelectorAll('.trkCard2[data-card="servers"] .rxRow[data-id]').length === 3`), 'the RECEIVERS card opens with three receivers');
+  const rows = await js(`[...document.querySelectorAll('.trkCard2[data-card="servers"] .rxRow[data-id]')].map(r => ({ id: r.dataset.id, text: r.textContent, href: r.querySelector('a.listen')?.href }))`);
   const lv = rows.find((r) => r.id === 'lenovo'), pi = rows.find((r) => r.id === 'pi500');
   ok(lv && lv.href === 'https://lenovo.vibeserver.vibesdr.net/', `LISTEN is the directory's link (${lv && lv.href})`);
   ok(lv && /NAVTEX/.test(lv.text) && /SONDES/.test(lv.text) && /MESHCORE/.test(lv.text) && /on the map now/.test(lv.text) && /GB · IO92/.test(lv.text), 'a row: where, what it shares, how many items now');
   ok(pi && /no free slot/.test(pi.text) && /4\/4 listening/.test(pi.text), 'busy as the directory says it');
   await shot('community-receivers-desktop.png');
-  await js(`document.querySelector('#rxList [data-only=xcover]').click(); true`);
+  await js(`document.querySelector('.trkCard2[data-card="servers"] [data-only=xcover]').click(); true`);
   ok(await until(`window.__cm.server === 'xcover'`), 'ONLY THIS: the XCover');
   c = await cm();
   ok(Object.keys(c.byKind).every((k) => ['aircraft', 'ship', 'aprs'].includes(k)), `…what it heard only (${JSON.stringify(c.byKind)})`);
-  await js(`document.getElementById('onlyChip').click(); document.querySelector('[data-close=rx]').click(); true`);
+  ok(await js(`!!document.getElementById('onlyChip')`), '…said in MAP CONTROLS (ONLY XCover ✕)');
+  await js(`document.getElementById('onlyChip').click(); true`); await card('servers', false);
+  ok(await until(`window.__cm.server === ''`), '…and undone there');
 
   console.log('── only what is switched on is fetched; a chip switched on fetches itself ──');
   await sleep(15000);
@@ -426,7 +447,7 @@ try {
   await call('Page.navigate', { url: PAGE });
   ok(await until(`window.__cm && window.__cm.up === 3`, 20000), 'reloaded with AIS and SONDES switched off');
   ok(!asked.xcover.join().includes('ais') && !asked.lenovo.join().includes('sondes'), `…they are not asked for (${asked.xcover} / ${asked.lenovo})`);
-  await js(`document.querySelector('[data-mode=ais]').click(); true`);
+  await tgl('ais');
   ok(await until(`(window.__cm.byKind.ship || 0) === 2`, 8000) && asked.xcover.slice(-1)[0] === 'ais' && hits.lenovo === 1 && hits.pi500 === want('pi500'), `switched on: ONE request for AIS, to the receiver that shares it (${asked.xcover.join(' | ')})`);
   ok(listHits === 1, `/api/community once per load (${listHits})`);
   await js(`localStorage.removeItem('vibesdr.communityMap.v2'); true`);
@@ -438,26 +459,48 @@ try {
   ok(await js(`document.documentElement.scrollWidth <= 390`), `no sideways scroll (${await js('document.documentElement.scrollWidth')})`);
   await sleep(3500);
   await shot('community-all-groups-390.png');
-  await js(`document.getElementById('keyBtn').click(); true`); await sleep(400);
-  ok(await js(`(() => { const r = document.getElementById('key').getBoundingClientRect(); return r.left >= 0 && r.right <= 390 && document.documentElement.scrollWidth <= 390; })()`), 'the KEY fits a phone (no sideways scroll)');
+  await card('map'); await js(`document.querySelector('.trkCard2[data-card="map"] details.keySect').open = true; true`); await sleep(900);
+  ok(await js(`(() => { const r = document.querySelector('.trkCards .trkCard2[data-card="map"]').getBoundingClientRect(); return r.width > 200 && r.left >= -4 && r.right <= 394 && document.documentElement.scrollWidth <= 390; })()`), 'MAP CONTROLS with the KEY fits a phone (no sideways scroll)');
   await shot('community-key-390.png');
-  await js(`document.getElementById('keyBtn').click(); true`);
-  await js(`document.getElementById('rxBtn').click(); true`);
-  const sheet = await js(`(() => { const r = document.getElementById('rx').getBoundingClientRect(); return { w: r.width, top: r.top }; })()`);
-  ok(sheet.w === 390 && sheet.top > 200, `RECEIVERS opens as a sheet (${JSON.stringify(sheet)})`);
+  await card('map', false);
+  await card('servers'); await sleep(900);
+  const sheet = await js(`(() => { const r = document.querySelector('.trkCards .trkCard2[data-card="servers"]').getBoundingClientRect(); return { l: r.left, r: r.right, w: r.width }; })()`);
+  ok(sheet.w > 300 && sheet.l >= -4 && sheet.r <= 394, `RECEIVERS opens as a card on the phone (${JSON.stringify(sheet)})`);
   await sleep(400);
   await shot('community-receivers-390.png');
-  await js(`document.querySelector('[data-close=rx]').click(); true`);
+  await card('servers', false);
   {
     await mockRoutes();
     const ll = await js(`(() => { const i = ITEM_BY_KEY.get('a:4CA000'); return i && [i.lon, i.lat]; })()`);
-    await js(`window.__cmRoute = null; gl.jumpTo({ center: [-1.3, 51.4], zoom: 5.6 }); showCard('a:4CA000', ${JSON.stringify(ll)}); true`);
+    await hold(); await js(`window.__cmRoute = null; gl.jumpTo({ center: [-1.3, 51.4], zoom: 5.6 }); showCard('a:4CA000', ${JSON.stringify(ll)}); true`);
     ok(await until(`window.__cmRoute && window.__cmRoute.key === 'a:4CA000' && window.__cmTrail && window.__cmTrail.src === 'server'`, 10000), 'a phone: the aircraft card with its route and track');
     await sleep(1500);
     ok(await js(`(() => { const r = document.querySelector('.maplibregl-popup').getBoundingClientRect(); return r.left >= 0 && r.right <= 390 && document.documentElement.scrollWidth <= 390; })()`),
        `…the card fits a phone (${JSON.stringify(await js(`(() => { const r = document.querySelector('.maplibregl-popup').getBoundingClientRect(); return [Math.round(r.left), Math.round(r.right)]; })()`))})`);
     await shot('community-aircraft-route-390.png');
     await js(`document.querySelector('.maplibregl-popup-close-button').click(); true`);
+  }
+  await call('Emulation.clearDeviceMetricsOverride');
+
+  console.log('── ★★★ b97 the card system at every size: nothing off screen, nothing overlapping, nothing hidden ──');
+  for (const [name, W, H, ins, mobile] of MAP_SIZES) {
+    await call('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: mobile ? 2 : 1, mobile });
+    await call('Page.navigate', { url: PAGE });
+    await until(`window.__cm && window.__cm.up === 3`, 20000);
+    await js(setInsetsExpr(ins)); await sleep(1500);
+    for (const listOpen of [true, false]) {
+      await card('list', listOpen); await sleep(700);
+      const L = JSON.parse(await js(chromeLayoutExpr(ins)));
+      const want = ['x', 'help', 'chip:list', 'chip:layers', 'chip:servers', 'chip:map', 'chip:stats'];
+      const have = L.pieces.map((p) => p.k);
+      ok(want.every((k) => have.includes(k)) && !L.hidden.length, `${name}, LIST ${listOpen ? 'open' : 'shut'}: ✕, HELP, LIST, LAYERS, RECEIVERS, MAP, STATS all on screen (${have.join(' ')}${L.hidden.length ? ' · hidden: ' + L.hidden.join(' ') : ''})`);
+      ok(!L.outside.length, `${name}, LIST ${listOpen ? 'open' : 'shut'}: everything inside the window${L.short ? ' and the safe rectangle' : ''} (${L.outside.join(' ') || 'all ' + L.pieces.length})`);
+      ok(!L.overlaps.length && !L.covered.length, `${name}, LIST ${listOpen ? 'open' : 'shut'}: no two pieces overlap (${JSON.stringify(L.overlaps)} ${L.covered.join(' ')})`);
+      ok(!/RATE|CHAT|TUNE/.test(have.join()) && !have.includes('chip:rate') && !have.includes('chip:chat') && !have.includes('chip:tune'), `${name}: a viewer — no TUNE, CHAT or RATE`);
+      if (listOpen) await shot(`community-layout-${W}x${H}.png`);
+    }
+    if (/956|667|915×412/.test(name)) ok(JSON.parse(await js(chromeLayoutExpr(ins))).short, `${name}: the short-landscape layout (the top row)`);
+    await js(setInsetsExpr({ l: null, r: null, b: null }));
   }
   await call('Emulation.clearDeviceMetricsOverride');
 
@@ -469,7 +512,7 @@ try {
   await sleep(1500);
   const heap = await js(`performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1`);
   ok(c.perf.listDraw > 0 && c.perf.full > 0 && c.perf.firstDraw > 0, `receivers listed ${c.perf.listDraw} ms · first receiver's data ${c.perf.firstData} ms · all ${N} in ${c.perf.full} ms · GPU map's first draw ${c.perf.firstDraw} ms (software GL, headless) · JS heap ${heap} MB`);
-  await js(`gl.jumpTo({ center: [8, 52], zoom: 2.2 }); true`); await sleep(1500);
+  await hold(); await js(`gl.jumpTo({ center: [8, 52], zoom: 2.2 }); true`); await sleep(1500);
   const clusters = await js(`gl.queryRenderedFeatures({ layers: ['cm-clusters'] }).length`);
   ok(clusters > 0, `zoomed out, the dense layers cluster (${clusters} clusters drawn)`);
   await shot('community-10-receivers-clustered.png');

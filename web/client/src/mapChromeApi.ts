@@ -90,7 +90,7 @@ export interface MapChromeHostOpts extends MapChromeOpts {
  *  `pill` (distance | band …), the subtitle; the age on the right. `key` is what onRow hands back. */
 export function mapRowHtml(x: { key: string; colour: string; name: string; second?: string; pill?: string[]; age?: string; dim?: boolean; extra?: string }): string {
   const pill = (x.pill || []).filter(Boolean);
-  return `<div class="trkRow kvRow${x.dim ? ' nopos' : ''}" role="button" tabindex="0" data-key="${esc(x.key)}">`
+  return `<div class="trkRow kvRow${x.dim ? ' nopos' : ''}" role="button" tabindex="0" data-nofocus="1" data-key="${esc(x.key)}">`
     + `<span class="id"><b><i class="sw" style="background:${/^#[0-9a-fA-F]{3,8}$|^rgba?\([\d.,\s]+\)$/.test(x.colour) ? x.colour : '#9fb0c2'}"></i><span class="nmT">${esc(x.name)}</span>`
     + (pill.length ? `<span class="kv">${pill.map((t) => `<span>${esc(t)}</span>`).join('<i></i>')}</span>` : '') + `</b><small>${esc(x.second || '')}</small></span>`
     + `<span class="rg"></span><span class="ag"><span class="agL">${esc(x.age || '')}</span><span class="agS">${esc(String(x.age || '').replace(/^(\d+)\s*([a-z]).*$/i, '$1$2'))}</span></span>${x.extra || ''}</div>`;
@@ -108,6 +108,9 @@ export interface MapChromeMore extends MapChrome {
   fitNow(): void;
   fitPoke(): void;
   fitPause(): void;
+  /** ★ A card's body for the host's own rows (the community map's RECEIVERS, with LISTEN and ONLY THIS); `avail` offers
+   *  its chip. The host owns what is in it from then on. */
+  cardBody(id: CardId, avail?: boolean): HTMLElement;
   /** ★ The view's root (cards, rows) — for a host that fills a row after drawing it (a NAVTEX message's text). */
   readonly root: HTMLElement;
 }
@@ -152,6 +155,7 @@ export function mountMapChrome(o: MapChromeHostOpts): MapChromeMore {
   }
   return {
     get root() { return v.root; },
+    cardBody: (id, avail = true) => { v.cardsAvail(id, avail); v.cardsLayout(); return v.root.querySelector(`.trkCard2[data-card="${id}"] .cb`) as HTMLElement; },
     controls: () => { const s = v.slot('ctl'); (v.root.querySelector('.ctlSect') as HTMLElement).hidden = false; return s; },
     ranges: (r, cur, f, label) => { if (f) rangeCb = f; v.setRanges(r, cur, label); },
     legend: (h) => v.setLegend(h),
