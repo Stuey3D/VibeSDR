@@ -15,7 +15,7 @@ ok(cardLimit(1440, 900) === 6 && cardLimit(1440, 600) === 4, `wide: every chip's
 // ── opening: the oldest gives way; a short window keeps one card per side ──
 let open: CardId[] = [];
 for (const id of CARD_IDS) open = cardToggle(open, id, true, 390, 844);
-ok(open.length === 1 && open[0] === 'help', `phone: every chip opened in turn leaves the last (${open})`);
+ok(open.length === 1 && open[0] === CARD_IDS[CARD_IDS.length - 1], `phone: every chip opened in turn leaves the last (${open})`);
 open = [];
 for (const id of ['servers', 'tune', 'layers'] as CardId[]) open = cardToggle(open, id, true, 1440, 600);
 ok(open.join() === 'layers', `1440 × 600: the left edge holds one card (${open})`);
@@ -37,7 +37,7 @@ ok(!oneSide(400 - 60, STACK), 'a phone in landscape (≈956×400): flanks');
 ok(oneSide(900 - 42, STACK), '1440 × 900: all on the left');
 ok(!oneSide(700, 600), 'a stack too tall for the map: flanks, whatever the window');
 // ── the help's words: one line per chip, in one place ──
-ok(MAP_HELP.map((h) => h.id).join() === 'servers,tune,layers,map,list' && MAP_HELP.every((h) => h.words.length > 10 && h.words.length < 90) && MAP_HELP_NOTES.length >= 2, 'MAP_HELP: a short line per chip, and the notes');
+ok(MAP_HELP.map((h) => h.id).join() === 'servers,tune,layers,map,list,stats,rate,chat' && MAP_HELP.every((h) => h.words.length > 10 && h.words.length < 110) && MAP_HELP_NOTES.length >= 2, 'MAP_HELP: a short line per chip, and the notes');
 // ── defaults ──
 ok(cardDefaults(390).length === 0, 'a phone opens with nothing (the map is the point)');
 ok(cardDefaults(1024).join() === 'list', 'a wide window opens with LIST');
