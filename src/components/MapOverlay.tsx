@@ -3273,7 +3273,8 @@ function MapCardsHost(p: {
         servers={p.cards?.servers ?? null}
         tune={tuneOn ? { rows: tuneRows?.rows ?? [], facts, onPick: tuneRows?.onPick ?? (() => {}), onRefused: tuneRows?.onRefused ?? (() => {}), gain, gainH } : null}
         layers={layerRows.length ? { rows: layerRows, toggled: t.toggled ?? {}, onToggle: (id, on) => t.onToggle?.(id, on), fam, note: [p.cards?.listNote ?? ''].filter(Boolean).join('') } : null}
-        stats={p.cards?.stats ?? null}
+        /* ★ a STATS row finds its aircraft: the live ADS-B report's are the map's `adsb:` items */
+        stats={p.cards?.stats ? { ...p.cards.stats, onPick: (k: string) => { p.cards?.stats?.onPick(k); p.onFocus(p.adsb && /^a:[0-9a-f]{6}$/.test(k) ? `adsb:${k.slice(2)}` : k); } } : null}
         map={{ ctl: p.ctl, onCtl: (k) => p.pageCall('__cardsCtl', k),
                ranges: t.ranges, range: t.range,
                onRange: t.onRange ? (id) => { t.onRange?.(id); setTimeout(() => p.pageCall('__trkFit'), 400); } : undefined,

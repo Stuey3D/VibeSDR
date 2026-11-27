@@ -287,6 +287,11 @@ import DecoderPanel,
   { type DecoderType } from '../components/DecoderPanel';
 import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
+import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMiniWaterfall';   // ★★★ beta97 the map drawer's waterfall
+import type { MapCardsIn } from '../components/MapChrome';
+import { gainRowFor, rateRows, mapSpecWanted } from '../utils/mapChrome';
+import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
+import { wfModelChannels, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
 import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
@@ -4796,6 +4801,14 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Server map overlays (HFDL / Digital spots / CW spots — skin parity)
   const [mapKind, setMapKind] = useState<MapKind | null>(null);
+  /* ★★★ beta97 THE MAP CARDS: the drawer's live waterfall — its sink (fed from onSpectrum only while it shows) and its
+   *  history (kept for the map's session, freed when the map closes); STATS' store (mapStats.ts). */
+  const mapWfSink = useRef<((f: MwfFrame) => void) | null>(null);
+  const mapWfStore = useRef<MwfStore>(mwfStoreNew());
+  const mapWfSeen = useRef<WfSeen>(new Map());
+  const [mapWfShown, setMapWfShown] = useState(false);
+  const mapStats = useRef<StatsStore>(new Map());
+  const mapStatsOpened = useRef(0);
   /** ★ What the server-map overlay shows: ADS-B's map while its view is up (it is the mode's screen), else the server
    *  map somebody opened from the Mode sheet. Not on Apple TV (no WebView — the ADS-B box stands in there). */
   // ★★★ beta96 AIS mode's map, the shipping map and the aviation map are ONE page: the AIR & SEA map ('airsea')
@@ -9532,6 +9545,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current) return;
         // Waterfall/spectrum render imperatively — no React state per frame.
         wfFrameSink.current?.(newBins, s);
+        // ★★★ beta97 the map drawer's live waterfall (only while it is on screen — one ref read otherwise)
+        if (mapWfSink.current) mapWfSink.current({ bins: newBins, centreHz: s.trueCenterHz ?? s.centerHz, spanHz: s.trueBwHz ?? s.bwHz });
         // ★ V12 binaural tuning: the AM/CW/FM offset from this frame (and the dial/source); off = one ref read.
         if (binauralRef.current) {
           binauralTracker.current?.onFrame(newBins, {
@@ -15896,6 +15911,269 @@ export default function SDRScreen({ route, navigation }: Props) {
       />
       </PanelBoundary>
   );
+  /* ★★★ beta97 THE MAP CONTROL CARDS — what the screen works out for them (the web's main.ts asCardsSync): SERVERS, TUNE's
+   *  gain row per driver and its facts, STATS, RATE, HEALTH / TIME, the drawer's waterfall, and the spectrum rule. */
+  const trackMapUp = shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes'
+    || shownMap === 'avdata' || shownMap === 'vormap' || shownMap === 'airsea';
+  // ★ a LIVE map mode over this radio (not the history viewer, not a box's map over a running decoder)
+  const mapLive = trackMapUp && !asViewer && (shownMap === 'airsea' ? airSeaMode !== '' : shownMap === 'ais' || shownMap === 'sondes' || shownMap === 'vormap');
+  // ★ the map closed: the drawer's history, STATS and the ident stamps go with it
+  useEffect(() => { if (!trackMapUp) { mapWfStore.current = mwfStoreNew(); mapWfSeen.current = new Map(); mapStats.current = new Map(); mapStatsOpened.current = 0; setMapWfShown(false); } }, [trackMapUp]);
+  /* ★★★ MAP-TEMPLATE rule 4, the app's half (mapChrome mapSpecWanted): the non-live viewer keeps the spectrum flowing (the
+   *  waterfall's history keeps ingesting, as today); a LIVE map stops this listener's spectrum ({"type":"spec","on":0}) unless
+   *  the drawer's waterfall shows. VibeServer only (an older server ignores the message). */
+  const specWanted = mapSpecWanted({ mapUp: trackMapUp, live: mapLive, wfOpen: mapWfShown });
+  useEffect(() => {
+    if (!isVibeServer) return;
+    (client.current as { specOn?: (on: boolean) => void } | null)?.specOn?.(specWanted);
+  }, [specWanted, isVibeServer]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ── STATS: every source's aircraft, per mode (folded in only when a report changes, never per render) ──
+  const mapStatsSections = useMemo(() => {
+    if (!trackMapUp) return [];
+    const now = Date.now();
+    if (!mapStatsOpened.current) mapStatsOpened.current = now;
+    const obs: Array<{ mode: string; key: string; lat: number; lon: number; name: string; trackedNm?: number }> = [];
+    for (const pl of avShared?.aircraft ?? []) if (pl.lat != null && pl.lon != null) for (const m of pl.src) obs.push({ mode: m, key: `a:${pl.key}`, lat: pl.lat, lon: pl.lon, name: pl.flight || pl.reg || pl.icao || '' });
+    if (adsbLiveHere && adsbReport) for (const a of adsbReport.aircraft as unknown as Array<Record<string, unknown>>) {
+      const lat = Number(a.lat), lon = Number(a.lon), hex = String(a.hex ?? '').toLowerCase();
+      if (a.lat == null || a.lon == null || !Number.isFinite(lat) || !Number.isFinite(lon) || !hex) continue;
+      obs.push({ mode: 'ADS-B', key: `a:${hex}`, lat, lon, name: String(a.flight ?? '').trim() || String(a.r ?? '').trim() || hex.toUpperCase(), trackedNm: Number(a.tracked_nm) || undefined });
+    }
+    statsSeen(mapStats.current, obs, now);
+    return statsSections(mapStats.current, trkRx, now, mapStatsOpened.current);
+  }, [trackMapUp, avShared, adsbReport, adsbLiveHere, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const mapCards: MapCardsIn | null = (() => {
+    if (!trackMapUp) return null;
+    const drv = String(radioCaps?.driver ?? (isLocal ? 'rtl' : ''));
+    const rc = radioCaps as (typeof radioCaps & { noHwGain?: boolean; hwAgc?: boolean; agcOn?: boolean; attStepDb?: number; attSteps?: number;
+                                                   aspLimit?: { max: number; locked?: boolean } | null }) | null;
+    const gain = isLocal && !asViewer ? gainRowFor({
+      driver: drv, gains: hwGains, gainTenthDb: drv === 'airspy' ? hwGain : hwAutoGain && hwGainLive >= 0 ? hwGainLive : hwGain,
+      autoGain: drv === 'usrp' ? !!rc?.agcOn : hwAutoGain, liveTenthDb: hwGainLive, noHwGain: !!rc?.noHwGain, hwAgc: !!rc?.hwAgc,
+      rspIfGr, rspIfAgc, rspSys, rspGrMin: hwIfGrFloor >= 0 ? hwIfGrFloor : undefined,
+      ahfAtt, ahfAgc, attStepDb: rc?.attStepDb, attSteps: rc?.attSteps, hrfLna, aspGainMode, aspLimit: rc?.aspLimit ?? null,
+      locked: hwGainLocked, admin: adminOk, more: true,
+    }) : { kind: 'none' as const, more: false };
+    const gainH = {
+      onAgc: (on: boolean) => {
+        markInteract();
+        if (askGate()) return;
+        if (drv === 'sdrplay') { setRspIfAgc(on); (client.current as any)?.rspControl?.({ ifagc: on }); }
+        else if (drv === 'airspyhf') { setAhfAgc(on); (client.current as any)?.ahfControl?.({ agc: on }); }
+        else onHwAuto(on);
+      },
+      onSet: (v: number) => {
+        markInteract();
+        if (askGate()) return;
+        if (gain.kind === 'none') return;
+        if (gain.set === 'rsp-gr') { setRspIfGr(v); (client.current as any)?.rspControl?.({ ifgr: v }); }
+        else if (gain.set === 'ahf-att') { setAhfAtt(v); setAhfAgc(false); (client.current as any)?.ahfControl?.({ att: v, agc: false }); }
+        else if (gain.set === 'hrf-lna') { setHrfLna(v); (client.current as any)?.hackrfControl?.({ lna: v }); }
+        else if (gain.set === 'asp-preset') onHwGain(v * 10);
+        else onHwGain(hwGains[v] ?? 0);
+      },
+      onUnlock: async (pw: string) => { await onAdminUnlockPw(pw); await new Promise((res) => setTimeout(res, 1200)); return adminOkRef.current; },
+      onMore: () => { markInteract(); setHwOpen(true); },
+    };
+    // ── RATE: this radio's live mode first, then each feed's own messages a second ──
+    const mine = adsbLiveHere && adsbReport?.msgRate != null ? { name: 'ADS-B', perSec: adsbReport.msgRate }
+      : avOn && avReport?.msgRate != null ? { name: avReport.bandName || 'DATALINK', perMin: avReport.msgRate }
+      : aisOn && aisReport ? { name: 'AIS', perMin: aisReport.msgRate } : null;
+    const rate = rateRows({ mine: asViewer ? null : mine, feeds: avShared?.feeds ?? [] });
+    // ── the drawer's waterfall: a live map over this radio (not the viewer); the span and markers fit the mode ──
+    const wfOffered = !asViewer && isVibeServer && (shownMap === 'airsea' || ismMapUp);
+    let wfModel: MapWfModel | null = null;
+    if (wfOffered) {
+      const band = avOn && avReport ? avCap?.bands.find((b) => b.id === avReport.band) : undefined;
+      wfModel = (band ? wfModelChannels(band) : null)
+        ?? (vmOn && vmReport ? wfModelVor(vmReport, mapWfSeen.current, mapWfStore.current.seq === 0) : null)
+        ?? wfModelVfo({ frequency: status.frequency, mode: String(status.mode), bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh });
+    }
+    return {
+      servers: { rows: [{ id: 'back', label: door && door.radios.length > 1 ? 'Leave — back to this server’s radios' : 'Leave server — back to the server list',
+                          sub: instanceName ?? baseUrl.replace(/^https?:\/\//, '') }],
+                 onPick: (id: string) => { if (id === 'back') onBackToPicker(); } },
+      gain, gainH,
+      facts: avOn && avReport ? `${avReport.bandName || 'DATALINK'} ${(avReport.hz / 1e6).toFixed(3)} MHz` : '',
+      stats: mapStatsSections.length ? { sections: mapStatsSections, onPick: () => { /* the map finds it (MapCardsHost → its focus) */ } } : null,
+      rate,
+      health: health && hs ? { colour: hs.colour, content: <HealthPill health={health} style={{ borderWidth: 0, backgroundColor: 'transparent', borderRadius: 0 }} /> } : null,
+      time: sessionEndsAt != null && !adminOk ? { colour: TIME_TAB[timeStage], frame: ['rgba(255,160,0,0.55)', 'rgba(255,225,77,0.7)', 'rgba(255,90,90,0.75)'][timeStage],
+                                                 content: <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed} stage={timeStage} /> } : null,
+      wf: wfOffered ? { offered: true, model: wfModel, colormap, store: mapWfStore, sinkRef: mapWfSink, onShown: setMapWfShown } : null,
+    };
+  })();
+
+  /* v4 local hardware: RTL-SDR controls submenu (one element: here, or over the map — TUNE's ⌄) */
+  const hwPanelEl = isLocal ? (
+        <PanelBoundary name="Hardware" onClose={() => setHwOpen(false)} resetKey={hwOpen}>
+        <LocalHardwarePanel
+          isSpy={isSpy}
+          bench={localBench}
+          // ★ The ONE gate for the whole feature — see canConvert. A VibeServer reaches this
+          //   panel too (it is `isLocal`), and there the owner's own setup page owns the
+          //   converter, so it must get none.
+          converter={canConvert ? converter : undefined}
+          onConverter={canConvert ? setConverter : undefined}
+          radio={radioCaps}
+          /* ★★★ AN ICOM: the panel draws the radio's own controls instead of every IQ one (icomRadio.ts). Sent as
+             icom_control; the server judges the owner lock / RF-admin and answers a refusal with a notice + config. */
+          icom={icom}
+          onIcomControl={(f) => (client.current as any)?.icomControl?.(f)}
+          icomSetup={icom ? { doorBase: baseUrl, connectBase, authQ: adminAuthQ,
+                              onOpenSetupPage: vibeSetupUrl ? () => { setHwOpen(false); onAdminLink(vibeSetupUrl, 'Setup'); } : undefined }
+                          : undefined}
+          agcLocked={hwAgcLocked}
+          askLocked={askLocked(dialState) && !adminOk}   /* ★★ ask before tuning: the whole panel is the room's */
+          onAskLockedTouch={nudgeAsk}
+          gainLocked={hwGainLocked}
+          ifGrFloorDb={hwIfGrFloor}
+          hasTunerBw={hwHasTunerBw}
+          tunerBw={hwTunerBw}
+          tunerBwAuto={hwTunerBwAuto}
+          ifWidths={hwIfWidths}
+          ifCap={hwIfCap}
+          ifLocked={hwIfLocked}
+          /* ★★★ WHOSE FILTER IT IS — the web client's syncIfMenu rule, and now the server's too
+           *  (local_sdr_shim.cpp tunerbw, "WHO MAY SET IT"): on a SHARED DIAL, or a locked range with
+           *  several VFOs, the IF filter is everybody's hardware and only the signed-in owner sets it.
+           *  One listener's 350 kHz would outlive them and leave the next wondering why the dongle
+           *  hears nothing (Stuart, 2026-09-27/28). */
+          ifOwnerOnly={!adminOk && (sharedDial || (hwLockedCentre > 0 && occMaxUsers > 1))}
+          fromServer={adoptHw}
+          onTunerBw={(hz) => {
+            // ★ Optimistic, like every other control here: the server echoes hwinfo back and the
+            //   picker settles on what the RADIO says, so a refusal corrects it within a frame.
+            if (hz < 0) { setHwTunerBwAuto(true); } else { setHwTunerBwAuto(false); setHwTunerBw(hz); }
+            (client.current as any)?.setTunerBandwidth?.(hz);
+          }}
+          adminSet={adminSet}
+          adminOk={adminOk}
+          adminRefused={adminRefused}
+          adminFailReason={adminFailReason}
+          onAdminUnlock={onAdminUnlockPw}
+          rspSysGain={rspSys} rspOverload={rspOvl} rspSettling={rspSettling}
+          rspLna={rspLna}
+          onRspLna={(v) => { setRspLna(v); (client.current as any)?.rspControl?.({ lna: v }); }}
+          rspIfGr={rspIfGr}
+          onRspIfGr={(v) => { setRspIfGr(v); (client.current as any)?.rspControl?.({ ifgr: v }); }}
+          rspIfAgc={rspIfAgc}
+          onRspIfAgc={(v) => { setRspIfAgc(v); (client.current as any)?.rspControl?.({ ifagc: v }); }}
+          rspAutoNotch={rspAutoNotch}
+          rspUserNotch={rspUserNotch}
+          rspRfAgc={rspRfAgc}
+          /* ★ Through rspControl like every sibling, and with the server's own key names
+           *  (`rfagc`, `agcset` — lower case). I first wrote these as a hand-built message with
+           *  camelCase keys, which the server would have parsed as nothing at all: a control that
+           *  looks wired and silently does nothing, which is the exact fault this pass is for. */
+          onRspRfAgc={(v) => { setRspRfAgc(v); (client.current as any)?.rspControl?.({ rfagc: v }); }}
+          rspAgcSet={rspAgcSet}
+          onRspAgcSet={(v) => { setRspAgcSet(v); (client.current as any)?.rspControl?.({ agcset: v }); }}
+          rspLnaN={rspLnaN}
+          rspGainStuck={rspGainStuck}
+          rspAgcLine={rspAgcLine} rspAgcWarn={rspAgcWarn} rspAgcWhy={rspAgcWhy}
+          rspVagcRunning={rspVagcRunning} rspVagcTgt={rspVagcTgt}
+          onRspVagcMode={(m) => { (client.current as any)?.rspControl?.({ vagcmode: m }); }}
+          onRspAgcRestart={() => { setRspGainStuck(false); (client.current as any)?.rspAgcRestart?.(); }}
+          rspRfNotch={rspRfNotch}
+          onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
+          rspDabNotch={rspDabNotch}
+          onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
+          /* ★★★ THE RSP SWEEP (GitHub #29, 2026-09-24). `client.current`, not hwClient(): these
+           *  reach the engine over the WS in BOTH modes — a dongle on this phone is a VibeServer
+           *  over loopback — and hwClient() is null locally, which is exactly how six FM controls
+           *  spent two releases doing nothing. The state is not mirrored into local React state
+           *  either: the panel reads it back from radioCaps, so the switch shows the RADIO. */
+          onRspAntenna={(port) => (client.current as any)?.rspControl?.({ antenna: port })}
+          onRspHdr={(v) => (client.current as any)?.rspControl?.({ hdr: v })}
+          onRspAmNotch={(v) => (client.current as any)?.rspControl?.({ amNotch: v })}
+          onRspExtRef={(v) => (client.current as any)?.rspControl?.({ extRef: v })}
+          // ★ The RSP's bias-T — read back from radioCaps.biasTOn like its siblings, never mirrored here.
+          onRspBiasT={(v) => (client.current as any)?.rspControl?.({ biasT: v })}
+          gainCapTenthDb={hwGainCap}
+          aspCurve={aspCurve}
+          onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');
+                                  aspSend({ curve: sens }); }}
+          aspGainMode={aspGainMode}
+          onAspGainMode={(m) => {
+            /* ★ The state change is also what SAVES it (the per-device blob's persist effect lists
+             *  aspGainMode) — so "free" is on disk before the listener can leave for the server
+             *  list, and is stated back to the radio on the next connect. See aspWantModeRef. */
+            setAspGainMode(m);
+            if (m !== 2) setAspCurve(m === 0 ? 'sensitivity' : 'linearity');
+            aspSend({ mode: m });
+          }}
+          aspLna={aspLna}
+          onAspLna={(v) => { setAspLna(v); aspSend({ lna: v }); }}
+          aspMixer={aspMixer}
+          onAspMixer={(v) => { setAspMixer(v); aspSend({ mixer: v }); }}
+          aspVga={aspVga}
+          onAspVga={(v) => { setAspVga(v); aspSend({ vga: v }); }}
+          aspLnaAgc={aspLnaAgc}
+          onAspLnaAgc={(v) => { setAspLnaAgc(v); aspSend({ lnaAgc: v }); }}
+          aspMixerAgc={aspMixerAgc}
+          onAspMixerAgc={(v) => { setAspMixerAgc(v); aspSend({ mixerAgc: v }); }}
+          aspBiasT={aspBiasT}
+          onAspBiasT={(v) => { setAspBiasT(v); aspSend({ biast: v }); }}
+          aspPacking={aspPacking}
+          onAspPacking={(v) => { setAspPacking(v); aspSend({ packing: v }); }}
+          hrfAmp={hrfAmp}
+          onHrfAmp={(v) => { setHrfAmp(v); (client.current as any)?.hackrfControl?.({ amp: v }); }}
+          hrfLna={hrfLna}
+          onHrfLna={(v) => { setHrfLna(v); (client.current as any)?.hackrfControl?.({ lna: v }); }}
+          hrfVga={hrfVga}
+          onHrfVga={(v) => { setHrfVga(v); (client.current as any)?.hackrfControl?.({ vga: v }); }}
+          hrfBiasT={hrfBiasT}
+          onHrfBiasT={(v) => { setHrfBiasT(v); (client.current as any)?.hackrfControl?.({ biast: v }); }}
+          ahfAgc={ahfAgc}
+          onAhfAgc={(v) => { setAhfAgc(v); (client.current as any)?.ahfControl?.({ agc: v }); }}
+          ahfAgcHigh={ahfAgcHigh}
+          onAhfAgcThreshold={(v) => { setAhfAgcHigh(v); (client.current as any)?.ahfControl?.({ thresh: v }); }}
+          ahfAtt={ahfAtt}
+          // ★ Send the attenuation WITH agc:false. Setting it while the AGC owns the gain path
+          // does nothing, and a control that silently does nothing is the thing we are fixing.
+          onAhfAtt={(v) => { setAhfAtt(v); setAhfAgc(false);
+                             (client.current as any)?.ahfControl?.({ att: v, agc: false }); }}
+          ahfLna={ahfLna}
+          onAhfLna={(v) => { setAhfLna(v); (client.current as any)?.ahfControl?.({ lna: v }); }}
+          visible={hwOpen}
+          onClose={() => setHwOpen(false)}
+          gains={hwGains}
+          /* ★ Under VibeAGC the slider shows where the LOOP has the gain now, not the resting figure
+           *  it would return to. On a remote server hwGain already IS that figure (adopted); on the
+           *  phone's own dongle hwGain is the owner's saved manual gain and must stay so. */
+          gainTenthDb={hwAutoGain && hwGainLive >= 0 ? hwGainLive : hwGain}
+          autoGain={hwAutoGain}
+          onAuto={onHwAuto}
+          onGain={onHwGain}
+          ppm={adoptHw && !hwStated.ppm ? undefined : hwPpm}
+          onPpm={onHwPpm}
+          afc={adoptHw ? afc : null}
+          onAfcReset={onAfcReset}
+          onAfcOn={onAfcOn}
+          sampleRate={hwSampleRate}
+          onSampleRate={onHwSampleRate}
+          isTcp={!!route.params.isTcp}
+          serverRates={hwServerRates}
+          lockedRate={hwLockedRate}
+          dabOn={dabOn}
+          adsbOn={adsbOn}
+          biasTee={adoptHw && !hwStated.biasT ? undefined : hwBiasTee}
+          onBiasTee={onHwBiasTee}
+          agc={adoptHw && !hwStated.digitalAgc ? undefined : hwAgc}
+          onAgc={onHwAgc}
+          dsLive={hwDsLive}
+          directSampling={hwDirectSamp}
+          onDirectSampling={onHwDirectSamp}
+          autoDs={hwAutoDs}
+          dsBelowHz={hwDsBelowHz}
+          /* ★ AUTO only where the server has said it has the setting — an older one would be
+           *  offered a position it cannot honour (the web's hwHasAutoDs rule). */
+          onAutoDs={!adoptHw || hwHasAutoDs ? onHwAutoDs : undefined}
+        />
+        </PanelBoundary>
+      ) : null;
+
   return (
     <DecoderAvoidContext.Provider value={decoderAvoid}>
     <BoxRectsContext.Provider value={onBoxRects}>
@@ -18490,175 +18768,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       )} />
       </PanelBoundary>
 
-      {/* v4 local hardware: RTL-SDR controls submenu */}
-      {isLocal ? (
-        <PanelBoundary name="Hardware" onClose={() => setHwOpen(false)} resetKey={hwOpen}>
-        <LocalHardwarePanel
-          isSpy={isSpy}
-          bench={localBench}
-          // ★ The ONE gate for the whole feature — see canConvert. A VibeServer reaches this
-          //   panel too (it is `isLocal`), and there the owner's own setup page owns the
-          //   converter, so it must get none.
-          converter={canConvert ? converter : undefined}
-          onConverter={canConvert ? setConverter : undefined}
-          radio={radioCaps}
-          /* ★★★ AN ICOM: the panel draws the radio's own controls instead of every IQ one (icomRadio.ts). Sent as
-             icom_control; the server judges the owner lock / RF-admin and answers a refusal with a notice + config. */
-          icom={icom}
-          onIcomControl={(f) => (client.current as any)?.icomControl?.(f)}
-          icomSetup={icom ? { doorBase: baseUrl, connectBase, authQ: adminAuthQ,
-                              onOpenSetupPage: vibeSetupUrl ? () => { setHwOpen(false); onAdminLink(vibeSetupUrl, 'Setup'); } : undefined }
-                          : undefined}
-          agcLocked={hwAgcLocked}
-          askLocked={askLocked(dialState) && !adminOk}   /* ★★ ask before tuning: the whole panel is the room's */
-          onAskLockedTouch={nudgeAsk}
-          gainLocked={hwGainLocked}
-          ifGrFloorDb={hwIfGrFloor}
-          hasTunerBw={hwHasTunerBw}
-          tunerBw={hwTunerBw}
-          tunerBwAuto={hwTunerBwAuto}
-          ifWidths={hwIfWidths}
-          ifCap={hwIfCap}
-          ifLocked={hwIfLocked}
-          /* ★★★ WHOSE FILTER IT IS — the web client's syncIfMenu rule, and now the server's too
-           *  (local_sdr_shim.cpp tunerbw, "WHO MAY SET IT"): on a SHARED DIAL, or a locked range with
-           *  several VFOs, the IF filter is everybody's hardware and only the signed-in owner sets it.
-           *  One listener's 350 kHz would outlive them and leave the next wondering why the dongle
-           *  hears nothing (Stuart, 2026-09-27/28). */
-          ifOwnerOnly={!adminOk && (sharedDial || (hwLockedCentre > 0 && occMaxUsers > 1))}
-          fromServer={adoptHw}
-          onTunerBw={(hz) => {
-            // ★ Optimistic, like every other control here: the server echoes hwinfo back and the
-            //   picker settles on what the RADIO says, so a refusal corrects it within a frame.
-            if (hz < 0) { setHwTunerBwAuto(true); } else { setHwTunerBwAuto(false); setHwTunerBw(hz); }
-            (client.current as any)?.setTunerBandwidth?.(hz);
-          }}
-          adminSet={adminSet}
-          adminOk={adminOk}
-          adminRefused={adminRefused}
-          adminFailReason={adminFailReason}
-          onAdminUnlock={onAdminUnlockPw}
-          rspSysGain={rspSys} rspOverload={rspOvl} rspSettling={rspSettling}
-          rspLna={rspLna}
-          onRspLna={(v) => { setRspLna(v); (client.current as any)?.rspControl?.({ lna: v }); }}
-          rspIfGr={rspIfGr}
-          onRspIfGr={(v) => { setRspIfGr(v); (client.current as any)?.rspControl?.({ ifgr: v }); }}
-          rspIfAgc={rspIfAgc}
-          onRspIfAgc={(v) => { setRspIfAgc(v); (client.current as any)?.rspControl?.({ ifagc: v }); }}
-          rspAutoNotch={rspAutoNotch}
-          rspUserNotch={rspUserNotch}
-          rspRfAgc={rspRfAgc}
-          /* ★ Through rspControl like every sibling, and with the server's own key names
-           *  (`rfagc`, `agcset` — lower case). I first wrote these as a hand-built message with
-           *  camelCase keys, which the server would have parsed as nothing at all: a control that
-           *  looks wired and silently does nothing, which is the exact fault this pass is for. */
-          onRspRfAgc={(v) => { setRspRfAgc(v); (client.current as any)?.rspControl?.({ rfagc: v }); }}
-          rspAgcSet={rspAgcSet}
-          onRspAgcSet={(v) => { setRspAgcSet(v); (client.current as any)?.rspControl?.({ agcset: v }); }}
-          rspLnaN={rspLnaN}
-          rspGainStuck={rspGainStuck}
-          rspAgcLine={rspAgcLine} rspAgcWarn={rspAgcWarn} rspAgcWhy={rspAgcWhy}
-          rspVagcRunning={rspVagcRunning} rspVagcTgt={rspVagcTgt}
-          onRspVagcMode={(m) => { (client.current as any)?.rspControl?.({ vagcmode: m }); }}
-          onRspAgcRestart={() => { setRspGainStuck(false); (client.current as any)?.rspAgcRestart?.(); }}
-          rspRfNotch={rspRfNotch}
-          onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}
-          rspDabNotch={rspDabNotch}
-          onRspDabNotch={(v) => { setRspDabNotch(v); (client.current as any)?.rspControl?.({ dabNotch: v }); }}
-          /* ★★★ THE RSP SWEEP (GitHub #29, 2026-09-24). `client.current`, not hwClient(): these
-           *  reach the engine over the WS in BOTH modes — a dongle on this phone is a VibeServer
-           *  over loopback — and hwClient() is null locally, which is exactly how six FM controls
-           *  spent two releases doing nothing. The state is not mirrored into local React state
-           *  either: the panel reads it back from radioCaps, so the switch shows the RADIO. */
-          onRspAntenna={(port) => (client.current as any)?.rspControl?.({ antenna: port })}
-          onRspHdr={(v) => (client.current as any)?.rspControl?.({ hdr: v })}
-          onRspAmNotch={(v) => (client.current as any)?.rspControl?.({ amNotch: v })}
-          onRspExtRef={(v) => (client.current as any)?.rspControl?.({ extRef: v })}
-          // ★ The RSP's bias-T — read back from radioCaps.biasTOn like its siblings, never mirrored here.
-          onRspBiasT={(v) => (client.current as any)?.rspControl?.({ biasT: v })}
-          gainCapTenthDb={hwGainCap}
-          aspCurve={aspCurve}
-          onAspCurve={(sens) => { setAspCurve(sens ? 'sensitivity' : 'linearity');
-                                  aspSend({ curve: sens }); }}
-          aspGainMode={aspGainMode}
-          onAspGainMode={(m) => {
-            /* ★ The state change is also what SAVES it (the per-device blob's persist effect lists
-             *  aspGainMode) — so "free" is on disk before the listener can leave for the server
-             *  list, and is stated back to the radio on the next connect. See aspWantModeRef. */
-            setAspGainMode(m);
-            if (m !== 2) setAspCurve(m === 0 ? 'sensitivity' : 'linearity');
-            aspSend({ mode: m });
-          }}
-          aspLna={aspLna}
-          onAspLna={(v) => { setAspLna(v); aspSend({ lna: v }); }}
-          aspMixer={aspMixer}
-          onAspMixer={(v) => { setAspMixer(v); aspSend({ mixer: v }); }}
-          aspVga={aspVga}
-          onAspVga={(v) => { setAspVga(v); aspSend({ vga: v }); }}
-          aspLnaAgc={aspLnaAgc}
-          onAspLnaAgc={(v) => { setAspLnaAgc(v); aspSend({ lnaAgc: v }); }}
-          aspMixerAgc={aspMixerAgc}
-          onAspMixerAgc={(v) => { setAspMixerAgc(v); aspSend({ mixerAgc: v }); }}
-          aspBiasT={aspBiasT}
-          onAspBiasT={(v) => { setAspBiasT(v); aspSend({ biast: v }); }}
-          aspPacking={aspPacking}
-          onAspPacking={(v) => { setAspPacking(v); aspSend({ packing: v }); }}
-          hrfAmp={hrfAmp}
-          onHrfAmp={(v) => { setHrfAmp(v); (client.current as any)?.hackrfControl?.({ amp: v }); }}
-          hrfLna={hrfLna}
-          onHrfLna={(v) => { setHrfLna(v); (client.current as any)?.hackrfControl?.({ lna: v }); }}
-          hrfVga={hrfVga}
-          onHrfVga={(v) => { setHrfVga(v); (client.current as any)?.hackrfControl?.({ vga: v }); }}
-          hrfBiasT={hrfBiasT}
-          onHrfBiasT={(v) => { setHrfBiasT(v); (client.current as any)?.hackrfControl?.({ biast: v }); }}
-          ahfAgc={ahfAgc}
-          onAhfAgc={(v) => { setAhfAgc(v); (client.current as any)?.ahfControl?.({ agc: v }); }}
-          ahfAgcHigh={ahfAgcHigh}
-          onAhfAgcThreshold={(v) => { setAhfAgcHigh(v); (client.current as any)?.ahfControl?.({ thresh: v }); }}
-          ahfAtt={ahfAtt}
-          // ★ Send the attenuation WITH agc:false. Setting it while the AGC owns the gain path
-          // does nothing, and a control that silently does nothing is the thing we are fixing.
-          onAhfAtt={(v) => { setAhfAtt(v); setAhfAgc(false);
-                             (client.current as any)?.ahfControl?.({ att: v, agc: false }); }}
-          ahfLna={ahfLna}
-          onAhfLna={(v) => { setAhfLna(v); (client.current as any)?.ahfControl?.({ lna: v }); }}
-          visible={hwOpen}
-          onClose={() => setHwOpen(false)}
-          gains={hwGains}
-          /* ★ Under VibeAGC the slider shows where the LOOP has the gain now, not the resting figure
-           *  it would return to. On a remote server hwGain already IS that figure (adopted); on the
-           *  phone's own dongle hwGain is the owner's saved manual gain and must stay so. */
-          gainTenthDb={hwAutoGain && hwGainLive >= 0 ? hwGainLive : hwGain}
-          autoGain={hwAutoGain}
-          onAuto={onHwAuto}
-          onGain={onHwGain}
-          ppm={adoptHw && !hwStated.ppm ? undefined : hwPpm}
-          onPpm={onHwPpm}
-          afc={adoptHw ? afc : null}
-          onAfcReset={onAfcReset}
-          onAfcOn={onAfcOn}
-          sampleRate={hwSampleRate}
-          onSampleRate={onHwSampleRate}
-          isTcp={!!route.params.isTcp}
-          serverRates={hwServerRates}
-          lockedRate={hwLockedRate}
-          dabOn={dabOn}
-          adsbOn={adsbOn}
-          biasTee={adoptHw && !hwStated.biasT ? undefined : hwBiasTee}
-          onBiasTee={onHwBiasTee}
-          agc={adoptHw && !hwStated.digitalAgc ? undefined : hwAgc}
-          onAgc={onHwAgc}
-          dsLive={hwDsLive}
-          directSampling={hwDirectSamp}
-          onDirectSampling={onHwDirectSamp}
-          autoDs={hwAutoDs}
-          dsBelowHz={hwDsBelowHz}
-          /* ★ AUTO only where the server has said it has the setting — an older one would be
-           *  offered a position it cannot honour (the web's hwHasAutoDs rule). */
-          onAutoDs={!adoptHw || hwHasAutoDs ? onHwAutoDs : undefined}
-        />
-        </PanelBoundary>
-      ) : null}
+      {/* v4 local hardware: RTL-SDR controls submenu — ★★★ beta97 drawn inside the map while one is up (TUNE's ⌄) */}
+      {!(hwOpen && trackMapUp) && hwPanelEl}
 
       {/* Server map overlay (HFDL / Digital / CW — full-screen WebView Leaflet) */}
       {/* ★ NOT ON tvOS — MapOverlay is Leaflet in a WebView and there is no WKWebView on the
@@ -18713,9 +18824,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★★ beta96 (Stuart 11-26) the SHARED TUNER line + CHAT, the TUNE chip, and the dial lock on EXIT (MapTopStrip) */
         shared={mapLine.show ? { line: mapLine, chatDisabled: isKiwi || (isVibeServer && !sharedDial), chatUnread: chatUnread || askNudge, onChat: openChat } : null}
         tune={mapTune}
+        /* ★★★ beta97 THE MAP CONTROL CARDS' inputs (above the return: SERVERS, the gain row, STATS, RATE, HEALTH / TIME, the waterfall) */
+        cards={mapCards}
         dialLock={mapLockWhy ? { why: mapLockWhy, exitMoves: mapExitMoves, onDialLocked: () => { nudgeAsk(); } } : null}
         safeInsets={insets}
-        overlay={(!!dualMyId && dualShape.phase === 'paired') || (chatOpen && mapLine.show) ? (<>{chatOpen && mapLine.show ? chatDrawerEl : null}{!!dualMyId && dualShape.phase === 'paired' ? (
+        overlay={(!!dualMyId && dualShape.phase === 'paired') || (chatOpen && mapLine.show) || (hwOpen && trackMapUp) ? (<>{chatOpen && mapLine.show ? chatDrawerEl : null}
+          {/* ★★★ beta97 TUNE's ⌄ — the radio's own controls (the hardware panel) over the map, inside its Modal */}
+          {hwOpen && trackMapUp ? hwPanelEl : null}{!!dualMyId && dualShape.phase === 'paired' ? (
           // ★★ V12 the second server's card over the map too (Stuart, 2026-10-30: "the 2nd server chip control should also
           //   be accessible here too … with the ability to minimise it the same as in waterfall mode") — the same card,
           //   tucking to its tab as over the waterfall; under the map's own header bar.
