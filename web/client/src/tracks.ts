@@ -721,6 +721,23 @@ const CSS = `
 .mDock .lsum{flex-direction:column!important;gap:6px!important}
 .mDock .le{flex-direction:column!important;gap:2px!important;font-size:10.5px!important}
 .mDock .lg svg{width:15px;height:15px}
+/* ★ the SCALE chip: right edge, bottom, above the ? (and clear of the zoom ± up top) */
+.mChipsScale{right:0;bottom:calc(var(--trk-attrib-h,0px) + 50px)}
+.mScale .hCard{cursor:default!important;padding:5px 8px 5px 8px!important}
+.mScaleBody{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.mScaleBody .maplibregl-ctrl-scale,.mScaleBody .leaflet-control-scale-line{background:transparent!important;border-color:#cfd9e3!important;color:#e8eef5!important;
+  font:600 10px/1.2 ui-monospace,Menlo,monospace!important;margin:0!important;padding:0 3px!important;box-shadow:none!important}
+.mScaleBody .leaflet-control-scale{margin:0!important}
+.mDock .zst{position:relative;display:block;width:18px;height:18px;color:#7ee787}
+.mDock .zst:empty{display:none}
+.mDock .zst svg{position:absolute;inset:0;width:18px;height:18px}
+.mDock[data-zoom="paused"] .zst{color:#ffd34d}
+.mDock[data-zoom="off"] .zst{color:#9fb0c2}
+.mDock .zst .zNo{color:#ff5a4d}
+.trkCard2 .fitSect .btn.fit[data-zoom="paused"]{background:#3a2e0e;color:#ffd34d;border-color:#ffd34d}
+.trkCard2 .fitSect .btn.fit[data-zoom="paused"]::after{content:" ‖"}
+.trkCard2 .fitSect .btn.fit[data-zoom="off"]{background:#2a1d1d;color:#ff8a6b;border-color:#8a3434}
+.trkCard2 .fitSect .btn.fit[data-zoom="off"]::after{content:" OFF"}
 .lgI{width:16px;height:16px;display:block}
 .trkList .hd .tab .tg{display:inline-flex;vertical-align:-3px;margin-right:4px}
 .trkList .hd .tab .tg svg{width:14px;height:14px}
@@ -767,10 +784,11 @@ const CSS = `
 .trkCards .sideL{left:0;top:var(--trk-cl-top,8px)}
 .trkCards .sideR{right:0;top:var(--trk-cr-top,8px)}
 /* ★ tweak 4: the LIST grows UP out of its chip at the bottom-left, where the old list sheet sat */
-.mChipsBL{left:12px;bottom:var(--trk-attrib-h,0px);overflow:hidden;padding-top:12px;margin-top:-12px}   /* ★ the LIST stands on the attribution line, never over it */
+.mChipsBL{left:0;bottom:var(--trk-list-bottom,0px);overflow:hidden;padding-top:12px;margin-top:-12px}   /* ★ Stuart 12:07: the LIST is a DRAWER in the bottom-left corner */
+.mChipsBL .edgeDock.bottom .hCard{border-left-width:0;border-radius:0 12px 0 0;padding-left:6px}
 .mChipsBL .mDock .mchip{flex-direction:row;gap:8px;min-height:34px}
-.trkMapHost .maplibregl-ctrl-bottom-left,.trkMapHost .leaflet-bottom.leaflet-left{left:var(--trk-list-w,0px)}
-.trkCards .sideB{left:12px;right:auto;bottom:var(--trk-cb-bottom,0px);top:30%;justify-content:flex-end;width:min(300px,calc(100% - 24px))}   /* ★ the LIST: as wide as its rows need, no wider */
+/* ★ the old scale corner is empty now (its lines live in the SCALE chip) */
+.trkCards .sideB{left:0;right:auto;bottom:var(--trk-list-bottom,0px);top:30%;justify-content:flex-end;width:min(300px,calc(100% - 12px))}   /* ★ the LIST drawer: flush to the left edge and the bottom, as wide as its rows need */
 .trkCards.lAndB .sideL{bottom:47%}
 .trkCards.lAndB .sideB{top:55%}
 .trkCards .sideB>.trkCard2[data-card="list"]{height:var(--trk-list-card-h,320px);flex:none!important;max-height:none!important}
@@ -779,7 +797,7 @@ const CSS = `
 .trkCard2[data-card="list"] .trkList{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 .trkCard2[data-card="list"] .trkList>.hd,.trkCard2[data-card="list"] .trkList>.filt,.trkCard2[data-card="list"] .trkList>.safety{flex:none}
 .trkCard2[data-card="list"] .trkList .rows{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-.trkCards .sideB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-radius:12px 12px 0 0;transform-origin:bottom left}
+.trkCards .sideB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-left-width:0;border-radius:0 12px 0 0;transform-origin:bottom left}
 .trkCards .cSide>.trkCard2{border:1.5px solid var(--hc,#5BE36B);background:rgba(8,12,8,.92)}
 .trkCards .sideL>.trkCard2{border-left-width:0;border-radius:0 12px 12px 0;transform-origin:top left}
 .trkCards .sideR>.trkCard2{border-right-width:0;border-radius:12px 0 0 12px;transform-origin:top right}
@@ -795,7 +813,7 @@ const CSS = `
 .mDock .mchip{padding:2px 6px;min-height:40px}
 .trkView[data-narrow] .trkCards .sideL{left:0;right:var(--trk-chip-r,64px);top:var(--trk-cl-top,8px)}
 .trkView[data-narrow] .trkCards .sideR{left:var(--trk-chip-l,64px);right:0}
-.trkView[data-narrow] .trkCards .sideB{left:6px;right:6px;width:auto}
+.trkView[data-narrow] .trkCards .sideB{left:0;right:var(--trk-chip-r,44px);width:auto}
 `;
 function addCss() {
   if (document.getElementById('trk-style')) return;
@@ -962,9 +980,12 @@ export class TrackView {
        *  back: TUNE and LAYERS down the left edge, MAP CONTROLS on the right, LIST at the bottom (its card pops UP). */
       + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('servers', 'left', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card', false, SERVERS_SVG.replace('mIco', 'tIco'))}${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true, modeIconSvg('radio', 'tIco'))}`
       + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card', false, LAYER_GLYPH.aircraft)}</div>`
-      + `<div class="mChips mChipsR">${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}</span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
+      + `<div class="mChips mChipsR">${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
       + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
+      // ★★★ the SCALE as its own little edge chip (Stuart 11-27: "scale could be its own little chip on the side of the
+      //     screen"), bottom right above the ? — the map's own scale lines, moved in (scaleDock), live with every zoom
+      + `<div class="mChips mChipsScale"><div class="edgeDock mDock mScale" data-dock="scale" aria-label="Map scale" role="img"><div class="hCard"><div class="mScaleBody"></div></div></div></div>`
       + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
       + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
       + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
@@ -1091,6 +1112,7 @@ export class TrackView {
     if (!t.length) return false;
     this.cardOrder = this.cardOrder.filter((x) => STICKY_CARDS.has(x));
     this.cardsLayout();
+    this.fitPauseForCards();
     this.idleArm();
     return true;
   }
@@ -1133,6 +1155,7 @@ export class TrackView {
     this.cardOrder = cardOpenRule(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on);
     if (save) this.cardsSave();
     this.cardsLayout();
+    this.fitPauseForCards();
     this.idleArm();
     if (on && save) {
       // ★ the pad / keyboard: into the card (its first control), so Escape / BACK come straight back out
@@ -1266,6 +1289,9 @@ export class TrackView {
       /* ★★★ Stuart 11:59 "the list should be a fixed height and scrollable": its OWN height — about half the map, 240 to
        *  480 px, never more than the room under the chips — so it never jumps as rows come and go; only the rows scroll */
       const attrib = parseFloat(this.root.style.getPropertyValue('--trk-attrib-h')) || 0;
+      { const a = this.mapHost.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution') as HTMLElement | null, ab = a?.getBoundingClientRect();
+        const reachesLeft = !!ab && ab.width > 0 && ab.left < m.left + 320;   // ★ an attribution wrapped across a phone runs under the drawer
+        setv('--trk-list-bottom', `${reachesLeft ? Math.round(m.bottom - ab!.top) : 0}px`); }
       const room = Math.max(120, m.height - capTop - attrib - 8);
       setv('--trk-list-card-h', `${Math.round(Math.min(room, Math.max(240, Math.min(480, m.height * 0.48))))}px`);
       // ★ the scale bar steps right of the open LIST (not just its chip)
@@ -1917,7 +1943,8 @@ export class TrackView {
     // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
     //   again had no KEY (and setLegend found nothing to fill)
     // ★ beta96 the cards (open ones and the park) are the view's, not the map's — they stay
-    for (const el of Array.from(this.mapHost.children)) if (!el.classList.contains('trkCards') && !el.classList.contains('trkPark') && !el.classList.contains('trkSlot') && !el.classList.contains('cardBtns')) el.remove();
+    for (const el of Array.from(this.mapHost.children)) if (!el.classList.contains('trkCards') && !el.classList.contains('trkPark') && !el.classList.contains('trkSlot') && !el.classList.contains('cardBtns') && !el.classList.contains('mChips') && !el.classList.contains('mHelp')) el.remove();
+    { const sb = this.root.querySelector('.mScaleBody') as HTMLElement | null; if (sb) sb.innerHTML = ''; }   // ★ the scale lines go with their map
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null; this.selPaused = false;
   }
@@ -2017,6 +2044,7 @@ export class TrackView {
             const p = layer.points(); const m = this.morePoints?.(); return m?.length ? [...p, ...m] : p;
           },
           receiver: () => layer.receiver(), button: this.fitBtn,
+          onState: () => { if (this.cardPausedFit) { try { const st = this.af?.state?.(); if (st && (!st.on || !st.paused)) this.cardPausedFit = false; } catch { /* none */ } } this.zoomStateSync(); },
           what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
           obstacle: () => this.cardsObstacle(),
         });
@@ -2029,6 +2057,7 @@ export class TrackView {
     }
     this.watchAttrib();
     this.attribAuto();
+    this.scaleDock();
     this.mapSay({ gl: this.vm, lm: this.vm ? null : this.lmap });   // ★ beta96 stage 8 a host layer (NDB) joins this map
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
@@ -2064,6 +2093,48 @@ export class TrackView {
    *  clicking, or zooming" or "automatically after five seconds", provided the user can still find it — the (i) in the
    *  corner, which the guidelines give as an example. GPU map (MapLibre's own compact control); the Leaflet fallback keeps
    *  its full line. */
+  /* ★★★ THE AUTO-ZOOM STATE (Stuart 11-27): on · off (the person moved the map, or switched AUTO off) · paused (a transient
+   *  card is open — AUTO waits while it is used, and resumes when it folds; the LIST is the exception, it re-fits once).
+   *  Shown on the MAP chip (under its glyph — a badge in the corner did not read at 16 px) and on the AUTO key. */
+  private cardPausedFit = false;
+  private zoomStateNow: 'on' | 'off' | 'paused' | '' = '';
+  private zoomStateSync() {
+    let st: { on?: boolean; paused?: boolean } | null = null;
+    try { st = this.af?.state?.() ?? null; } catch { st = null; }
+    const z: 'on' | 'off' | 'paused' | '' = !st ? '' : this.cardPausedFit ? 'paused' : st.on && !st.paused ? 'on' : 'off';
+    if (z === this.zoomStateNow) return;
+    this.zoomStateNow = z;
+    const dk = this.root.querySelector('.mDock[data-dock="map"]') as HTMLElement | null;
+    const words = z === 'on' ? 'Auto zoom on' : z === 'paused' ? 'Auto zoom paused while a card is open' : z === 'off' ? 'Auto zoom off \u2014 you moved the map; press FIT or AUTO to resume' : '';
+    if (dk) {
+      if (z) dk.dataset.zoom = z; else delete dk.dataset.zoom;
+      const zs = dk.querySelector('.zst') as HTMLElement | null;
+      if (zs) zs.innerHTML = z === 'on' ? modeIconSvg('zoomAuto', 'zIco') : z === 'paused' ? modeIconSvg('zoomPause', 'zIco') : z === 'off' ? `${modeIconSvg('zoomLens', 'zIco')}${modeIconSvg('noEntry', 'zNo')}` : '';
+      const b = dk.querySelector('.mchip') as HTMLElement | null;
+      if (b) { b.title = words ? `Map controls \u2014 ${words}` : 'Map controls'; b.setAttribute('aria-label', `MAP \u2014 open the map controls${words ? '. ' + words : ''}`); }
+    }
+    this.fitBtn.dataset.zoom = z;
+    if (words) this.fitBtn.title = words;
+  }
+  /** A transient card opened / every transient folded: AUTO waits while one is open (only when it was running). */
+  private fitPauseForCards() {
+    const open = this.cardOrder.some((x) => !STICKY_CARDS.has(x));
+    try {
+      const st = this.af?.state?.();
+      if (open && !this.cardPausedFit && st?.on && !st.paused) { this.cardPausedFit = true; this.af.pause(); }
+      else if (!open && this.cardPausedFit) { this.cardPausedFit = false; const s2 = this.af?.state?.(); if (s2?.on && s2.paused) this.af.resume(); }
+    } catch (e) { console.error('[tracks] fit pause', e); }
+    this.zoomStateSync();
+  }
+  /** ★ the map's scale lines (MapLibre's / Leaflet's own control — still theirs, still live) into the SCALE chip. A press
+   *  does nothing: it is a reading, not a control. */
+  private scaleDock() {
+    const body = this.root.querySelector('.mScaleBody') as HTMLElement | null;
+    if (!body) return;
+    body.innerHTML = '';
+    for (const el of Array.from(this.mapHost.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale')) as HTMLElement[]) body.appendChild(el);
+    (this.root.querySelector('.mScale') as HTMLElement).hidden = !body.children.length;
+  }
   private attribT: ReturnType<typeof setTimeout> | null = null;
   private attribAuto() {
     const at = this.mapHost.querySelector('.maplibregl-ctrl-attrib') as HTMLElement | null;

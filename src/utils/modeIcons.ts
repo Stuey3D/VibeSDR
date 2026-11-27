@@ -30,7 +30,7 @@
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
   | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
-  | 'servers' | 'list' | 'navtex';
+  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -55,6 +55,13 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { d: 'M11 13.5h9v6.6l-1.5-1-1.5 1-1.5-1-1.5 1-1.5-1-1.5 1Z' },
     { d: 'M13 16h5', w: 1.5 },
   ],
+  /* ★★★ beta96 THE AUTO-ZOOM STATE (Stuart 11-27) on the map's MAP chip and its AUTO key: a magnifier with an "A" (auto zoom
+   *  on); the magnifier PAUSED (‖ — a card is open, amber); the bare magnifier under a NO-ENTRY sign (off: you moved the
+   *  map — the sign drawn in red by its holder). One source for the web and the app. */
+  zoomAuto: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 }, { d: 'M7.4 13 10 6.8l2.6 6.2M8.3 11h3.4', w: 1.6 } ],
+  zoomPause: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 }, { d: 'M8.4 7.4v5.2M11.6 7.4v5.2', w: 2 } ],
+  zoomLens: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 } ],
+  noEntry: [ { c: [12, 12, 10.2], w: 2.2 }, { d: 'M4.8 19.2 19.2 4.8', w: 2.4 } ],
   /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
   list: [
     { d: 'M9 6h11M9 12h11M9 18h11' },

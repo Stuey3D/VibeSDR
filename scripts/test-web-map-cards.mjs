@@ -307,6 +307,26 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     // ── idle: a transient card folds back by itself (9 s untouched) ──
     await p.ev(`${BTN('map')}.click(); 1`); await sleep(10500);
     ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes('map'), 'MAP CONTROLS folds back by itself after 9 s untouched');
+    // ── the AUTO-zoom state on the MAP chip: on · off after a pan · paused while a card is open ──
+    await shutTransients(p);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="map"] .fitOnce').click(); 1`); await sleep(2500);
+    const Z = `${V}.querySelector('.mDock[data-dock="map"]').dataset.zoom`;
+    ok(await p.until(`${Z} === 'on'`, 4000) && await p.ev(`!!${V}.querySelector('.mDock[data-dock="map"] .zst svg')`), `AUTO on: the MAP chip says so (${await p.ev(Z)})`);
+    { const c = JSON.parse(await p.ev(`JSON.stringify((() => { const b = ${V}.querySelector('.trkMapHost').getBoundingClientRect(); return { x: b.left + b.width * 0.65, y: b.top + b.height * 0.45 }; })())`));
+      await p.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: c.x, y: c.y, deltaX: 0, deltaY: -240 }); await sleep(1500); }
+    ok(await p.until(`${Z} === 'off'`, 4000) && await p.ev(`!!${V}.querySelector('.mDock[data-dock="map"] .zst .zNo')`), `a zoom by hand: AUTO off, the red no-entry sign (${await p.ev(Z)})`);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="map"] .fitOnce').click(); 1`); await sleep(1500);
+    await p.ev(`${BTN('layers')}.click(); 1`); await sleep(500);
+    ok(await p.until(`${Z} === 'paused'`, 3000), `LAYERS open: AUTO paused (${await p.ev(Z)})`);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="layers"] > .ch').click(); 1`); await sleep(500);
+    ok(await p.until(`${Z} === 'on'`, 3000), `LAYERS folded: AUTO on again (${await p.ev(Z)})`);
+    // ── the SCALE chip: right edge, clear of the LIST, live with the zoom ──
+    const sc = JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${V}.querySelector('.mScale:not([hidden]) .hCard'); if (!d) return null; const b = d.getBoundingClientRect(); const l = ${V}.querySelector('.trkCard2[data-card="list"]'); const lb = l && !l.hidden ? l.getBoundingClientRect() : null;
+      return { right: Math.round(b.right), w: innerWidth, clash: !!lb && b.left < lb.right && b.right > lb.left && b.top < lb.bottom && b.bottom > lb.top, text: d.textContent.trim() }; })())`));
+    ok(!!sc && sc.right >= sc.w - 1 && !sc.clash, `the SCALE chip on the right edge, clear of the LIST (${sc && sc.text})`);
+    await p.ev(`(document.querySelector('.trkView:not([hidden]) .maplibregl-ctrl-zoom-in, .trkView:not([hidden]) .leaflet-control-zoom-in') || {}).click?.(); 1`); await sleep(1500);
+    const sc2 = await p.ev(`${V}.querySelector('.mScale .hCard').textContent.trim()`);
+    ok(!!sc && sc2 !== sc.text, `…its reading follows the zoom (${sc && sc.text} → ${sc2})`);
     // ── one side or flanking, by the map's own height (Stuart's phones) ──
     for (const [ww, hh, want] of [[375, 667, 'R'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {
       await p.size(ww, hh, true); await sleep(700);
