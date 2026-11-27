@@ -53,7 +53,8 @@ ok(!noRx.includes(tallinn), 'with no receiver, measured from the median point: T
 // ── FIT: the default layer ──
 ok(fitDefault({ adsb: 140, datalink: 5, ships: 3 }, 'datalink') === 'adsb', 'ADS-B where there is ADS-B (even in the DATALINK mode)');
 ok(fitDefault({ datalink: 5, ships: 3 }, 'datalink') === 'datalink', 'no ADS-B: the live mode\'s own layer');
-ok(fitDefault({ ships: 3, navst: 25, warnings: 19 }, '') === 'navst', 'no ADS-B, nothing live: the fullest layer');
+ok(fitDefault({ ships: 3, navst: 25, warnings: 19 }, '') === 'ships', 'no ADS-B, nothing live: the ships, never the continent of NAVTEX stations');
+ok(fitDefault({ navst: 25, warnings: 19 }, '') === '', 'only stations and warnings: no fit — the map keeps its view (Stuart 12:03)');
 ok(fitDefault({ other: 9 }, '') === '', 'only unnamed items: none');
 // ── the rate's words ──
 ok(rateWords(1425.4) === '1,425' && rateWords(98.6) === '99' && rateWords(4.25) === '4.3', `the rate: ${rateWords(1425.4)} · ${rateWords(98.6)} · ${rateWords(4.25)}`);

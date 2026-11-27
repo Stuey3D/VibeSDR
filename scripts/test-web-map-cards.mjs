@@ -226,6 +226,21 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await sleep(300);
     ok(await p.ev(look) === look0, 'the control colours (any skin, solid or glass) leave the map\'s bar and cards as they are');
     await p.ev(`(() => { const r = document.documentElement.style; for (const k of ['--btn-bg', '--btn-text', '--ctl-card-bg', '--btn-border', '--ov-chip']) r.removeProperty(k); return 1; })()`);
+    // ── the map's credits: shown as the map opens, folded to their (i) by 6 s, the (i) opens them again ──
+    await p.ev(`(() => { window.__vibeAsReopen = 1; return 1; })()`);
+    await p.ev(`document.querySelector('.trkView:not([hidden]) .trkTop .exit') && 1`);
+    { const A = `${V}?.querySelector('.maplibregl-ctrl-attrib')`;
+      if (await p.ev(`!!${A}`)) {
+        await p.ev(`${V}.querySelector('.trkTop .exit').click(); 1`); await sleep(1500);
+        await p.ev(`document.getElementById('mMode')?.click()`); await sleep(500);
+        await p.ev(`document.getElementById('mModeAirSea')?.click(); 1`);
+        ok(await p.until(`!!${A} && ${A}.classList.contains('maplibregl-compact-show')`, 8000), 'the map credits are shown as the map opens');
+        await sleep(6000);
+        ok(await p.ev(`!${A}.classList.contains('maplibregl-compact-show')`), '…folded to their (i) by 6 s');
+        await p.ev(`${A}.querySelector('.maplibregl-ctrl-attrib-button').click(); 1`); await sleep(300);
+        ok(await p.ev(`${A}.classList.contains('maplibregl-compact-show')`), '…and the (i) opens them again');
+      } else console.log('   (the GPU map is not in this browser — the credits check needs it)');
+    }
     // ── only LIST is remembered (per narrow / wide); the transient cards always start folded ──
     await p.size(1440, 900, false); await shutAll(p);
     await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(200); await p.ev(`${BTN('map')}.click(); 1`); await sleep(300);

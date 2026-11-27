@@ -11189,11 +11189,25 @@ const asSrcHidden = new Set<string>((() => { try { const j = JSON.parse(localSto
 const AV_LAYER_IDS: LiveLayerId[] = ['adsb', 'acars', 'vdl2', 'hfdl', 'adsc'];
 /** The radios on this server (id → its label), read once per opening of the map (GET /vibeserver/radios). */
 let asRadioNames: Map<string, string> | null = null;
-let asRadioList: Array<{ id: string; label: string; sub: string }> = [];
+let asRadioList: Array<{ id: string; label: string; sub: string; max?: number }> = [];
 /* ★★★ tweak 3 THE SERVERS chip on every map (Stuart 11-27: "must ALWAYS be reachable on every map screen, even when EXIT is
  *  hidden or the mode can't be left"): back to this server's radios (the front door's list, or the start page), or over
  *  to another radio on it. Before this a web listener on a map-locked radio (an only-mode server, the landing map) could
  *  leave only with the browser's own back button or by editing the address. */
+/** ★ each radio's live listeners and limit (its own /vibeserver.json — what the landing's radio list reads), at most every
+ *  10 s and only while a map's SERVERS card is open (a floored poll: memory cloudflare_workers_limit_incident). */
+const asRadioLive = new Map<string, { listeners: number; max: number }>();
+let asRadioLiveAt = 0;
+function asRadioLiveLoad() {
+  if (Date.now() - asRadioLiveAt < 10_000) return;
+  asRadioLiveAt = Date.now();
+  void Promise.all(asRadioList.filter((r) => r.id !== mapMine).slice(0, 8).map(async (r) => {
+    try {
+      const j = await (await fetch(`${location.origin}${doorRoot()}r/${encodeURIComponent(r.id)}/vibeserver.json`, { cache: 'no-store' })).json();
+      asRadioLive.set(r.id, { listeners: Math.max(0, Number(j?.listeners) || 0), max: Math.max(0, Number(j?.maxUsers) || 0) });
+    } catch { /* that radio is not answering: its row keeps the limit alone */ }
+  })).then(() => mapServersSync());
+}
 function doorRoot(): string { return location.pathname.replace(/\/r\/[^/]+(\/.*)?$/, '/') || '/'; }
 function mapServersSync() {
   const o = mapShOpenView();
@@ -11202,7 +11216,13 @@ function mapServersSync() {
   const onDoorRadio = /\/r\/[^/]+/.test(location.pathname);
   const rows = [{ id: 'back', label: asStandalone ? 'Back to this server\u2019s start page' : onDoorRadio ? 'Back to this server\u2019s radios' : 'Leave this radio \u2014 back to the start page',
                   sub: location.host }];
-  for (const r of asRadioList) if (r.id !== mapMine) rows.push({ id: `r:${r.id}`, label: `Switch to ${r.label}`, sub: r.sub || 'another radio on this server' });
+  // ★ Stuart 12:03 ("this should show listeners as 0/4"): each radio's listeners against its limit, live while the card is open
+  if (o.v.isCardOpen('servers')) asRadioLiveLoad();
+  for (const r of asRadioList) if (r.id !== mapMine) {
+    const lv = asRadioLive.get(r.id), max = lv?.max || (r as any).max || 0;
+    const count = lv ? `${lv.listeners}/${max || '?'} listeners` : max ? `?/${max} listeners` : '';
+    rows.push({ id: `r:${r.id}`, label: `Switch to ${r.label}`, sub: [count, r.sub].filter(Boolean).join(' · ') || 'another radio on this server' });
+  }
   o.v.setServers(rows, (id) => {
     if (id === 'back') { if (asStandalone) { asClose(); return; } location.href = `${location.origin}${doorRoot()}`; return; }
     if (id.startsWith('r:')) location.href = `${location.origin}${doorRoot()}r/${encodeURIComponent(id.slice(2))}/`;
@@ -11219,8 +11239,7 @@ function asRadioNamesLoad() {
       const label = typeof x.label === 'string' && x.label ? x.label.slice(0, 40) : x.id;
       m.set(x.id, label);
       const mode = typeof x.mode === 'string' ? x.mode.toUpperCase().slice(0, 12) : '';
-      const users = typeof x.users === 'number' ? `${x.users} listener${x.users === 1 ? '' : 's'} max` : '';
-      list.push({ id: x.id, label, sub: [typeof x.driver === 'string' ? x.driver : '', mode, users].filter(Boolean).join(' · ') });
+      list.push({ id: x.id, label, sub: [typeof x.driver === 'string' ? x.driver : '', mode].filter(Boolean).join(' · '), max: typeof x.users === 'number' ? x.users : 0 } as any);
     }
     asRadioNames = m; asRadioList = list;
     mapServersSync();
@@ -11241,7 +11260,8 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   const clock = asStandalone && asViewer ? asViewer.status().clock : '';
   v.setFacts({
     tune,
-    list: [clock, notPlaced ? `${notPlaced} heard but not on the map yet (no position)` : ''].filter(Boolean).join(' · '),
+    list: [clock, notPlaced ? `${notPlaced} heard but not on the map yet (no position)` : '',
+           asSrcHidden.size ? `Hidden in MAP \u2192 SOURCES: ${[...asSrcHidden].map((id) => (id === 'feed' ? 'the aircraft feeds' : asRadioNames?.get(id) ?? id)).join(', ')}` : ''].filter(Boolean).join(' · '),
     layers: x.shc.warnWords,
   });
   // ── MAP: the furthest aircraft ──

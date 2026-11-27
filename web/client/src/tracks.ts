@@ -2028,6 +2028,7 @@ export class TrackView {
       if (!this.wantFocus) this.autoFitCheck(p);
     }
     this.watchAttrib();
+    this.attribAuto();
     this.mapSay({ gl: this.vm, lm: this.vm ? null : this.lmap });   // ★ beta96 stage 8 a host layer (NDB) joins this map
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
@@ -2054,6 +2055,29 @@ export class TrackView {
       w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
     } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
     if (this.o.mixed) this.applyCamera();
+  }
+  /* ★★★ THE CREDITS FOLD AWAY BY THEMSELVES (Stuart 11-27: "it always pissed me off having to hide it every time"): the
+   *  attribution opens EXPANDED with the map, then folds to its (i) after 5 s or at the first touch of the map (a pan, a
+   *  zoom, a tap), whichever comes first; the (i) opens it again, and it folds again 5 s later. Never remembered — every
+   *  map opens with the credits shown. This follows the OSMF Attribution Guidelines for interactive maps: the credit is
+   *  shown without any interaction at first, and may then collapse "automatically on map interaction such as panning,
+   *  clicking, or zooming" or "automatically after five seconds", provided the user can still find it — the (i) in the
+   *  corner, which the guidelines give as an example. GPU map (MapLibre's own compact control); the Leaflet fallback keeps
+   *  its full line. */
+  private attribT: ReturnType<typeof setTimeout> | null = null;
+  private attribAuto() {
+    const at = this.mapHost.querySelector('.maplibregl-ctrl-attrib') as HTMLElement | null;
+    if (!at) return;
+    const gen = this.gen;
+    at.classList.add('maplibregl-compact', 'maplibregl-compact-show');
+    const fold = () => { if (this.attribT) { clearTimeout(this.attribT); this.attribT = null; } if (gen === this.gen) at.classList.remove('maplibregl-compact-show'); };
+    const arm = () => { if (this.attribT) clearTimeout(this.attribT); this.attribT = setTimeout(fold, 5000); };
+    arm();
+    const canvas = this.mapHost.querySelector('.maplibregl-canvas-container, .maplibregl-canvas') as HTMLElement | null;
+    const first = (e: Event) => { if (!at.contains(e.target as Node) && at.classList.contains('maplibregl-compact-show')) fold(); };
+    for (const ev of ['pointerdown', 'wheel', 'touchstart']) (canvas ?? this.mapHost).addEventListener(ev, first, { passive: true });
+    // ★ the (i): MapLibre's own toggle opens it; ours folds it again 5 s later
+    (at.querySelector('.maplibregl-ctrl-attrib-button') as HTMLElement | null)?.addEventListener('click', () => setTimeout(() => { if (at.classList.contains('maplibregl-compact-show')) arm(); }, 0));
   }
   /** ★ The map's attribution (a licence line we may not hide) sits at the bottom; on a phone it wraps to three lines and
    *  the list's last row went under it. The list stands just above it, however tall it grows. */

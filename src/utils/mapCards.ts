@@ -88,9 +88,10 @@ export function trimOutliers<T extends { lat: number; lon: number }>(pts: T[], r
 export function fitDefault(counts: Record<string, number>, main: string): string {
   if ((counts.adsb ?? 0) > 0) return 'adsb';
   if (main && (counts[main] ?? 0) > 0) return main;
-  let best = '', n = 0;
-  for (const [k, v] of Object.entries(counts)) if (k !== 'other' && v > n) { best = k; n = v; }
-  return best;
+  // ★ Stuart 12:03: with no aircraft the fit must not fly out to a continent of NAVTEX stations and warnings — the
+  //   things that MOVE (datalink aircraft, ships, sondes) may frame the view; else none: the map keeps where it is
+  for (const k of ['datalink', 'ships', 'sondes']) if ((counts[k] ?? 0) > 0) return k;
+  return '';
 }
 /** The live message rate's words, top right: ADS-B per second, the rest per minute ('' = nothing live). */
 export function rateWords(n: number): string { return n >= 100 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(n < 10 ? 1 : 0); }
