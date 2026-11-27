@@ -232,5 +232,28 @@ console.log('── b96-rangefeed: an ADS-B position is never sparse, whoever he
   eq('an ADS-C position over HFDL: sparse', shape('A1B2C3').sparse, true);
 }
 
+console.log('── b96-2 "Not at this site": an off-site feed\'s aircraft are drawn, never offered to the live outline (Stuart 11-27) ──');
+{
+  const NOW3 = 1795770661;
+  const tbl = sharedSanitise({ now: NOW3, count: 3, adsbLive: 1, adsbLast: 0, adsbNow: 3, aircraft: [
+    // the server marked it: its position is an off-site feed's only (vibe_aircraft_share.h offsiteOnly)
+    { key: '4B1A2C', icao: '4B1A2C', flight: 'SWR38', lat: 47.4, lon: 8.5, posAge: 1, posSrc: 'ADS-B', alt: 31000, src: ['ADS-B'], srcAge: { 'ADS-B': 0 }, age: 0, n: 50, radios: ['feed'], offsite: 1 },
+    // an at-site feed's: no mark
+    { key: '406A99', icao: '406A99', flight: 'VKG520', lat: 53.7, lon: -0.3, posAge: 1, posSrc: 'ADS-B', src: ['ADS-B'], srcAge: { 'ADS-B': 0 }, age: 0, n: 900, radios: ['feed'] },
+    // junk in the field is not a mark
+    { key: '4CA97B', icao: '4CA97B', flight: 'RYR12AB', lat: 52.6, lon: -1.3, posAge: 0, posSrc: 'ADS-B', src: ['ADS-B'], srcAge: { 'ADS-B': 0 }, age: 0, n: 30, offsite: 'yes' },
+  ] })!;
+  const planes = avNowRule(avMerge(null, tbl), tbl).planes;
+  const shape = (icao: string) => avPlaneAdsb(planes.find((p) => p.icao === icao)!)!;
+  eq('the off-site row reads offsite and is still drawn (an ADS-B aircraft, not sparse)', [planes.find((p) => p.icao === '4B1A2C')?.offsite, !!shape('4B1A2C'), shape('4B1A2C').sparse], [true, true, false]);
+  eq('…and the layer is told: offsite, so its live outline skips it', shape('4B1A2C').offsite, true);
+  eq('an at-site feed\'s row: no mark (it grows the outline)', [planes.find((p) => p.icao === '406A99')?.offsite, shape('406A99').offsite], [undefined, undefined]);
+  eq('junk ("yes") is not a mark', shape('4CA97B').offsite, undefined);
+  // the live report (this radio, now) joined with the table's off-site row: a newer table fix keeps the mark, this radio's own clears it
+  const live = { aircraft: [{ icao: '4B1A2C', flight: 'SWR38', lat: 47.39, lon: 8.49, posAge: 30, posSrc: 'ADS-C', via: 'HFDL', age: 30, n: 1 }] } as any;
+  const m = avMerge(live, tbl).find((p) => p.icao === '4B1A2C')!;
+  eq('merged with a live datalink row: the table\'s newer off-site fix brings its mark', [m.posSrc, m.offsite], ['ADS-B', true]);
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

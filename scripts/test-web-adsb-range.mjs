@@ -133,6 +133,16 @@ try {
   await ev(row('aa0002', 40.5, 120, 120, false)); await sleep(1100);
   await ev(row('aa0002', 40.5, 145, 0, false)); await sleep(1800);
   ok((await liveN()) === n0 + 2, `live: a fix two minutes old then a fresh one 25 NM on is flight, counted at once (${await liveN()} bearings)`);
+  // ★★ b96-2 "NOT AT THIS SITE" (Stuart 11-27): an aircraft the server marked offsite (an off-site feed's only) is drawn but
+  //    never offered to the live outline; the same aircraft's next fix without the mark (heard here too) is a FIRST fix
+  const rowOff = (hex, b, nm) => `(() => { const p = VibeAdsbLayer.maths.destination(52.29, -0.85, ${b}, ${nm}); layer.update([{hex:"${hex}",lat:p.lat,lon:p.lon,alt_baro:35000,seen:0,seen_pos:0,offsite:true}]); return 1; })()`;
+  await ev(rowOff('aa0003', 200.5, 180)); await sleep(1000); await ev(rowOff('aa0003', 200.5, 180.1)); await sleep(1000); await ev(rowOff('aa0003', 200.5, 180.2)); await sleep(1800);
+  ok((await liveN()) === n0 + 2, `live: an off-site feed's aircraft (offsite) — three fixes grow nothing (${await liveN()} bearings)`);
+  ok((await ev(`layer.focus('aa0003') !== false`)) === true, '…and it is on the map all the same (its card opens)');
+  await ev(row('aa0003', 200.5, 180.3, 0, false)); await sleep(1800);
+  ok((await liveN()) === n0 + 2, 'live: …its first fix without the mark is a FIRST fix (no pair across the two)');
+  await ev(row('aa0003', 200.5, 180.4, 0, false)); await sleep(1800);
+  ok((await liveN()) === n0 + 3, `live: …the next grows it (${await liveN()} bearings)`);
   for (const theme of ['dark', 'light']) {
     await open(theme, {});
     let s = await shown();
