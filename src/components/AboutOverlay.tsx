@@ -59,6 +59,12 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta97 2026-11-27 — WHO TOOK THE PICTURE (b97-gallery-source; Stuart, Sony beta96). Checked against the code: the
+  //     badge and the open item's line are src/utils/galleryOrigin.ts (web main.ts galOriginTag, app GalleryOverlay), the
+  //     source line shows the item's "p" (web main.ts `src`, GalleryOverlay s.dim); the server half is vibe_gallery.h
+  //     stampStartOrigin + local_sdr_shim.cpp satPassStartLocked. Items already saved keep their tag (no record says which
+  //     were a pass's).
+  { v: 'V12 (experimental)', detail: 'THE GALLERY NO LONGER SAYS A LISTENER TOOK PICTURES NOBODY WAS THERE FOR. Every Meteor picture caught by an unattended satellite pass — the 2:44 in the morning with nobody connected included — was tagged LISTENER in the gallery list. A pass’s pictures are now tagged BACKGROUND, like everything else background decoding saves, and their line says “Satellite pass”; opening one says “background decoding (Satellite pass)”. The same goes for whatever else a pass decodes (FUNcube telemetry, ORBCOMM, SSTV). A decoder a listener starts is still LISTENER. Pictures already in the gallery keep the tag they were saved with. Needs a VibeServer updated to this beta.' },
   // ★★★ V12 b96-2 2026-11-27 — UNATTENDED PASSES WAIT, AND GIVE BACK (b96-satgrace; Mac Ha). Checked against the code: the
   //     server (local_sdr_shim.cpp satPassTick's grace, satKeepGiveBackLocked, resumeWhyNot / modeResumeGated), the Setup
   //     page's and the Android server screen's Unattended satellite passes text (same words), the map's glfail note
