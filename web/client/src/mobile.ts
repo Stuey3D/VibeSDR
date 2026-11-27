@@ -445,9 +445,38 @@ export function initMobileControls(deps: MobileDeps) {
       } else {
         decRow.className = 'mModeOpt';
         decRow.textContent = 'DECODERS…';
+        decRow.dataset.askok = '';   // ★★ a door, not a change: open while ask-locked (main.ts wireAskShield)
         decRow.onclick = () => { close(); deps.openDecoders(); };
       }
       grid.appendChild(decRow);
+    }
+    /* ★★★ THE VIEWS WHEN THERE IS NO DOOR (Stuart, 2026-11-27: "i have no way of getting to the gallery"). With one decoder
+     *  left its own key stands where DECODERS… stood, and with none the door is left out — and the panel behind the door is
+     *  also where GALLERY, the maps and the DX LOG live. So in those two cases the VIEWS come here as keys of their own: the
+     *  panel's own keys pressed (#viewsRow — the same handlers, the same hidden-where-the-server-has-nothing rule). Keys
+     *  rather than always drawing the door: a door that opens onto one greyed decoder reads as a way to decode, not to look. */
+    const viewKeys = sole || !deps.anyDecoderLeft()
+      ? (Array.from(document.querySelectorAll('#viewsRow > button')) as HTMLButtonElement[]).filter((b) => !b.hidden)
+      : [];
+    if (viewKeys.length) {
+      const sep = document.createElement('div');
+      sep.className = 'mBwSep';
+      sep.textContent = 'VIEWS';
+      menu.appendChild(sep);
+      const vg = document.createElement('div');
+      vg.className = 'mModeGrid';
+      vg.id = 'mModeViews';
+      vg.dataset.askok = '';   // ★★ read-only views: open while ask-locked
+      for (const src of viewKeys) {
+        const v = document.createElement('button');
+        v.className = 'mModeOpt';
+        v.textContent = (src.textContent || '').trim();
+        v.title = src.title;
+        v.dataset.view = src.id;
+        v.onclick = () => { close(); src.click(); };
+        vg.appendChild(v);
+      }
+      menu.appendChild(vg);
     }
 
     // ★★ AN EXPLICIT WAY OUT. Dismiss-by-clicking-away is fine when the backdrop is inert; here
@@ -465,6 +494,7 @@ export function initMobileControls(deps: MobileDeps) {
     wiki.target = '_blank';
     wiki.rel = 'noopener noreferrer';
     wiki.textContent = 'SIGNAL ID WIKI ↗';
+    wiki.dataset.askok = '';
     wiki.title = 'Not sure what a signal is? Search the Signal Identification Wiki';
     menu.appendChild(wiki);
     /* ★★ V12 (2026-10-29) QRZ.COM ↗ — the callsign lookup, a plain link in a new tab as the wiki is (nothing fetched or
@@ -472,6 +502,7 @@ export function initMobileControls(deps: MobileDeps) {
      *  CW TERMS GUIDE — the ham-CW vocabulary the PLAIN key reads from, searchable (cwGuide.ts). The app has the same pair. */
     const pair = document.createElement('div');
     pair.className = 'mModePair';
+    pair.dataset.askok = '';   // ★ a link out and a guide — neither touches the radio
     const qrz = document.createElement('a');
     qrz.className = 'mModeClose mModeWiki';
     qrz.id = 'mModeQrz';
@@ -497,6 +528,7 @@ export function initMobileControls(deps: MobileDeps) {
       const dcKey = document.createElement('button');
       dcKey.className = 'mModeClose';
       dcKey.textContent = 'WHAT IS THE DC SPIKE?';
+      dcKey.dataset.askok = '';
       dcKey.title = 'What is the DC spike?';
       dcKey.setAttribute('aria-expanded', 'false');
       const dcText = document.createElement('div');
@@ -511,6 +543,7 @@ export function initMobileControls(deps: MobileDeps) {
     const closeRow = document.createElement('button');
     closeRow.className = 'mModeClose';
     closeRow.textContent = 'CLOSE';
+    closeRow.dataset.askok = '';
     closeRow.onclick = () => close();
     menu.appendChild(closeRow);
 
