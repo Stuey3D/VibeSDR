@@ -287,8 +287,10 @@ export interface GainIn {
   gains?: readonly number[]; gainTenthDb?: number; autoGain?: boolean; liveTenthDb?: number;
   /** rtl: a relayed rtl_tcp stream with no tuner (radio.noHwGain). usrp: the radio has its own AGC (radio.hwAgc). */
   noHwGain?: boolean; hwAgc?: boolean;
-  /** sdrplay: IF gain reduction (dB), its IF AGC, the system gain, the owner's floor. */
-  rspIfGr?: number; rspIfAgc?: boolean; rspSys?: number; rspGrMin?: number; rspGrMax?: number;
+  /** sdrplay: IF gain reduction (dB), its IF AGC, the system gain, the owner's floor; ★★★ beta97 the LNA state (the RF
+   *  side, shown with the IF on the row) and the NAME of the loop holding the IF while it is automatic — the server's own
+   *  report (rspstat vagc → "VibeAGC", else "SDRplay"; vagcIfOwner), never a hardcoded one. */
+  rspIfGr?: number; rspIfAgc?: boolean; rspSys?: number; rspGrMin?: number; rspGrMax?: number; rspLna?: number; agcName?: string;
   /** airspyhf: the attenuator step, its AGC, the step size and count. */
   ahfAtt?: number; ahfAgc?: boolean; attStepDb?: number; attSteps?: number;
   /** hackrf: the LNA (dB). */
@@ -333,8 +335,12 @@ export function gainRowFor(g: GainIn): GainRow {
     case 'sdrplay': {
       if (typeof g.rspIfGr !== 'number') return { kind: 'none', more };
       const lo = g.rspGrMin ?? 20, hi = g.rspGrMax ?? 59;
-      const value = typeof g.rspSys === 'number' && g.rspSys > 0 ? `${g.rspSys.toFixed(0)} dB` : `GR ${Math.round(g.rspIfGr)} dB`;
-      return { kind: kindOf(g.rspIfAgc !== false), driver: 'sdrplay', name: 'IF AGC', label: 'GR', value, min: lo, max: hi, step: 1,
+      /* ★★★ beta97 (Stuart, build 587) the RF AND the IF on the one row: "RF LNA 3 · IF 42 dB" (the LNA state and the IF gain
+       *  reduction the server reports); the loop's own name on the AGC key ("VibeAGC") */
+      const ifText = `IF ${Math.round(g.rspIfGr)} dB`;
+      const value = typeof g.rspLna === 'number' ? `RF LNA ${Math.round(g.rspLna)} \u00b7 ${ifText}`
+        : typeof g.rspSys === 'number' && g.rspSys > 0 ? `${g.rspSys.toFixed(0)} dB` : `GR ${Math.round(g.rspIfGr)} dB`;
+      return { kind: kindOf(g.rspIfAgc !== false), driver: 'sdrplay', name: g.agcName || 'IF AGC', label: 'GR', value, min: lo, max: hi, step: 1,
                at: Math.max(lo, Math.min(hi, Math.round(g.rspIfGr))), set: 'rsp-gr', more, unlocked };
     }
     case 'airspyhf': {

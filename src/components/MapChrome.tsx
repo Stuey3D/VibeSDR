@@ -53,7 +53,10 @@ export interface MapLayerRow { id: string; label: string; words: string; n?: num
   nOther?: number }
 export interface MapStatsSection { mode: string; rows: Array<{ key: string; label: string; value: string; name: string }> }
 export interface MapCtlState { auto: 'on' | 'off' | 'paused'; rings?: boolean; range?: boolean; rangeOffered?: boolean; labels?: boolean; aircraft: boolean }
-export interface MapGainHandlers { onAgc: (on: boolean) => void; onSet: (at: number) => void; onUnlock?: (password: string) => Promise<boolean>; onMore?: () => void }
+export interface MapGainHandlers { onAgc: (on: boolean) => void; onSet: (at: number) => void; onUnlock?: (password: string) => Promise<boolean>;
+  /** ★★★ beta97 (Stuart, build 587: "gain controls bring up the main menu instead") the radio's OTHER controls — the hardware
+   *  panel's own body (per radio.driver), drawn INLINE in the TUNE card under ⌄; never the radio's controls sheet over the map */
+  extras?: React.ReactNode }
 
 /** ★ The shared tuner's line + CHAT (dialChat.mapBarLine words — the SAME inputs as the controls bar's banner). */
 export interface MapSharedProps {
@@ -591,10 +594,15 @@ function GainRowView({ row, h, locked, onLocked }: { row: GainRow; h: MapGainHan
   const [pwText, setPwText] = useState('');
   const [pwMsg, setPwMsg] = useState('');
   const [drag, setDrag] = useState<number | null>(null);
+  const [open, setOpen] = useState(false);
   if (row.kind === 'none' && !row.more) return null;
   const ask = () => { if (locked) { onLocked(); return true; } return false; };
-  const more = row.more && h.onMore ? <Key label={'⌄'} words="More radio controls" onPress={() => { if (!ask()) h.onMore?.(); }} /> : null;
-  if (row.kind === 'none') return <NavRow><View style={styles.gainRow}><Text style={styles.gainLbl}>RADIO</Text><View style={{ flex: 1 }} />{more}</View></NavRow>;
+  /* ★★★ ⌄ opens the radio's other controls IN PLACE (the hardware panel's body); none while the owner's lock holds (the
+   *  inline unlock first), none where there are no extras (no dead control) */
+  const canMore = row.more && !!h.extras && row.kind !== 'locked';
+  const more = canMore ? <Key label={open ? '⌃' : '⌄'} on={open} words={open ? 'Hide the other radio controls' : 'More radio controls, here'} onPress={() => { if (!ask()) setOpen((v) => !v); }} /> : null;
+  const extras = canMore && open ? <View style={styles.gainExtras}>{h.extras}</View> : null;
+  if (row.kind === 'none') return <><NavRow><View style={styles.gainRow}><Text style={styles.gainLbl}>RADIO</Text><View style={{ flex: 1 }} />{more}</View></NavRow>{extras}</>;
   const agc = row.name ? <Key label={row.name} on={row.kind === 'auto'} words={`${row.name} — ${row.kind === 'auto' ? 'on; press for manual gain' : 'off; press to let it set the gain'}`}
                               onPress={() => { if (ask() || row.kind === 'locked') return; h.onAgc(row.kind !== 'auto'); }} /> : null;
   const val = drag != null ? row.value.replace(/[\d.]+/, String(drag)) : row.value;
@@ -630,6 +638,7 @@ function GainRowView({ row, h, locked, onLocked }: { row: GainRow; h: MapGainHan
           </View>
         </NavRow>
       )}
+      {extras}
     </>
   );
   async function unlock() {
@@ -1120,6 +1129,7 @@ const RAW = {
   lvOut: { backgroundColor: 'transparent', color: '#8fd79a', borderColor: '#4f8f5a' },
   layerN: { fontFamily: F, fontSize: 11, color: C.dim, minWidth: 26, textAlign: 'right' },
   layerNMine: { color: C.live, marginRight: 6 },
+  gainExtras: { borderTopWidth: 1, borderTopColor: C.rim, marginTop: 4, paddingTop: 4 },
   notice: { position: 'absolute', flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim,
             borderLeftWidth: 3, borderLeftColor: '#ff6b5e', borderRadius: 10, paddingVertical: 6, paddingLeft: 10, paddingRight: 4, zIndex: 30 },
   noticeHead: { fontFamily: F, fontSize: 10.5, fontWeight: '800', letterSpacing: 0.8, color: '#ff6b5e' },

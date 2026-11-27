@@ -100,6 +100,8 @@ const DS_MODES: { label: string; value: number }[] = [
 
 export interface LocalHardwarePanelProps {
   visible: boolean;
+  /** ★★★ beta97 the controls alone, drawn in place (the map TUNE card's ⌄) — no sheet, no backdrop, no own keys */
+  inline?: boolean;
   /** ★★ V12 WHAT THIS PHONE CAN RUN — the device benchmark, read for someone using the phone as their own radio
    *  (LocalBenchmarkCard). Given ONLY for a radio plugged into this Android phone (SDRScreen decides); absent = not drawn. */
   bench?: LocalBenchProps;
@@ -611,57 +613,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
     slots.current.push(p.askLocked ? () => p.onAskLockedTouch?.() : run);
     return idx === i;
   };
-  return (
-    <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}
-           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
-      {/* ★★★ Transparency OFF: no dim over the live waterfall — the view stays, invisible, so a tap
-          outside still closes the sheet. */}
-      <TouchableWithoutFeedback onPress={p.onClose}>
-        <View style={[styles.backdrop, fp.opaque && styles.backdropNone]} />
-      </TouchableWithoutFeedback>
-      {/* ★★★ THE KEYBOARD USED TO SIT ON TOP OF THIS SHEET. Focusing the admin-password field
-          raised it over a bottom-anchored panel that never moved, leaving "a slither of the top of
-          it" visible — you could not see the box you were typing into, let alone the controls
-          below (Stuart, 2026-09-02, trying to check VibeAGC on a locked receiver).
-          ★★ `padding` on iOS and `height` on Android: the two platforms report the keyboard
-             differently, and iOS is the one that overlays rather than resizing the window. The
-             wrapper is `pointerEvents: box-none` so the backdrop behind it still takes a tap to
-             dismiss — otherwise fixing the keyboard would break closing the sheet.
-          ★ The sheet keeps maxHeight 85%, so with the keyboard up it shrinks and its ScrollView
-            scrolls; nothing is unreachable, which is the whole complaint. */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.kbWrap} pointerEvents="box-none">
-      <DecoderSurface transparency="on">
-      <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, styles.sheet, sheetCap, { borderColor: frameBorder, backgroundColor: sheetBg,
-        paddingBottom: insets.bottom + 12,
-        paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
-      }, metalFrame, metalFrame && { paddingTop: 0 }]}>
-        <PopupPlate />
-        <PopupHandle drag={sheetDrag} />
-        <View style={styles.handleBar}>
-          {/* ★ NAME THE ACTUAL RADIO. This said "RTL-SDR Controls" over a panel driving an
-              Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
-              app has misidentified their hardware. The server already reports a model string
-              taken from the USB descriptor, i.e. what is written on the box. */}
-          {pt.metal ? (
-            <Text style={[styles.title, engraveText(pt), styles.titleMetal]} numberOfLines={1}>
-              {p.isSpy ? 'SpyServer Controls'
-               : p.radio?.model ? `${p.radio.model} Controls`
-               : 'Local SDR Controls'}
-            </Text>
-          ) : (
-          <DecoderTitle style={styles.title}>
-            {p.isSpy ? 'SpyServer Controls'
-             : p.radio?.model ? `${p.radio.model} Controls`
-             : 'Local SDR Controls'}
-          </DecoderTitle>
-          )}
-          <DecoderKey tone="close" onPress={p.onClose} hitSlop={10} label="✕" />
-        </View>
-        <PopupWindow style={styles.bodyWrap} metalStyle={styles.bodyWin}>
-        {/* ★ The indicator's lane: the gain / attenuator keys run to the right edge. */}
-        <ScrollView contentContainerStyle={[{ paddingBottom: 16 }, scrollLane]}>
+  /* ★★★ beta97 THE BODY ALONE, INLINE (Stuart, build 587: "gain controls bring up the main menu instead") — the map TUNE card's
+   *  ⌄ draws these same controls in place, never this sheet over the map. `visible` stays false there, so the panel's own
+   *  keys stay off (the card is the pad's scope). */
+  const body = (
+    <>
           {/* ★ The lock notice goes FIRST, before any control — it explains the whole panel,
               and finding it underneath the thing it applies to would be no use. */}
           {p.adminSet && (
@@ -1895,6 +1851,61 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
           {Platform.OS === 'android' && !!p.bench && (
             <LocalBenchmarkCard bench={p.bench} styles={styles} m={gt.ink.m} fill={K.fill} track={gt.ink.keyBorder} slot={slot} />
           )}
+    </>
+  );
+  if (p.inline) return <View style={styles.inlineBody}>{body}</View>;
+  return (
+    <Modal visible={p.visible} transparent animationType="slide" onRequestClose={p.onClose}
+           supportedOrientations={['portrait', 'landscape', 'landscape-left', 'landscape-right']}>
+      {/* ★★★ Transparency OFF: no dim over the live waterfall — the view stays, invisible, so a tap
+          outside still closes the sheet. */}
+      <TouchableWithoutFeedback onPress={p.onClose}>
+        <View style={[styles.backdrop, fp.opaque && styles.backdropNone]} />
+      </TouchableWithoutFeedback>
+      {/* ★★★ THE KEYBOARD USED TO SIT ON TOP OF THIS SHEET. Focusing the admin-password field
+          raised it over a bottom-anchored panel that never moved, leaving "a slither of the top of
+          it" visible — you could not see the box you were typing into, let alone the controls
+          below (Stuart, 2026-09-02, trying to check VibeAGC on a locked receiver).
+          ★★ `padding` on iOS and `height` on Android: the two platforms report the keyboard
+             differently, and iOS is the one that overlays rather than resizing the window. The
+             wrapper is `pointerEvents: box-none` so the backdrop behind it still takes a tap to
+             dismiss — otherwise fixing the keyboard would break closing the sheet.
+          ★ The sheet keeps maxHeight 85%, so with the keyboard up it shrinks and its ScrollView
+            scrolls; nothing is unreachable, which is the whole complaint. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.kbWrap} pointerEvents="box-none">
+      <DecoderSurface transparency="on">
+      <Animated.View style={[{ transform: [{ translateY: sheetDrag.y }] }, styles.sheet, sheetCap, { borderColor: frameBorder, backgroundColor: sheetBg,
+        paddingBottom: insets.bottom + 12,
+        paddingLeft: 16 + insets.left, paddingRight: 16 + insets.right,  // clear the notch in landscape
+      }, metalFrame, metalFrame && { paddingTop: 0 }]}>
+        <PopupPlate />
+        <PopupHandle drag={sheetDrag} />
+        <View style={styles.handleBar}>
+          {/* ★ NAME THE ACTUAL RADIO. This said "RTL-SDR Controls" over a panel driving an
+              Airspy HF+ (Stuart, 2026-07-27) — which is not just wrong, it tells the user the
+              app has misidentified their hardware. The server already reports a model string
+              taken from the USB descriptor, i.e. what is written on the box. */}
+          {pt.metal ? (
+            <Text style={[styles.title, engraveText(pt), styles.titleMetal]} numberOfLines={1}>
+              {p.isSpy ? 'SpyServer Controls'
+               : p.radio?.model ? `${p.radio.model} Controls`
+               : 'Local SDR Controls'}
+            </Text>
+          ) : (
+          <DecoderTitle style={styles.title}>
+            {p.isSpy ? 'SpyServer Controls'
+             : p.radio?.model ? `${p.radio.model} Controls`
+             : 'Local SDR Controls'}
+          </DecoderTitle>
+          )}
+          <DecoderKey tone="close" onPress={p.onClose} hitSlop={10} label="✕" />
+        </View>
+        <PopupWindow style={styles.bodyWrap} metalStyle={styles.bodyWin}>
+        {/* ★ The indicator's lane: the gain / attenuator keys run to the right edge. */}
+        <ScrollView contentContainerStyle={[{ paddingBottom: 16 }, scrollLane]}>
+          {body}
         </ScrollView>
         </PopupWindow>
       </Animated.View>
@@ -2074,6 +2085,7 @@ const makeLhpStyles = (pt: PopupTokens) => StyleSheet.create({
   title: { flexShrink: 1, marginRight: 8 },
   titleMetal: { fontSize: 12, letterSpacing: 2, fontWeight: '700' },
   bodyWrap: { flexShrink: 1 },
+  inlineBody: { paddingTop: 4 },   // ★★★ beta97 the map TUNE card's ⌄
   bodyWin: { paddingHorizontal: 10 },
   section: { fontFamily: FONT, fontSize: 10, letterSpacing: 2, color: pt.ink.section, marginTop: 16, marginBottom: 4 },
   segRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },

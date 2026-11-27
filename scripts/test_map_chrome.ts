@@ -237,6 +237,29 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(/<SnrChip mode="adsb" db=\{r\.snr\} size=\{11\.5 \* snrK\} \/>/.test(al) && 11.5 >= info && /const snrK = chromeScale\(win\.width, win\.height\);/.test(al), `the ADS-B LIVE rows too (≥ their info line ${info} pt, at the same scale)`);
 }
 
+// ── ★★★ beta97 the TUNE gain row (Stuart, build 587: "gain controls bring up the main menu instead") ──
+{
+  const rsp = gainRowFor({ driver: 'sdrplay', rspIfGr: 42, rspIfAgc: true, rspLna: 3, agcName: 'VibeAGC', more: true });
+  ok(rsp.kind === 'auto' && rsp.name === 'VibeAGC' && rsp.value === 'RF LNA 3 \u00b7 IF 42 dB', `RSP auto: the server's loop name and RF + IF on one row (${rsp.kind !== 'none' ? rsp.name + ' ' + rsp.value : ''})`);
+  const sdrOnly = gainRowFor({ driver: 'sdrplay', rspIfGr: 42, rspIfAgc: true, more: true });
+  ok(sdrOnly.kind === 'auto' && sdrOnly.name === 'IF AGC', 'no loop reported (an older server): the generic name, never a made-up one');
+  const lockedRsp = gainRowFor({ driver: 'sdrplay', rspIfGr: 42, rspIfAgc: true, rspLna: 3, agcName: 'VibeAGC', locked: true, more: true });
+  ok(lockedRsp.kind === 'locked', 'locked by the owner: the 🔒 row');
+  ok(gainRowFor({ driver: 'airspyhf', ahfAtt: 2, ahfAgc: true, more: true }).kind === 'auto' && gainRowFor({ driver: 'rtl', gains: [0, 100], gainTenthDb: 100, autoGain: false, more: true }).kind === 'manual',
+     'other drivers keep their own name / status');
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  const lhp = readFileSync(new URL('../src/components/LocalHardwarePanel.tsx', import.meta.url), 'utf8');
+  ok(/row\.kind === 'locked' && <Key label=\{'\\u\{1F512\}'\} words="Gain locked by the owner — enter the admin password" onPress=\{\(\) => setPw\(\(v\) => !v\)\} \/>/.test(mc)
+     && /secureTextEntry autoComplete="current-password"/.test(mc) && /const ok = await h\.onUnlock\(pwText\)/.test(mc), 'locked: the 🔒 opens the INLINE admin password box (the sheet\'s own unlock call), no sheet');
+  ok(/const canMore = row\.more && !!h\.extras && row\.kind !== 'locked';/.test(mc) && /const extras = canMore && open \? <View style=\{styles\.gainExtras\}>\{h\.extras\}<\/View> : null;/.test(mc),
+     '⌄ expands the other controls IN the card; none while locked, none where there are none');
+  ok(/get extras\(\) \{ return hwPanelEl \? React\.cloneElement\(hwPanelEl, \{ inline: true, visible: false \}\) : undefined; \}/.test(sdr) && !/onMore: \(\) => \{ markInteract\(\); setHwOpen\(true\); \}/.test(sdr),
+     'the extras are the hardware panel\'s own body (per radio.driver, hwinfo-driven) — the map never opens the controls sheet');
+  ok(/if \(p\.inline\) return <View style=\{styles\.inlineBody\}>\{body\}<\/View>;/.test(lhp), 'LocalHardwarePanel draws its body alone, inline (no Modal, no keys of its own)');
+  ok(/agcName: drv === 'sdrplay' && rspIfAgc !== false && \(rspVagcRunning !== undefined/.test(sdr) && /\? vagcIfOwner\(!!rspVagcRunning\) : undefined,/.test(sdr), 'the name from the server\'s report (rspstat vagc → VibeAGC / SDRplay)');
+}
+
 // ── the pill's words ──
 {
   const t = 'Shared VFO: Ask before changing mode or exiting 2/5';

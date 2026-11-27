@@ -42,7 +42,7 @@ import React, {
 } from 'react';
 import { setSessionTeardown } from '../services/crashGuard';
 import { guardJson } from '../services/faultLog';
-import { RspAgcWatch, rspAgcSampleOf } from '../services/rspAgcReadout';
+import { vagcIfOwner, RspAgcWatch, rspAgcSampleOf } from '../services/rspAgcReadout';
 import {
   Alert,
   Animated,
@@ -16014,6 +16014,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       driver: drv, gains: hwGains, gainTenthDb: drv === 'airspy' ? hwGain : hwAutoGain && hwGainLive >= 0 ? hwGainLive : hwGain,
       autoGain: drv === 'usrp' ? !!rc?.agcOn : hwAutoGain, liveTenthDb: hwGainLive, noHwGain: !!rc?.noHwGain, hwAgc: !!rc?.hwAgc,
       rspIfGr, rspIfAgc, rspSys, rspGrMin: hwIfGrFloor >= 0 ? hwIfGrFloor : undefined,
+      // ★★★ beta97 the RF side and the loop's own name, as the server reports them (the sheet's "AGC: VibeAGC (auto)")
+      rspLna: drv === 'sdrplay' ? rspLna : undefined,
+      agcName: drv === 'sdrplay' && rspIfAgc !== false && (rspVagcRunning !== undefined || typeof (radioCaps as { vagcMode?: unknown } | null)?.vagcMode === 'number')
+        ? vagcIfOwner(!!rspVagcRunning) : undefined,
       ahfAtt, ahfAgc, attStepDb: rc?.attStepDb, attSteps: rc?.attSteps, hrfLna, aspGainMode, aspLimit: rc?.aspLimit ?? null,
       locked: hwGainLocked, admin: adminOk, more: true,
     }) : { kind: 'none' as const, more: false };
@@ -16036,7 +16040,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         else onHwGain(hwGains[v] ?? 0);
       },
       onUnlock: async (pw: string) => { await onAdminUnlockPw(pw); await new Promise((res) => setTimeout(res, 1200)); return adminOkRef.current; },
-      onMore: () => { markInteract(); setHwOpen(true); },
+      /* ★★★ beta97 (Stuart, build 587) the TUNE card's ⌄: the hardware panel's own body IN PLACE — never this screen's sheet */
+      // ★ a getter: hwPanelEl is declared below this block — read when the card draws, never here (no TDZ)
+      get extras() { return hwPanelEl ? React.cloneElement(hwPanelEl, { inline: true, visible: false }) : undefined; },
     };
     // ── RATE: this radio's live mode first, then each feed's own messages a second ──
     const mine = adsbLiveHere && adsbReport?.msgRate != null ? { name: 'ADS-B', perSec: adsbReport.msgRate }
