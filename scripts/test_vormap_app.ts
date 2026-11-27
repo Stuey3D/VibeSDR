@@ -146,7 +146,7 @@ const vsc = read('src/services/VibeServerClient.ts'), wsc = read('src/services/V
 ok(/vormap\(on: boolean\) \{\n    if \(this\.askBlocked\(\)\) return;/.test(vsc) && /case 'vormap': \{/.test(vsc) && /case 'vormap_error':/.test(vsc), 'app: sent behind ask-before-tuning; report, off, refusal');
 ok((wsc.match(/this\.ndbHeld \|\| this\.vormapHeld/g) || []).length >= 5, 'app: every hold NDB has');
 ok(/vormap:    j\.vormap === true \|\| j\.vormap === false/.test(types), 'app: the capability\'s three states from vibeserver.json');
-ok(/vormapAvail: !asMenuOne && \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\.current as any\)\?\.isVibe && !IS_APPLE_TV,/.test(app) && /const asMenuOne = !IS_APPLE_TV && /.test(app),
+ok(/vormapAvail: !asMenuOne && \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\.current as any\)\?\.isVibe && !IS_APPLE_TV,/.test(app) && /const asMenuOne = vibeHere;/.test(app) && /const vibeHere = !IS_APPLE_TV && /.test(app),
    'app: its own key only where AIR & SEA LIVE does not stand in (never), and never on the Apple TV (no maps), as NDB — beta96 a TUNE row');
 ok((app.match(/onlyRefuses\('vormap'/g) || []).length >= 2 && /askLocked\(dialStateRef\.current\)\) \{ setVmMapOpen\(false\); askGate\(\); return; \}/.test(app),
    'app: EXIT and the Mode key refuse to leave the only mode; ask before tuning');

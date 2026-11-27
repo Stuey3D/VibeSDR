@@ -105,6 +105,7 @@ import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the 
  *  like the adsb maps") — the ADS-B map's camera, shared: src/utils/mapAutoFit.ts. Every kind but HFDL (its SNAP follows
  *  the latest flight) and ADS-B (the reference, its own AUTO key). */
 import { MAP_AUTOFIT_JS } from '../utils/mapAutoFit';
+import { LEGEND_READ_JS, legendClean, type LegendItem } from '../utils/mapLegend';   // ★★★ beta97 the KEY inside the MAP card
 import { mapPageShown, mapPageWritten, type MapPage } from '../utils/mapPage';   // ★★★ beta96 the page kept with its kind and opening
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend rows   // ★ the spot card's HH:MM:SS UTC (the slot's start)
 
@@ -654,20 +655,21 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   body.amL #toast{bottom:calc(var(--amH,0px) + 18px);}
   ` : ''}
   ${CARDS ? `
-  /* ★★★ beta97 THE CARDS: the KEY (the legend) where React Native says, the credits above its group */
-  #dleg,#legend{top:var(--keyTop,64px)!important;left:var(--keyLeft,64px)!important;bottom:auto!important;right:auto!important;}
-  #dleg{max-height:calc(100% - var(--keyTop,64px) - 24px);padding:8px 10px;}
-  #legend #legbody{top:0;bottom:auto;max-height:calc(100vh - var(--keyTop,64px) - 24px);}
+  /* ★★★ beta97 THE CARDS: the KEY is the MAP card's fold (React Native draws it from the page's own legend — mapLegend.ts);
+     the page's legend panels never show here. The credits sit above the cards' bottom-right group. */
+  #dleg,#legend{display:none!important;}
   .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{bottom:var(--cardsBrB,0px)!important;}
   ` : ''}
+  /* ★★★ beta97 THE CREDITS FOLD TO AN (i) on every map (Stuart): Leaflet has no compact credits of its own, so this is it */
+  .leaflet-control-attribution.att-fold{font-size:0!important;padding:0!important;width:22px;height:22px;border-radius:11px;cursor:pointer;overflow:hidden;}
+  .leaflet-control-attribution.att-fold::before{content:'i';display:block;width:22px;line-height:22px;text-align:center;font:italic 700 13px Georgia,serif;color:rgba(${T.x},0.6);}
   ${isTrk ? `
   /* ★★★ beta97 THE MAP CARDS (MapChrome, React Native over this page) own every corner: LIST bottom-left, ? · scale · [− +]
      bottom-right, the ✕ and RATE on top. */
   /* ★★★ beta97 the map credits' (i): just above the cards' bottom-right group (React Native says how high — __cardsBr) */
   .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{bottom:var(--cardsBrB,0px)!important;}
-  /* ★★★ beta97 the KEY (MAP card → KEY): React Native says where it opens (__cardsKey) — beside the cards, never under them */
-  #legend{top:var(--keyTop,64px);left:var(--keyLeft,64px);bottom:auto;}
-  #legbody{left:0;top:0;bottom:auto;max-height:calc(100vh - var(--keyTop,64px) - 24px);}
+  /* ★★★ beta97 the KEY is the MAP card's fold (React Native) — the page's legend never opens on a card map */
+  #legend{display:none!important;}
   /* ★★ THE ATTRIBUTION STAYS READABLE BESIDE THE LIST: its text is narrowed to the room right of the list (the list
      reports its width, __adsbListW; 0 as a pill) and wraps upwards instead of running underneath it. */
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib,.leaflet-bottom.leaflet-right .leaflet-control-attribution{
@@ -1104,6 +1106,18 @@ var cnt={textContent:''};   // ★★★ beta97 no bar: the count is the LIST ch
 /* ★★★ beta97 THE CARDS' BRIDGE, ONE FOR EVERY MAP OFF THE TRACK HOST (HFDL, spots, CW, the AMATEUR map): each kind sets
  *  window.__mapAuto ({state, toggle, fit}), window.__pageFocus(key) and tells React Native its rows (pageRowsTell). */
 function rnPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
+${LEGEND_READ_JS}
+/* ★★★ beta97 THE CREDITS FOLD AWAY ON EVERY MAP (Stuart): open as the map opens, folded to their (i) after 5 s or at the first
+ *  touch — one tap away. MapLibre's own compact (i); Leaflet's control folded by att-fold (a tap on the (i) opens it again). */
+(function(){var done=false;
+  function lf(){return document.querySelector('.leaflet-control-attribution');}
+  function fold(){if(done)return;done=true;try{var a=document.querySelector('.maplibregl-ctrl-attrib');
+      if(a){a.classList.remove('maplibregl-compact-show');a.classList.add('maplibregl-compact');}
+      var l=lf();if(l)l.classList.add('att-fold');}catch(e){}}
+  document.addEventListener('click',function(e){var l=lf();if(!l||!l.contains(e.target))return;
+    if(l.classList.contains('att-fold')){l.classList.remove('att-fold');e.preventDefault();e.stopPropagation();}
+    else if(!(e.target&&e.target.closest&&e.target.closest('a')))l.classList.add('att-fold');},true);
+  setTimeout(fold,5000);document.addEventListener('touchstart',fold,{once:true,passive:true});document.addEventListener('mousedown',fold,{once:true});})();
 var pageRowsSig='',pageRowsT=null,pageRowsFn=null;
 function pageRowsTell(fn){pageRowsFn=fn;if(pageRowsT)return;pageRowsT=setTimeout(function(){pageRowsT=null;try{var rows=pageRowsFn?pageRowsFn():[];
   var sig=JSON.stringify(rows);if(sig!==pageRowsSig){pageRowsSig=sig;if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('{"t":"pageRows","rows":'+sig+'}');}}catch(e){}},700);}
@@ -1847,8 +1861,11 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     else if(A&&(k==='rings'||k==='range'||k==='labels'))A[k]();
   }catch(e){console.error('cards ctl',e);}cardsTell(true);};
   window.__cardsZoom=function(d){try{var mm=GLVM?GLVM.map:map;if(d>0)mm.zoomIn();else mm.zoomOut();}catch(e){}};
-  window.__cardsKey=function(on,top,left){try{document.documentElement.style.setProperty('--keyTop',(Number(top)||64)+'px');document.documentElement.style.setProperty('--keyLeft',(Number(left)||64)+'px');
-    legEl.classList.toggle('open',!!on);if(on)setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);if(acLayer&&acLayer.toggleLegend)acLayer.toggleLegend(!!on);}catch(e){}};
+  /* ★★★ beta97 the KEY: the MAP card's fold — the page's legend (#legbody) and the ADS-B layer's key, READ into React Native
+   *  (mapLegend.ts); re-read every 2 s while open (the range outline's words change); the page draws no panel */
+  function legRootsT(){return [legBody,document.querySelector('.vsadsb-leg')];}
+  window.__cardsKey=function(on){legOn=!!on;if(legT){clearInterval(legT);legT=null;}
+    if(legOn){legTell(legRootsT(),trkPost,true);legT=setInterval(function(){legTell(legRootsT(),trkPost,false);},2000);}};
   var cardsSig='';
   function cardsTell(force){try{
     var auto='off',ac=useAc(),cs=acLayer&&acLayer.ctlState?acLayer.ctlState():null;
@@ -1861,11 +1878,6 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     var sig=JSON.stringify(o);if(!force&&sig===cardsSig)return;cardsSig=sig;trkPost(o);}catch(e){}}
   window.__cardsTell=cardsTell;
   window.__cardsBr=function(px){document.documentElement.style.setProperty('--cardsBrB',(Math.max(0,Number(px)||0))+'px');};
-  /* ★★★ beta97 THE CREDITS FOLD AWAY (Stuart): the attribution opens as the map opens, then folds to its (i) after 5 s or at the
-   *  first touch — it is still one tap away */
-  (function(){var done=false;function fold(){if(done)return;done=true;try{var a=document.querySelector('.maplibregl-ctrl-attrib');
-      if(a){a.classList.remove('maplibregl-compact-show');a.classList.add('maplibregl-compact');}}catch(e){}}
-    setTimeout(fold,5000);document.addEventListener('touchstart',fold,{once:true,passive:true});document.addEventListener('mousedown',fold,{once:true});})();
   setInterval(function(){if(document.visibilityState!=='hidden')cardsTell(false);},1000);
   (function(){var mm=GLVM?GLVM.map:map;try{mm.on('moveend',function(){cardsTell(false);});
     /* ★ a tap on the map folds the open card (the web's rule) — a tap, not a drag */
@@ -2381,9 +2393,10 @@ ${CARDS ? `
     if(k==='auto'&&a)a.toggle();else if(k==='fit'&&a)a.fit();
     else if(k==='centre'&&(RX_LAT||RX_LON))map.setView([RX_LAT,RX_LON],Math.max(map.getZoom(),5));}catch(e){}tell(true);};
   window.__cardsZoom=function(d){try{if(d>0)map.zoomIn();else map.zoomOut();}catch(e){}};
-  window.__cardsKey=function(on,top,left){document.documentElement.style.setProperty('--keyTop',(Number(top)||64)+'px');document.documentElement.style.setProperty('--keyLeft',(Number(left)||64)+'px');
-    if(window.__digiKey){window.__digiKey(!!on);return;}
-    legEl.classList.toggle('open',!!on);if(on)setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);};
+  /* ★★★ beta97 the KEY: the MAP card's fold — read from the digital map's legend (its counts, refreshed) or #legbody */
+  function legRootsO(){var d=document.getElementById('dleg');if(window.__digiKey&&d){window.__digiKey(false);return [d.querySelector('.dc')];}return [legBody];}
+  window.__cardsKey=function(on){legOn=!!on;if(legT){clearInterval(legT);legT=null;}
+    if(legOn){legTell(legRootsO(),rnPost,true);legT=setInterval(function(){legTell(legRootsO(),rnPost,false);},2000);}};
   window.__cardsBr=function(px){document.documentElement.style.setProperty('--cardsBrB',(Math.max(0,Number(px)||0))+'px');};
   setInterval(function(){if(document.visibilityState!=='hidden')tell(false);},1000);
   try{map.on('moveend',function(){tell(false);});map.on('click',function(){rnPost({t:'mapTap'});});}catch(e){}
@@ -2660,6 +2673,7 @@ export default function MapOverlay(
   const [cardsCtl, setCardsCtl] = useState<MapCtlState>({ auto: 'on', aircraft: false });
   const [cardsMpp, setCardsMpp] = useState(0);
   const [mapTapSeq, setMapTapSeq] = useState(0);
+  const [legendItems, setLegendItems] = useState<LegendItem[]>([]);   // ★★★ beta97 the KEY fold (the page's legend, read)
   /** ★★★ beta97 the AMATEUR map's statistics, from the page (digiStats — the STATS card) */
   const [amStats, setAmStats] = useState<AmStatsIn | null>(null);
   useEffect(() => { if (!visible) setAmStats(null); }, [visible]);
@@ -2945,6 +2959,7 @@ export default function MapOverlay(
               return;
             }
             if (m && (m as any).t === 'mapTap') { setMapTapSeq((n) => n + 1); return; }
+            if (m && (m as any).t === 'legend') { setLegendItems(legendClean((m as any).items)); return; }   // ★★★ beta97 the KEY fold's items
             if (m && (m as any).t === 'amStats') { setAmStats(amStatsClean(m)); return; }
             if (m && (m as any).t === 'cardsState' && (m as any).autoOk === false) { /* no camera key on this map */ }
             if (m && (m as any).t === 'pageRows') { setPageRows(pageRowsClean((m as any).rows)); return; }   // ★★★ beta97 the LIST of the maps off the track host
@@ -3108,7 +3123,7 @@ export default function MapOverlay(
               stats={secs.length ? { sections: secs, onPick: (k) => { if (k) pageCall('__pageFocus', k.replace(/^spot:/, '')); } } : null}
               map={{ ctl: cardsCtl, onCtl: (k) => pageCall('__cardsCtl', k),
                      ranges: ages.length ? ages : undefined, range: spotAge || ages.find((a) => a.def)?.id, onRange: (id) => { setSpotAge(id); pageCall('__digiSet', 'age', id); },
-                     keyOn: spotKeyOn, onKey: (on) => { setSpotKeyOn(on); pageCall('__cardsKey', on, (safeInsets?.top ?? 0) + 64, (safeInsets?.left ?? 0) + 64); },
+                     keyOn: spotKeyOn, onKey: (on) => { setSpotKeyOn(on); pageCall('__cardsKey', on); }, keyItems: legendItems, onKeyCheck: (i) => pageCall('__legCheck', i),
                      /* ★★★ HFDL: AUTO follows the latest flight (SNAP) — said so wherever it shows */
                      autoFollow: kind === 'hfdl',
                      /* ★★★ the receiver's place unknown (an on-device map at 0,0): SET MY LOCATION, here — never a button in the page */
@@ -3141,7 +3156,7 @@ export default function MapOverlay(
                    },
                    sources: amScope?.offered ? [{ id: 'others', name: OTHER_RADIOS_LABEL, what: OTHER_RADIOS_WORDS, on: amScope.others }] : undefined,
                    onSource: () => amScope?.onOthers(!amScope.others),
-                   keyOn: amKeyOn, onKey: (on) => { setAmKeyOn(on); pageCall('__cardsKey', on, (safeInsets?.top ?? 0) + 64, (safeInsets?.left ?? 0) + 64); },
+                   keyOn: amKeyOn, onKey: (on) => { setAmKeyOn(on); pageCall('__cardsKey', on); }, keyItems: legendItems, onKeyCheck: (i) => pageCall('__legCheck', i),
                    setLocation: local && onPickCity && !(rxLat || rxLon) ? onPickCity : undefined,   // ★★★ SET MY LOCATION — the page draws no button of its own
                    extra: <AmFilters modes={spotsListModes(spotModes && spotModes.length ? spotModes : Object.keys(DIGI_MODE_STYLE))} radios={digiRadios ?? null}
                                      value={amFilter} onChange={(k, v) => { setAmFilter((cur) => ({ ...cur, [k]: v })); pageCall('__digiSet', k, v); }} /> }}
@@ -3162,7 +3177,7 @@ export default function MapOverlay(
           <MapCardsHost kind={kind} trk={trk} cards={cards ?? null} only={only} shared={shared ?? null} tune={tune ?? null}
                         lockWhy={dialLock?.why ?? ''} onLocked={(why) => dialLock?.onDialLocked(why)} exitLocked={exitLocked} onExit={closeGuarded}
                         winW={winW} winH={winH} insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} ink={ink}
-                        ctl={cardsCtl} mpp={cardsMpp} mapTapSeq={mapTapSeq} pageCall={pageCall} onFootprint={trkFootprint}
+                        ctl={cardsCtl} mpp={cardsMpp} mapTapSeq={mapTapSeq} legendItems={legendItems} pageCall={pageCall} onFootprint={trkFootprint}
                         selected={trkSel} onFocus={trkFocus}
                         route={kind === 'ism' && trkSel && trk.items.some((it) => it.key === trkSel && !!(it as { _rt?: unknown })._rt)
                           ? { name: String(trk.items.find((it) => it.key === trkSel)?._lb ?? ''), on: trkRouteKey === trkSel } : null}
@@ -3217,7 +3232,7 @@ function MapCardsHost(p: {
   kind: MapKind; trk: NonNullable<MapOverlayProps['trk']>; cards: MapCardsIn | null; only?: string; shared: MapSharedProps | null; tune: MapTuneProps | null;
   lockWhy: string; onLocked: (why: string) => void; exitLocked: boolean; onExit: () => void;
   winW: number; winH: number; insets: { top: number; bottom: number; left: number; right: number }; ink: { x: string; k: string; kt: string };
-  ctl: MapCtlState; mpp: number; mapTapSeq: number; pageCall: (fn: string, ...args: unknown[]) => void; onFootprint: (w: number, h: number) => void;
+  ctl: MapCtlState; mpp: number; mapTapSeq: number; legendItems: LegendItem[]; pageCall: (fn: string, ...args: unknown[]) => void; onFootprint: (w: number, h: number) => void;
   selected: string | null; onFocus: (key: string) => void;
   route: { name: string; on: boolean } | null; onRoute: () => void;
   adsb: AdsbBodyInput | null; adsbGain: MapOverlayProps['adsbGain'] | null; adsbCapture: { short: string; rest: string } | null;
@@ -3284,7 +3299,7 @@ function MapCardsHost(p: {
                fitTo: fit ? { groups: fit.groups, pick: fit.use, onPick: (id: string) => { setFitPick(id); AsyncStorage.setItem('lsv_map_fit_to', id).catch(() => {}); } } : undefined,
                onRange: t.onRange ? (id) => { t.onRange?.(id); setTimeout(() => p.pageCall('__trkFit'), 400); } : undefined,
                sources: p.cards?.sources, onSource: p.cards?.onSource,
-               keyOn, onKey: (on) => { setKeyOn(on); p.pageCall('__cardsKey', on, p.insets.top + 64, p.insets.left + 64); },
+               keyOn, onKey: (on) => { setKeyOn(on); p.pageCall('__cardsKey', on); }, keyItems: p.legendItems, onKeyCheck: (i) => p.pageCall('__legCheck', i),
                extra: nb.head }}
         chat={p.shared ? { disabled: p.shared.chatDisabled, unread: p.shared.chatUnread, onOpen: p.shared.onChat } : null}
         rate={p.cards?.rate ?? []}
