@@ -1718,6 +1718,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── server-level aircraft feeds (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-aircraft-feeds.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 follow-up (docs/v12/FEED-TEST.md, the Lenovo 11-27): feeds saved through a RADIO's process reach the FRONT DOOR
+#    that owns them (its config.json watch) within ~2 s; an unrelated save re-applies nothing. ~25 s.
+printf '\n\033[1m── aircraft feeds saved through a radio reach the front door (test-feeds-door-watch) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-feeds-door-watch.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: the aircraft table as deltas + the standalone map\x27s tickets, real binary (test-server-aircraft-delta, ADSB-FEED.md) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" npx tsx scripts/test-server-aircraft-delta.mts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

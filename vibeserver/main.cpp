@@ -3543,6 +3543,9 @@ int main(int argc, char** argv) {
             LocalSdrShim::setAirSeaViewers(next.mapViewers, next.mapTimeMin);   // ★★ V12 beta96 the standalone AIR & SEA map's limits, live
             LocalSdrShim::setCommunityModesOff(next.communityOff);
             if (g_amFrontDoor.load()) applyCommunityDoorRadios(next);   // ★★ beta95 a radio's modes changed: the door's feed follows
+            /* ★★ beta96 follow-up (docs/v12/FEED-TEST.md): the door OWNS the server-level aircraft feeds, and owns no radio, so
+             *  the per-radio block below never reaches it — apply them here, at once (the config watch is the backstop). */
+            if (g_amFrontDoor.load()) applyAircraftFeeds(next, true);
             LocalSdrShim::setGalleryRedact(gallerySerials(next));
             applySpotReporting(next, nullptr);   // ★ V12 beta90 PSK Reporter: the front door's own process (the radios re-read the file)
             // ★★ THE LISTING FOLLOWS THE SAVE. Without this the switch wrote the file and changed
@@ -6316,6 +6319,48 @@ int main(int argc, char** argv) {
             if (!pw.empty() && !ser.empty() && (key != lastPw || ++pwTick >= 30)) {
                 icomPowerWrite(ser, pw, autoOn, byOwner);
                 lastPw = key; pwTick = 0;
+            }
+        }
+        /* ★★★ V12 beta96 follow-up (docs/v12/FEED-TEST.md — the Lenovo, 2026-11-27): THE FRONT DOOR WATCHES TOO. The door
+         *  owns the SERVER-LEVEL things — the aircraft feeds and the flight-tracker hub (vibe_feeds.h "ONE OWNER PER
+         *  MACHINE"), the merged community feed, the directory listing — and a save may come through a RADIO's process
+         *  (Stuart's two feeds went through :48001). That radio restarted itself; the door, skipped by this watch, kept its
+         *  boot-time "0 sources" until it was restarted by hand. So the door re-reads the file the same way and applies
+         *  only what it owns, each only on a change (the appliers ignore an unchanged value). Nothing per-radio: the door
+         *  has no radio. */
+        if (frontDoorOnly && !g_configPath.empty()) {
+            static int doorTick = 0;
+            static long long doorStamp = -1;
+            if (++doorTick >= 2) {
+                doorTick = 0;
+                struct stat cst{};
+                if (::stat(g_configPath.c_str(), &cst) == 0) {
+                    const long long stamp = (long long)cst.st_mtime * 1000000000LL + (long long)cst.st_size;
+                    /* ★ The FIRST look applies too (unlike the radios' watch below): the door's main loop starts well after
+                     *  its port opens, and a save in that gap would otherwise be remembered as the baseline and never
+                     *  applied. Every applier here is keyed, so a first look at an unchanged file changes nothing. */
+                    if (stamp != doorStamp) {
+                        const bool first = doorStamp < 0;
+                        doorStamp = stamp;
+                        vsconfig::ServerConfig fresh; std::string e;
+                        if (vsconfig::loadServer(g_configPath, fresh, e)) {
+                            applyAircraftFeeds(fresh, true);   // ★★ the feeds + the flight-tracker hub (unchanged = not re-applied)
+                            applyCommunityDoorRadios(fresh);   // ★★ beta95 the door's merged community feed (ignores unchanged)
+                            LocalSdrShim::setCommunityMap(fresh.communityMap);
+                            LocalSdrShim::setCommunityModesOff(fresh.communityOff);
+                            // ★★ the listing: only when what the directory is told changed; a new share length only when IT did
+                            const auto dirKey = [](const vsconfig::ServerConfig& c) {
+                                return std::string(c.configured ? "c" : "-") + (c.dirList ? "l" : "-") + (c.locFollow ? "f" : "-") + "|" + c.dirName + "|" + c.name
+                                     + "|" + c.locator + "|" + c.dirPublicUrl + (c.dirAlias ? "|a|" : "|-|") + std::to_string(c.dirShareSec);
+                            };
+                            const bool dirChanged = dirKey(fresh) != dirKey(g_serverConfig);
+                            const bool shareChanged = fresh.dirShareSec != g_serverConfig.dirShareSec;
+                            g_serverConfig = fresh;   // ★ as the door's own save does: its view follows the file
+                            if (dirChanged && g_applyDirectory) g_applyDirectory(fresh, shareChanged);
+                            if (!first) std::printf("VibeServer: front door re-read %s (server-level settings)\n", g_configPath.c_str());
+                        }
+                    }
+                }
             }
         }
         /* ★★★ V12 BACKGROUND DECODING REACHES THE RADIO'S OWN PROCESS (Lenovo, 2026-10-22). The setup page saves
