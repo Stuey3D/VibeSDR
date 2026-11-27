@@ -412,6 +412,11 @@ public:
     static void setAdsbIngest(const std::string& dir);
     /** The feeds' status for the owner (with addresses) — this process's, or the owner's status file. */
     static std::string aircraftFeedsStatusJson();
+    /** ★★ beta96 follow-up TEST / FIND A FEED BEFORE SAVING (vibe_feed_test.h, docs/v12/FEED-TEST.md). `body` =
+     *  {"src":{fmt,dir,host,port,label,name}} → the test's JSON, or {"find":"host[:port]"} → what is there (auto-detect).
+     *  Bounded (~5 s), one at a time per process, on its own thread; never disturbs a running feed. Blocks the caller:
+     *  call it from a connection thread or a worker, never audio/DSP. A stop cancels it. */
+    static std::string feedTestJson(const std::string& body);
     /** ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's limits (vibe_airsea_viewers.h): at most `maxViewers` open at once
      *  (0 = no limit), each address for at most `minutes` (0 = no limit). Live; every process may call it (only the one
      *  serving /vibeserver/airsea/join counts). */

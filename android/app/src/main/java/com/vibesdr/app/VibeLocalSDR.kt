@@ -385,6 +385,10 @@ object VibeLocalSDR {
      *  Beast or BaseStation output into this server's shared aircraft table (vibe_feeds.h). Live. "" = applied, else why not. */
     fun setAircraftFeeds(json: String): String { ensureLoaded(); return nativeSetAircraftFeeds(json) }
     private external fun nativeSetAircraftFeeds(json: String): String
+    /** ★★ beta96 follow-up: TEST / FIND a feed before it is saved (vibe_feed_test.h). {"src":{…}} or {"find":"host"} → JSON.
+     *  Blocks up to ~6 s — call it from a worker thread. */
+    fun feedTest(json: String): String { ensureLoaded(); return nativeFeedTest(json) }
+    private external fun nativeFeedTest(json: String): String
     /** ★★ V12 beta96 the standalone AIR & SEA map's limits: viewers at once (0 = no limit), minutes each (0 = none). Live. */
     fun setAirSeaViewers(maxViewers: Int, minutes: Int) { ensureLoaded(); nativeSetAirSeaViewers(maxViewers, minutes) }
     private external fun nativeSetAirSeaViewers(maxViewers: Int, minutes: Int)

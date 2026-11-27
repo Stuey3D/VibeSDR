@@ -1011,13 +1011,28 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div class="card" id="feedsCard">
         <h2>Aircraft feeds from other receivers</h2>
         <p class="why">Aircraft another receiver decodes, shown on this server&rsquo;s maps beside its own radios&rsquo;: a PiAware
-          Pi&rsquo;s dump1090 (Beast), or HFDL from dumphfdl (BaseStation text) &mdash; on an UberSDR, for one. Nothing to
+          Pi&rsquo;s dump1090 (Beast), an UberSDR&rsquo;s HFDL add-on, or HFDL from dumphfdl (BaseStation text). Nothing to
           tune: no radio is used. One aircraft heard both ways is one row with both sources.</p>
         <div id="feedsList"></div>
         <div class="hint" id="feedsNone">No feeds yet.</div>
+        <!-- ★★ beta96 follow-up (Stuart 11-27: "the easiest way possible please"; docs/v12/FEED-TEST.md): type an ADDRESS, press
+             FIND — the server looks for Beast (30005), BaseStation (30003) and an UberSDR's HFDL add-on (8080, 80) at once and
+             says what it found; ADD adds it. Everything else (listening feeds, odd ports) is under Advanced, where ADD tests the
+             feed first and offers "Add anyway" when the test fails (the other receiver may just be off). -->
         <details id="feedsAdd" style="margin-top:8px"><summary><b>+ Add aircraft feed</b></summary>
+          <label><span class="lbl">The other receiver&rsquo;s address</span>
+            <input type="text" id="feedFind" maxlength="120" placeholder="e.g. 192.168.86.12" autocapitalize="off" autocorrect="off" spellcheck="false" style="max-width:280px">
+            <div class="hint">This server looks for PiAware or dump1090 (Beast, port 30005), BaseStation text (30003) and an
+              UberSDR&rsquo;s HFDL add-on (8080) there, and fills in the rest. An UberSDR needs no change: its HFDL add-on already
+              shares its aircraft. Add <code>:port</code> for an unusual port.</div></label>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+            <button type="button" class="btn" id="feedFindGo">FIND</button>
+            <span class="hint" id="feedFindMsg" style="margin:0"></span></div>
+          <div id="feedFound"></div>
+          <details id="feedAdv" style="margin-top:10px"><summary>Advanced &mdash; a feed that connects to this server, or set it by hand</summary>
           <label><span class="lbl">Format</span>
             <select id="feedFmt"><option value="beast">Beast (dump1090, readsb, PiAware)</option>
+              <option value="uberhfdl">UberSDR HFDL add-on (read from the UberSDR)</option>
               <option value="sbs">BaseStation / SBS text (dumphfdl, dumpvdl2)</option></select></label>
           <label><span class="lbl">Direction</span>
             <select id="feedDir"><option value="connect">This server connects to it</option>
@@ -1035,11 +1050,16 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
               flight-tracking sites.</div></label>
           <label><span class="lbl">Name</span>
             <input type="text" id="feedName" maxlength="40" placeholder="e.g. PiAware in the loft" style="max-width:280px"></label>
-          <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+          <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <button type="button" class="ghost" id="feedTestGo">TEST</button>
             <button type="button" class="btn" id="feedAddGo">ADD</button>
+            <button type="button" class="ghost hide" id="feedAddAnyway">ADD ANYWAY</button>
             <span class="hint" id="feedAddMsg" style="margin:0"></span></div>
+          <div class="hint">ADD tests the feed first. If the test fails you are told why, and may add it anyway (the other
+            receiver may just be off).</div>
           <div class="hint">Saved with <b>Save</b> below. dumphfdl: add <code>--output decoded:basestation:tcp:address=<span id="feedHostEcho">this-server</span>,port=32010</code>
             to its options (Docker: <code>EXTRA_ARGS</code>), then add a BaseStation feed here that listens on 32010, labelled HFDL.</div>
+          </details>
         </details>
       </div>
       <!-- ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (Stuart 2026-11-26: "like we did for PSKReporter"; docs/v12/ADSB-FEED.md,
@@ -9589,7 +9609,15 @@ async function afStatusPoll() {
  *  Stuart 11-26: "feeds are NOT radios". A list of {fmt, dir, host?, port, label, name}; ADD and REMOVE change the list,
  *  Save stores it. Pure parts (feedsRowsFrom, feedsDefaults, feedsFromForm, feedsBlob, feedsTitle, beastAddrWhy) are
  *  tested by scripts/test-setup-adsb-feed.mjs. */
-let feedsModel = [], feedsStatus = [];
+let feedsModel = [], feedsStatus = [], feedsTested = {}, feedsFound = [], feedsPending = null;
+const feedsKey = (f) => [f.fmt, f.dir, f.host || "", f.port, f.label].join("|");
+/** ★★ beta96 follow-up: ask THE SERVER to test one source ({src}) or find what is at an address ({find}). ~5 s at most. */
+async function feedTestPost(body) {
+  try {
+    const r = await fetch(`/vibeserver/admin/feedtest?${await authQuery()}`, { method: "POST", cache: "no-store", body: JSON.stringify(body) });
+    return await r.json();
+  } catch (e) { return null; }
+}
 /** The stored text → the list ("" or junk = none). */
 function feedsRowsFrom(text) {
   let v = [];
@@ -9598,7 +9626,22 @@ function feedsRowsFrom(text) {
 }
 /** What a new feed of this format starts with (Stuart's two cases: PiAware's Beast, dumphfdl's BaseStation). */
 function feedsDefaults(fmt) {
-  return fmt === "sbs" ? { dir: "listen", port: 32010, label: "hfdl" } : { dir: "connect", port: 30005, label: "adsb" };
+  return fmt === "sbs" ? { dir: "listen", port: 32010, label: "hfdl" }
+       : fmt === "uberhfdl" ? { dir: "connect", port: 8080, label: "hfdl" } : { dir: "connect", port: 30005, label: "adsb" };
+}
+/** ★★ beta96 follow-up: what each format is called in the list. */
+function feedsFmtWord(fmt) { return fmt === "sbs" ? "BaseStation" : fmt === "uberhfdl" ? "UberSDR HFDL" : "Beast"; }
+/** The server's test answer (/vibeserver/admin/feedtest, vibe_feed_test.h toJson) → {ok, text}. */
+function feedTestWords(j) {
+  if (!j || typeof j !== "object") return { ok: false, text: "The test did not answer \u2014 is this server still running?" };
+  const line = String(j.line || j.verdict || "no answer");
+  return { ok: !!j.ok, text: (j.ok ? "\u2713 " : "\u2717 ") + line + (j.hint ? " \u2014 " + j.hint : "") };
+}
+/** The FIND answer → {hits:[{src,name,line}], text}. A hit's src is ready to add (the server built it). */
+function feedFindWords(j) {
+  if (!j || typeof j !== "object") return { hits: [], text: "The search did not answer \u2014 is this server still running?" };
+  const hits = Array.isArray(j.hits) ? j.hits.filter(h => h && h.src && typeof h.src === "object").slice(0, 5) : [];
+  return { hits, text: String(j.line || "") + (hits.length ? "" : (j.hint ? " " + j.hint : "")) };
 }
 /** "PiAware" or "HFDL feed on port 32010" — what the list and the section summary call it. */
 function feedsTitle(f) {
@@ -9607,8 +9650,9 @@ function feedsTitle(f) {
 }
 /** The form → {src} or {error} (the server checks it again: vibe_feeds.h parseSources). */
 function feedsFromForm(fmt, dir, addr, port, label, name, list) {
-  const f = { fmt: fmt === "sbs" ? "sbs" : "beast", dir: dir === "listen" ? "listen" : "connect" };
-  f.label = f.fmt === "beast" ? "adsb" : (["adsb", "hfdl", "vdl2", "acars"].includes(label) ? label : "hfdl");
+  const f = { fmt: fmt === "sbs" || fmt === "uberhfdl" ? fmt : "beast", dir: dir === "listen" ? "listen" : "connect" };
+  if (f.fmt === "uberhfdl") f.dir = "connect";   // ★ read from the UberSDR: this server always connects
+  f.label = f.fmt === "beast" ? "adsb" : f.fmt === "uberhfdl" ? "hfdl" : (["adsb", "hfdl", "vdl2", "acars"].includes(label) ? label : "hfdl");
   if (f.dir === "connect") {
     const why = beastAddrWhy(addr);
     if (why) return { error: why };
@@ -9632,6 +9676,9 @@ function feedsFromForm(fmt, dir, addr, port, label, name, list) {
 function feedsBlob(list) { return list && list.length ? JSON.stringify(list) : ""; }
 function feedsWhy() { return feedsModel.length > 8 ? "at most 8 aircraft feeds" : ""; }
 function feedsFormRender() {
+  const uber = $("feedFmt").value === "uberhfdl";
+  if (uber) $("feedDir").value = "connect";
+  $("feedDir").disabled = uber;   // ★ an UberSDR is only ever read from
   const sbs = $("feedFmt").value === "sbs", listen = $("feedDir").value === "listen";
   $("feedLabelWrap").classList.toggle("hide", !sbs);   // ★ Beast is Mode S: always ADS-B — no label to choose
   $("feedAddrWrap").classList.toggle("hide", listen);
@@ -9639,8 +9686,9 @@ function feedsFormRender() {
   $("feedDirHint").textContent = sbs
     ? (listen ? "dumphfdl's and dumpvdl2's tcp output connect OUT to an address: choose this, and give the sender this server's address and the port."
               : "For a program that serves BaseStation on a port (dump1090's 30003, for one).")
+    : uber ? "This server reads the UberSDR's HFDL add-on every 5 seconds (its web port, usually 8080). Nothing to change on the UberSDR."
     : (listen ? "For a program that pushes Beast out to an address (readsb's net-connector)." : "dump1090-fa / readsb serve Beast on port 30005.");
-  $("feedAddr").placeholder = sbs ? "e.g. 192.168.86.12:30003" : "e.g. 192.168.86.12:30005";
+  $("feedAddr").placeholder = sbs ? "e.g. 192.168.86.12:30003" : uber ? "e.g. 192.168.86.11:8080" : "e.g. 192.168.86.12:30005";
   if ($("feedHostEcho")) $("feedHostEcho").textContent = location.hostname || "this-server";
 }
 function feedsDraw() {
@@ -9649,11 +9697,19 @@ function feedsDraw() {
   box.innerHTML = feedsModel.map((f, i) => {
     const st = feedsStatus.find(x => x.title === feedsTitle(f) || (f.name && x.title === f.name)) || null;
     const lbl = f.fmt === "beast" ? "ADS-B" : ({ adsb: "ADS-B", hfdl: "HFDL", vdl2: "VDL2", acars: "ACARS" }[f.label] || "");
-    const how = (f.fmt === "beast" ? "Beast" : "BaseStation") + " \u00b7 " + (f.dir === "listen" ? `listens on ${f.port}` : `from ${f.host}:${f.port}`) + " \u00b7 " + lbl;
+    const how = feedsFmtWord(f.fmt) + " \u00b7 " + (f.dir === "listen" ? `listens on ${f.port}` : `from ${f.host}:${f.port}`) + " \u00b7 " + lbl;
+    const t = feedsTested[feedsKey(f)];
     return `<div class="row" style="gap:10px;align-items:center;margin-top:6px"><span style="flex:1"><b>${esc(f.name || feedsTitle(f))}</b>
-      <span class="why" style="margin:0">${esc(how)}</span>${st ? `<div class="hint" style="margin:2px 0 0;color:${st.state === "down" || st.state === "error" ? "var(--red,#e55)" : "var(--amber)"}">Now: ${esc(st.line || st.state)}</div>` : ""}</span>
+      <span class="why" style="margin:0">${esc(how)}</span>${st ? `<div class="hint" style="margin:2px 0 0;color:${st.state === "down" || st.state === "error" ? "var(--red,#e55)" : "var(--amber)"}">Now: ${esc(st.line || st.state)}</div>` : ""}${t ? `<div class="hint" data-feedtested="${i}" style="margin:2px 0 0;color:${t.ok ? "var(--good)" : "var(--bad)"}">${esc(t.text)}</div>` : ""}</span>
+      <button type="button" class="ghost" data-feedtest="${i}" style="flex:0 0 auto">TEST</button>
       <button type="button" class="ghost" data-feeddel="${i}" style="flex:0 0 auto">REMOVE</button></div>`;
   }).join("");
+  for (const b of box.querySelectorAll("button[data-feedtest]")) b.addEventListener("click", async () => {
+    const f = feedsModel[Number(b.dataset.feedtest)]; if (!f) return;
+    b.disabled = true; feedsTested[feedsKey(f)] = { ok: true, text: "Testing\u2026 (up to 5 s)" }; feedsDraw();
+    feedsTested[feedsKey(f)] = feedTestWords(await feedTestPost({ src: f }));
+    feedsDraw();
+  });
   for (const b of box.querySelectorAll("button[data-feeddel]")) b.addEventListener("click", () => {
     feedsModel.splice(Number(b.dataset.feeddel), 1); feedsDraw(); if (typeof afRender === "function") afRender();
     $("feedAddMsg").textContent = "Removed \u2014 press Save to keep it.";
@@ -9684,13 +9740,68 @@ function feedsLoad(cfg) {
       feedsFormRender();
     });
     $("feedDir").addEventListener("change", feedsFormRender);
-    $("feedAddGo").addEventListener("click", () => {
-      const r = feedsFromForm($("feedFmt").value, $("feedDir").value, $("feedAddr").value, $("feedPort").value, $("feedLabel").value, $("feedName").value, feedsModel);
-      if (r.error) { $("feedAddMsg").textContent = "Not added \u2014 " + r.error + "."; return; }
-      feedsModel.push(r.src);
-      $("feedAddr").value = ""; $("feedName").value = "";
-      $("feedAddMsg").textContent = "Added \u2014 press Save to start it.";
+    const addOne = (src, msgEl, extra) => {
+      if (feedsModel.length >= 8) { msgEl.textContent = "Not added \u2014 at most 8 aircraft feeds."; return false; }
+      if (feedsModel.some(x => feedsKey(x) === feedsKey(src))) { msgEl.textContent = "That feed is already in the list."; return false; }
+      feedsModel.push(src);
+      msgEl.textContent = (extra ? extra + " " : "") + "Added \u2014 press Save to start it.";
       feedsDraw(); if (typeof afRender === "function") afRender();
+      return true;
+    };
+    // ── FIND: the address → what is there (the server probes; one line; ADD beside each find) ──
+    const drawFound = () => {
+      $("feedFound").innerHTML = feedsFound.map((h, i) => `<div class="row" style="gap:10px;align-items:center;margin-top:6px">
+        <span style="flex:1">${esc(h.line)}</span>
+        <input type="text" data-foundname="${i}" maxlength="40" value="${esc(h.name || "")}" aria-label="Name" style="max-width:160px">
+        <button type="button" class="btn" data-foundadd="${i}" style="flex:0 0 auto">ADD</button></div>`).join("");
+      for (const b of $("feedFound").querySelectorAll("button[data-foundadd]")) b.addEventListener("click", () => {
+        const h = feedsFound[Number(b.dataset.foundadd)]; if (!h) return;
+        const nm = $("feedFound").querySelector(`input[data-foundname="${b.dataset.foundadd}"]`);
+        const src = Object.assign({}, h.src); const n = String(nm ? nm.value : h.name || "").trim().slice(0, 40);
+        if (n) src.name = n; else delete src.name;
+        if (addOne(src, $("feedFindMsg"))) { feedsFound.splice(Number(b.dataset.foundadd), 1); drawFound(); if (!feedsFound.length) $("feedFind").value = ""; }
+      });
+    };
+    $("feedFindGo").addEventListener("click", async () => {
+      const a = $("feedFind").value.trim();
+      const why = beastAddrWhy(a);
+      if (why) { $("feedFindMsg").textContent = why; return; }
+      $("feedFindGo").disabled = true; feedsFound = []; drawFound();
+      $("feedFindMsg").textContent = "Looking at " + a + "\u2026 (about 5 s)";
+      const w = feedFindWords(await feedTestPost({ find: a }));
+      $("feedFindGo").disabled = false;
+      feedsFound = w.hits; drawFound();
+      $("feedFindMsg").textContent = w.text;
+    });
+    $("feedFind").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("feedFindGo").click(); } });
+    // ── Advanced: TEST, and ADD = test first; a failed test offers ADD ANYWAY ──
+    const formSrc = () => feedsFromForm($("feedFmt").value, $("feedDir").value, $("feedAddr").value, $("feedPort").value, $("feedLabel").value, $("feedName").value, feedsModel);
+    const runTest = async (src) => {
+      $("feedTestGo").disabled = $("feedAddGo").disabled = true;
+      $("feedAddMsg").textContent = "Testing\u2026 (up to 5 s)";
+      const w = feedTestWords(await feedTestPost({ src }));
+      $("feedTestGo").disabled = $("feedAddGo").disabled = false;
+      $("feedAddMsg").textContent = w.text;
+      return w;
+    };
+    $("feedTestGo").addEventListener("click", async () => {
+      const r = formSrc();
+      $("feedAddAnyway").classList.add("hide"); feedsPending = null;
+      if (r.error) { $("feedAddMsg").textContent = "Not tested \u2014 " + r.error + "."; return; }
+      await runTest(r.src);
+    });
+    $("feedAddGo").addEventListener("click", async () => {
+      const r = formSrc();
+      $("feedAddAnyway").classList.add("hide"); feedsPending = null;
+      if (r.error) { $("feedAddMsg").textContent = "Not added \u2014 " + r.error + "."; return; }
+      const w = await runTest(r.src);
+      if (!w.ok) { feedsPending = r.src; $("feedAddAnyway").classList.remove("hide"); return; }
+      if (addOne(r.src, $("feedAddMsg"), w.text)) { $("feedAddr").value = ""; $("feedName").value = ""; }
+    });
+    $("feedAddAnyway").addEventListener("click", () => {
+      $("feedAddAnyway").classList.add("hide");
+      if (feedsPending && addOne(feedsPending, $("feedAddMsg"))) { $("feedAddr").value = ""; $("feedName").value = ""; }
+      feedsPending = null;
     });
   }
   feedsFormRender();
