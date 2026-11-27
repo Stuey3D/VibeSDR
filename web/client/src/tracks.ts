@@ -735,8 +735,7 @@ const CSS = `
 .trkCard2[data-card="list"] .lMax svg{color:var(--hc,#5BE36B)}
 /* ★ …and the chip over the last row: the row fades out under it (a gradient off the chip's plate, no layout) */
 .mDock[data-dock="list"].open .hCard{position:relative}
-.mDock[data-dock="list"].open .hCard::after{content:"";position:absolute;left:100%;top:-26px;bottom:0;width:40px;background:linear-gradient(to right,#0b110d,rgba(11,17,13,0));pointer-events:none}
-.mDock[data-dock="list"].open .hCard::before{content:"";position:absolute;left:0;right:0;top:-26px;height:26px;background:linear-gradient(to top,#0b110d,rgba(11,17,13,0));pointer-events:none}
+
 .mDock[data-dock="list"].open .hCard{box-shadow:none!important;border-color:transparent!important}
 /* a row's long title is a mouse's tooltip, never a touch's */
 @media (hover:none){.trkRow{-webkit-touch-callout:none}}
@@ -816,7 +815,13 @@ const CSS = `
 .trkCards .sideB>.trkCard2[data-card="list"]{padding-bottom:env(safe-area-inset-bottom,0px)!important}
 /* ★ Stuart 12:55 ("the collapse button can simply cut in over the data in that corner"): no strip — the rows run to the
  *  drawer's bottom; the chip floats over the corner on its own opaque plate; a spacer after the last row lets it scroll clear */
-.trkCard2[data-card="list"] .rows::after{content:"";display:block;height:calc(var(--trk-lchip-h,34px) + 6px)}
+.trkCard2[data-card="list"] .rows::after{content:none}
+/* ★★★ Stuart 13:20 ("the row at the top … moves next to the collapse button at the bottom, no covering of the lines at
+ *  all"): ONE slim bar at the drawer's foot — the chip (in the corner, as ever), the tab scroller, ‖ +N, the sort — and
+ *  the rows above it from the drawer's top edge; nothing ever covers a row */
+.trkCard2[data-card="list"] .trkList .hd{order:9;min-height:var(--trk-lchip-h,31px);box-sizing:border-box;padding:0 8px 0 calc(var(--trk-lchip-w,76px) + 4px)!important;border-top:1px solid #1b2733;border-bottom:0!important;flex:none}
+.trkCard2[data-card="list"] .trkList .rows{order:1}
+.trkCard2[data-card="list"] .trkList .safety,.trkCard2[data-card="list"] .trkList .filt{order:2}
 .trkView .mChipsBL{z-index:800}
 .mDock[data-dock="list"].open{visibility:visible}
 .mDock[data-dock="list"].open .hCard{background:#0b110d!important}
@@ -1557,7 +1562,8 @@ export class TrackView {
         const content = (Array.from(rowsEl.children) as HTMLElement[]).reduce((t, c) => t + c.offsetHeight, 0);
         // fits without scrolling → its rows and the chip's clear strip (at most the chip's height over normal: a list that
         // just fills the drawer gets the strip rather than a row under the chip)
-        if (content <= n * rowH) this.listNormH = Math.round(head + content + chipH + 4);
+        void chipH;
+        if (content <= n * rowH) this.listNormH = Math.round(head + content);
       }
       this.listMaxH = Math.max(this.listNormH, Math.round(m.height - capTop - (parseFloat(this.root.style.getPropertyValue('--trk-list-bottom')) || 0)));
       setv('--trk-list-card-h', `${this.listMax ? this.listMaxH : this.listNormH}px`);
@@ -1576,7 +1582,8 @@ export class TrackView {
   private liftOverList() {
     const m = this.mapHost.getBoundingClientRect();
     { const ch = this.root.querySelector('.mDock[data-dock="list"] .hCard') as HTMLElement | null;   // the drawer's chip strip
-      const v = `${ch && ch.offsetHeight ? ch.offsetHeight : 40}px`; if (this.root.style.getPropertyValue('--trk-lchip-h') !== v) this.root.style.setProperty('--trk-lchip-h', v); }
+      const v = `${ch && ch.offsetHeight ? ch.offsetHeight : 40}px`; if (this.root.style.getPropertyValue('--trk-lchip-h') !== v) this.root.style.setProperty('--trk-lchip-h', v);
+      const w = `${ch && ch.offsetWidth ? ch.offsetWidth : 76}px`; if (this.root.style.getPropertyValue('--trk-lchip-w') !== w) this.root.style.setProperty('--trk-lchip-w', w); }
     const list = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
     const open = !!list && !list.hidden && !this.listAside && !!list.parentElement?.classList.contains('sideB') && list.offsetHeight > 0;
     let L: { l: number; t: number; r: number; b: number } | null = null;

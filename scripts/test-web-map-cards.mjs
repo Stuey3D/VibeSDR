@@ -407,7 +407,12 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
         return { title: getComputedStyle(c.querySelector('.ch')).display, chipVis: getComputedStyle(d).visibility, arrow: getComputedStyle(d.querySelector('.arw')).transform,
           rowsToEdge: Math.abs(rows.bottom - (cr.bottom - parseFloat(getComputedStyle(c).paddingBottom))) <= 1, over: chip.left <= cr.left + 1 && chip.bottom >= cr.bottom - 1 && chip.top < rows.bottom,
           onTop: !!hit && !!hit.closest('.mDock[data-dock="list"]'), expanded: d.querySelector('[data-cbtn]').getAttribute('aria-expanded') }; })())`));
-      ok(t.title === 'none' && t.chipVis === 'visible' && t.arrow !== 'none' && t.rowsToEdge && t.over && t.onTop && t.expanded === 'true', `no title row, no bottom strip: the rows reach the drawer's edge and the chip floats over its corner, on top for a tap (${JSON.stringify(t)})`);
+      const bar = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), hd = c.querySelector('.trkList .hd').getBoundingClientRect(), rows = c.querySelector('.rows').getBoundingClientRect(), chip = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect();
+        const cr = c.getBoundingClientRect(), srt = c.querySelector('.srt').getBoundingClientRect(), tabs = c.querySelector('.tabWrap').getBoundingClientRect();
+        const under = [...c.querySelectorAll('.rows .trkRow')].filter(r => { const b = r.getBoundingClientRect(); return b.height && b.bottom > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
+        return { rowsTop: Math.round(rows.top - cr.top), barBelow: hd.top >= rows.bottom - 1, chipInBar: chip.top >= hd.top - 2 && chip.bottom <= hd.bottom + 2, sortInBar: srt.width === 0 || (srt.top >= hd.top - 1 && srt.bottom <= hd.bottom + 1), tabsRight: tabs.width === 0 || tabs.left >= chip.right - 1, under }; })())`));
+      ok(t.title === 'none' && t.chipVis === 'visible' && t.arrow !== 'none' && t.expanded === 'true' && bar.rowsTop <= 2 && bar.barBelow && bar.chipInBar && bar.sortInBar && bar.tabsRight && bar.under === 0,
+         `the rows from the drawer's top; ONE bar at its foot — the chip, the tabs, the sort; nothing over a row (${JSON.stringify(bar)})`);
       await p.ev(`${BTN('list')}.click(); 1`); await sleep(600);
       const u = JSON.parse(await p.ev(`JSON.stringify({ shut: ${V}.querySelector('.trkCard2[data-card="list"]').hidden || !${V}.querySelector('.trkCard2[data-card="list"]').offsetHeight, arrow: getComputedStyle(${V}.querySelector('.mDock[data-dock="list"] .arw')).transform })`));
       ok(u.shut && u.arrow === 'none', `…its chip folds it; the arrow points up (${JSON.stringify(u)})`);
@@ -478,11 +483,11 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
         const under = [...rows.querySelectorAll('.trkRow')].filter(r => { const b = r.getBoundingClientRect(); return b.height && b.bottom > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
         return { scroll: rows.scrollHeight > rows.clientHeight + 1, under, h: Math.round(c.getBoundingClientRect().height), spacer: getComputedStyle(rows, '::after').height }; })())`));
       const g1 = await geo();
-      ok(g1.scroll && g1.under >= 1 && parseFloat(g1.spacer) > 0, `AIRCRAFT (scrolls): the chip floats over the last row, a spacer after the rows (${JSON.stringify(g1)})`);
+      ok(g1.scroll && g1.under === 0, `AIRCRAFT (scrolls): no row under the chip (${JSON.stringify(g1)})`);
       const ships = await p.ev(`(() => { const t = ${V}.querySelector('.trkList .hd .tab[data-tab="ships"]'); if (!t) return false; t.click(); return true; })()`);
       if (ships) { await sleep(900);
         const g2 = await geo();
-        ok(!g2.scroll && g2.under === 0 && g2.h <= g1.h + 40, `SHIPS (a few rows): no row under the chip, the drawer at most the chip's strip over normal (${JSON.stringify(g2)})`);
+        ok(!g2.scroll && g2.under === 0 && g2.h <= g1.h, `SHIPS (a few rows): the drawer fits them, no taller than normal (${JSON.stringify(g2)})`);
         await p.ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]')?.click(); 1`); await sleep(600); }
       void r0;
     }
@@ -494,7 +499,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
         const g = JSON.parse(await p.ev(`JSON.stringify((() => { const rows = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); rows.scrollTop = rows.scrollHeight; const last = rows.lastElementChild;
           const chip = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect(); return { last: last ? Math.round(last.getBoundingClientRect().bottom) : 0, chipTop: Math.round(chip.top) }; })())`));
         await sleep(200);
-        ok(!g.last || g.last <= g.chipTop - 4, `${tb || 'the list'}: scrolled to the end, the last item clears the chip (${g.last} ≤ ${g.chipTop} − 4)`);
+        ok(!g.last || g.last <= g.chipTop + 1, `${tb || 'the list'}: scrolled to the end, the last item ends above the bar and its chip (${g.last} ≤ ${g.chipTop})`);
         await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 0; return 1; })()`); await sleep(300);
       }
       if (tabs.includes('aircraft')) { await p.ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click(); 1`); await sleep(600); }
