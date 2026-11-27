@@ -41,7 +41,7 @@ const card = navCard(sites[0]);
 eq('the card lists each letter with its band and counts', (card.match(/<b>[A-Z]<\/b> · \d+ kHz · \d+ received, \d+ different/g) || []).length, 3);
 eq('the card escapes what came off the air', /<script/.test(navCard({ ...sites[0], name: '<script>' })), false);
 const items = navItems(r);
-eq('the app\'s pins: one a site, with a line from the receiver', [items.length, items.every((i) => i._arc === true)], [3, true]);
+eq('the app\'s pins: one a site, and no line from the receiver (Stuart 11-27)', [items.length, items.some((i) => (i as any)._arc)], [3, false]);
 eq('the status', navStatus(r), '3 sites · 6 stations · 30 messages · furthest Niton 105 NM · 2 not placed');
 eq('ranges: ALL by default; since', [navRangeOf(null), navRangeOf('7d'), navSince('24h'), navSince('all')], ['all', '7d', 86400, 0]);
 // ── the warnings (navtexWarn.ts) ──

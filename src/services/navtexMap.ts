@@ -248,7 +248,7 @@ export const NAV_EMPTY = 'No NAVTEX message in the gallery for this time — the
 export function navItems(r: NavReport | null, wrap: 'web' | 'app' = 'app') {
   return navSites(r).map((g) => ({ key: g.key, lat: g.lat, lon: g.lon, _ic: navIcon(g), _lb: navLabel(g), _cd: navCard(g, wrap), _h: g.n,
                                    // ★ stations outrank the warnings and the met labels when names collide
-                                   _rk: 1e12 + navRank(g), _arc: true,
+                                   _rk: 1e12 + navRank(g),   // ★★★ beta96 no line from the receiver any more (Stuart 11-27: "loose the lines between receiver and navtex sites") — the distance stays in the label and card
                                    _aria: `Station ${navLabel(g)}, ${g.n} messages, last heard ${navAgo(g.seen)}. Press Enter for its card.` }));
 }
 const ageShort = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);

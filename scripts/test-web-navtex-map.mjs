@@ -123,7 +123,7 @@ try {
   ok(await until(`document.querySelectorAll('.vtl-mk').length >= ${nSites}`, 15000), `a marker per site: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
   await sleep(4000);
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
-  ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
+  ok(arcs === 0, `no line from the receiver to the sites (Stuart 11-27: "loose the lines") — ${arcs}`);
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => (b.textContent.slice(0, b.textContent.length - (b.querySelector('.n')?.textContent.length || 0))) + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === 'NAVTEX:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: NAVTEX (stations) · WARNINGS · WEATHER · SEA AREAS (2026-11-02; beta96 the AIR & SEA map names; read without SHOW\'s count), all on');
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
