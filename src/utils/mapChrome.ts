@@ -240,51 +240,98 @@ export function rateChip(rows: RateRow[]): { show: boolean; text: string; more: 
   return { show: true, text: `${first.name} ${first.rate}`.trim(), more: rows.length - 1 };
 }
 
-/** ★★★ THE ONE-ROW GAIN (Stuart 15:35, the web's gainDriver / mapGainRender), per DRIVER (AGENTS.md: never a control that
- *  only works on one radio): an RTL's gain list + its AUTO; an RSP's IF gain reduction + its IF AGC; the HF+'s attenuator
- *  + its AGC (no variable gain); anything else no row — only ⌄ for the radio's own controls. Locked by the owner: 🔒 and
- *  the inline admin password (no slider). */
+/** ★★★ THE ONE-ROW GAIN (Stuart 15:35, the web's gainDriver / mapGainRender), for EVERY driver the app's hardware panel
+ *  (LocalHardwarePanel) knows, each with ITS OWN controls (AGENTS.md: never a control built for one radio drawn on another):
+ *    rtl       the gain list + AUTO (VibeAGC); a relayed rtl_tcp stream (noHwGain) has no gain → no row
+ *    sdrplay   IF gain reduction + its IF AGC
+ *    airspyhf  the attenuator + its AGC (no variable gain)
+ *    usrp      its gain list + the AD9361's own AGC — the AGC key only where the radio says it has one (hwAgc)
+ *    hackrf    the LNA (0–40 dB, 8 dB steps) — NO AGC key (libhackrf has none); VGA and the owner-only amp under ⌄
+ *    airspy    the preset curve (0–21, the owner's limit) in SENSITIVE / LINEAR — no AGC key; FREE mode's three stages
+ *              and the per-stage AGCs under ⌄ (no row: there is no single gain to move)
+ *    icom, anything else: no row — ⌄ only when the radio has controls (the hardware panel).
+ *  Locked by the owner: 🔒 and the inline admin password (no slider). `set` says which setter the slider drives. */
 export interface GainIn {
   driver: string;
-  /** RTL: the gain list (tenths of dB), the chosen one, AUTO, the live gain AUTO chose (−1 unknown). */
+  /** rtl / usrp: the gain list (tenths of dB), the chosen one, AUTO / AGC on, the live gain AUTO chose (−1 unknown). */
   gains?: readonly number[]; gainTenthDb?: number; autoGain?: boolean; liveTenthDb?: number;
-  /** RSP: IF gain reduction (dB), its IF AGC, the system gain words. */
+  /** rtl: a relayed rtl_tcp stream with no tuner (radio.noHwGain). usrp: the radio has its own AGC (radio.hwAgc). */
+  noHwGain?: boolean; hwAgc?: boolean;
+  /** sdrplay: IF gain reduction (dB), its IF AGC, the system gain, the owner's floor. */
   rspIfGr?: number; rspIfAgc?: boolean; rspSys?: number; rspGrMin?: number; rspGrMax?: number;
-  /** HF+: the attenuator step, its AGC, the step size and count. */
+  /** airspyhf: the attenuator step, its AGC, the step size and count. */
   ahfAtt?: number; ahfAgc?: boolean; attStepDb?: number; attSteps?: number;
+  /** hackrf: the LNA (dB). */
+  hrfLna?: number;
+  /** airspy: the gain mode (0 sensitive, 1 linear, 2 free) and the owner's limit on the preset (max position, locked). */
+  aspGainMode?: number; aspLimit?: { max: number; locked?: boolean } | null;
   /** The owner fixed the gain, and whether this listener holds the admin password. */
   locked?: boolean; admin?: boolean;
   /** The radio has more controls (the hardware panel) — ⌄. */
   more?: boolean;
 }
+export type GainSet = 'gain-index' | 'rsp-gr' | 'ahf-att' | 'hrf-lna' | 'asp-preset';
 export type GainRow =
   | { kind: 'none'; more: boolean }
-  | { kind: 'auto' | 'manual' | 'locked'; driver: 'rtl' | 'sdrplay' | 'airspyhf'; name: string; value: string;
-      min: number; max: number; step: number; at: number; more: boolean; unlocked: boolean };
+  | { kind: 'auto' | 'manual' | 'locked'; driver: string;
+      /** the AGC key's name ('' = this radio has no automatic gain: no key) */
+      name: string;
+      /** the slider's own label where it is not plain gain (LNA, SENSITIVE, LINEAR, GR, ATT) */
+      label: string;
+      value: string; min: number; max: number; step: number; at: number; set: GainSet; more: boolean; unlocked: boolean };
 export function gainRowFor(g: GainIn): GainRow {
   const more = !!g.more;
   const lockedNow = !!g.locked && !g.admin;
   const unlocked = !!g.locked && !!g.admin;
-  if (g.driver === 'rtl' && g.gains && g.gains.length) {
-    const gains = g.gains;
-    const idx = Math.max(0, gains.reduce((bi, v, i) => (Math.abs(v - (g.gainTenthDb ?? 0)) < Math.abs(gains[bi] - (g.gainTenthDb ?? 0)) ? i : bi), 0));
-    const t = g.autoGain && (g.liveTenthDb ?? -1) >= 0 ? g.liveTenthDb! : gains[idx] ?? 0;
-    const kind = lockedNow ? 'locked' : g.autoGain ? 'auto' : 'manual';
-    return { kind, driver: 'rtl', name: 'AUTO', value: `${(t / 10).toFixed(1)} dB`, min: 0, max: gains.length - 1, step: 1, at: idx, more, unlocked };
+  const kindOf = (auto: boolean) => (lockedNow ? 'locked' : auto ? 'auto' : 'manual') as 'locked' | 'auto' | 'manual';
+  const listRow = (driver: string, name: string, auto: boolean): GainRow => {
+    const gains = g.gains!;
+    const want = g.gainTenthDb ?? 0;
+    const idx = gains.reduce((bi, v, i) => (Math.abs(v - want) < Math.abs(gains[bi] - want) ? i : bi), 0);
+    const t = auto && (g.liveTenthDb ?? -1) >= 0 ? g.liveTenthDb! : gains[idx] ?? 0;
+    return { kind: kindOf(auto), driver, name, label: '', value: `${(t / 10).toFixed(1)} dB`, min: 0, max: gains.length - 1, step: 1, at: idx,
+             set: 'gain-index', more, unlocked };
+  };
+  switch (g.driver) {
+    case 'rtl':
+      if (g.noHwGain || !g.gains?.length) return { kind: 'none', more };
+      return listRow('rtl', 'AUTO', !!g.autoGain);
+    case 'usrp':
+      if (!g.gains?.length) return { kind: 'none', more };
+      // ★ the AGC key only where the radio has one; without it the slider alone (never a dead AUTO)
+      return listRow('usrp', g.hwAgc ? 'AGC' : '', !!g.hwAgc && !!g.autoGain);
+    case 'sdrplay': {
+      if (typeof g.rspIfGr !== 'number') return { kind: 'none', more };
+      const lo = g.rspGrMin ?? 20, hi = g.rspGrMax ?? 59;
+      const value = typeof g.rspSys === 'number' && g.rspSys > 0 ? `${g.rspSys.toFixed(0)} dB` : `GR ${Math.round(g.rspIfGr)} dB`;
+      return { kind: kindOf(g.rspIfAgc !== false), driver: 'sdrplay', name: 'IF AGC', label: 'GR', value, min: lo, max: hi, step: 1,
+               at: Math.max(lo, Math.min(hi, Math.round(g.rspIfGr))), set: 'rsp-gr', more, unlocked };
+    }
+    case 'airspyhf': {
+      if (typeof g.ahfAtt !== 'number') return { kind: 'none', more };
+      const step = g.attStepDb ?? 6, n = g.attSteps ?? 9;
+      const agc = g.ahfAgc !== false;
+      return { kind: kindOf(agc), driver: 'airspyhf', name: 'AGC', label: 'ATT', value: agc ? 'ATT by AGC' : `ATT ${Math.round(g.ahfAtt) * step} dB`,
+               min: 0, max: Math.max(0, n - 1), step: 1, at: Math.max(0, Math.min(n - 1, Math.round(g.ahfAtt))), set: 'ahf-att', more, unlocked };
+    }
+    case 'hackrf': {
+      // ★ no AGC of any kind on this radio: the LNA slider alone (VGA and the owner-only amp under ⌄)
+      const lna = Math.max(0, Math.min(40, Math.round((g.hrfLna ?? 0) / 8) * 8));
+      return { kind: kindOf(false), driver: 'hackrf', name: '', label: 'LNA', value: `LNA ${lna} dB`, min: 0, max: 40, step: 8, at: lna, set: 'hrf-lna',
+               more: true, unlocked };
+    }
+    case 'airspy': {
+      const mode = g.aspGainMode ?? 1;
+      if (mode === 2) return { kind: 'none', more: true };   // ★ FREE: three stages, no single gain — under ⌄
+      const max = Math.max(0, Math.min(21, g.aspLimit?.max ?? 21));
+      const at = Math.min(max, Math.max(0, Math.round((g.gainTenthDb ?? 0) / 10)));
+      const label = mode === 0 ? 'SENSITIVE' : 'LINEAR';
+      const kind = lockedNow || g.aspLimit?.locked ? 'locked' : 'manual';
+      return { kind, driver: 'airspy', name: '', label, value: `${label} ${at}`, min: 0, max, step: 1, at, set: 'asp-preset', more: true, unlocked };
+    }
+    default:
+      return { kind: 'none', more };
   }
-  if (g.driver === 'sdrplay' && typeof g.rspIfGr === 'number') {
-    const lo = g.rspGrMin ?? 20, hi = g.rspGrMax ?? 59;
-    const kind = lockedNow ? 'locked' : g.rspIfAgc !== false ? 'auto' : 'manual';
-    const value = typeof g.rspSys === 'number' && g.rspSys > 0 ? `${g.rspSys.toFixed(0)} dB` : `GR ${Math.round(g.rspIfGr)} dB`;
-    return { kind, driver: 'sdrplay', name: 'IF AGC', value, min: lo, max: hi, step: 1, at: Math.max(lo, Math.min(hi, Math.round(g.rspIfGr))), more, unlocked };
-  }
-  if (g.driver === 'airspyhf' && typeof g.ahfAtt === 'number') {
-    const step = g.attStepDb ?? 6, n = g.attSteps ?? 9;
-    const kind = lockedNow ? 'locked' : g.ahfAgc !== false ? 'auto' : 'manual';
-    return { kind, driver: 'airspyhf', name: 'AGC', value: g.ahfAgc !== false ? 'ATT by AGC' : `ATT ${Math.round(g.ahfAtt) * step} dB`,
-             min: 0, max: Math.max(0, n - 1), step: 1, at: Math.max(0, Math.min(n - 1, Math.round(g.ahfAtt))), more, unlocked };
-  }
-  return { kind: 'none', more };
 }
 
 /** ★★★ THE APP'S SPECTRUM UNDER A MAP (MAP-TEMPLATE rule 4, the app half): the NON-live viewer over the radio keeps the
