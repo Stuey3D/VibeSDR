@@ -39745,6 +39745,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *      (satKeepGiveBackLocked), before the newcomer is sent anything, so the map simply carries on.
      *   3. THE TRUTH. While a pass holds the radio, a returning listener's mode_resume says so (satHoldWhy). ══ */
     double satEmptySince_ = -1;                      // under satPassMtx_: -1 = nobody since the start, 0 = somebody here
+    /** ★ The radio emptied because a HELD session ran out (finishHold): the listener has had their wait — min(the owner's
+     *  idle grace, 3 min) — so the passes do not add theirs on top, exactly as the whole-radio mode then leaves at once. */
+    std::atomic<bool> satHoldServed_{false};
     std::mutex satHoldMtx_;                          // the pass now holding the radio, for satHoldWhy (any thread)
     std::string satHoldName_;
     double satHoldUntil_ = 0;
@@ -40129,8 +40132,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const vibe::sat::Clock clk = satClock();
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
         const double nowS = nowSecs();
-        if (anyone) satEmptySince_ = 0;                          // ★★★ b96-satgrace (the grace, below)
-        else if (satEmptySince_ == 0) satEmptySince_ = nowS;
+        if (anyone) { satEmptySince_ = 0; satHoldServed_.store(false); }   // ★★★ b96-satgrace (the grace, below)
+        else if (satEmptySince_ == 0) satEmptySince_ = satHoldServed_.exchange(false) ? nowS - modeLeaveGraceS() : nowS;
         satHybridCycleTickLocked();   // ★★★ beta96 the hybrid's switch: the listeners' sockets recycled ~2 s after the notice
         keepOrbRiderTickLocked(cfg, why);   // ★★★ beta96 the sky plot beside kept VDL2 (no session, any listener welcome)
         // 1. what ends regardless: blocked, a listener, a pass's LOS
@@ -41758,6 +41761,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ An empty radio now: what its last socket's close would have done, with the whole-radio mode left AT ONCE —
         //   they have had their three minutes (the leave still records itself, so mode_resume can give it back).
         noteLastGone(sess);   // ★ whose mode it was — arrivalResume puts THEM back, nobody else
+        satHoldServed_.store(true);   // ★★★ b96-satgrace …and the passes' grace likewise: the hold WAS it (satPassTick)
         radioEmptied(0.0);
     }
     /** House thread, every pass: holds that have run out end; ended holds are finished; kept decoders are judged. */

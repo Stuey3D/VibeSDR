@@ -229,6 +229,14 @@ try {
     A.send({ type: 'gain', gain: 100 });
     await sleep(400);
     ok(/\[SINGLE\] satellites: a listener's "gain" refused/.test(S.L()), 'the radio itself (gain) is still refused');
+    // ★★★ b96-satgrace a returning listener's mode_resume (the app was in AIS) is ANSWERED with the pass, never left to time
+    //     out into the app's generic "the receiver left AIS while you were away"
+    A.send({ type: 'mode_resume', mode: 'ais' });
+    ok(await until(() => jsons(A, 'mode_resume').length > 0, 3000), 'a mode_resume refused by single mode is still answered');
+    const mr = lastOf(A, 'mode_resume');
+    ok(mr && mr.ok === 0 && /^A scheduled RS-44 pass has the receiver until \d\d:\d\d UTC\.$/.test(mr.why || ''), `…with the pass and its end: "${mr?.why}"`);
+    const losHm = new Date(los * 1000).toISOString().slice(11, 16);
+    ok(mr && (mr.why || '').includes(losHm), `…the end is the pass's LOS (${losHm} UTC)`);
     // a joiner mid-pass
     C = await conn(S, S_SESS[2]);
     ok(await until(() => lastOf(C, 'sat_hybrid')?.on === true, 3000), 'a joiner is told the hybrid (sendFullState)');
