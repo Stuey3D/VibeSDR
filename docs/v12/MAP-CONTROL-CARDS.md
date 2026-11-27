@@ -21,9 +21,12 @@ how many cards can be open follows the window; a phone shows one at a time.
   `src/components/MapMiniWaterfall.tsx` (Skia), MapOverlay `MapCardsHost` + the page bridge (`__cardsCtl / __cardsZoom /
   __cardsKey / __cardsBr`, `cardsState`, `mapTap`), SDRScreen `mapCards` + `specOn`. The old MapTopStrip, the page's top
   bar on the track maps, the legend's (i), the page scale, the ADS-B layer's keys (now `keys:false` + `layer.actions` in
-  adsblayer.js — carry into the web branch) and TrackLiveList's track-map chrome were DELETED. Not ported yet: FIT TO /
-  the shared auto fit owning the AIR & SEA camera, SOURCES rows, SERVERS' other radios, the AMATEUR map (after
-  b97-maps-port).
+  adsblayer.js — carried into b96-mapcards 1d79246a4) and TrackLiveList were DELETED. Then ported: SERVERS' other radios
+  (listeners live while open; the switch = the door's remount with `doorVisit.pick`), SOURCES (`MapScope.hidden`) and
+  LAYERS' outlined LIVE (`layerOthers`), FIT TO one layer with the shared auto fit owning the AIR & SEA camera
+  (`fitGroupOf` / `fitGroups`), NDB's drawer waterfall, and the AMATEUR map on the cards (`src/utils/amCards.ts`, the page's
+  `CARDS` flag: no bar / filter row / STATS panels there; DigiMapKeys is the panel keys of the maps off the cards only —
+  on-device FT8 and UberSDR spots). Tests: `test_map_chrome`, `test_map_stats`, `test_am_cards`.
 - Live preview (while it runs): `http://<Mac LAN IP>:47610/` — scratchpad `mapcards/run-preview.sh` (a local door: the
   Lenovo PiAware Beast feed read-only + a fake RTL replaying a synthetic VDL2 clip; NAVTEX fixtures + a ship store
   seeded by `mapcards/seed.mjs`) and `mapcards/preview.mjs` (serves web/dist, proxies the rest, rebuilds through the
