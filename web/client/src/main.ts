@@ -9895,7 +9895,6 @@ function adsbChromeMount(v: TrackView, tab: string) {
   // ★★★ beta96 map cards: GAIN and the capture warning are the TUNE card's (they set the radio); CHAT stays in the bar
   const tune = v.slot('tune');
   for (const id of ['adsbCapture', 'adsbGain']) { const el = $(id); if (el.parentElement !== tune) tune.appendChild(el); }
-  { const el = $('adsbChat'); if (el.parentElement !== top) top.appendChild(el); }
   v.tuneSync();
   void head; void tab;   // ★★ Stuart 16:53: NEWEST / FURTHEST / LONGEST are the STATS card's (asStatsSync, every source merged)
   for (const id of ['adsbFeedWarn', 'adsbGainPop']) { const el = $(id); if (el.parentElement !== over) over.appendChild(el); }
@@ -9903,25 +9902,13 @@ function adsbChromeMount(v: TrackView, tab: string) {
 function adsbChromePark() {
   const park = document.getElementById('adsbChrome');
   if (!park) return;
-  for (const id of ['adsbCapture', 'adsbGain', 'adsbChat', 'adsbFeedWarn', 'adsbGainPop']) {
+  for (const id of ['adsbCapture', 'adsbGain', 'adsbFeedWarn', 'adsbGainPop']) {
     const el = document.getElementById(id);
     if (el && el.parentElement !== park) park.appendChild(el);
   }
   $('adsbGainPop').hidden = true;
 }
 
-/** ★ CHAT IS IN THE BAR: its key on the card is under the map. The same panel, the same unread count,
- *  greyed exactly when the card's is (a private receiver has no chat). */
-function adsbSyncChat() {
-  const src = document.getElementById('mChat') as HTMLButtonElement | null;
-  const b = document.getElementById('adsbChat') as HTMLButtonElement | null;
-  if (!src || !b) return;
-  b.disabled = src.disabled;
-  b.title = src.title || 'Chat';
-  b.classList.toggle('chatBreathing', src.classList.contains('chatBreathing'));
-  const su = document.getElementById('mChatUnread'), du = document.getElementById('adsbChatUnread');
-  if (su && du) { du.textContent = su.textContent; du.hidden = su.hidden; }
-}
 
 /* ★★★ beta96 THE SHARED TUNER ON EVERY FULL-SCREEN MAP (Stuart 11-26, "big issue" — Listen-Amateur-VLD's SHIPPING MAP on a
  *  shared dial covered the controls bar: no shared-tuner state, no CHAT). Whichever track map is open (the AIR & SEA map in
@@ -9938,8 +9925,7 @@ function mapShBuild(): HTMLElement {
   const g = document.createElement('span');
   g.id = 'mapShared'; g.className = 'mapShared'; g.hidden = true;
   g.style.cssText = 'display:inline-flex;align-items:center;gap:6px';
-  g.innerHTML = '<button type="button" class="btn mapShLine" id="mapShLine"></button>'
-    + '<button type="button" class="btn" id="mapChat" title="Chat">CHAT<span class="unread" id="mapChatUnread" hidden></span></button>';
+  g.innerHTML = '<button type="button" class="btn mapShLine" id="mapShLine"></button>';   // ★ (its old CHAT key went in the map purge: CHAT is a chip)
   const openChat = () => {
     if (($('mChat') as HTMLButtonElement).disabled) return;
     const o = mapShOpenView();   // ★★★ no top bar (Stuart 12:50): the pill opens the map's CHAT card
@@ -9948,10 +9934,6 @@ function mapShBuild(): HTMLElement {
     chatOpened(isPanelOpen('chatPanel')); mapShChatSync();
   };
   (g.querySelector('#mapShLine') as HTMLElement).onclick = openChat;
-  (g.querySelector('#mapChat') as HTMLElement).onclick = () => {
-    if (($('mChat') as HTMLButtonElement).disabled) return;
-    togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); mapShChatSync();
-  };
   // ★ the bar's CHAT is the truth for greyed / unread / breathing — copied whenever it changes
   const src = document.getElementById('mChat');
   if (src && typeof MutationObserver !== 'undefined')
@@ -9975,13 +9957,8 @@ function mapAskPulse() {
 (window as any).__vibeMapNudge = (why: string) => { const o = mapShOpenView(); o?.v.onDialLocked?.(why); };   // ★ for the drivers
 function mapShChatSync() {
   const src = document.getElementById('mChat') as HTMLButtonElement | null;
-  const b = document.getElementById('mapChat') as HTMLButtonElement | null;
-  if (!src || !b) return;
-  b.disabled = src.disabled; b.title = src.title || 'Chat';
-  b.classList.toggle('chatBreathing', src.classList.contains('chatBreathing'));
-  b.classList.toggle('askNudge', src.classList.contains('askNudge'));
-  const su = document.getElementById('mChatUnread'), du = document.getElementById('mapChatUnread');
-  if (su && du) { du.textContent = su.textContent; du.hidden = su.hidden; }
+  if (!src) return;
+  const su = document.getElementById('mChatUnread');
   const o = mapShOpenView();
   if (o) o.v.setChat({ show: !(mapShEl?.hidden ?? true), disabled: src.disabled, why: src.title, unread: su && !su.hidden ? parseInt(su.textContent || '0', 10) || 0 : 0 });
 }
@@ -10042,8 +10019,6 @@ function mapSharedSync() {
   });
   g.hidden = !st.show;
   o.v.setChat({ show: st.show });
-  // ★ ADS-B's own CHAT key gives way to this one (one CHAT on the map, beside the line)
-  const ac = document.getElementById('adsbChat'); if (ac) ac.hidden = st.show;
   const line = $('mapShLine') as HTMLButtonElement;
   if (st.show) {
     const alone = listenerCount === 1 && !st.dialLocked && !bannerSaidText && !scanLockOn;
@@ -10127,7 +10102,6 @@ function onAdsbReport(r: AdsbReport | null) {
    *  the heal judged the silence a fault and reopened the audio socket every 6 s for the whole session.
    *  Renewed each report (once a second), so it lapses on its own a few seconds after ADS-B ends. */
   audio?.holdHealing(8000);
-  adsbSyncChat();
   asRender();   // ★ beta96 the AIR & SEA map draws the report (ADS-B live) — and adsbRender, its chrome
 }
 
@@ -12663,7 +12637,6 @@ function buildControls() {
     $('adsbGainNow').textContent = `${((hwGains[i] ?? 0) / 10).toFixed(1)} dB`;
     spec?.setHwGain(hwGains[i] ?? 0, false);
   };
-  $('adsbChat').onclick = () => { if (!($('mChat') as HTMLButtonElement).disabled) { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); adsbSyncChat(); } };
   initBookmarks();
   buildMenu();
 
@@ -14657,7 +14630,7 @@ function initPanels() {
     //     ★ The popups are exempt too: #stepMenu and #mModeMenu are anchored menus rather than
     //     PANELS members, so a click on one of their options counted as "outside".
     if (!PANELS.some(id => $(id).contains(t))
-        && !t.closest('#mcard') && !t.closest('#mCentreFloat') && !t.closest('#adsbChat') && !t.closest('#adsbGain')
+        && !t.closest('#mcard') && !t.closest('#mCentreFloat') && !t.closest('#adsbGain')
         && !t.closest('#stepMenu') && !t.closest('#mModeMenu')) closePanels();
   });
 }

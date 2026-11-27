@@ -531,7 +531,11 @@ const CSS = `
   font:800 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#9fb0c2}
 .trkCard2>.ch .x{margin-left:auto;background:none;border:1px solid transparent;border-radius:6px;color:#9fb0c2;font:600 15px/1 system-ui,sans-serif;padding:3px 7px;cursor:pointer}
 .trkCard2>.ch .x:hover,.trkCard2>.ch .x:focus-visible{border-color:#7fc8ff;color:#fff;outline:none}
-.trkCard2>.cb{overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain}
+.trkCard2>.cb{overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain;touch-action:pan-y;-webkit-overflow-scrolling:touch}
+/* ★ Stuart 18:1x ("the CHAT card doesn't scroll"): every card's body and the chat's own log scroll by touch — pan-y on the
+ *  scroller itself, and a card never taller than its column (min-height 0 lets it shrink, the body takes the rest) */
+.trkCards .trkCard2{min-height:0;max-height:100%}
+.trkCard2[data-card="chat"] .chatBody #chatLog{touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .trkCard2 .facts{padding:6px 10px;color:#9fb0c2;font-size:12px;border-bottom:1px solid #151f29}
 .trkCard2 .facts:empty{display:none}
 .trkCard2 .sect{padding:8px 10px;border-bottom:1px solid #151f29}
@@ -803,7 +807,6 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView .trkTop .slot-share .mapShLine.alone{color:#7bd88f!important}
 .trkView .trkTop .slot-share .mapShLine.locked{color:#ff9d8a!important}
 .trkView[data-narrow] .trkTop .slot-share .mapShLine{white-space:nowrap!important;font-size:11px!important;letter-spacing:.06em!important}
-.trkView .trkTop #mapChat{display:none!important}
 /* the RATE chip: a reading; a ⌄ only with several sources */
 .mDock[data-dock="rate"] .rateIc{flex-direction:row!important;align-items:center;gap:4px;font:700 11px/1 ui-monospace,Menlo,monospace;color:#dfe7ef;white-space:nowrap}
 .mDock[data-dock="rate"] .ru{color:#ffd34d}
@@ -938,19 +941,31 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .mChipsL .mDock .mchip .cap{display:none}
 .trkView[data-short] .mChipsL .mDock .lsum{flex-direction:row!important}
 .trkView[data-short] .mChipsL .mDock.open{visibility:hidden}
-.trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:0!important;bottom:auto!important;max-height:calc(100% - 8px);justify-content:flex-start;width:min(320px,calc(100% - var(--trk-cl-left,96px) - 8px))!important}
+.trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:0!important;bottom:calc(var(--sai-b) + 8px)!important;max-height:none;justify-content:flex-start;width:min(320px,calc(100% - var(--trk-cl-left,96px) - 8px))!important}
 /* ★★★ Stuart 17:5x — SHORT LANDSCAPE, his design: the top edge has no inset, so EVERY chip hangs from it. The family from the
  *  ✕ rightwards; at the right end, before the RATE corner, CHAT and the health / time pair (rotated EdgeChips: the tab when
  *  tucked, the card when out — both hanging from the top). Every card drops DOWN. The shared-tuner pill moves to the
  *  bottom centre (information, not a control). Portrait is untouched: all of it is [data-short]. */
 .trkView[data-short] .mChipsR{top:0!important;flex-direction:row-reverse!important;align-items:flex-start!important;gap:8px!important}
 .trkView[data-short] .mChipsR .mDock:not([data-dock="rate"]) .hCard{border-top-width:0!important;border-right-width:1px!important;border-left-width:1px!important;border-bottom-width:1px!important;border-radius:0 0 12px 12px!important;padding:4px 6px!important}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock){position:relative!important;top:auto!important;right:auto!important;margin:0!important;align-self:flex-start!important;transform:none!important;width:52px;height:30px;flex:none}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab{top:0!important;right:0;margin:0!important;left:auto;width:52px!important;height:30px!important;padding:0!important;flex-direction:row;gap:4px;
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock){position:relative!important;top:auto!important;right:auto!important;margin:0!important;align-self:flex-start!important;transform:none!important;width:52px;height:var(--trk-tab-h,48px);flex:none}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab{top:0!important;right:0;margin:0!important;left:auto;width:52px!important;height:var(--trk-tab-h,48px)!important;padding:0!important;flex-direction:column;gap:0;
   border:1.5px solid var(--hc)!important;border-top-width:0!important;border-radius:0 0 12px 12px!important;transform:none!important}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{position:absolute;top:0;right:0;border-top-width:0!important;border-right-width:1.5px!important;border-radius:0 0 12px 12px!important;
   transform:none!important;padding:4px 8px!important;z-index:2;white-space:nowrap}
-.trkView[data-short] .trkCards .sideR{top:var(--trk-row-h,48px)!important;right:8px!important;bottom:auto!important}
+.trkView[data-short] .trkCards .sideR{top:var(--trk-row-h,48px)!important;right:8px!important;bottom:calc(var(--sai-b) + 8px)!important;justify-content:flex-start}
+/* ★ Stuart 18:11: hanging from the TOP edge the arrows turn with it — the tab's ‹ points DOWN (where its card drops), the
+ *  card's › points UP (back to the edge); the portrait side tabs keep ‹ / ›. And every top-hanging tab is ONE height — the
+ *  family's (--trk-tab-h, measured by shortGeom): CHAT drops its caption, health and time grow to it. */
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTabChev,.trkView[data-short] .mChipsL .mDock .arw{display:inline-block;transform:rotate(-90deg)}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTuck{transform:rotate(-90deg)}
+.trkView[data-short] .mChipsR .mDock:not([data-dock="rate"]) .mchip .cap{display:none}
+.trkView[data-short] .mChipsR .mDock:not([data-dock="rate"]) .hCard{height:var(--trk-tab-h,48px);box-sizing:border-box;align-items:center}
+.trkView[data-short] .mChipsL .mDock .hCard{height:var(--trk-tab-h,48px);box-sizing:border-box}
+/* the pill: the deck bar's height plus the home bar — nothing stacked twice */
+.trkView[data-short] .trkTop{min-height:0!important;height:auto!important}
+.trkView[data-short] .trkTop .slot-share,.trkView[data-short] .trkTop .slot-share>span{min-height:0!important;height:auto!important;align-items:flex-end!important}
+.trkView[data-short] .trkTop .slot-share .mapShLine{min-height:0!important;height:auto!important;line-height:1.2!important;white-space:nowrap!important;margin:0!important}
 .trkView[data-short] .trkCards .sideR>.trkCard2{border-radius:0 0 12px 12px!important;transform-origin:top right!important}
 /* the pill at the bottom centre, mirrored deck style: flat on the bottom edge, rounded on top; the span between the panel
  *  and the bottom-right group (shortGeom --trk-pill-pl / -pr) */
@@ -1379,6 +1394,9 @@ export class TrackView {
     }
     // ★★★ beta96 THE CARDS: each button opens / shuts its card; × shuts it; FIT (once) fits the chosen layer
     this.cardsEl = r.querySelector('.trkCards') as HTMLElement;
+    // ★ a drag inside a card scrolls the card — it never reaches the map underneath (Stuart 18:1x, the CHAT card on an iPhone)
+    for (const ev of ['touchstart', 'touchmove', 'pointerdown', 'pointermove', 'wheel', 'mousedown', 'dblclick'])
+      this.cardsEl.addEventListener(ev, (e) => { if ((e.target as HTMLElement | null)?.closest?.('.trkCard2')) e.stopPropagation(); }, { passive: true });
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
     for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => {
       // ★ the LIST stepped aside for a card: its chip brings it back (the card folds), never shuts it
@@ -1875,6 +1893,7 @@ export class TrackView {
   }
   private geomErr = '';
   private shortGeom(m: DOMRect) {
+    if (!m.width || !m.height || this.root.hidden) return;   // ★ never from an empty box (a map not laid out yet, or hidden) — its px would stick
     try { this.shortGeomRun(m); this.geomErr = ''; } catch (e) { this.geomErr = String((e as Error)?.message || e).slice(0, 120); }
   }
   private shortGeomRun(m: DOMRect) {
@@ -1910,6 +1929,9 @@ export class TrackView {
     const pieces: Array<{ el: HTMLElement | null; w: number; h: number; optional?: boolean }> = [
       { el: attrib, ...size(attrib) }, { el: help, ...size(help) }, { el: zoom, ...size(zoom) }, { el: scale, ...size(scale), optional: true },
     ].filter((p) => p.el && p.w > 0);
+    { // ★ one height for every top-hanging tab: the family chip's own (its content + padding), set before the row is measured
+      const fc = this.root.querySelector('.mChipsL .mDock:not([hidden]) .mchip') as HTMLElement | null;
+      if (fc && fc.offsetHeight) { const v = `${fc.offsetHeight + 8}px`; if (this.root.style.getPropertyValue('--trk-tab-h') !== v) this.root.style.setProperty('--trk-tab-h', v); } }
     // ★ the top row: its height (the cards drop from it) and, when the family would run into the right end, compact glyphs
     { const fam = this.root.querySelector('.mChipsL') as HTMLElement | null, fb = fam?.getBoundingClientRect(), rb = (this.root.querySelector('.mChipsR') as HTMLElement | null)?.getBoundingClientRect();
       const rowH = Math.max(fb && fb.height ? fb.bottom - m.top : 0, rb && rb.height ? rb.bottom - m.top : 0);

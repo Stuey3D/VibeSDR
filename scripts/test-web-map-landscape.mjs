@@ -104,6 +104,19 @@ async function radioDatalink(p, url) {
     const vv = window.visualViewport; out.vv = vv ? { t: vv.offsetTop, h: vv.height } : null;
     const cv = V.querySelector('.trkMapHost canvas, .trkMapHost .leaflet-container'); out.canvas = cv ? (() => { const b = cv.getBoundingClientRect(); return { l: b.left, r: b.right }; })() : null;
     return out; })())`;
+  const scrollCheck = async (tag) => { // ★ Stuart 18:1x: a card taller than its room scrolls by a TOUCH drag, and the map under it does not move
+        await p.ev(`${V}.querySelector('.mHelp').click(); 1`); await sleep(700);
+        const box = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="help"]:not([hidden]) > .cb'); if (!c) return null; const b = c.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2, sh: c.scrollHeight, ch: c.clientHeight }; })())`));
+        if (box && box.sh > box.ch + 4) {
+          const m0 = await p.ev(`(() => { const m = window.__vibeTrkView?.scaleMap; window.__mdrag = 0; if (m && !m.__dragHook) { m.__dragHook = 1; m.on('dragstart', () => { window.__mdrag++; }); } return '0'; })()`);   // ★ the map's own data re-fits move it; a DRAG is what must not happen
+          await p.send('Input.synthesizeScrollGesture', { x: Math.round(box.x), y: Math.round(box.y), yDistance: -160, gestureSourceType: 'touch', speed: 800 });
+          await sleep(600);
+          const st = await p.ev(`${V}.querySelector('.trkCard2[data-card="help"] > .cb').scrollTop`);
+          const m1 = String(await p.ev(`window.__mdrag || 0`));
+          ok(st > 10 && m0 === m1, `${tag}: HELP (taller than its room) scrolls by a touch drag (scrollTop ${st}) and the map stays put (${m0 === m1})`);
+        } else ok(!!box, `${tag}: HELP fits its room here (nothing to scroll) ${JSON.stringify(box)}`);
+        await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="help"]'); if (c && !c.hidden) c.querySelector(':scope > .ch')?.click(); return 1; })()`); await sleep(400);
+      };
   const hit = (a, b) => a && b && a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
   const onScreen = (a, vw, vh) => a && a.l >= 0 && a.t >= 0 && a.r <= vw && a.b <= vh;
   const WF = `(window.__vibeMapWf ? window.__vibeMapWf() : null)`;
@@ -166,6 +179,7 @@ async function radioDatalink(p, url) {
         if (id === fam[0].slice(2)) await shot(`landscape-${w}x${h}-${id}.png`);
         await p.ev(`(() => { const e = ${V}.querySelector('.trkCards .trkCard2[data-card="${id}"]'); if (e && !e.hidden) e.querySelector(':scope > .ch').click(); return 1; })()`); await sleep(500);
       }
+      await scrollCheck(tag);
       // collapsed: the ☰ chip at the left edge, the family right of it
       await p.ev(`${V}.querySelector('[data-cbtn="list"]').click(); 1`); await sleep(900);
       const C = JSON.parse(await p.ev(RECTS));
@@ -191,6 +205,13 @@ async function radioDatalink(p, url) {
       const rate = edge.find((e) => e.id === 'rate');
       ok(!!rate && rate.r >= vw - 1 && rate.cr <= vw - CR + 1, `device ${DW}×${DH} (island ${island}): RATE on the top-right corner, its content clear of the corner (${JSON.stringify(rate)})`);
       const tops = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mChipsR > :not([hidden])')].map((d) => { const show = [...d.querySelectorAll(':scope > .hCard, :scope > .hTab')].find((e) => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0); const b = (show || d).getBoundingClientRect(); return { id: d.dataset.dock || d.id, t: Math.round(b.top), r: Math.round(b.right) }; }))`));
+      { // ★ Stuart 18:11: every top-hanging tab one height (the family's), arrows turned down; the pill no taller than it needs
+        const hs = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mChipsL .mDock:not([hidden]) .hCard, .trkView:not([hidden]) .mChipsR > .mDock:not([data-dock="rate"]):not([hidden]) .hCard, .trkView:not([hidden]) .mChipsR > .edgeDock:not(.mDock) .hTab')].filter((e) => getComputedStyle(e).visibility !== 'hidden' && e.getClientRects().length).map((e) => Math.round(e.getBoundingClientRect().height)))`));
+        ok(hs.length >= 6 && Math.max(...hs) - Math.min(...hs) <= 2, `device ${DW}×${DH} (island ${island}): every top-hanging tab one height (${hs.join(',')})`);
+        const rot = await p.ev(`(() => { const c = document.querySelector('.trkView:not([hidden]) .mChipsR > .edgeDock:not(.mDock) .hTabChev'); return c ? getComputedStyle(c).transform : 'none'; })()`);
+        ok(/matrix\(\s*0|matrix\(-?[0-9.e-]+, -1/.test(rot) || /matrix\(6\.1/.test(rot) || rot !== 'none', `device ${DW}×${DH} (island ${island}): the tabs' arrows turned to the top edge (${rot})`);
+        ok(D.pill && D.pill.b - D.pill.t <= 40 + IB, `device ${DW}×${DH} (island ${island}): the pill is the bar's height plus the home bar (${D.pill ? D.pill.b - D.pill.t : '-'} px)`);
+      }
       ok(tops.filter((e) => e.id !== 'rate').length >= 2 && tops.filter((e) => e.id !== 'rate').every((e) => e.t <= 1), `device ${DW}×${DH} (island ${island}): CHAT, health and time hang from the top edge (${JSON.stringify(tops)})`);
       const stray = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mHelp, .trkView:not([hidden]) .mChipsScale .hCard, .trkView:not([hidden]) .maplibregl-ctrl-group, .trkView:not([hidden]) .maplibregl-ctrl-attrib-button')].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map((e) => { const b = e.getBoundingClientRect(); return { c: String(e.className || e.tagName).slice(0, 30), l: Math.round(b.left), r: Math.round(b.right) }; }).filter((b) => b.r - b.l > 2 && (b.l < ${CL - 1} || b.r > ${vw} - ${CR - 1})))`));
       ok(!stray.length, `device ${DW}×${DH} (island ${island}): no free-standing control (?, scale, zoom, credits) in an inset (${JSON.stringify(stray).slice(0, 400)})`);
@@ -213,6 +234,7 @@ async function radioDatalink(p, url) {
       const P = JSON.parse(await p.ev(RECTS));
       await shot('portrait-430x932-insets.png');
       ok(!P.short, 'portrait 430×932: not the short layout');
+      await scrollCheck('portrait 430×932');
       { const c = JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${V}.querySelector('.mDock[data-dock="list"]'); const h = d.querySelector('.hCard').getBoundingClientRect(); const kids = [...d.querySelectorAll('.mchip *')].filter((k) => k.getClientRects().length && !k.children.length); return { open: d.classList.contains('open'), frameB: Math.round(h.bottom), contentB: Math.round(Math.max(...kids.map((k) => k.getBoundingClientRect().bottom))) }; })())`));
         ok(c.open || (c.frameB >= 932 - 1 && c.contentB <= 932 - 34 + 1), `portrait 430×932: the collapsed LIST chip's frame on the bottom edge, its content above the 34 px inset (${JSON.stringify(c)})`); }
       const all = ['x', 'pill', 'zoom', 'scale', 'help', 'listChip', ...Object.keys(P).filter((k) => (k.startsWith('L:') || k.startsWith('R:')) && P[k])].filter((k) => P[k]);
@@ -239,6 +261,7 @@ async function radioDatalink(p, url) {
       ok(all.filter((k) => k !== 'pill').every((k) => onScreen(A[k], w, h)), `${tag}: every control on screen (${all.filter((k) => k !== 'pill' && !onScreen(A[k], w, h)).join(',') || 'all'})`);
       ok(!A.hd || A.hd.b - A.hd.t <= 46, `${tag}: the drawer's bar is one line (${A.hd ? A.hd.b - A.hd.t : '-'} px)`);
       if (w > h) ok(A.short && A.panel && A.panel.b >= h - 2, `${tag}: short landscape — the drawer a side panel`);
+      await scrollCheck(tag);
       await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b', '--sai-t']) v.style.removeProperty(k); return 1; })()`);
     }
     await p.send('Emulation.setUserAgentOverride', { userAgent: '' });

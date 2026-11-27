@@ -332,7 +332,7 @@ try {
       ok(await ev(`!${V}.querySelector('.trkList .hd .srt').hidden`), '…nearest / latest, as every list');
       ok(await until(`[...${V}.querySelectorAll('[data-tgl].live')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join(',') === 'ADS-B' || (!${V}.querySelector('[data-tgl]'))`, 8000),
          `the ADS-B key is LIVE (or the only layer: no chip row) (${await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim() + (b.classList.contains('live') ? '*' : '')).join(',')`)})`);
-      ok(await ev(`!!${V}.querySelector('.trkTop #adsbChat') && !!${V}.querySelector('.slot-tune #adsbGain') && !!${V}.querySelector('.slot-tune #adsbCapture')`), 'CHAT is in the map\'s top bar; GAIN and the capture warning in its TUNE card (map cards)');
+      ok(await ev(`!document.getElementById('adsbChat') && !!${V}.querySelector('.slot-tune #adsbGain') && !!${V}.querySelector('.slot-tune #adsbCapture')`), 'GAIN and the capture warning in the TUNE card; no old ADS-B CHAT key (CHAT is the map\'s chip)');
       ok(await until(`!${V}.querySelector('.mDock[data-dock="stats"]').hidden`, 20000), 'NEWEST / FURTHEST / LONGEST are the STATS card\'s');
       ok(await ev(`!!${V}.querySelector('.slot-over #adsbFeedWarn') && !!${V}.querySelector('.slot-over #adsbGainPop')`), 'the antenna warning and the gain pop-over are over the map');
       ok(await until(`(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : 0) >= 3`, 15000), `the live aircraft on the map (${await ev(`window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1`)})`);
@@ -346,9 +346,6 @@ try {
       await sleep(2500);
       ok(await ev(`!!${V}.querySelector('.trkRow.sel[data-key="${key}"]')`), '…still lit after more reports');
       await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button').forEach(b => b.click())`);
-      await ev(`document.getElementById('adsbChat').click()`);
-      ok(await until(`document.getElementById('chatPanel').classList.contains('open') && !document.getElementById('chatPanel').inert && getComputedStyle(document.getElementById('chatPanel')).zIndex === '700'`, 3000), 'CHAT opens its panel over the map');
-      await ev(`document.getElementById('adsbChat').click()`);
       console.log('   screenshot', await shot('adsb-mode'));
       await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
       await sleep(1500);
@@ -370,7 +367,7 @@ try {
       await sleep(800);
       await ev(`${V}.querySelector('.exit').click()`);
       ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 8000), 'EXIT ADS-B: the map goes with the mode');
-      ok(await ev(`document.getElementById('adsbChat').parentElement.id === 'adsbChrome' && document.getElementById('adsbChrome').hidden`), '…its chrome parked again');
+      ok(await ev(`document.getElementById('adsbGain').parentElement.id === 'adsbChrome' && document.getElementById('adsbChrome').hidden`), '…its chrome parked again');
     });
     if (fail === failA) fs.rmSync(dirA, { recursive: true, force: true }); else console.log(`   (kept ${dirA})`);
   }

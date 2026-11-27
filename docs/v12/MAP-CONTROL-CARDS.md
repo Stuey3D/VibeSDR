@@ -37,13 +37,27 @@ how many cards can be open follows the window; a phone shows one at a time.
 - **Spectrum on only while it shows** (`spec` on:1 / on:0). **Server** (`recomputeEngineRate`, `vsMapMode`): in a map
   mode the display FFT runs at the 1 fps housekeeping floor with nobody's waterfall open, ≤ 10 fps with one open; the FFT
   size is untouched (a change restarts the engine and dips everyone's audio).
-- **Short landscape** (`mapCards.shortMap`: map height < 480 and wider than tall): the drawer is a LEFT SIDE PANEL at full
-  height under the ✕ (300–360 px), its two tabs on its right edge; the left family a row of tabs along the BOTTOM edge right
-  of it, cards popping up; the right column as ever, the scale hidden when there is no room under the zoom.
-- **Safe areas:** `viewport-fit=cover` only while a map is up (`TrackView.coverOn`); every map control stands in by
-  `--sai-l/r/t/b`; iOS's equal landscape insets resolved by the orientation angle (`web/client/src/islandSide.ts`, the
-  same mapping as the app's `islandSideFor`): the island side the full inset, the other a 20 px corner allowance.
-  ★ The radio page itself has NOT had a safe-area pass — it keeps Safari's letterbox (its deck, VTS, edge chips, menus).
+- **Short landscape** (`mapCards.shortMap`: map height < 480 and wider than tall) — STUART'S DESIGN (11-27 17:5x): the top
+  edge has no inset in landscape, so EVERY chip hangs from it — the family (SERVERS, TUNE, LAYERS, STATS, MAP) right of the
+  ✕, and at the right end before the RATE corner CHAT and the health / time pair (their tab when tucked, their card when
+  out); every card drops DOWN. The LIST / waterfall is a LEFT SIDE PANEL at full height under the ✕ (300–360 px, its two
+  tabs on its right edge). The shared-tuner pill sits at the bottom centre (flat on the edge; "Ask · 3/4" when short of
+  room, never an ellipsis through the count). One geometry pass (`TrackView.shortGeom`) places the bottom-right group —
+  credits (i), ?, zoom [− +], a HORIZONTAL scale — from the box and the measured insets, and the pill's span. A row too
+  long for the window drops the family's counts (`famCompact`). Portrait is untouched: every rule is `[data-short]`.
+- **Safe areas:** `viewport-fit=cover` only while a map is up (`TrackView.coverOn`); the island side takes the full inset,
+  the other side only a ~20 px corner allowance for corner pieces (`islandSide.ts` from the orientation angle, the app's
+  EdgeChip rule) — `--sai-*` (raw), `--sai-le/-re` (an edge tab), `--sai-lc/-rc` (a corner piece). Android: env() as given.
+  Stuart's own device numbers (956×376, L62 R62 T0 B20) are the e2e's device profile. `?perf=1` shows the decision
+  (`window.__mapGeom`). ★ The radio page itself has NOT had a safe-area pass — it keeps Safari's letterbox.
+- **The PURGE (11-27, Stuart: "old and new fighting each other")** — deleted, not hidden: the old ADS-B view / live sheet /
+  table / NEWEST-FURTHEST-LONGEST chips and their CSS and code (`adsb.ts adsbListHtml` & co, `#adsbView` `#adsbLive`
+  `#adsbList` `#adsbChips`), the old top bar's SHOW / TIME / RANGE / scope / tune rows, the card rail, the list's minimise
+  and the docks' tuck leftovers, the old CHAT keys (`#mapChat`, `#adsbChat`); ADS-B live is ONE list like every mode (its
+  rows keep their reply SNR chip), the aircraft data's licence words are HELP's. Kept on purpose (still read): the hidden
+  `.trkTop .ttl / .rate / .st` data holders (the title, the rate probe, the status line for screen readers).
+  ★ APP PORT: the app's MapOverlay still has the old top strip, its list header chips (src/components/AdsbLiveList.tsx,
+  TrackLiveList.tsx) and the AUTO/FIT keys in the layer — purge them the same way when the cards land in the app.
 - **e2e:** `scripts/test-web-map-waterfall.mjs` (swap, spec on/off and server frame rates, markers per channel, passive,
   palette follows the page, lit + bursts, history kept across maximise / rotation, drawer never grows, tabs clear),
   `scripts/test-web-map-landscape.mjs` (932×370, 932×430, 852×340, 667×320; insets; `PREVIEW_URL=` drives the preview).

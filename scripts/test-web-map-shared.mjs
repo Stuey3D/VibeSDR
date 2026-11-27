@@ -153,7 +153,7 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   await ev(`document.getElementById('mModeAirSea')?.click()`);
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'AIR & SEA LIVE lands on the last-used mode (AIS), the map open');
   ok(await until(`(${MS})?.shown && /^Shared VFO: Free to change mode or exit 1\\/4$/.test((${MS}).text)`, 8000), `alone on a shared dial: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
-  ok(await ev(`!!document.querySelector('.trkView:not([hidden]) .slot-share #mapChat') && !document.getElementById('mapChat').hidden`), 'CHAT sits beside the line in the map\'s top bar');
+  ok(await ev(`!document.getElementById('mapChat') && !!document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"]:not([hidden])')`), 'CHAT is the map\'s chip (the old CHAT key beside the line went in the purge)');
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.includes('adsb') && tune.includes('ais*'), `TUNE: ADS-B and AIS (AIS lit) — ${tune.join(' ')}`);
   // ★★★ beta96 map cards: TUNE is a card button now — the live mode is in its title and the TUNE card's first line
@@ -172,10 +172,10 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   const b = await join('bbbb0001');
   ok(await until(`/^Shared VFO: Ask before changing mode or exiting 2\\/4$/.test((${MS})?.text || '')`, 8000), `a listener joins → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
   ok(!(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).exitLocked, 'the page was here first: EXIT stays live');
-  // CHAT opens the chat panel over the map
-  await ev(`document.getElementById('mapChat').click()`);
-  ok(await until(`document.getElementById('chatPanel')?.classList.contains('open')`, 3000), 'CHAT opens the chat panel over the map');
-  await ev(`document.getElementById('mapChat').click()`);
+  // CHAT opens its card on the map (the log and the canned replies)
+  await ev(`document.querySelector('.trkView:not([hidden]) [data-cbtn="chat"]').click()`);
+  ok(await until(`!!document.querySelector('.trkView:not([hidden]) .trkCard2[data-card="chat"]:not([hidden]) #chatLog')`, 3000), 'CHAT opens its card over the map');
+  await ev(`document.querySelector('.trkView:not([hidden]) .trkCard2[data-card="chat"] > .ch')?.click()`);
   // SHOW: toggling a chip sends nothing
   const show = JSON.parse(await ev(`JSON.stringify(${SHOW_IDS})`));
   if (show.length) {
