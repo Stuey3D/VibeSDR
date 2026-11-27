@@ -152,6 +152,19 @@ try {
   ok(await until(`/VOICE/.test(document.querySelector('#satPanel .sat-xp').textContent) && /BEACON/.test(document.querySelector('#satPanel .sat-xp').textContent) && /G4ABC/.test(document.querySelector('#satPanel .sat-xp').textContent)`, 30000),
      `★ rows: a VOICE, the BEACON, G4ABC's CQ (${(await ev(`document.querySelector('#satPanel .sat-xp').textContent`) || '').slice(0, 200)})`);
   ok(await ev(`!!document.querySelector('#satPanel .sat-xp button[data-act="xlisten"]')`) === true, 'a voice row has LISTEN');
+  // ★★★ beta97 the digital-mode skimmer: SKIM FT8/FT4 and its line; a press sends xpdr_skim and the server switches it
+  ok(await until(`!!document.querySelector('#satPanel .sat-xp button[data-act="xskim"]') && /FT8/.test(document.querySelector('#satPanel .sat-xp .sat-xs').textContent)`, 6000),
+     `★ SKIM FT8/FT4 with its line ("${await ev(`document.querySelector('#satPanel .sat-xp .sat-xs')?.textContent || ''`)}")`);
+  {
+    const was = await ev(`document.querySelector('#satPanel .sat-xp button[data-act="xskim"]').getAttribute('aria-pressed')`);
+    const want = was === 'true' ? 'SAT SKIM: off (what is queued is still decoded)' : 'SAT SKIM: on\n';
+    const n0 = S.log().split(want).length;
+    await ev(`document.querySelector('#satPanel .sat-xp button[data-act="xskim"]').click()`);
+    let switched = false;
+    for (let i = 0; i < 60 && !switched; i++) { await new Promise((r) => setTimeout(r, 100)); switched = S.log().split(want).length > n0; }
+    ok(switched, `a press switches the server's skimmer (it was ${was === 'true' ? 'on' : 'off'})`);
+    await ev(`document.querySelector('#satPanel .sat-xp button[data-act="xskim"]').click()`);   // ★ and back as it was
+  }
   ok(await ev(`[...document.querySelectorAll('#satPanel .sat-xp .sat-xr')].filter(r => /CW|BEACON/.test(r.textContent)).every(r => !r.querySelector('button'))`) === true, 'CW rows have none (CW simply decodes)');
   ok(await until(`window.__ft.includes('TRANSPONDER · every signal found here')`, 6000), "★ the waterfall: the slice shaded and titled (ORBCOMM's drawing)");
   ok(await until(`window.__ft.includes('VOICE') && window.__ft.includes('G4ABC')`, 6000), '…with an arrow per signal: VOICE, G4ABC');

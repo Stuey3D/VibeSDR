@@ -64,10 +64,12 @@ int main(int argc, char** argv) {
     std::mt19937 rng(5); std::normal_distribution<float> g(0.0f, 1.0f);
     for (auto& v : iq) v = cf32(g(rng), g(rng));
     const double amp = std::sqrt(std::pow(10.0, -12 / 10.0) * 2 / fs * 2500.0);   // −12 dB in 2500 Hz
-    const char* calls[] = { "G4ABC", "DL1XYZ", "F5AAA", "W1AW", "JA1QRZ", "VK2DEF", "PY2ABC", "ZS6XYZ", "EA4BBB", "K9CCC", "OH2DDD", "SM5EEE" };
     for (int w = 0; w < (int)sk.dials().size(); ++w) {
         const bool ft4 = w % 2 == 1;
-        const auto t = tonesOf(std::string("CQ ") + calls[w % 12] + " IO91", ft4);
+        // ★ a call of its own per window ("AA1HL"…) — the skimmer drops a repeated message in a slot as a duplicate
+        std::string call;
+        call += (char)('A' + w % 26); call += (char)('A' + w / 26); call += '1'; call += (char)('A' + (w * 7) % 26); call += (char)('A' + (w * 11) % 26);
+        const auto t = tonesOf("CQ " + call + " IO91", ft4);
         const double off = sk.dials()[(size_t)w] + 900 + 37 * (w % 7) - centre;
         for (int s = 0; s < slots * (ft4 ? 2 : 1); ++s) addFtx(iq, fs, off, 1.0 + s * (ft4 ? 7.5 : 15.0) + 0.5, t, ft4, amp);
     }
