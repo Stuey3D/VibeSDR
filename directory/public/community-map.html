@@ -103,6 +103,10 @@
   .maplibregl-popup-close-button { color: var(--dim); font-size: 16px; }
   .pc .t, .trkCard .t { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
   .pc .r, .trkCard .r { display: flex; gap: 8px; } .pc .k, .trkCard .k { color: var(--dim); min-width: 70px; }
+  /* ★ the aircraft card's route and track lines: the words small and dim under them say where each came from */
+  .pc .src { font-size: 10px; color: var(--dim); margin: 1px 0 3px; line-height: 1.35; }
+  .pc .src a { color: var(--dim); }
+  .pc .off { text-decoration: line-through; opacity: .7; }
   .pc .hb { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 5px; }
   .pc .hb div { display: flex; justify-content: space-between; gap: 10px; }
   .maplibregl-ctrl-group { background: var(--panel); border: 1px solid var(--line); }
@@ -364,6 +368,15 @@ function ensureLayers() {
   gl.addSource('cm-rx', { type: 'geojson', data: empty });
   gl.addLayer({ id: 'cm-area', type: 'fill', source: 'cm-shapes', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.16 } });
   gl.addLayer({ id: 'cm-line', type: 'line', source: 'cm-shapes', paint: { 'line-color': ['get', 'c'], 'line-width': ['coalesce', ['get', 'w'], 1.6], 'line-opacity': ['coalesce', ['get', 'op'], 0.85], 'line-dasharray': [3, 2] } });
+  // ★★ THE CLICKED AIRCRAFT's TRACK (Stuart 11-26): flown runs solid, a gap over 5 min dashed — under every marker, and
+  //    in no click list (a tap on it reaches whatever is under it, or closes the card)
+  gl.addSource('cm-trail', { type: 'geojson', data: empty });
+  gl.addLayer({ id: 'cm-trail-halo', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 0], layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#0b1014', 'line-width': 5, 'line-opacity': 0.55 } });
+  gl.addLayer({ id: 'cm-trail-line', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 0], layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'c'], 'line-width': 2.6, 'line-opacity': 0.95 } });
+  gl.addLayer({ id: 'cm-trail-gap', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 1],
+    paint: { 'line-color': ['get', 'c'], 'line-width': 2, 'line-opacity': 0.8, 'line-dasharray': [2, 2.5] } });
   gl.addLayer({ id: 'cm-clusters', type: 'circle', source: 'cm-dense', filter: ['has', 'point_count'],
     paint: { 'circle-color': 'rgba(255,184,51,0.78)', 'circle-stroke-color': '#140d00', 'circle-stroke-width': 1.5,
              'circle-radius': ['step', ['get', 'point_count'], 12, 20, 16, 100, 21, 500, 26] } });
@@ -473,6 +486,7 @@ let fitted = false;
 async function render() {
   const now = Math.floor(Date.now() / 1000);
   ITEMS = CM.merge([...DATA.values()].map((d) => d.items || []));
+  CM.trackNote(TRACKS, ITEMS, now);   // ★ every aircraft's fixes since the page opened (bounded) — the track when no server has one
   PRESENT = CM.modesPresent(SERVERS, ITEMS);
   drawBars();
   SHOWN = CM.filter(ITEMS, { groups: F.groups, modes: new Set(layersOn()), maxAge: F.maxAge, server: F.server, nav: F.nav }, now);
@@ -531,6 +545,7 @@ async function render() {
   metZoom();
   if (!perf.firstDraw && rx.length) perf.firstDraw = Math.round(performance.now() - T0);
   if (!fitted && (SHOWN.length || rx.length)) { fitted = true; fitTo(SHOWN.filter((i) => i.lat !== null), SERVERS); }
+  if (OPEN) trailRefresh();
   window.__cm = { servers: SERVERS.length, up: SERVERS.filter((s) => DATA.has(s.id)).length, items: ITEMS.length, shown: SHOWN.length,
     byKind: SHOWN.reduce((a, i) => (a[i.kind] = (a[i.kind] || 0) + 1, a), {}), modes: PRESENT, on: layersOn(),
     heardBy: Object.fromEntries(ITEMS.map((i) => [i.key, i.heard.length])), selected, server: F.server, groups: [...F.groups],
@@ -588,9 +603,13 @@ function cardOf(it, now) {
   if (it.kind === 'navst' && KIT) { const site = KIT.navSites({ stations: [Object.assign({}, it.d, { seen: now - it.d.last })] })[0]; return KIT.navCard(site, 'web'); }
   const rows = [], d = it.d;
   const add = (k, v) => { if (v !== '' && v !== null && v !== undefined) rows.push(`<div class="r"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>`); };
-  if (it.kind === 'aircraft') { add('ICAO', d.icao); add('Flight', d.flight); add('Reg', d.reg); add('Type', d.type);
+  if (it.kind === 'aircraft') { add('ICAO', d.icao); add('Flight', d.flight);
+    // ★ filled when the card opens (lookRoute / openAircraft): where it is flying from and to, and the track drawn
+    rows.push(`<div class="r"><span class="k">Route</span><span data-rt>looking up…</span></div><div class="src" data-rts></div>`);
+    add('Reg', d.reg); add('Type', d.type);
     if (d.alt !== null) add('Altitude', d.alt.toLocaleString('en-GB') + ' ft'); if (d.gs !== null) add('Speed', `${d.gs} kt${d.trk !== null ? ' · ' + d.trk + '°' : ''}`);
-    add('Position', `${it.modes.map((m) => CM.MODE[m].label).join(', ')}${d.adsc ? ' (ADS-C)' : ''}, ${CM.ago(now - it.t)} ago`); }
+    add('Position', `${it.modes.map((m) => CM.MODE[m].label).join(', ')}${d.adsc ? ' (ADS-C)' : ''}, ${CM.ago(now - it.t)} ago`);
+    rows.push(`<div class="r"><span class="k">Track</span><span data-trk>looking…</span></div>`); }
   else if (it.kind === 'ship') { add('MMSI', d.mmsi); add('Call', d.call); add('Type', d.family); if (d.sog !== null) add('Speed', `${d.sog} kn${d.cog !== null ? ' · ' + Math.round(d.cog) + '°' : ''}`); add('Heard', CM.ago(now - it.t) + ' ago'); }
   else if (it.kind === 'dsc') { add('MMSI', d.mmsi); add('Heard', new Date(it.t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'); rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`); }
   else if (it.kind === 'ndb' || it.kind === 'vor') { add('Ident', d.ident); add('Station', d.name); add('Country', d.cc); add('Last', CM.ago(now - it.t) + ' ago'); }
@@ -608,9 +627,151 @@ function showCard(key, ll) {
   const now = Math.floor(Date.now() / 1000);
   if (popup) popup.remove();
   popup = new maplibregl.Popup({ maxWidth: '340px' }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
+  if (it.kind === 'aircraft') openAircraft(it, popup);
   // ★ a NAVTEX card's message: fetched now, from the receiver that holds its cleanest copy (never in the poll)
   const pre = popup.getElement().querySelector('.nvTx');
   if (pre) fillText(pre, CM.textSource(it));
+}
+/* ══ AN AIRCRAFT's ROUTE AND TRACK — looked up only when its card opens (community-map.js ROUTE: why, where from, the limits).
+ *  ★★★ Never through the directory's Worker: the server's own tunnel, and adsbdb.com, straight from this browser. ══ */
+const TRACKS = new Map();   // item key → [[lat, lon, t]] — the fixes this page has seen (CM.trackNote)
+let OPEN = null;            // the aircraft card open: { key, popup, pts, src, who, colour, gs, serverPts }
+/** A GET with a timeout: { status, j } (status 0 = no answer). */
+async function getJson(url, ms) {
+  const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), ms || CM.ROUTE.timeoutMs);
+  try { const r = await fetch(url, { signal: ctrl.signal, credentials: 'omit' }); const j = await r.json().catch(() => null); return { status: r.status, j }; }
+  catch { return { status: 0, j: null }; }
+  finally { clearTimeout(timer); }
+}
+// ── the route ──
+const AC_TABLE = new Map();   // server id → { at, p }: its aircraft table, asked at most once a minute (CM.SERVER_AC_SEC)
+function serverTable(s) {
+  const now = Date.now(), have = AC_TABLE.get(s.id);
+  if (have && now - have.at < CM.SERVER_AC_SEC * 1000) return have.p;
+  const u = CM.aircraftTableUrl(s, location.protocol);
+  const p = u ? getJson(u).then((r) => (r.status === 200 ? r.j : null)) : Promise.resolve(null);
+  AC_TABLE.set(s.id, { at: now, p });
+  return p;
+}
+const ROUTES = new Map();   // callsign → { r: route|null, at (s), err }
+try { for (const [k, v] of Object.entries(JSON.parse(sessionStorage.getItem(CM.ROUTE.cacheKey) || '{}') || {})) if (v && typeof v.at === 'number') ROUTES.set(k, v); } catch { /* private window */ }
+function routesSave() {
+  try {
+    const keep = [...ROUTES].filter(([, v]) => !v.err).sort((a, b) => b[1].at - a[1].at).slice(0, CM.ROUTE.cacheMax);
+    sessionStorage.setItem(CM.ROUTE.cacheKey, JSON.stringify(Object.fromEntries(keep)));
+  } catch { /* private window, or full */ }
+}
+let routeChain = Promise.resolve();   // ★ ONE adsbdb request in flight at a time
+let routeAsked = 0;                   // (for the test: how many went out)
+function adsbdbRoute(cs) {
+  const fresh = (v) => v && Math.floor(Date.now() / 1000) - v.at < (v.err ? 60 : v.r ? CM.ROUTE.cacheSec : CM.ROUTE.unknownSec);
+  if (fresh(ROUTES.get(cs))) return Promise.resolve(ROUTES.get(cs));
+  const run = routeChain.then(async () => {
+    if (fresh(ROUTES.get(cs))) return ROUTES.get(cs);   // ★ asked again while it waited its turn: the answer is in now
+    routeAsked++;
+    const r = await getJson(CM.ROUTE.api + encodeURIComponent(cs));
+    const at = Math.floor(Date.now() / 1000);
+    const v = r.status === 200 && CM.parseAdsbdb(r.j) ? { r: CM.parseAdsbdb(r.j), at }
+      : r.status === 404 || r.status === 200 ? { r: null, at }
+      : { r: null, at, err: r.status === 429 ? 'busy' : 'no answer' };
+    ROUTES.set(cs, v); routesSave();
+    return v;
+  });
+  routeChain = run.catch(() => {});
+  return run;
+}
+/** ★ The route for item `it`: the server's own data first (the receivers that heard it, newest first, at most two), then
+ *  adsbdb.com by its callsign. { r, who } — who: the server whose data it is. */
+async function lookRoute(it) {
+  for (const h of it.heard.slice(0, 2)) {
+    const s = SERVERS.find((x) => x.id === h.sid);
+    if (!s) continue;
+    const r = CM.serverRoute(CM.tableRow(await serverTable(s), it.key));
+    if (r) return { r, who: s.name };
+  }
+  const cs = CM.callsignOf(it.d.flight);
+  if (!cs) return { r: null, why: it.d.flight ? `${it.d.flight} is not an airline callsign` : 'no callsign heard' };
+  const v = await adsbdbRoute(cs);
+  return v.err ? { r: null, err: v.err, cs } : { r: v.r, cs };
+}
+const extLink = (u, w) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(w)}</a>`;
+/** The card's route line, and the small words under it: where it came from, and whether to believe it. */
+function routeHtml(res, it) {
+  const r = res.r;
+  if (!r) {
+    if (res.err) return ['<span class="d">not looked up</span>', `${extLink(CM.ROUTE.creditUrl, CM.ROUTE.credit)} ${res.err === 'busy' ? 'is busy' : 'did not answer'} — open the card again shortly`];
+    if (res.why) return ['unknown', `${esc(res.why)}, so there is no route to look up`];
+    return ['unknown', `nothing for ${esc(res.cs)} in the receiver’s data or at ${extLink(CM.ROUTE.creditUrl, CM.ROUTE.credit)}`];
+  }
+  const line = esc(CM.routeLine(r)) + (r.stops && r.stops.length > 2 ? ` <span class="d">(${r.stops.map(esc).join(' – ')})</span>` : '');
+  if (r.src === 'datalink') return [`✈ ${line}`, `from the aircraft’s own datalink messages, heard by ${esc(res.who)}`];
+  const ok = r.src === 'filed' ? r.plausible : CM.routeJudge(r, it.lat, it.lon);
+  const who = r.src === 'filed' ? `the filed route in ${esc(res.who)}’s aircraft data (Virtual Radar Server)`
+    : `${extLink(CM.ROUTE.creditUrl, 'adsbdb.com')} for ${esc(res.cs)} (flight route data by David Taylor &amp; Jim Mason)`;
+  if (ok === false) return [`<span class="off" title="The aircraft is far from this route">${line}</span>`, `${who} — but the aircraft is far from it: probably not today’s route (a reused callsign or a diversion)`];
+  return [`✈ ${line}`, `${who}${ok === true ? ' — the aircraft is on it' : ' — a published route, not confirmed by the aircraft'}`];
+}
+// ── the track ──
+const TRAILS = new Map();   // item key → { at, pts, who } — a server trail, kept TRAIL_CACHE_SEC
+async function serverTrail(it) {
+  const have = TRAILS.get(it.key);
+  if (have && Date.now() - have.at < CM.TRAIL_CACHE_SEC * 1000) return have;
+  let out = { at: Date.now(), pts: [], who: '' };
+  for (const u of CM.trailUrls(it, SERVERS, location.protocol)) {   // ★ one after another, at most TRAIL_FETCH_MAX
+    if (!OPEN || OPEN.key !== it.key) return null;                   // the card closed: stop asking
+    const r = await getJson(u);
+    const pts = r.status === 200 ? CM.parseTrail(r.j) : [];
+    if (pts.length >= 2) { const s = SERVERS.find((x) => u.startsWith(CM.dataBase(x, location.protocol) + '/')); out = { at: Date.now(), pts, who: s ? s.name : '' }; break; }
+  }
+  TRAILS.set(it.key, out);
+  return out;
+}
+function trailDraw() {
+  const src = gl && gl.getSource('cm-trail');
+  const lines = OPEN && OPEN.pts && OPEN.pts.length > 1 ? CM.trackLines(OPEN.pts, OPEN.colour, OPEN.gs) : [];
+  if (src) src.setData({ type: 'FeatureCollection', features: lines });
+  window.__cmTrail = OPEN ? { key: OPEN.key, src: OPEN.src, n: OPEN.pts ? OPEN.pts.length : 0, solid: lines.filter((f) => !f.properties.gap).length,
+                              gaps: lines.filter((f) => f.properties.gap).length, colour: OPEN.colour } : null;
+}
+function trailWords() {
+  const el = OPEN && OPEN.popup.getElement() && OPEN.popup.getElement().querySelector('[data-trk]');
+  if (!el) return;
+  const n = OPEN.pts ? OPEN.pts.length : 0;
+  el.textContent = OPEN.src === 'server' ? `drawn: ${OPEN.who}’s ADS-B trail (${n} points)`
+    : n > 1 ? `drawn: the track since you opened the map (${n} fixes)` : 'none yet: drawn from the positions that arrive while the map is open';
+}
+/** The open card's track follows the data: the fixes this page sees, or the server's trail with the newest position on its end. */
+function trailRefresh() {
+  const it = ITEMS.find((i) => i.key === OPEN.key);
+  if (it) { OPEN.colour = CM.MODE[CM.primaryMode(it, F.off)].colour; OPEN.gs = it.d.gs; }
+  if (OPEN.src === 'server') {
+    const p = OPEN.serverPts.slice(), l = p[p.length - 1];
+    if (it && it.lat !== null && (!l || CM.gcNm(l[0], l[1], it.lat, it.lon) > 0.3)) p.push([it.lat, it.lon, null]);
+    OPEN.pts = p;
+  } else OPEN.pts = (TRACKS.get(OPEN.key) || []).slice();
+  trailDraw(); trailWords();
+}
+function trailClear() { OPEN = null; trailDraw(); }
+/** ★ An aircraft's card opened: its route (the server's data, else adsbdb.com) and its track (the server's trail, else this
+ *  page's own fixes) — both cleared away with the card. */
+function openAircraft(it, p) {
+  OPEN = { key: it.key, popup: p, pts: [], src: 'client', who: '', colour: CM.MODE[CM.primaryMode(it, F.off)].colour, gs: it.d.gs, serverPts: [] };
+  p.on('close', () => { if (OPEN && OPEN.popup === p) trailClear(); });
+  trailRefresh();
+  lookRoute(it).then((res) => {
+    const el = p.getElement();
+    if (!el || !p.isOpen()) return;
+    const [line, src] = routeHtml(res, it);
+    const a = el.querySelector('[data-rt]'), b = el.querySelector('[data-rts]');
+    if (a) a.innerHTML = line;
+    if (b) b.innerHTML = src;
+    window.__cmRoute = { key: it.key, src: res.r ? res.r.src : '', line: a ? a.textContent : '', words: b ? b.textContent : '', struck: !!(a && a.querySelector('.off')) };
+  });
+  if (CM.trailUrls(it, SERVERS, location.protocol).length) serverTrail(it).then((t) => {
+    if (!t || !OPEN || OPEN.popup !== p || t.pts.length < 2) return;
+    OPEN.src = 'server'; OPEN.serverPts = t.pts; OPEN.who = t.who;
+    trailRefresh();
+  });
 }
 async function fillText(pre, src) {
   const s = src && SERVERS.find((x) => x.id === src.sid);
@@ -778,6 +939,8 @@ function drawKey() {
     const kc = CM.MODE[air[0]].colour, shapes = ['jet', 'heavy', 'b757', 'regional', 'light', 'heli', 'fighter', 'glider', 'balloon', 'ultralight', 'uav'];
     h += sec('AIRCRAFT') + air.map((m) => kr(acGlyph('jet', CM.MODE[m].colour, 28), `Aircraft whose position came from ${CM.MODE[m].label}, pointing along its track`)).join('')
       + (KIT && KIT.AIRCRAFT_CLASS_NAMES ? shapes.map((c) => kr(acGlyph(c, kc, 28), `${KIT.AIRCRAFT_CLASS_NAMES[c]}${c === 'jet' ? ' (also: type not known)' : ''}`)).join('') : '')
+      + kr(`<svg width="24" height="12" viewBox="0 0 24 12"><path d="M1 9 L9 4 L14 6" fill="none" stroke="${kc}" stroke-width="2.4" stroke-linecap="round"/><path d="M15 6 L23 2" fill="none" stroke="${kc}" stroke-width="2" stroke-dasharray="2 2.5"/></svg>`,
+           'A clicked aircraft’s track: solid where flown, dashed across a gap of over five minutes with no position')
       + kr(`<span style="opacity:.45;display:flex">${acGlyph('jet', CM.MODE.adsb.colour, 28)}</span>`, 'Faded: a datalink position (ACARS, VDL2, HFDL) over five minutes old, fading until it is dropped at 30 minutes — ADS-B positions are dropped at five')
       + kr(`<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(255,184,51,0.78)" stroke="#140d00" stroke-width="1.5"/><text x="12" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="#140d00">12</text></svg>`, 'A number: aircraft, ships, APRS or MeshCore gathered when zoomed out — click to zoom in');
   }

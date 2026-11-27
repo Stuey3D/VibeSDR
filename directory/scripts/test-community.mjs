@@ -203,5 +203,76 @@ console.log('== 2. the page logic (public/community-map.js + the server maps\' o
   ok(CM.SEA.url === '/community-sea-areas.json' && !/^https?:/.test(CM.SEA.url), 'served beside the page (no other request)');
 }
 
+// ── 3. an aircraft's ROUTE and TRACK (Stuart 11-26: "show the flight route in the cards … the tracked route when clicked") ──
+console.log('== 3. an aircraft\'s route and track');
+{
+  const sandbox = {};
+  vm.runInNewContext(readFileSync(new URL('public/community-map.js', dir), 'utf8'), sandbox);
+  const CM = sandbox.CommunityMap;
+  ok(CM.callsignOf('EZY82YZ ') === 'EZY82YZ' && CM.callsignOf('baw696') === 'BAW696' && CM.callsignOf('GEZAB') === '' && CM.callsignOf('N123AB') === '' && CM.callsignOf('') === '' && CM.callsignOf(7) === '',
+     'a lookup only for an AIRLINE callsign (three letters, a number) — never a registration flown as one');
+  // adsbdb's real answer shape (2026-11-27, trimmed)
+  const real = { response: { flightroute: { callsign: 'EZY82YZ', airline: { name: 'easyJet' },
+    origin: { iata_code: 'BRS', icao_code: 'EGGD', latitude: 51.3827, longitude: -2.71909, municipality: 'Bristol', name: 'Bristol Airport' },
+    destination: { iata_code: 'KRK', icao_code: 'EPKK', latitude: 50.0777, longitude: 19.7848, municipality: 'Kraków', name: 'Kraków John Paul II International Airport' } } } };
+  const r = CM.parseAdsbdb(real);
+  ok(r && r.src === 'adsbdb' && r.from.iata === 'BRS' && r.to.code === 'EPKK' && r.airline === 'easyJet', 'adsbdb\'s answer read: origin, destination, airline');
+  ok(CM.routeLine(r) === 'Bristol (BRS) → Kraków (KRK)', `…in the card's words: "${CM.routeLine(r)}"`);
+  ok(CM.parseAdsbdb({ response: 'unknown callsign' }) === null && CM.parseAdsbdb(null) === null && CM.parseAdsbdb({ response: { flightroute: { origin: { name: '<b>' } } } }) === null,
+     '"unknown callsign" (its 404) and anything odd → no route');
+  // ★ the server's judge (vibe_adsb_data.h Db::judge): within max(60 NM, a quarter of the leg) of the leg
+  ok(CM.routeJudge(r, 51.0, 5.0) === true, 'over Belgium: on Bristol → Kraków');
+  ok(CM.routeJudge(r, 40.0, -3.7) === false, 'over Madrid: far from it — the card strikes it through');
+  ok(CM.routeJudge(r, null, null) === null && CM.routeJudge({ from: { lat: null }, to: { lat: null } }, 51, 0) === null, 'no position, or ends with no place: not judged');
+  ok(Math.abs(CM.gcNm(51.47, -0.45, 40.64, -73.78) - 2999) < 15, `great circle LHR–JFK ≈ 2 999 NM (${CM.gcNm(51.47, -0.45, 40.64, -73.78).toFixed(0)})`);
+  // the server's own data (aircraft.json rows)
+  const dl = CM.serverRoute({ key: 'A1B2C3', from: 'EGLL', to: 'KIAD', route: { from: 'EGKK', to: 'LEMD' } });
+  ok(dl && dl.src === 'datalink' && dl.from.code === 'EGLL' && dl.to.code === 'KIAD', '★ the aircraft\'s OWN datalink from/to wins over a filed route');
+  const fl = CM.serverRoute({ key: '4CA000', route: { from: 'EGLL', to: 'EDDF', fromIata: 'LHR', toIata: 'FRA', fromPlace: 'London', toPlace: 'Frankfurt', plausible: false } });
+  ok(fl && fl.src === 'filed' && fl.plausible === false && CM.routeLine(fl) === 'London (LHR) → Frankfurt (FRA)', 'a filed route from the server\'s aircraft data, with ITS verdict');
+  ok(CM.serverRoute({ key: 'X', from: '<script>', to: 'KIAD' }) === null && CM.serverRoute({}) === null && CM.serverRoute(null) === null, 'nothing usable → nothing');
+  ok(CM.tableRow({ aircraft: [{ key: '4CA000' }, { key: 'A1B2C3', from: 'EGLL' }] }, 'a:A1B2C3').from === 'EGLL' && CM.tableRow(null, 'a:X') === null, 'the table row by the item\'s key');
+  // where the trail is asked
+  const servers = [{ id: 'one', name: 'One', url: 'https://one-x.trycloudflare.com' },
+                   { id: 'pi', name: 'Pi', url: 'https://pi-x.trycloudflare.com', radios: ['r1', 'r2', 'r3'] },
+                   { id: 'slug', name: 'Slug only', address: 'slug.vibeserver.vibesdr.net' }];
+  const ac = (modes, heard, icao = '4CA000') => ({ kind: 'aircraft', key: 'a:' + icao, modes, d: { icao }, heard });
+  const u1 = CM.trailUrls(ac(['adsb'], [{ sid: 'pi', rid: 'r2' }, { sid: 'one' }]), servers, 'https:');
+  ok(JSON.stringify(u1) === JSON.stringify(['https://pi-x.trycloudflare.com/r/r2/adsb/trail/4ca000', 'https://pi-x.trycloudflare.com/r/r1/adsb/trail/4ca000',
+     'https://pi-x.trycloudflare.com/r/r3/adsb/trail/4ca000', 'https://one-x.trycloudflare.com/adsb/trail/4ca000']), `the trail: the radio that answered first, then the server's others, then the next receiver — at most ${CM.TRAIL_FETCH_MAX} (${u1.length})`);
+  ok(u1.every((u) => !/vibeserver\.vibesdr\.net/.test(u)), '★★★ never the directory\'s Worker (the slug) — the server\'s own tunnel');
+  ok(CM.trailUrls(ac(['hfdl'], [{ sid: 'one' }]), servers, 'https:').length === 0 && CM.trailUrls(ac(['adsb'], [{ sid: 'slug' }]), servers, 'https:').length === 0
+     && CM.trailUrls({ kind: 'aircraft', key: 'a:r:GABC', modes: ['adsb'], d: { icao: '' }, heard: [{ sid: 'one' }] }, servers, 'https:').length === 0,
+     'no trail asked for a datalink-only aircraft, one without an ICAO address, or a server with no address of its own');
+  ok(CM.aircraftTableUrl(servers[1], 'https:') === 'https://pi-x.trycloudflare.com/vibeserver/aircraft.json?since=1800' && CM.aircraftTableUrl(servers[2], 'https:') === '',
+     'the route table: the server\'s own tunnel (its door answers for every radio), the last 30 min');
+  const tr = CM.parseTrail({ type: 'adsb_trail', hex: '4ca000', pts: [[51, 0, 35000], [51.01, 0.01, null], ['x', 1], [0, 0, 0]] });
+  ok(tr.length === 2 && tr[0][2] === null, 'a server trail read (bad points dropped)');
+  // ★ the client's own fixes: bounded, aged out, the same fix not twice
+  const T = 1800000000, tracks = new Map();
+  const fix = (key, lat, lon, t) => ({ kind: 'aircraft', key, lat, lon, t });
+  CM.trackNote(tracks, [fix('a:1', 50, 0, T), Object.assign(fix('s:9', 50, 0, T), { kind: 'ship' })], T);
+  CM.trackNote(tracks, [fix('a:1', 50, 0, T)], T + 60);                 // the same datalink fix reread
+  CM.trackNote(tracks, [fix('a:1', 50.1, 0.1, T + 60)], T + 60);
+  ok(tracks.size === 1 && tracks.get('a:1').length === 2, 'aircraft only; a fix reread is not a new point');
+  for (let i = 0; i < 700; i++) CM.trackNote(tracks, [fix('a:1', 50 + i * 0.01, 0, T + 120 + i)], T + 120 + i);
+  ok(tracks.get('a:1').length === CM.TRACK_MAX, `at most ${CM.TRACK_MAX} points an aircraft (${tracks.get('a:1').length})`);
+  CM.trackNote(tracks, [], T + 120 + 700 + CM.TRACK_KEEP_SEC + 1);
+  ok(!tracks.has('a:1'), `…and nothing older than ${CM.TRACK_KEEP_SEC / 60} min`);
+  const many = new Map();
+  for (let i = 0; i < CM.TRACK_AIRCRAFT_MAX + 50; i++) CM.trackNote(many, [fix('a:' + i, 50, 0, T + i)], T + i);
+  ok(many.size === CM.TRACK_AIRCRAFT_MAX && !many.has('a:0') && many.has('a:' + (CM.TRACK_AIRCRAFT_MAX + 49)), `at most ${CM.TRACK_AIRCRAFT_MAX} aircraft, the longest unheard dropped`);
+  // ★ the gaps: a datalink track (times) and a server trail (no times — by distance at its speed)
+  const dlTrack = [[50, -20, T], [50.5, -18, T + 240], [51, -10, T + 1500], [51.2, -9, T + 1700]];
+  const L = CM.trackLines(dlTrack, '#c084fc', 480);
+  ok(L.length === 3 && L.map((f) => f.properties.gap).join() === '0,1,0' && L.every((f) => f.properties.c === '#c084fc'), `fixes 4 min apart solid, a 21-min gap DASHED, in the mode's colour (${L.map((f) => f.properties.gap)})`);
+  ok(L[1].geometry.coordinates.length === 2 && L[1].geometry.coordinates[0][0] === -18, '…the dash runs straight between the two fixes either side (lon, lat)');
+  const sv = [[51, 0, null], [51, 0.005, null], [51, 0.01, null], [51, 1.5, null], [51, 1.505, null]];
+  const S = CM.trackLines(sv, '#ffb000', 450);
+  ok(S.map((f) => f.properties.gap).join() === '0,1,0', 'a server trail (no times): a 56 NM hole at 450 kt (> 5 min flown) dashed; its 0.3 NM steps solid');
+  ok(CM.trackLines([[51, 0, null]], '#fff').length === 0 && CM.trackLines(null).length === 0, 'one point or none: nothing drawn');
+  ok(CM.ROUTE.api.startsWith('https://api.adsbdb.com/') && !/vibesdr/.test(CM.ROUTE.api), '★★★ the route source is called direct — never the Worker');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

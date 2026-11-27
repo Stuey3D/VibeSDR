@@ -441,11 +441,201 @@
     return a.length ? 'Sea areas: ' + a.map((x) => x.replace(/^Sea areas:\s*/, '')).join(' · ') : '';
   }
 
+  // ── AN AIRCRAFT's ROUTE AND TRACK (Stuart 11-26: "show the flight route in the cards and if possible show the tracked
+  //    route when clicked") ─────────────────────────────────────────────────────────────────────────────────────────────
+  /* ★★★ NOTHING HERE TOUCHES THE DIRECTORY'S WORKER. Each lookup happens only when a card opens, from the viewer's browser:
+   *   · the ROUTE, first from THE SERVER THAT HEARD IT — its /vibeserver/aircraft.json (the machine's shared aircraft table,
+   *     CORS open) carries `from`/`to` read from the aircraft's own datalink messages (ACARS / VDL2 / HFDL), else `route`, the
+   *     filed route from the server's aircraft data (Virtual Radar Server standing data, CC0), judged against the position
+   *     ("plausible"). Read at most once a minute per server (SERVER_AC_SEC), whatever the viewer clicks.
+   *   · else adsbdb.com's callsign lookup (free, CORS *, MIT code; its limit is 512 requests a minute per IP before a 429 —
+   *     one at a time, only on a card opening, cached for the session, never comes near it). Its routes are the work of
+   *     David Taylor and Jim Mason: shown to the viewer, never copied into anything of ours (sessionStorage is the viewer's).
+   *     It has no "is this right" flag of its own, so the SERVER'S RULE (vibe_adsb_data.h Db::judge) judges it against the
+   *     aircraft's position: on a leg within max(60 NM, a quarter of the leg) — else struck through and said why.
+   *   · the TRACK: an ADS-B aircraft's whole trail from the radio that decoded it (GET /adsb/trail/<hex>, vibe_adsb.h — the
+   *     server map's own rainbow line; per RADIO, so a multi-radio server's /r/<id>/), else the fixes this page has seen
+   *     since it was opened (TRACK_MAX points, TRACK_KEEP_SEC). A gap over TRACK_GAP_SEC is drawn DASHED: a datalink fix
+   *     comes minutes apart, and a solid line through a gap would claim a path nobody saw flown. */
+  const ROUTE = {
+    api: 'https://api.adsbdb.com/v0/callsign/',
+    credit: 'adsbdb.com',
+    creditUrl: 'https://www.adsbdb.com/',
+    creditWords: 'Route: adsbdb.com — flight route data by David Taylor & Jim Mason',
+    timeoutMs: 6000,
+    cacheKey: 'vibesdr.communityMap.routes.v1',
+    cacheMax: 300,
+    cacheSec: 6 * H,                 // a found route, this session
+    unknownSec: H,                   // "unknown" asked again after an hour
+  };
+  const SERVER_AC_SEC = 60, TRAIL_FETCH_MAX = 4, TRAIL_CACHE_SEC = 30;
+  const TRACK_MAX = 500, TRACK_KEEP_SEC = H, TRACK_GAP_SEC = 300, TRACK_AIRCRAFT_MAX = 3000;
+  /** An airline callsign (ICAO: three letters, then a flight number) — never a registration flown as a callsign
+   *  ("GEZAB", "N123AB"), which has no route. Upper case, no spaces; '' when it is not one. */
+  function callsignOf(flight) {
+    const c = typeof flight === 'string' ? flight.replace(/\s+/g, '').toUpperCase() : '';
+    return /^[A-Z]{3}[0-9][0-9A-Z]{0,4}$/.test(c) ? c : '';
+  }
+  const ICAO_APT = /^[A-Z0-9]{3,4}$/;
+  /** One end of a route, sanitised: {code, iata, name, place, lat, lon} (anything missing ''/null). */
+  function airport(o) {
+    if (!o || typeof o !== 'object') return null;
+    const code = str(o.icao_code || o.code, 4).toUpperCase(), iata = str(o.iata_code || o.iata, 3).toUpperCase();
+    if (!ICAO_APT.test(code) && !/^[A-Z]{3}$/.test(iata)) return null;
+    const lat = num(o.latitude ?? o.lat), lon = num(o.longitude ?? o.lon);
+    return { code: ICAO_APT.test(code) ? code : '', iata: /^[A-Z]{3}$/.test(iata) ? iata : '', name: str(o.name, 60), place: str(o.municipality || o.place, 40),
+             lat: placed(lat, lon) ? lat : null, lon: placed(lat, lon) ? lon : null };
+  }
+  /** adsbdb's answer → a route ({from, to, via, airline, src: 'adsbdb'}), or null for "unknown callsign" / anything odd. */
+  function parseAdsbdb(j) {
+    const r = j && j.response && typeof j.response === 'object' ? j.response.flightroute : null;
+    if (!r || typeof r !== 'object') return null;
+    const from = airport(r.origin), to = airport(r.destination), via = airport(r.midpoint);
+    if (!from || !to) return null;
+    return { src: 'adsbdb', from, to, via, airline: r.airline && typeof r.airline === 'object' ? str(r.airline.name, 40) : '' };
+  }
+  /** ★ The route the SERVER's own data gives one aircraft.json row: the aircraft's own datalink words first (from/to — what
+   *  the crew's systems sent), else the filed route from its aircraft data (with the server's own "plausible" verdict).
+   *  null when it has neither. */
+  function serverRoute(row) {
+    if (!row || typeof row !== 'object') return null;
+    const f = str(row.from, 8).toUpperCase(), t = str(row.to, 8).toUpperCase();
+    if (ICAO_APT.test(f) && ICAO_APT.test(t)) return { src: 'datalink', from: { code: f, iata: '', name: '', place: '', lat: null, lon: null }, to: { code: t, iata: '', name: '', place: '', lat: null, lon: null }, via: null, airline: '' };
+    const r = row.route;
+    if (r && typeof r === 'object') {
+      const end = (k) => airport({ code: r[k], iata: r[k + 'Iata'], name: r[k + 'Name'], place: r[k + 'Place'] });
+      const from = end('from'), to = end('to');
+      if (from && to) return { src: 'filed', from, to, via: null, airline: '', plausible: r.plausible === true ? true : r.plausible === false ? false : null,
+                               stops: Array.isArray(r.stops) ? r.stops.slice(0, 8).map((x) => str(x, 4)).filter(Boolean) : [] };
+    }
+    return null;
+  }
+  // geometry: the server's (vibe_adsb_data.h gcNm / bearing / segmentNm), so the verdict is the one its own map gives
+  const rad = (d) => d * Math.PI / 180;
+  function gcNm(la1, lo1, la2, lo2) {
+    const a = Math.sin(rad(la2 - la1) / 2), b = Math.sin(rad(lo2 - lo1) / 2);
+    const h = a * a + Math.cos(rad(la1)) * Math.cos(rad(la2)) * b * b;
+    return 2 * 3440.065 * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  function bearingRad(la1, lo1, la2, lo2) {
+    const y = Math.sin(rad(lo2 - lo1)) * Math.cos(rad(la2));
+    const x = Math.cos(rad(la1)) * Math.sin(rad(la2)) - Math.sin(rad(la1)) * Math.cos(rad(la2)) * Math.cos(rad(lo2 - lo1));
+    return Math.atan2(y, x);
+  }
+  function segmentNm(pla, plo, ala, alo, bla, blo) {
+    const R = 3440.065, dap = gcNm(ala, alo, pla, plo) / R;
+    const xt = Math.asin(Math.sin(dap) * Math.sin(bearingRad(ala, alo, pla, plo) - bearingRad(ala, alo, bla, blo)));
+    const at = Math.acos(Math.max(-1, Math.min(1, Math.cos(dap) / Math.max(1e-12, Math.cos(xt)))));
+    const len = gcNm(ala, alo, bla, blo) / R;
+    const ahead = Math.cos(bearingRad(ala, alo, pla, plo) - bearingRad(ala, alo, bla, blo));
+    if (ahead < 0 || at > len) return Math.min(gcNm(pla, plo, ala, alo), gcNm(pla, plo, bla, blo));
+    return Math.abs(xt) * R;
+  }
+  /** ★ Db::judge: is the aircraft at (lat, lon) on route r — within max(60 NM, a quarter of the leg) of any leg? true / false,
+   *  or null when it cannot be judged (an end with no position). */
+  function routeJudge(r, lat, lon) {
+    if (!r || lat === null || lon === null || lat === undefined) return null;
+    const pts = [r.from, r.via, r.to].filter((p) => p && p.lat !== null && p.lon !== null);
+    if (pts.length < 2 || !r.from || r.from.lat === null || !r.to || r.to.lat === null) return null;
+    for (let k = 0; k + 1 < pts.length; k++) {
+      const a = pts[k], b = pts[k + 1];
+      if (segmentNm(lat, lon, a.lat, a.lon, b.lat, b.lon) <= Math.max(60, 0.25 * gcNm(a.lat, a.lon, b.lat, b.lon))) return true;
+    }
+    return false;
+  }
+  /** "Bristol (BRS)": the place (else the airport's name, without its "International Airport"), then the code. */
+  function airportWords(a) {
+    if (!a) return '';
+    const code = a.iata || a.code;
+    const nm = a.place || String(a.name || '').replace(/\s+(International\s+)?(Airport|Airfield|Aerodrome|Air Base)$/i, '').trim();
+    return nm ? `${nm} (${code})` : code;
+  }
+  /** "Bristol (BRS) → Kraków (KRK)". */
+  const routeLine = (r) => (r ? `${airportWords(r.from)} → ${r.via ? airportWords(r.via) + ' → ' : ''}${airportWords(r.to)}` : '');
+
+  /* ── the track: fixes this page has seen (client side), and the gaps in any track ── */
+  /** Note the aircraft items just merged: a fix each when it moved or is newer. Bounded per aircraft (TRACK_MAX points, the
+   *  last TRACK_KEEP_SEC) and in all (TRACK_AIRCRAFT_MAX aircraft, the longest-unheard dropped). `tracks`: Map key → [[lat, lon, t]]. */
+  function trackNote(tracks, items, now) {
+    for (const it of items) {
+      if (it.kind !== 'aircraft' || it.lat === null || !(it.t > 0)) continue;
+      let tr = tracks.get(it.key);
+      if (!tr) { tr = []; tracks.set(it.key, tr); }
+      const l = tr[tr.length - 1];
+      if (l && (it.t <= l[2] || (Math.abs(l[0] - it.lat) < 1e-5 && Math.abs(l[1] - it.lon) < 1e-5))) continue;   // ★ the same fix again (a datalink position reread)
+      tr.push([it.lat, it.lon, it.t]);
+      if (tr.length > TRACK_MAX) tr.splice(0, tr.length - TRACK_MAX);
+    }
+    for (const [k, tr] of tracks) {
+      let i = 0;
+      while (i < tr.length && tr[i][2] < now - TRACK_KEEP_SEC) i++;
+      if (i) tr.splice(0, i);
+      if (!tr.length) tracks.delete(k);
+    }
+    if (tracks.size > TRACK_AIRCRAFT_MAX) {
+      const by = [...tracks].sort((a, b) => a[1][a[1].length - 1][2] - b[1][b[1].length - 1][2]);
+      for (const [k] of by.slice(0, tracks.size - TRACK_AIRCRAFT_MAX)) tracks.delete(k);
+    }
+    return tracks;
+  }
+  /** ★ A track → GeoJSON lines: the flown runs SOLID, every gap DASHED (gap: 1). `pts` [[lat, lon, t|null]]. A gap is over
+   *  TRACK_GAP_SEC between fixes; a server trail carries no times, so there a step longer than TRACK_GAP_SEC flown at the
+   *  aircraft's speed (`gsKt`, else 450 kt) is one — its points are 0.3 NM apart while it is heard. */
+  function trackLines(pts, colour, gsKt) {
+    const out = [];
+    if (!Array.isArray(pts) || pts.length < 2) return out;
+    const nmGap = Math.max(10, ((gsKt > 60 ? gsKt : 450) * TRACK_GAP_SEC) / 3600);
+    let run = [[pts[0][1], pts[0][0]]];
+    const push = (coords, gap) => { if (coords.length > 1) out.push({ type: 'Feature', properties: { c: colour, gap: gap ? 1 : 0 }, geometry: { type: 'LineString', coordinates: coords } }); };
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const gap = typeof a[2] === 'number' && typeof b[2] === 'number' && a[2] > 1e9 && b[2] > 1e9 ? b[2] - a[2] > TRACK_GAP_SEC : gcNm(a[0], a[1], b[0], b[1]) > nmGap;
+      if (gap) { push(run, false); push([[a[1], a[0]], [b[1], b[0]]], true); run = [[b[1], b[0]]]; }
+      else run.push([b[1], b[0]]);
+    }
+    push(run, false);
+    return out;
+  }
+  /** A server trail's answer ({"pts":[[lat,lon,alt|null],…]}) → [[lat, lon, null]], at most TRACK_MAX * 2 (the server's own cap). */
+  function parseTrail(j) {
+    const p = j && Array.isArray(j.pts) ? j.pts.slice(0, 1000) : [];
+    return p.filter((x) => Array.isArray(x) && placed(num(x[0]), num(x[1]))).map((x) => [x[0], x[1], null]);
+  }
+  /** Where to ask for an ADS-B aircraft's trail: the receivers that heard it, newest first — for each, the radio that
+   *  answered then the server's other radios (the trail is per RADIO: only the one decoding ADS-B has it) — at most
+   *  TRAIL_FETCH_MAX URLs, one after another. [] for an aircraft with no ICAO address or not heard on ADS-B. */
+  function trailUrls(it, servers, pageProto) {
+    if (!it || it.kind !== 'aircraft' || !it.modes.includes('adsb') || !/^[0-9A-F]{6}$/.test(it.d.icao || '')) return [];
+    const out = [];
+    for (const h of it.heard) {
+      const s = servers.find((x) => x.id === h.sid);
+      const b = s && dataBase(s, pageProto);
+      if (!b) continue;
+      const rids = Array.isArray(s.radios) && s.radios.length >= 2 ? [h.rid || ''].concat(s.radios.filter((r) => r !== h.rid)).filter((r) => RID_OK.test(r)) : [''];
+      for (const rid of rids) out.push(b + radioPath(rid) + '/adsb/trail/' + it.d.icao.toLowerCase());
+    }
+    return out.slice(0, TRAIL_FETCH_MAX);
+  }
+  /** The server's aircraft table for a route: the receiver that heard it most recently, its machine-wide table (the door
+   *  answers it for every radio), the last 30 min only. */
+  function aircraftTableUrl(s, pageProto) {
+    const b = dataBase(s, pageProto);
+    return b ? b + '/vibeserver/aircraft.json?since=1800' : '';
+  }
+  /** That table's row for an item key (aircraft.json's own key: the ICAO hex, "r:<reg>", "f:<flight>"). */
+  function tableRow(j, key) {
+    const k = String(key || '').replace(/^a:/, '');
+    const rows = j && Array.isArray(j.aircraft) ? j.aircraft : [];
+    return rows.find((r) => r && r.key === k) || null;
+  }
+
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const api = { GROUPS, MODES, MODE, AGES, ADSB_STALE_SEC, FAST_SEC, SLOW_SEC, RETRY_SEC, RETRY_MAX_SEC, LIST_SEC, FETCH_TIMEOUT_MS, CONCURRENT,
                 itemsOf, merge, mergeRadios, modeCounts, primaryMode, shipsCombined, serverLayers, targets, askFor, textSource, filter, modesPresent, navtexFacets, perServer, listenUrl, dataBase, dataUrl, textUrl, stateOf,
-                dueLayers, noteResult, sectionsOf, ago, fade, esc, modeTip, ADDRESS_OK, SEA, seaSeverity, seaForecasts, seaShown, seaAttribution };
+                dueLayers, noteResult, sectionsOf, ago, fade, esc, modeTip, ADDRESS_OK, SEA, seaSeverity, seaForecasts, seaShown, seaAttribution,
+                ROUTE, SERVER_AC_SEC, TRAIL_FETCH_MAX, TRAIL_CACHE_SEC, TRACK_MAX, TRACK_KEEP_SEC, TRACK_GAP_SEC, TRACK_AIRCRAFT_MAX,
+                callsignOf, parseAdsbdb, serverRoute, routeJudge, routeLine, airportWords, gcNm, trackNote, trackLines, parseTrail, trailUrls, aircraftTableUrl, tableRow };
   root.CommunityMap = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
