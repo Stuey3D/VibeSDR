@@ -30,6 +30,13 @@ ok(/TUNE_ICON_PATH\[r\.icon\]/.test(st) && /TUNE_GROUP_LABEL\[r\.group\]/.test(s
 ok(/<Card title="TUNE" at=\{at\} onClose=\{close\} faded=\{locked\}>/.test(st), 'TUNE\'s card fades under the ask lock');
 ok(/onKey|onToggle/.test(st) && !/locked[^\n]*onToggle/.test(st), 'the map\'s own view (LAYERS, KEY) is never locked');
 
+console.log('── ★★★ beta97 every way to close a card (Stuart, build 586: "can\'t close an open card") ──');
+ok(/cardX: \{ width: 44, height: 44,/.test(st) && /words=\{`Close \$\{title\.toLowerCase\(\)\}`\} onPress=\{onClose\} hitSlop=\{8\}/.test(st), '1. the × is a 44-point target with slop, on the card\'s header (outside its ScrollView), its own press');
+ok(/useEffect\(\(\) => \{ setCard\(null\); \}, \[p\.mapTapSeq\]\);/.test(st) && /mm\.on\('click',function\(\)\{trkPost\(\{t:'mapTap'\}\);\}\)/.test(mo) && /map\.on\('click',function\(\)\{rnPost\(\{t:'mapTap'\}\);\}\)/.test(mo), '2. a tap on the map closes the transient card (the page tells React Native: mapTap)');
+ok(/const scope = usePanelNav\(true, \{ flat: true, onBack: \(\) => \{ onClose\(\); return true; \} \}\);/.test(st), '3. BACK on a pad — and Escape / Backspace on a keyboard (keyActions: back) — shuts the open card; its chip keeps the highlight');
+ok(/const toggle = \(id: Transient\) => \{ noteTouchInteraction\(\); setCard\(\(c\) => \(c === id \? null : id\)\); \};/.test(st), '4. the card\'s own chip again closes it');
+ok(/setTimeout\(\(\) => setCard\(null\), CARD_IDLE_MS\)/.test(st), '5. the idle timeout folds it');
+
 console.log('── SDRScreen ──');
 ok(/const mapLine = useMemo\(\(\) => mapSharedLine\(\{\n    shared: !!sharedDial, standalone: shownMap === 'airsea' && asViewer,/.test(sc), 'the line from the bar\'s own inputs (sharedDial, dialState, the ask lock, scan, said); not in the viewer');
 ok(/shared=\{mapLine\.show \? \{ line: mapLine, chatDisabled: isKiwi \|\| \(isVibeServer && !sharedDial\), chatUnread: chatUnread \|\| askNudge, onChat: openChat \} : null\}/.test(sc),
