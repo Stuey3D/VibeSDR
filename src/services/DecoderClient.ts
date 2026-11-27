@@ -61,7 +61,9 @@ import { sameStateText, selcalStateText } from './alertDecoders';
 import { aleStateText, parseAleStatus, type AleStatus } from './aleDecoder';   // ★ V12 2G HF ALE
 import { TONES_DEFAULTS, tonesParams, tonesSanitise, tonesStateText, type TonesOptions, type TonesStatus } from './tones';   // ★ V12 DTMF + 5-tone
 import { lrptAttachParams, lrptStatusText, parseLrptStatus } from './lrpt';   // ★ V12 METEOR LRPT
-import { clearLiveOutline, setLiveGaps, setLiveOutline } from './lrptOutlineLive';   // ★ V12 METEOR LRPT's live MAP OUTLINE
+import { clearLiveOutline, setLiveGaps, setLiveOutline, setLrptChanKey, setLrptNextPick, setLrptPick, watchLrptPick } from './lrptOutlineLive';
+// ★★★ beta96 METEOR LRPT: the viewer's channel picker (AUTO = composite by day, infrared at night)
+import { LrptRows, lrptChoices, lrptPickHint, lrptPickLabel, nextLrptPick, parseLrptChanFrame, resolveLrptView, type LrptPick, type LrptView } from '../utils/lrptChannels';   // ★ V12 METEOR LRPT's live MAP OUTLINE
 import { parseLiveOutline } from '../utils/lrptOutline';
 import { vorSanitise, vorStateText, vorHold, type VorHoldState, sarsatSanitise, sarsatStateText, type VorStatus, type SarsatStatus } from './navaids';   // ★ V12 VOR / ILS, 406 MHz
 import { hfdlStatusText } from './aviation';   // ★ V12 HFDL   // ★ V12 EAS / SAME and SELCAL
@@ -238,6 +240,9 @@ export interface DecoderCallbacks {
   onImageLine?: (lineNo: number, width: number, pixels: Uint8Array) => void;
   onImageStart?:(width: number, height: number) => void;
   onImageDone?: () => void;
+  /** ★★★ beta96 METEOR LRPT: the viewer picked another channel — redraw rows [0, n) of the live picture from `row(y)` (RGB;
+   *  null = not arrived). Never through onImageLine: a line number going back there is a new picture. */
+  onImageRepaint?: (n: number, row: (y: number) => Uint8Array | null) => void;
   onError?:     (msg: string) => void;
   /** ★ RTTY AUTO's tuning guide (server 0x06): how far the tones should move in AUDIO pitch (+ = up), 0 = fine. */
   onTuneHint?:  (audioHz: number) => void;
@@ -378,6 +383,40 @@ export class DecoderClient {
   /** ★ V12 this client's LRPT map outline goes to the app's one live store (lrptOutlineLive.ts) — false for VFO B's client
    *  (the SATELLITE box's second picture has no outline of its own yet). */
   outlineStore = true;
+  /* ★★★ beta96 THE VIEWER'S CHANNEL PICKER (Stuart 11-26 — NickB's NIGHT pass: the composite was speckle, channel 4 a
+   *  clean picture). The server sends each preview row's other channels (0x09); kept here per channel (LrptRows), and the
+   *  picture is fed the channel SHOWN — so SAVE, the gap bands and the outline follow it. Only the primary client (the
+   *  one with the outline store); VFO B's picture stays the composite. */
+  private lrptRows = new LrptRows();
+  private lrptApids: number[] = [];
+  private lrptDark: number[] = [];
+  private lrptPick: LrptPick = 'auto';
+  private lrptShown: LrptView = 'comp';
+  private lrptPickOff: (() => void) | null = null;
+  private lrptChanState() {
+    const apids = this.lrptApids.length ? this.lrptApids : this.lrptRows.apids();
+    const hasComp = this.lrptRows.hasComp() || (apids.includes(64) && apids.includes(65));
+    return { apids, hasComp, r: resolveLrptView(this.lrptPick, apids, this.lrptDark, hasComp) };
+  }
+  private lrptChanWatch() {
+    if (this.lrptPickOff || !this.outlineStore) return;
+    this.lrptPickOff = watchLrptPick((p) => { this.lrptPick = p; this.lrptChanResolve(); });
+    setLrptNextPick(() => { const { apids, hasComp } = this.lrptChanState(); setLrptPick(nextLrptPick(this.lrptPick, lrptChoices(apids, hasComp))); });
+  }
+  /** What is shown; when that changed, the whole pass so far is redrawn in it. True = redrawn. */
+  private lrptChanResolve(): boolean {
+    if (!this.outlineStore) return false;
+    const { apids, hasComp, r } = this.lrptChanState();
+    const show = this.active === 'lrpt' && this.lrptRows.supported && lrptChoices(apids, hasComp).length > 2;
+    setLrptChanKey(show ? { show, label: lrptPickLabel(this.lrptPick, r), hint: lrptPickHint(this.lrptPick, r), picked: this.lrptPick !== 'auto' }
+                        : { show: false, label: '', hint: '', picked: false });
+    const view: LrptView = this.lrptRows.supported ? r.view : 'comp';
+    if (view === this.lrptShown) return false;
+    this.lrptShown = view;
+    const rows = this.lrptRows, out = new Uint8Array(Math.max(1, rows.w) * 3);
+    this.cb.onImageRepaint?.(rows.maxY + 1, (y) => (rows.ready(y) || view === 'comp' ? rows.row(y, view, out) : null));
+    return true;
+  }
   /** ★★★ beta92 FUNcube telemetry: the parameters the SATELLITE pick attached it with ("centre":3800,"afc_range":2600 — the
    *  wide telemetry pick), so the app JOINS the server's run instead of restarting it at the old 1200 Hz centre. null = an
    *  older server's pick (no parameters: AUTO). */
@@ -651,6 +690,7 @@ export class DecoderClient {
 
   destroy() {
     this.destroyed = true;
+    if (this.lrptPickOff) { this.lrptPickOff(); this.lrptPickOff = null; setLrptNextPick(null); setLrptChanKey({ show: false, label: '', hint: '', picked: false }); }
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
     this.stop();
     this.stopSpots();
@@ -807,6 +847,7 @@ export class DecoderClient {
             if (this.active !== 'lrpt') return;
             const st = parseLrptStatus(m.data);
             if (st && this.outlineStore) setLiveGaps(st.gaps, st.rot);   // ★★★ beta96 the live picture's gaps (bands) + north up
+            if (st && this.outlineStore) { this.lrptApids = st.apids; this.lrptDark = st.dark; this.lrptChanResolve(); }   // ★★★ beta96 the channel picker
             this.cb.onStatus(lrptStatusText(st));
             if (st) this.cb.onDot(st.lines > 0 || st.sync ? 'active' : st.carrier ? 'sync' : 'idle');
           } else if (m.type === 'vor' && m.data) {
@@ -1200,12 +1241,24 @@ export class DecoderClient {
     } else if (name === 'sstv' || name === 'lrpt') {   // ★ V12 LRPT's preview is drawn in SSTV's frames
       if (t === 0x07) {
         const w = v.getUint32(1, false), h = v.getUint32(5, false);
-        if (name === 'lrpt' && this.outlineStore) clearLiveOutline();   // ★ a new picture: the last outline is not its
+        if (name === 'lrpt' && this.outlineStore) {
+          clearLiveOutline();   // ★ a new picture: the last outline is not its
+          this.lrptChanWatch(); this.lrptRows.reset(w); this.lrptApids = []; this.lrptDark = []; this.lrptShown = 'comp'; this.lrptChanResolve();   // ★★★ beta96
+        }
         this.cb.onImageStart?.(w, h); this.cb.onDot('sync');
       } else if (t === 0x01) {
         const ln = v.getUint32(1, false), w = v.getUint32(5, false);
+        // ★★★ beta96 METEOR: kept per channel; a channel view draws the row when its 0x09 arrives
+        if (name === 'lrpt' && this.outlineStore) { this.lrptRows.composite(ln, w, u8.subarray(9)); if (this.lrptShown !== 'comp') { this.cb.onDot('rx'); return; } }
         this.cb.onImageLine?.(ln, w, u8.subarray(9));
         this.cb.onDot('rx');
+      } else if (t === 0x09 && name === 'lrpt' && this.outlineStore) {
+        // ★★★ beta96 METEOR: the row's other channels (lrptChannels.ts parses and bounds it)
+        const c = parseLrptChanFrame(u8);
+        if (!c) return;
+        this.lrptRows.channels(c);
+        if (this.lrptChanResolve()) return;
+        if (this.lrptShown !== 'comp') { const row = this.lrptRows.row(c.y, this.lrptShown); if (row) this.cb.onImageLine?.(c.y, c.w, row); }
       } else if (t === 0x02) {
         const ml = v.getUint16(1, false);
         this.cb.onStatus('mode: ' + utf8(u8.subarray(3, 3 + ml)));

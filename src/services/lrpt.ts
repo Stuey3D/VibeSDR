@@ -3,6 +3,7 @@
 // line · 0x05 complete), a half-size colour preview growing during the pass; the full-size PNGs go to the gallery.
 
 import { parseLrptGaps, type LrptGap } from '../utils/lrptGaps';
+import { parseApidList } from '../utils/lrptChannels';   // ★★★ beta96 the viewer's channel picker
 
 /** {"type":"lrpt_status","data":{…}} once a second (vibe_lrpt_run.h Run::status). */
 export interface LrptStatus {
@@ -33,6 +34,10 @@ export interface LrptStatus {
    *  0 = southbound / not known yet / an older server. */
   rot: 0 | 180;
   channels: string[];    // live MSU-MR channels ("1 visible", "2 near-IR", "5 thermal" …)
+  /** ★★★ beta96 the same channels as APIDs (64 = ch 1 …), and the visible ones with no sunlight in them (a night pass —
+   *  vibe_lrpt.h kDarkHi): the channel picker's choices and AUTO's rule (src/utils/lrptChannels.ts). [] from an older server. */
+  apids: number[];
+  dark: number[];
   why?: string;          // a reason it cannot run here (the IQ slice's rate)
 }
 
@@ -60,6 +65,8 @@ export function parseLrptStatus(d: unknown): LrptStatus | null {
     gapLines: typeof o.gapLines === 'number' && isFinite(o.gapLines) ? Math.max(0, Math.round(o.gapLines)) : undefined,
     gaps: parseLrptGaps(o.gaps),
     rot: o.rot === 180 ? 180 : 0,
+    apids: parseApidList(o.apids),
+    dark: parseApidList(o.dark),
     channels: Array.isArray(o.channels) ? (o.channels as unknown[]).filter((c) => typeof c === 'string').map((c) => (c as string).slice(0, 24)).slice(0, 6) : [],
     why: typeof o.why === 'string' && o.why ? (o.why as string).slice(0, 160) : undefined,
   };

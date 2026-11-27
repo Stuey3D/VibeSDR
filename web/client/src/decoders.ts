@@ -28,6 +28,7 @@
  *     0x04                                       sync
  *     0x05 | u32                                 complete
  *     0x08                                       redraw start
+ *     0x09 | u32 y | u32 w | u8 rApid | u8 bApid | u8 n | n × (u8 apid | w grey)   ★★★ beta96 LRPT: the row's other channels
  *
  *   FT8 / FT4 (text frame)
  *     {"type":"digital_spot","data":{mode,callsign,snr,frequency,band,grid,how,country,timestamp}}
@@ -199,6 +200,8 @@ export interface DecoderCallbacks {
   onSitorStatus?: (data: unknown) => void;
   onHfdlStatus?: (data: unknown) => void;   // ★ V12 HFDL: {msgs, bursts, detections}
   onLrptStatus?: (data: unknown) => void;
+  /** ★★★ beta96 METEOR LRPT: a preview row's OTHER channels (0x09, src/utils/lrptChannels.ts) — the viewer's channel picker */
+  onLrptChanRow?: (frame: Uint8Array) => void;
   /** ★ V12 METEOR LRPT's map outline for the live preview ({"type":"lrpt_geo"}) — src/utils/lrptOutline.ts */
   onLrptGeo?: (data: unknown) => void;
   /** ★★ 2026-11-24 ORBCOMM: orbcomm_status / orbcomm_pkt (src/services/orbcomm.ts parses them) — the SATELLITE box */
@@ -810,6 +813,10 @@ export class DecoderClient {
             return;
           case 0x05:
             this.cb.onImageDone?.();
+            return;
+          case 0x09:
+            // ★★★ beta96 LRPT only: the row's other channels (lrptChannels.ts parses and bounds it)
+            if (this.mode === 'lrpt') this.cb.onLrptChanRow?.(new Uint8Array(buf));
             return;
           case 0x08:
             // ★★ A REDRAW IS NOT A NEW PICTURE (audit 2026-10-04, decoders.ts:303 / main.ts:11514). This

@@ -656,6 +656,25 @@ inline const char* channelName(int apid) {
     static const char* n[6] = {"1 visible", "2 near-IR", "3 SWIR", "4 MWIR", "5 thermal", "6 thermal"};
     return apid >= 64 && apid <= 69 ? n[apid - 64] : "?";
 }
+/* ★★★ beta96 A DARK CHANNEL (Stuart 11-26, NickB's Airspy HF+ on a Meteor-M2-3 NIGHT pass, 20:00 UTC: the live preview
+ *  was blue/yellow speckle although the decode was clean — 1254 frames, SNR 16 dB). MSU-MR channels 1–3 see REFLECTED
+ *  sunlight: at night they carry only the sensor's dark noise (raw counts of a few), and the 2nd…98th percentile stretch
+ *  blows that up into full-range speckle. Channels 4–6 are thermal and carry the picture day and night.
+ *  The test: a visible channel whose 98th percentile (Channel::levels hi, raw 0–255, over its decoded blocks) is under
+ *  kDarkHi. By day the brightest 2 % of any swath — cloud, land, sun glint — sits far above it (the synthetic picture's
+ *  hi is ≈ 230; a real daytime ch 1 / ch 2 reaches 150–255 on cloud); at night it is the noise floor. A pass across the
+ *  terminator with more than 2 % of its blocks lit is NOT dark: its composite shows the lit part, which is right.
+ *  It needs no orbit and no clock — it measures the very thing that makes the picture speckle. */
+constexpr int kDarkHi = 32;
+inline bool visibleApid(int apid) { return apid >= 64 && apid <= 66; }
+/** ★★★ beta96 a visible channel (1–3) with no sunlight in it (see kDarkHi); never true for a thermal channel. */
+inline bool channelDark(const Channel& ch) {
+    if (!visibleApid(ch.apid()) || ch.goodBlocks() == 0) return false;
+    int lo, hi; ch.levels(lo, hi);
+    return hi < kDarkHi;
+}
+/** The composite's name when both its channels are dark (a night pass): said, so nobody takes the speckle for a fault. */
+constexpr const char* kDarkCompositeNote = " \xc2\xb7 night (visible channels dark)";
 /** Greyscale per live channel, plus the RGB composite (R = ch2, G = ch2, B = ch1: the familiar false colour) when
  *  channels 1 and 2 are both live. Empty when nothing is worth showing. */
 /** `rot180` (★ beta96): a northbound pass — every picture turned round so north is up (Picture::rot). */
@@ -692,6 +711,9 @@ inline std::vector<Picture> renderPictures(const Receiver& rx, bool rot180 = fal
             rgb[i * 3] = r[i]; rgb[i * 3 + 1] = r[i]; rgb[i * 3 + 2] = b[i];
         }
         Picture p; p.apid = 0; p.w = w; p.h = h; p.name = "RGB 221 false colour";
+        // ★★★ beta96 a NIGHT pass: still filed (every product is kept), but named for what it is. It is filed FIRST, so
+        //   in the gallery's newest-first list it sits under the channels — the thermal channel (filed last) is the top.
+        if (channelDark(c1) && channelDark(c2)) p.name += kDarkCompositeNote;
         if (rot180) { rotate180(rgb, w, h, 3); p.rot = 180; p.name += " \xc2\xb7 north up"; }
         p.png = vibe::png::encode(w, h, 3, rgb.data(), rot180 ? kRotatedNote : "");
         out.insert(out.begin(), std::move(p));

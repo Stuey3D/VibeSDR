@@ -30,7 +30,7 @@ import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DEC
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import { decoderTextBacking } from '../constants/decoderTokens';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
-import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+import { useLrptOutline, nextLrptPickNow } from '../services/lrptOutlineLive';   // ★ V12 METEOR LRPT's MAP OUTLINE switch (+ beta96 the channel key)
 import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
 import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
@@ -561,10 +561,18 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               {confirmed && imageDec && (
                 <View style={showPic && showA ? s.img : s.hidden}>
                   {/* ★ V12 METEOR LRPT: MAP OUTLINE: OFF / ON over the live picture — once the server has sent one */}
-                  {p.picked!.decoder === 'lrpt' && !!lrptOl.outline && (
+                  {/* ★★★ beta96 …and the picture's CHANNEL (AUTO = composite by day, infrared at night; src/utils/lrptChannels.ts)
+                       — once the server sends channels and the pass has a choice; this device's own pick */}
+                  {p.picked!.decoder === 'lrpt' && (!!lrptOl.outline || lrptOl.chan.show) && (
                     <View style={s.olRow}>
-                      <DecoderKey label={outlineKeyLabel(lrptOl.on)} active={lrptOl.on} onPress={lrptOl.toggle}
-                                  accessibilityLabel={outlineKeyA11y(lrptOl.on)} />
+                      {lrptOl.chan.show && (
+                        <DecoderKey label={lrptOl.chan.label} active={lrptOl.chan.picked} onPress={nextLrptPickNow}
+                                    accessibilityLabel={`Picture channel: ${lrptOl.chan.label}. ${lrptOl.chan.hint}`} />
+                      )}
+                      {!!lrptOl.outline && (
+                        <DecoderKey label={outlineKeyLabel(lrptOl.on)} active={lrptOl.on} onPress={lrptOl.toggle}
+                                    accessibilityLabel={outlineKeyA11y(lrptOl.on)} />
+                      )}
                     </View>
                   )}
                   <DecoderImageCanvas ref={p.imageRef} maxHeight={Math.max(160, Math.min(440, bodyH - 150))} fullWidth

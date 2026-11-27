@@ -8,6 +8,7 @@
 //   both is exactly what the REAL recording (docs/v12/LRPT.md §Results) is there to catch.
 #pragma once
 
+#include <algorithm>   // std::find (beta96 dark channels)
 #include <cmath>
 #include <cstdint>
 #include <random>
@@ -91,7 +92,11 @@ struct TxConfig {
     int q = 80;
     uint32_t startMs = 43352840;       ///< ms of day of the first period
     uint32_t seed = 1;
+    /** ★★★ beta96 test: channels sent DARK — a night pass's visible channels, the sensor's noise floor (raw 0–6) */
+    std::vector<int> dark;
 };
+/** ★★★ beta96 a dark channel's pixel: a few counts of noise, as MSU-MR's visible channels read at night. */
+inline uint8_t darkPixel(int apid, int x, int y) { return uint8_t(((uint32_t(x) * 2654435761u) ^ (uint32_t(y) * 40503u) ^ (uint32_t(apid) * 0x9E3779B9u)) % 7); }
 
 /** The source picture for channel `apid`: smooth patterns plus edges, different per channel. */
 inline uint8_t sourcePixel(int apid, int x, int y) {
@@ -111,7 +116,8 @@ inline std::vector<std::vector<uint8_t>> buildVcdus(const TxConfig& c, int perio
         for (int a : c.apids) for (int mcu = 0; mcu < kMcuPerLine; mcu += kMcuPerPacket) {
             uint8_t blocks[kMcuPerPacket][64];
             for (int b = 0; b < kMcuPerPacket; b++) for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
-                blocks[b][y * 8 + x] = sourcePixel(a, (mcu + b) * 8 + x, pr * 8 + y);
+                blocks[b][y * 8 + x] = std::find(c.dark.begin(), c.dark.end(), a) != c.dark.end() ? darkPixel(a, (mcu + b) * 8 + x, pr * 8 + y)
+                                                                                                    : sourcePixel(a, (mcu + b) * 8 + x, pr * 8 + y);
             const auto ent = encodeMcus(blocks, c.q);
             std::vector<uint8_t> pk(6);
             const size_t dataLen = 8 + 6 + ent.size();

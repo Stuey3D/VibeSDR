@@ -3120,6 +3120,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decImgWrap { overflow: auto; max-height: calc(100dvh - var(--decBoxBottom, 14px) - 150px); position: relative; }
 /* ★ ALIGN: the picture becomes a drag target. A dark pill so the hint reads on white paper and black alike. */
 #decImgWrap.aligning { min-height: 72px; }
+/* ★★★ beta96 the keys over the picture (channel, MAP OUTLINE) never clipped by a picture still only a few rows tall */
+#decImgWrap:has(> #decOutlineBar:not([hidden])) { min-height: 44px; }
 #decAlignCover { position: absolute; inset: 0; cursor: ew-resize; touch-action: none; display: flex;
                  justify-content: center; align-items: flex-start; padding-top: 8px; }
 #decAlignHint { background: rgba(0,0,0,0.62); color: #fff; border: 1px solid rgba(255,255,255,0.35); border-radius: 14px;
@@ -3133,6 +3135,8 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decOutlineBar[hidden] { display: none; }
 #decOutlineBar .btn { margin: 14px 6px 0 0; padding: 3px 8px; font-size: 11px; background: rgba(0,0,0,0.65); height: fit-content; }
 #decOutline.on { border-color: var(--accent, #ffd600); color: var(--accent, #ffd600); }
+#decChan[hidden], #decOutline[hidden] { display: none; }
+#decChan.on { border-color: var(--accent, #ffd600); color: var(--accent, #ffd600); }
 #decImgWrap.zoomed #decImage { max-height: none; object-fit: fill; height: auto; width: calc(var(--decZoom, 1) * 100%); }
 #spotList { display: none; }
 #spotList.on { display: block; }
@@ -4508,7 +4512,7 @@ select.btn { padding: 6px 8px; }
       <div class="snrWrap" id="nvWrap"><div class="snrStrip" id="nvStrip"></div><pre id="nvText"></pre></div>
       <div id="nvIdle">standing by — each message appears here as it arrives</div>
     </div>
-    <div id="decImgWrap"><div id="decOutlineBar" hidden><button class="btn" id="decOutline" aria-pressed="false">MAP OUTLINE: OFF</button></div><canvas id="decImage"></canvas><svg id="decGeo" hidden aria-hidden="true"></svg><div id="decAlignCover" style="display:none"
+    <div id="decImgWrap"><div id="decOutlineBar" hidden><button class="btn" id="decChan" hidden>AUTO · COMPOSITE</button><button class="btn" id="decOutline" aria-pressed="false">MAP OUTLINE: OFF</button></div><canvas id="decImage"></canvas><svg id="decGeo" hidden aria-hidden="true"></svg><div id="decAlignCover" style="display:none"
       title="Drag sideways to align the chart"><span id="decAlignHint">◀ ─── drag ───▶</span></div></div>
     <!-- ★★★ beta92 THE SPOTS LIST BY PAD / KEYBOARD (Stuart, 2026-11-23: "make the spots navigatable by controller but make
          it so that you dont have to scroll a list of hundreds to get to the header buttons"): every row is a stop, enter

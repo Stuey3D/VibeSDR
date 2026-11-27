@@ -14,6 +14,8 @@ import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
 import { parseOutline, parseLiveOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl, type Outline } from '../../../src/utils/lrptOutline';
 import { drawOutline, outlineOn, setOutlineOn } from './lrptOutlineDom';
 // ★★★ beta96 METEOR LRPT's live preview: gaps squashed to short bands, FIT / FOLLOW in the SATELLITE box (shared with the app)
+// ★★★ beta96 METEOR LRPT: the viewer's channel picker (AUTO = composite by day, infrared at night)
+import { LRPT_PICK_KEY, LrptRows, lrptChoices, lrptPickHint, lrptPickLabel, nextLrptPick, parseLrptChanFrame, pickFromStored, pickToStored, resolveLrptView, type LrptPick, type LrptView as LrptChanView } from '../../../src/utils/lrptChannels';
 import { bandPixels, lrptFitNow, lrptViewHint, lrptViewToggle, mapOutline, sameGaps, squashPlan, turnedTop, type LrptGap, type LrptView, type SquashPlan } from '../../../src/utils/lrptGaps';
 import { healthTuckBody, healthTuckLevel } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
@@ -15638,6 +15640,7 @@ function initDecoders(host: string, auth: AuthState) {
     // ★ FELD HELL's 0x02 (a fresh decoder): the next line starts a new page; the one on screen stays until it does.
     onImageStart: (w, h) => {
       if (activeDec === 'hell') { hellPager.reset(); return; }
+      if (activeDec === 'lrpt') lrptChanReset(w);   // ★★★ beta96 a new pass: its own channels (the pick is kept)
       startDecImage(w, h);
       if (satDec && activeDec === satDec && (satDec === 'lrpt' || satDec === 'sstv')) satPanel?.pictureStart();   // ★★★ SATELLITE grows to show it
     },
@@ -15654,6 +15657,8 @@ function initDecoders(host: string, auth: AuthState) {
         if (f) decChartHz = f;
       }
       if (!rgb) { if (decRebase) { decRebase = false; decLineBase = y; } if (y < decLineBase) decLineBase = 0; y -= decLineBase; }
+      // ★★★ beta96 METEOR: the row is kept per channel; a channel view draws it when its 0x09 arrives (onLrptChanRow)
+      if (activeDec === 'lrpt' && rgb) { decLrptRows.composite(y, w, px); if (decLrptShown !== 'comp') { setDecLive(true); return; } }
       drawDecLine(y, w, px, rgb); if (!wefaxPhaseKnown) setDecLive(true);
     },
     /* ★★ WHAT PART OF THE TRANSMISSION IS ARRIVING (Stuart, 2026-10-04: "when nothing is received … standing by;
@@ -15825,9 +15830,19 @@ function initDecoders(host: string, auth: AuthState) {
       // ★★★ beta96 the live picture's gaps (merged on the server): redrawn as short bands when they change
       const gs = st?.gaps ?? [], rot = st?.rot === 180;
       if (!sameGaps(gs, decLrptGaps) || rot !== decLrptRot) { decLrptGaps = gs; decLrptRot = rot; if (!decViewingPrev) blitToVisible(decLiveCv); decOutlinePaint(); }
+      // ★★★ beta96 the channels received and the dark ones (a night pass): AUTO's choice, the picker's key
+      if (st) { decLrptApids = st.apids; decLrptDark = st.dark; lrptChanResolve(); }
       decStateText = lrptStatusText(st); $('decStatus').textContent = decStateText;
       if (satDec === 'lrpt') satPanel?.status(decStateText);   // ★★★ SATELLITE: the LRPT line in the window
       setDecLive(!!st && (st.sync || st.lines > 0));
+    },
+    onLrptChanRow: (f) => {   // ★★★ beta96 METEOR LRPT: a preview row's other channels
+      if (activeDec !== 'lrpt') return;
+      const c = parseLrptChanFrame(f);
+      if (!c) return;
+      decLrptRows.channels(c);
+      if (lrptChanResolve()) return;   // the view changed: the whole pass so far was redrawn in it
+      if (decLrptShown !== 'comp') { const row = decLrptRows.row(c.y, decLrptShown); if (row) drawDecLine(c.y, c.w, row, true); }
     },
     onLrptGeo: (d) => {   // ★ V12 METEOR LRPT: the live picture's map outline (or why there is none), every ~20 s
       if (activeDec !== 'lrpt') return;
@@ -18354,6 +18369,75 @@ let decLrptBlitPending = 0;
  *  180° canvas transform, the bands put at their turned place UPRIGHT (putImageData ignores the transform: never turned
  *  text), the outline's points turned with its label text upright (lrptGaps.ts mapOutline). Newest rows at the top. */
 let decLrptRot = false;
+/* ★★★ beta96 THE VIEWER'S CHANNEL PICKER (Stuart 11-26: "can we have the option to change the meteor image being viewed in
+ *  the preview as one of the channels is this grain but the other channels have images" — NickB's NIGHT pass: the
+ *  composite was speckle, channel 4 a clean picture). The server sends each preview row's other channels (0x09); the
+ *  rows are kept per channel here (src/utils/lrptChannels.ts LrptRows) and the live canvas holds the channel SHOWN — so
+ *  SAVE, the gap bands and the outline all follow it. AUTO = the composite by day, the infrared channel at night. The
+ *  pick is this browser's (localStorage); the server's decode and its gallery (every channel) are untouched. */
+const decLrptRows = new LrptRows();
+let decLrptPick: LrptPick = (() => { try { return pickFromStored(localStorage.getItem(LRPT_PICK_KEY)); } catch { return 'auto' as LrptPick; } })();
+let decLrptApids: number[] = [], decLrptDark: number[] = [];
+let decLrptShown: LrptChanView = 'comp';
+function lrptChanReset(w: number) { decLrptRows.reset(w); decLrptApids = []; decLrptDark = []; decLrptShown = 'comp'; lrptChanPaint(); }
+/** The channels this pass offers (status first; the rows' own list until a status names them). */
+function lrptChanApids(): number[] { return decLrptApids.length ? decLrptApids : decLrptRows.apids(); }
+function lrptChanState() {
+  const apids = lrptChanApids(), hasComp = decLrptRows.hasComp() || (apids.includes(64) && apids.includes(65));
+  return { apids, hasComp, r: resolveLrptView(decLrptPick, apids, decLrptDark, hasComp) };
+}
+/** Work out what is shown; when that changed, redraw the whole pass so far in it. True = redrawn. */
+function lrptChanResolve(): boolean {
+  const { r } = lrptChanState();
+  // a channel view needs the server's 0x09 rows: an older server has none — the composite as ever
+  const view: LrptChanView = decLrptRows.supported ? r.view : 'comp';
+  lrptChanPaint();
+  if (view === decLrptShown) return false;
+  decLrptShown = view;
+  lrptChanRepaint();
+  return true;
+}
+/** The live canvas redrawn from the kept rows in the channel shown — never through drawDecLine (a line going back there is
+ *  a new picture). */
+function lrptChanRepaint() {
+  const cv = decLiveCv, ctx = decLiveCtx, w = decLrptRows.w, n = decLrptRows.maxY + 1;
+  if (!cv || !ctx || activeDec !== 'lrpt' || w <= 0 || n <= 0 || cv.width !== w) return;
+  if (cv.height < n) return;
+  const img = ctx.createImageData(w, n), out = new Uint8Array(w * 3);
+  for (let y = 0; y < n; y++) {
+    const row = decLrptRows.ready(y) || decLrptShown === 'comp' ? decLrptRows.row(y, decLrptShown, out) : null;
+    if (!row) continue;
+    for (let x = 0; x < w; x++) { const o = (y * w + x) << 2; img.data[o] = row[x * 3]; img.data[o + 1] = row[x * 3 + 1]; img.data[o + 2] = row[x * 3 + 2]; img.data[o + 3] = 255; }
+  }
+  ctx.putImageData(img, 0, 0);
+  if (!decViewingPrev) blitToVisible(cv);
+}
+/** The key (#decChan, beside MAP OUTLINE over the picture): shown once this server sends channels and a pass has two. */
+function lrptChanShowKey(): boolean {
+  const { apids, hasComp } = lrptChanState();
+  return activeDec === 'lrpt' && decLrptRows.supported && !decViewingPrev && lrptChoices(apids, hasComp).length > 2;
+}
+function lrptChanPaint() {
+  const key = document.getElementById('decChan') as HTMLButtonElement | null;
+  if (!key) return;
+  const show = lrptChanShowKey();
+  key.hidden = !show;
+  if (show) {
+    const { r } = lrptChanState();
+    key.textContent = lrptPickLabel(decLrptPick, r);
+    key.title = lrptPickHint(decLrptPick, r);
+    key.setAttribute('aria-label', `Picture channel: ${key.textContent}. ${key.title}`);
+    key.classList.toggle('on', decLrptPick !== 'auto');
+  }
+  decOutlineBarPaint();
+}
+/** The key's click: the next channel this pass offers; remembered in this browser. */
+function lrptChanNext() {
+  const { apids, hasComp } = lrptChanState();
+  decLrptPick = nextLrptPick(decLrptPick, lrptChoices(apids, hasComp));
+  try { localStorage.setItem(LRPT_PICK_KEY, pickToStored(decLrptPick)); } catch { /* private browsing: this page only */ }
+  lrptChanResolve();
+}
 function lrptSquashed(src: HTMLCanvasElement): boolean { return src === decLiveCv && activeDec === 'lrpt' && (decLrptGaps.length > 0 || decLrptRot); }
 /** Rows arriving while the gaps are squashed: one redraw a frame, not one per row. */
 function lrptBlitSoon() {
@@ -18458,7 +18542,8 @@ function decOutlinePaint() {
   const bar = $('decOutlineBar'), key = $('decOutline') as HTMLButtonElement, svg = $('decGeo') as unknown as SVGSVGElement;
   const c = $<HTMLCanvasElement>('decImage');
   const has = activeDec === 'lrpt' && !!decOutline;
-  bar.hidden = !has;
+  key.hidden = !has;   // ★★★ beta96 the bar also holds the channel key (lrptChanPaint)
+  bar.hidden = !has && !lrptChanShowKey();
   if (decOutlineWhy && activeDec === 'lrpt') key.title = outlineWhyLine(decOutlineWhy);
   if (!has) { svg.setAttribute('hidden', ''); return; }
   const on = outlineOn();
@@ -18473,6 +18558,11 @@ function decOutlinePaint() {
   svg.setAttribute('viewBox', `0 0 ${c.width} ${c.height}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   svg.removeAttribute('hidden');
+}
+/** ★★★ beta96 the bar over the picture shows while either of its keys does. */
+function decOutlineBarPaint() {
+  const bar = document.getElementById('decOutlineBar');
+  if (bar) bar.hidden = !(activeDec === 'lrpt' && !!decOutline) && !lrptChanShowKey();
 }
 let decOutlineObs = false;
 function decOutlineWatch() {
@@ -18827,6 +18917,7 @@ function toggleDecPrev() {
   blitToVisible(decViewingPrev ? decPrevCv : decLiveCv);
   updateDecImageButtons();
   decOutlinePaint();
+  lrptChanPaint();   // ★★★ beta96 the channel key is the LIVE picture's
 }
 
 /** Save the currently-shown image to a PNG download (share sheet where available). */
@@ -21101,6 +21192,7 @@ function initGallery() {
   $('galClose').onclick = () => $('galleryPanel').classList.remove('open');
   $('galBack').onclick = () => { galTrReset(); galleryBack(); };
   $('galOutline').onclick = () => galOutlineToggle();   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+  $('decChan').onclick = () => lrptChanNext();   // ★★★ beta96 METEOR: the picture's channel (AUTO, composite, CH 1, 2, 4 …)
   $('decOutline').onclick = () => { setOutlineOn(!outlineOn()); decOutlinePaint(); };   // ★ …and the live picture's (the same choice)
   // ★★★ beta96 METEOR in the SATELLITE box: a click on the picture flips WHOLE PASS / FOLLOW (lrptGaps.ts)
   $('decImage').addEventListener('click', () => {

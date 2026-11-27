@@ -14,7 +14,8 @@
 //
 // ★★ WHAT CLIENTS SEE: the SSTV picture frames (vibe_decoder_host.h: 0x07 start w h · 0x01 line y w rgb · 0x05 complete),
 //    a QUARTER-SIZE colour preview (392 px wide; the composite when channels 1 and 2 are live, else the first live channel
-//    as grey) growing a strip at a time, plus {"type":"lrpt_status","data":{…}} once a second. WHAT THE GALLERY KEEPS: the
+//    as grey) growing a strip at a time — ★★★ beta96 with each row's OTHER live channels beside it (0x09, kChannelRowOp:
+//    each viewer picks which channel to see) — plus {"type":"lrpt_status","data":{…}} once a second. WHAT THE GALLERY KEEPS: the
 //    full-size PNGs — every live channel and the composite — when the pass ends (the satellite engine says it has set;
 //    with no engine, 30 s with neither a frame nor a signal — passOver()) or the decoder stops (then marked partial).
 #pragma once
@@ -141,6 +142,16 @@ public:
     static constexpr int kPreviewW = kLineWidth / 4;   ///< 392
     static constexpr int kPreviewRowsPerStrip = 2;
     static constexpr int kPreviewMaxH = kMaxStrips * kPreviewRowsPerStrip;   ///< 1600
+    /** ★★★ beta96 THE VIEWER'S CHANNEL PICKER (Stuart 11-26: "can we have the option to change the meteor image being
+     *  viewed in the preview as one of the channels is this grain but the other channels have images"). Beside each 0x01
+     *  preview row, one frame:  0x09 | u32 y | u32 w | u8 rApid | u8 bApid | u8 n | n × (u8 apid | w grey bytes)
+     *  — rApid / bApid say what the 0x01 row of y carries (R = G = rApid, B = bApid; the same APID when it is one grey
+     *  channel), the n channels are the live ones it does NOT carry. So the composite's two channels come free from the
+     *  0x01 row and only the rest is extra: on a 1-2-4 pass ONE channel, 404 bytes beside the 0x01's 1185 (+34 %, about
+     *  0.6 kB/s at the preview's ≈ 1.5 rows a second). Every viewer gets the same bytes (the frames are the host's
+     *  broadcast and the joiner's replay); which channel is SHOWN is each client's own choice — the server's decode, the
+     *  0x01 rows and the gallery are unchanged. An older client ignores an opcode it does not know (both clients do). */
+    static constexpr uint8_t kChannelRowOp = 0x09;
 
     struct Opts {
         double symbolRate = 72000;
@@ -360,7 +371,7 @@ private:
         rx_ = std::make_unique<Receiver>(c);
         if (o_.made) o_.made(*rx_);
         seenVersion_ = 0; previewVersion_ = 0; havePictures_ = false; sentRows_ = 0; previewOpen_ = false; lastFrameSec_ = fedSec_;
-        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0; heading_ = -1; headingAsked_ = -1;
+        wallAt_ = 0; wallStamp_ = -1; lastGeoSec_ = -1; geoStrips_ = 0; heading_ = -1; headingAsked_ = -1; dark_.clear();
         lastSignalSec_ = fedSec_; snrAcc_ = 0; snrN_ = 0;
         if (o_.log) o_.log("lrpt: receiver at " + std::to_string(int(rate_)) + " S/s, "
                            + (o_.rateAuto ? std::string("72k / 80k AUTO") : std::to_string(int(o_.symbolRate)) + " sym/s" + (o_.interleaved ? " (80k interleaved)" : "")));
@@ -440,10 +451,25 @@ private:
             o_.frame(n.data(), n.size());
         }
         const bool rgb = std::find(live.begin(), live.end(), 64) != live.end() && std::find(live.begin(), live.end(), 65) != live.end();
-        const Channel* a = &rx_->channels().at(rgb ? 65 : live.front());
-        const Channel* b = rgb ? &rx_->channels().at(64) : a;
-        int lo1, hi1, lo2, hi2; a->levels(lo1, hi1); b->levels(lo2, hi2);
+        const int rA = rgb ? 65 : live.front(), bA = rgb ? 64 : live.front();   // ★ what the 0x01 row carries (R = G, B)
+        // ★★★ beta96 each live channel's levels ONCE per preview (the composite's two were already taken here every
+        //   second): they stretch the rows, and say which visible channels are dark (a night pass — kDarkHi)
+        struct Lv { int apid, lo, hi; bool inv; const Channel* c; };
+        std::vector<Lv> lvs; dark_.clear();
+        for (int ap : live) {
+            Lv l{ ap, 0, 255, ap >= 67, &rx_->channels().at(ap) }; l.c->levels(l.lo, l.hi);
+            if (visibleApid(ap) && l.hi < kDarkHi) dark_.push_back(ap);
+            lvs.push_back(l);
+        }
+        auto lvOf = [&](int ap) -> const Lv& { for (const Lv& l : lvs) if (l.apid == ap) return l; return lvs.front(); };
+        const Channel* a = lvOf(rA).c;
+        const Channel* b = lvOf(bA).c;
+        const int lo1 = lvOf(rA).lo, hi1 = lvOf(rA).hi, lo2 = lvOf(bA).lo, hi2 = lvOf(bA).hi;
         const bool inv = !rgb && live.front() >= 67;
+        // ★★★ beta96 the channels the 0x01 row does NOT carry — sent beside it as 0x09 (see kChannelRowOp)
+        std::vector<const Lv*> extra;
+        for (const Lv& l : lvs) if (l.apid != rA && l.apid != bA) extra.push_back(&l);
+        std::vector<uint8_t> m9;
         const int upto = flush ? s1 : s1 - 1;
         std::vector<uint8_t> line(size_t(kPreviewW) * 3);
         auto lv = [](int v, int lo, int hi) { const int o = (v - lo) * 255 / std::max(1, hi - lo); return uint8_t(o < 0 ? 0 : o > 255 ? 255 : o); };
@@ -480,6 +506,27 @@ private:
             std::vector<uint8_t> m; m.reserve(9 + line.size()); m.push_back(0x01); put32(m, uint32_t(y)); put32(m, kPreviewW);
             m.insert(m.end(), line.begin(), line.end());
             o_.frame(m.data(), m.size());
+            // ★★★ beta96 the same row of every other live channel, stretched by its own levels, its missing blocks
+            //   hatched (and a gap's label lit) exactly as the 0x01 row draws them — so any channel the viewer picks
+            //   reads as the composite does. Right after its 0x01: a client holding the pair can show either.
+            m9.clear(); m9.reserve(12 + extra.size() * (1 + size_t(kPreviewW)));
+            m9.push_back(kChannelRowOp); put32(m9, uint32_t(y)); put32(m9, kPreviewW);
+            m9.push_back(uint8_t(rA)); m9.push_back(uint8_t(bA)); m9.push_back(uint8_t(extra.size()));
+            for (const Lv* l : extra) {
+                m9.push_back(uint8_t(l->apid));
+                for (int x = 0; x < kPreviewW; x++) {
+                    const int px = x * (kLineWidth / kPreviewW), col = px / 8;
+                    if (!l->c->has(s, col)) {
+                        uint8_t q[3];
+                        if (gap && gapart::lit(label, tScale, tx0, ty0, x, y)) q[0] = 214; else gapart::hatch(q, x, y);
+                        m9.push_back(q[0]); continue;
+                    }
+                    const size_t pi = (size_t(s) * 8 + size_t(r)) * kLineWidth + size_t(px);
+                    uint8_t v = lv(l->c->pixels()[pi], l->lo, l->hi);
+                    m9.push_back(l->inv ? uint8_t(255 - v) : v);
+                }
+            }
+            o_.frame(m9.data(), m9.size());
             sentRows_ = y + 1;
         }
         decideHeading();
@@ -537,7 +584,17 @@ private:
             if (heading_ >= 0) j += heading_ == 1 ? ",\"rot\":180" : ",\"rot\":0";   // ★★★ beta96 north up: turn the preview
             j += ",\"channels\":[";
             bool first = true;
-            for (int a : rx_->liveApids()) { j += std::string(first ? "" : ",") + "\"" + channelName(a) + "\""; first = false; }
+            const auto live = rx_->liveApids();
+            for (int a : live) { j += std::string(first ? "" : ",") + "\"" + channelName(a) + "\""; first = false; }
+            j += "]";
+            // ★★★ beta96 the same channels as APIDs (the viewer's channel picker), and the visible ones that are dark
+            //   (a night pass: the clients' AUTO shows a thermal channel instead of a speckled composite — kDarkHi).
+            //   "dark" is measured as the preview is drawn (once a second, with its levels).
+            j += ",\"apids\":[";
+            for (size_t i = 0; i < live.size(); i++) j += (i ? "," : "") + std::to_string(live[i]);
+            j += "],\"dark\":[";
+            first = true;
+            for (int a : dark_) if (std::find(live.begin(), live.end(), a) != live.end()) { j += std::string(first ? "" : ",") + std::to_string(a); first = false; }
             j += "]";
         }
         if (!why.empty()) j += ",\"why\":\"" + why + "\"";
@@ -555,6 +612,7 @@ private:
     int sentRows_ = 0, previewS0_ = 0;
     double wallAt_ = 0, lastGeoSec_ = -1; int32_t wallStamp_ = -1; int geoStrips_ = 0;   // ★ the map outline
     int heading_ = -1; double headingAsked_ = -1;   // ★★★ beta96 1 northbound (north up = turned), 0 southbound, −1 not known
+    std::vector<int> dark_;   // ★★★ beta96 the live visible channels with no sunlight in them (preview, kDarkHi)
 };
 
 } // namespace vibelrpt

@@ -146,7 +146,7 @@ const STEPS: Step[] = [
         + '(serial, height, climb; pick one for its track). '
         // ★★★ V12 SATELLITE (docs/v12/SATELLITE-MODE.md) — replaced SAT and the METEOR LRPT decoder key, 2026-11-20
         + 'SATELLITE lists every satellite\u2019s passes (up now first, each rated EXCELLENT to POOR by how high it climbs, greyed where this receiver cannot hear it); tap one and the '
-        + 'radio tunes there, follows its Doppler (AUTO DOPPLER) and decodes it \u2014 METEOR pictures grow in its box, packets '
+        + 'radio tunes there, follows its Doppler (AUTO DOPPLER) and decodes it \u2014 METEOR pictures grow in its box (the key over the picture picks its channel: AUTO, the colour composite, or one channel \u2014 AUTO shows channel 4, infrared, on a night pass, when the daylight channels are dark), packets '
         + 'are listed (MAP shows where they are), a voice satellite shows a little globe with it overhead and its orbit dotted, '
         // ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md)
         + 'another downlink of the same satellite inside the window (RS-44\u2019s CW beacon beside its transponder) gets OPEN IN VFO B in the box \u2014 VFO B there, decoded and Doppler-corrected, a line of its own, tap a line to choose which decoder the box shows \u2014 and on a pass '

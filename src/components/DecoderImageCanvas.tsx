@@ -89,6 +89,9 @@ export interface DecoderImageHandle {
   imageStart: (w: number, h: number) => void;
   wefaxLine:  (ln: number, w: number, px: Uint8Array) => void;
   sstvLine:   (ln: number, w: number, px: Uint8Array) => void;
+  /** ★★★ beta96 METEOR LRPT: the viewer picked another channel — rows [0, n) of the LIVE picture rewritten from `row(y)`
+   *  (RGB; null = leave the row) and shown at once. Same picture, same geometry: no new image, PREV untouched. */
+  repaintRgb: (n: number, row: (y: number) => Uint8Array | null) => void;
   /** ★ V12 FELD HELL: a strip's grey line at its own place on the page (a re-sent line replaces itself). */
   hellLine:   (ln: number, w: number, px: Uint8Array) => void;
   /** ★ V12 FELD HELL: a fresh decoder (0x02) — the next line starts a new page; the one on screen stays until then. */
@@ -500,6 +503,19 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         if (ln > buf.maxLine) buf.maxLine = ln;
         linesSince.current++;
         if (!viewingPrev) rebuild(buf);
+      },
+
+      repaintRgb(n: number, row: (y: number) => Uint8Array | null) {
+        const buf = live.current;
+        if (!buf) return;
+        for (let y = 0; y < Math.min(n, buf.h); y++) {
+          const px = row(y);
+          if (!px) continue;
+          const off = y * buf.w * 4, m = Math.min(buf.w, Math.floor(px.length / 3));
+          for (let x = 0; x < m; x++) { const s3 = x * 3, o = off + x * 4; buf.data[o] = px[s3]; buf.data[o + 1] = px[s3 + 1]; buf.data[o + 2] = px[s3 + 2]; buf.data[o + 3] = 255; }
+          if (y > buf.maxLine) buf.maxLine = y;
+        }
+        if (!viewingPrev) rebuild(buf, true);
       },
 
       /* ★★ FELD HELL (V12, 2026-10-31): drawn plainly — no margin, slant or level finding (they would bend the letters),
