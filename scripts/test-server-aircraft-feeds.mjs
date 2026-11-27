@@ -132,6 +132,7 @@ console.log('\nA. a full server: a Beast source (migrated from a feed radio) + a
   const cfgPath = path.join(dir, 'config.json');
   fs.writeFileSync(cfgPath, JSON.stringify({
     configured: true, name: 'Feeds beside an SDR', adminPass: ADMIN, port: P, fullMode: true,
+    locator: 'IO92nh', lat: '', lon: '',   // ★ b96-rangefeed the Lenovo's own: a locator, lat / lon empty
     aircraftFeeds: JSON.stringify([{ fmt: 'sbs', dir: 'listen', port: sbsPort, label: 'hfdl', name: 'UberSDR HFDL' }]),
     adsbShare: JSON.stringify({ push: true, feeds: [{ host: 'localhost', port: dport, on: true }, { host: '127.0.0.1', port: loopPort, on: true }] }),
     radios: [
@@ -190,6 +191,17 @@ console.log('\nA. a full server: a Beast source (migrated from a feed radio) + a
        'aircraft.json lists the feeds by label, with no addresses');
     const jr = await acOf(`${H}/r/afx-rtl`);
     ok(Array.isArray(jr.feeds) && jr.feeds.length === 2 && (jr.aircraft || []).some((x) => x.icao === 'AB12CD'), 'the radio behind the door shows the same feeds and aircraft (the status file + shared table)');
+    // ★★ b96-rangefeed (Stuart 11-27, the Lenovo: /adsb/range all 0 with the feed's aircraft on the map): the RADIO behind
+    //    the door (no ADS-B of its own) counts the door's Beast feed into ITS outline, around the server's location — the
+    //    locator's centre, as its /location says
+    const loc = await (await fetch(`${H}/r/afx-rtl/location`)).json().catch(() => ({}));
+    ok(Math.abs(loc.lat - 52.3125) < 1e-6 && Math.abs(loc.lon + 0.875) < 1e-6 && /IO92/i.test(loc.grid || ''), `the radio's /location: the locator's centre (${JSON.stringify(loc)})`);
+    let rg = {};
+    const filled = await until(async () => { try { rg = await (await fetch(`${H}/r/afx-rtl/adsb/range`)).json(); } catch { rg = {}; } return Array.isArray(rg.km) && rg.km.some((v) => v > 0); }, 15000);
+    const fb = Array.isArray(rg.km) ? rg.km.findIndex((v) => v > 0) : -1;
+    ok(filled && rg.lat === 52.3125 && rg.lon === -0.875 && fb >= 88 && fb <= 90 && rg.km[fb] > 300 && rg.km[fb] < 340,
+       `the radio's /adsb/range fills from the door's Beast feed: 40621D at bearing ${fb}°, ${fb >= 0 ? rg.km[fb] : '—'} km, around ${rg.lat}, ${rg.lon}`);
+    ok(filled && rg.km.filter((v) => v > 0).length <= 2, '…and only where the feed heard it (no HFDL position counted: AB12CD over the Atlantic)');
     // the hub: the destination got the Beast replies byte-faithfully (signal byte 0x1a as sent, escaped), nothing else
     await until(() => dest.bytes.length > 200, 8000);
     const hexs = []; { let i = 0; const b = dest.bytes; while (i < b.length - 1) { if (b[i] === 0x1a && (b[i + 1] === 0x32 || b[i + 1] === 0x33)) { const n = b[i + 1] === 0x32 ? 7 : 14; const raw = []; let k = i + 2; while (raw.length < 7 + n && k < b.length) { if (b[k] === 0x1a) k++; raw.push(b[k]); k++; } if (raw.length === 7 + n) hexs.push({ sig: raw[6], m: Buffer.from(raw.slice(7)).toString('hex').toUpperCase() }); i = k; } else i++; } }
