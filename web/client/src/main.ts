@@ -4128,6 +4128,7 @@ function perfReport(secs: number) {
     document.body.appendChild(perfEl);
   }
   perfEl.textContent = line.replace(/ · /g, '\n');
+  perfEl.style.display = trackViewUp() ? 'none' : '';   // ★ under a map the page draws nothing: its panel would only cover the ✕ (the map has its own ?perf=1 line)
   perf.tick = perf.draw = perf.scale = perf.renders = 0;
 }
 

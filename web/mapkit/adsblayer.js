@@ -1909,13 +1909,16 @@
        *  that clears them ALL and keeps the card inside the map wins; none at all = the card stays where it is */
       const xs = [0], ys = [0];
       for (const o of obs) { xs.push(o.r - a.left + 6, o.l - a.right - 6); ys.push(o.b - a.top + 6, o.t - a.bottom - 6); }
-      let best = null;
+      // ★ none clears everything (a tall card on a phone with the LIST open): the move that leaves the LEAST covered — the
+      //   zoom keys and the chips first (they are what a finger needs), the drawer's edge after
+      const area = function (dx, dy) { let t = 0; for (const o of obs) { const w = Math.min(a.right + dx, o.r) - Math.max(a.left + dx, o.l), h = Math.min(a.bottom + dy, o.b) - Math.max(a.top + dy, o.t); if (w > 0 && h > 0) t += w * h * (o.w || 1); } return t; };
+      let best = null, bestA = Infinity;
       for (const dx of xs) for (const dy of ys) {
         if (a.left + dx < m.left || a.right + dx > m.right || a.top + dy < m.top || a.bottom + dy > m.bottom) continue;
-        if (hits(dx, dy)) continue;
-        if (!best || Math.hypot(dx, dy) < Math.hypot(best[0], best[1])) best = [dx, dy];
+        const ar = area(dx, dy);
+        if (ar < bestA - 1 || (Math.abs(ar - bestA) <= 1 && best && Math.hypot(dx, dy) < Math.hypot(best[0], best[1]))) { best = [dx, dy]; bestA = ar; }
       }
-      if (best) gl.panBy([-best[0], -best[1]], { duration: 0 });
+      if (best && (best[0] || best[1])) gl.panBy([-best[0], -best[1]], { duration: 0 });
     }
     function llClamp() {
       if (gl || !popup || !lm) return;

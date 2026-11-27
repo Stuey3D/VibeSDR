@@ -1024,8 +1024,10 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★★ Stuart 17:3x ("the right side ones are huge when collapsed"): the drawn body stays PORTRAIT size; the inset is only a flush
  *  strip of frame reaching the physical edge — painted faint, not as more of the chip */
 .trkView .mChipsR .mDock .hCard,.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard,.trkView .mChipsR .edgeDock .hTab{
-  background-image:linear-gradient(to left,rgba(0,0,0,.55) 0 var(--sai-r),transparent var(--sai-r))!important}
-.trkView[data-short] .mChipsL .mDock .hCard{background-image:linear-gradient(to top,rgba(0,0,0,.55) 0 var(--sai-b),transparent var(--sai-b))!important}
+  background-color:transparent!important;
+  background-image:linear-gradient(to left,transparent 0 var(--sai-r),var(--ov-health,rgba(8,12,8,.86)) var(--sai-r))!important}
+.trkView[data-short] .mChipsL .mDock .hCard{background-color:transparent!important;
+  background-image:linear-gradient(to top,transparent 0 var(--sai-b),var(--ov-health,rgba(8,12,8,.86)) var(--sai-b))!important}
 .trkView .edgeDock.left .hTab{width:calc(26px + var(--sai-l));padding-left:var(--sai-l);padding-right:0}
 .trkView[data-short] .mChipsL .mDock .hCard{padding-left:4px!important;padding-bottom:calc(4px + var(--sai-b))!important}
 /* ★ Stuart 17:07 (the bar "wrapped" — ☰ 129 ⌄ dropped below the tabs): the drawer's content stands above the home bar
@@ -2312,12 +2314,13 @@ export class TrackView {
     } else if (TrackView.coverWas !== null && !document.querySelector('.trkView:not([hidden])')) { m.content = TrackView.coverWas; TrackView.coverWas = null; }
   }
   static CHROME_SEL = '.mDock:not([hidden]) .hCard, .trkTop .exit, #mapShLine, .maplibregl-ctrl-top-left, .leaflet-top.leaflet-left, .mHelp, .mChipsScale, #srvHealth .hCard, #rxBadge, .trkCards .trkCard2:not([hidden])';
-  chromeRects(): Array<{ l: number; t: number; r: number; b: number }> {
-    const out: Array<{ l: number; t: number; r: number; b: number }> = [];
+  chromeRects(): Array<{ l: number; t: number; r: number; b: number; w?: number }> {
+    const out: Array<{ l: number; t: number; r: number; b: number; w?: number }> = [];
     for (const e of Array.from(this.root.querySelectorAll(TrackView.CHROME_SEL)) as HTMLElement[]) {
       if (!e.getClientRects().length || getComputedStyle(e).visibility === 'hidden') continue;
       const q = e.getBoundingClientRect(); if (q.width < 2 || q.height < 2) continue;
-      out.push({ l: q.left, t: q.top, r: q.right, b: q.bottom });
+      // ★ w: how much covering it matters — the drawer (a big surface the card may lie over) far less than a control
+      out.push({ l: q.left, t: q.top, r: q.right, b: q.bottom, w: e.matches('.trkCard2[data-card="list"]') ? 0.15 : 1 });
     }
     return out;
   }
@@ -3436,6 +3439,8 @@ function perfOverlay() {
     const modeW = mode.startsWith('max') ? mode : gs && gs.ok ? `ambient ${gs.fps} fps` : 'ambient';
     const mg = (window as any).__mapGeom;
     const geomWords = mg ? `layout: ${mg.short ? 'SHORT' : 'normal'} · window ${mg.iw}×${mg.ih} · visual ${mg.vvw}×${mg.vvh} · map ${mg.mapW}×${mg.mapH} · insets L${Math.round(mg.ins.l)} R${Math.round(mg.ins.r)} T${Math.round(mg.ins.t)} B${Math.round(mg.ins.b)} · island ${mg.island || '-'} · cover ${mg.cover ? 'on' : 'off'}${mg.geomErr ? ' · ERROR ' + mg.geomErr : ''}` : 'layout: -';
+    { const sh = !!document.querySelector('.trkView:not([hidden])[data-short]');   // ★ short landscape: under the pill, the controls stay testable
+      box.style.bottom = sh ? 'auto' : '4px'; box.style.top = sh ? 'calc(env(safe-area-inset-top, 0px) + 44px)' : 'auto'; }
     box.textContent = `${modeW} · page rAF ${c.raf}/s · map renders ${c.render}/s · setData ${c.setData}/s · CSS animations ${anims} · worst stall ${Math.round(c.lag)} ms\n${gpuWords}\n${geomWords}`;
     c.raf = 0; c.render = 0; c.setData = 0; c.lag = 0;
   }, 1000);
