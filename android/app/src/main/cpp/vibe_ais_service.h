@@ -96,6 +96,7 @@ struct Vessel {
     double first = 0, last = 0, posAt = -1;
     int count = 0, ch = 0;
     float level = -120, snr = 0;
+    bool hasSnr = true;   ///< ★ beta96 false = a stored ship with no SNR kept (an older store): "snr" is left out
     // ★ the speed trend (the card's ▲/▼): the speed a minute ago
     double sogRef = NAN, sogRefAt = -1; int trend = 0;
     struct Pt { double t, lat, lon; };
@@ -262,10 +263,11 @@ public:
         prune_(t);
         while (!rateWin_.empty() && t - rateWin_.front() > 60) rateWin_.pop_front();
         const double span = std::min(60.0, std::max(1.0, t));
-        char b[400];
+        char b[448];   // ★ beta96 +snrv
         std::snprintf(b, sizeof b, "{\"type\":\"ais\",\"centre\":%.0f,\"rate\":%.0f,\"now\":%.1f,\"msgs\":%llu,\"msgRate\":%.2f,"
                       "\"chA\":%llu,\"chB\":%llu,\"repaired\":%llu,\"other\":%llu,\"dropped\":%llu,\"capture\":%d,\"noise\":%.1f,\"afc\":%.0f,"
-                      "\"implausible\":%llu,\"heldPos\":%llu,\"vessels\":[",
+                      "\"implausible\":%llu,\"heldPos\":%llu,\"snrv\":2,\"vessels\":[",   // ★ beta96 snrv 2: a vessel's "snr" is the frame's (burstSnr_); before, the floor after it
+
                       kCentreHz, rate_, t, (unsigned long long)msgs_, rateWin_.size() / span * 60.0,
                       (unsigned long long)perCh_[0], (unsigned long long)perCh_[1], (unsigned long long)repaired_,
                       (unsigned long long)other_, (unsigned long long)dropped_, cap_.percent(t), health_.noiseDb, afcHz_,
@@ -433,6 +435,7 @@ private:
             if (safety_.size() > 20) safety_.erase(safety_.begin());
             if (heard) heard->push_back({ std::to_string(m.mmsi) + "#txt", "safety", displayName(v),
                                           displayName(v) + " (MMSI " + std::to_string(m.mmsi) + ") \xc2\xb7 safety message: " + m.text, kChanHz[ch & 1] });
+            if (heard) heard->back().snr = f.snrDb;   // ★ beta96
             return;
         }
         if (!m.name.empty()) v.name = m.name;
@@ -481,6 +484,7 @@ private:
                 std::string full = line + " \xc2\xb7 MMSI " + std::to_string(v.mmsi);
                 if (v.lat == v.lat) full += " \xc2\xb7 " + fmtNum(v.lat, 4) + " " + fmtNum(v.lon, 4);
                 heard->push_back({ std::to_string(v.mmsi), v.kind, displayName(v), full, kChanHz[ch & 1] });
+                heard->back().snr = f.snrDb;   // ★ beta96 the frame's SNR into the day log
                 v.logLine = line; v.loggedAt = t; v.loggedName = displayName(v);
             }
         }
@@ -600,8 +604,11 @@ public:
         if (v.fakes > 0) o += ",\"fakes\":" + std::to_string(v.fakes);
         o += ",\"line\":\"" + jsonEsc(readable(v)) + "\"";
         char b[160];
-        std::snprintf(b, sizeof b, ",\"ch\":\"%s\",\"level\":%.1f,\"snr\":%.1f,\"seen\":%.0f,\"age\":%.0f,\"posAge\":%.0f,\"count\":%d,\"trail\":%zu}",
-                      v.ch ? "B" : "A", v.level, v.snr, t - v.last, t - v.first, v.posAt >= 0 ? t - v.posAt : -1.0, v.count, v.trail.size());
+        std::snprintf(b, sizeof b, ",\"ch\":\"%s\",\"level\":%.1f", v.ch ? "B" : "A", v.level);
+        o += b;
+        if (v.hasSnr) { std::snprintf(b, sizeof b, ",\"snr\":%.1f", v.snr); o += b; }
+        std::snprintf(b, sizeof b, ",\"seen\":%.0f,\"age\":%.0f,\"posAge\":%.0f,\"count\":%d,\"trail\":%zu}",
+                      t - v.last, t - v.first, v.posAt >= 0 ? t - v.posAt : -1.0, v.count, v.trail.size());
         o += b;
     }
 private:

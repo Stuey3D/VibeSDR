@@ -19,7 +19,7 @@ import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-n
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
-import { avAge, avAppsText, avDetail, avGainText, avLine, type AvBand, type AvReport } from '../services/aviation';
+import { avAge, avAppsText, avRateText, avDetail, avGainText, avLine, type AvBand, type AvReport } from '../services/aviation';
 
 const AV_MAX_W = 760;
 
@@ -57,7 +57,7 @@ export default function AvdataPanel(p: AvdataPanelProps) {
   const since = arrived ? Math.floor((Date.now() - arrived) / 1000) : 0;
   const r = p.report;
   const band = p.error ? 'not available' : r ? `${r.bandName} ${(r.hz / 1e6).toFixed(4).replace(/0+$/, '')} MHz` : 'finding the band…';
-  const status = r ? `${r.aircraft.length} aircraft · ${r.msgs} message${r.msgs === 1 ? '' : 's'}`
+  const status = r ? `${r.aircraft.length} aircraft · ${r.msgs} message${r.msgs === 1 ? '' : 's'}${avRateText(r)}`
     + (avAppsText(r) ? ` · ${avAppsText(r)}` : '')
     + avGainText(r) + (r.dropped ? ' · fell behind' : '') : '';
 

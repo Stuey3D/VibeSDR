@@ -7,7 +7,7 @@
  * ★ The report is parsed by the app's own code (src/services/aviation.ts — one rule, two readers). ★ MESSAGE TEXT shows
  *   only where the server sent it: the owner's opt-in, on the owner's own session. Everything is escaped here.
  */
-import { avAge, avAppsText, avCard, avDetail, avGainText, avIcon, avKey, avLine, type AvBand, type AvReport, type AvAircraft } from '../../../src/services/aviation';
+import { avAge, avAppsText, avRateText, avCard, avDetail, avGainText, avIcon, avKey, avLine, type AvBand, type AvReport, type AvAircraft } from '../../../src/services/aviation';
 export { avCard, avIcon, avKey };
 
 function esc(s: unknown): string {
@@ -16,7 +16,7 @@ function esc(s: unknown): string {
 
 export function avStatus(r: AvReport | null): string {
   if (!r) return 'taking the receiver to the aircraft datalink…';
-  return `${r.bandName} ${(r.hz / 1e6).toFixed(4).replace(/0+$/, '')} MHz · ${r.aircraft.length} aircraft · ${r.msgs} message${r.msgs === 1 ? '' : 's'}`
+  return `${r.bandName} ${(r.hz / 1e6).toFixed(4).replace(/0+$/, '')} MHz · ${r.aircraft.length} aircraft · ${r.msgs} message${r.msgs === 1 ? '' : 's'}${avRateText(r)}`
     + (avAppsText(r) ? ` · ${avAppsText(r)}` : '')
     + avGainText(r) + (r.dropped ? ' · fell behind' : '');
 }

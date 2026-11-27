@@ -378,5 +378,16 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('no gain on the report (no gain list for ISM to walk) = nothing claimed', [web.ismGainChip(web.ismSanitise({ ...r, gain: undefined })), app.ismGainChip(null)], ['', '']);
 }
 
+// ★★ beta96 a LoRa message keeps its frame's SNR + SF (vibe_lora_track.h snrJson); both sanitisers alike; the rows' chips
+{ const rep = { type: 'ism', devices: [], lora: { on: 1 }, msgs: [{ ago: 3, net: 'meshtastic', from: 'Bob', text: 'hi', freq: 869525000, snr: -12.5, sf: 11 },
+                                                 { ago: 9, net: 'meshcore', from: 'Al', text: 'yo', snr: 4 }] };
+  const aa = app.ismSanitise(rep)!, ww = web.ismSanitise(rep)!;
+  eq('message SNR + SF: app = web', aa.msgs, ww.msgs);
+  eq('message SNR + SF read; an SNR without its SF is dropped (no scale)', aa.msgs!.map((m) => [m.snr, m.sf]), [[-12.5, 11], [undefined, undefined]]);
+  eq('the app\'s message lines carry them', app.ismMsgLines(aa).map((m) => [m.snr, m.sf]), [[-12.5, 11], [undefined, undefined]]);
+  const h = web.ismMsgsHtml(ww);
+  eq('the web\'s message rows: a chip for the measured one only', [(h.match(/class="snrChip /g) || []).length, h.includes('>\u221213 dB</span>') || h.includes('>\u221212 dB</span>')], [1, true]);
+}
+
 console.log(`ism app: ${passes} passed, ${fails} failed`);
 if (fails) process.exit(1);

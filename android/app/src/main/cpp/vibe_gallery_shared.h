@@ -93,7 +93,18 @@ inline int lineSecs(const std::string& l) {
     return ((l[0] - '0') * 10 + (l[1] - '0')) * 3600 + ((l[3] - '0') * 10 + (l[4] - '0')) * 60 + (l[6] - '0') * 10 + (l[7] - '0');
 }
 /** The text after the time ("HH:MM:SS  "). */
-inline std::string lineText(const std::string& l) { size_t p = 8; while (p < l.size() && l[p] == ' ') ++p; return l.substr(p); }
+/** ★ beta96 a line's SNR token (" · SNR 18 dB" / " · SNR −7 dB" at its end, vibe_station_sink.h snrToken) cut off — two
+ *  radios hear the same message at different strengths, and it is still ONE message (the first radio's SNR is kept). */
+inline std::string withoutSnr(const std::string& t) {
+    const size_t k = t.rfind(" \xc2\xb7 SNR ");
+    if (k == std::string::npos || t.size() < 3 || t.compare(t.size() - 3, 3, " dB") != 0) return t;
+    for (size_t i = k + 8; i < t.size() - 3; ++i) {
+        const unsigned char c = (unsigned char)t[i];
+        if (!((c >= '0' && c <= '9') || c == 0xE2 || c == 0x88 || c == 0x92)) return t;   // digits, or U+2212
+    }
+    return t.substr(0, k);
+}
+inline std::string lineText(const std::string& l) { size_t p = 8; while (p < l.size() && l[p] == ' ') ++p; return withoutSnr(l.substr(p)); }
 
 /** ★ The lines THIS process wrote lately (≤ kOwnSec, ≤ kOwnMax): in a file's tail they are ours, not another radio's — so
  *  a call genuinely sent twice (a coast station polling a ship again) is never taken for the other radio's copy. */

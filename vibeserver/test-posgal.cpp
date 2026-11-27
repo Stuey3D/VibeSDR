@@ -105,6 +105,35 @@ int main() {
         for (auto& r : rows) if (r.find("S1234567") != std::string::npos && r.find(" \xc2\xb7 500 \xc2\xb7 9000 \xc2\xb7 ") != std::string::npos) top = true;
         ok(top, "the restored highest kept (altitude 500, highest 9000)");
     }
+    std::printf("THE SNR BLOCK (beta96)\n");
+    {
+        const std::string d3 = tmpDir("snr");
+        int64_t ck = clock;
+        auto clk3 = [&]() { return ck; };
+        {
+            gallery::Store st; st.setDir(d3); st.setLimitBytes(50ull << 20);
+            posgal::DayCard c(st, { posgal::sondesSpec(), clk3 });
+            posgal::Row a = sonde("S7000001", 51.5, -1.0, 9000, 9000, ck); a.snr = 12.46;
+            posgal::Row b = sonde("S7000002", 51.6, -1.1, 3000, 3000, ck);   // no SNR (an older feed)
+            c.seen(a); c.seen(b); c.finish();
+            const std::string body = itemText(st, c.itemName());
+            ok(body.find(posgal::kSnrHead) != std::string::npos && body.find("S7000001 \xc2\xb7 12.5\n") != std::string::npos
+               && body.find("S7000002 \xc2\xb7 ") == body.find("S7000002 \xc2\xb7 "), "the card's SNR block: the measured one only");
+            // ★ an older reader (10 fields a row, as galPosParse and the old restore): the block's lines are never rows
+            int ten = 0; for (const auto& l : tableRows(body)) { size_t n = 1, q = 0; while ((q = l.find(" \xc2\xb7 ", q)) != std::string::npos) { ++n; q += 4; } if (n == 10) ++ten; }
+            ok(ten == 2, "an older reader still sees exactly the 2 rows (" + std::to_string(ten) + ")");
+        }
+        {
+            gallery::Store st; st.setDir(d3); st.setLimitBytes(50ull << 20);
+            ck += 60;
+            posgal::DayCard c(st, { posgal::sondesSpec(), clk3 });
+            c.seen(sonde("S7000003", 51.7, -1.2, 100, 100, ck));
+            c.finish();
+            const std::string body = itemText(st, c.itemName());
+            ok(body.find("S7000001 \xc2\xb7 12.5\n") != std::string::npos, "after a restart the SNR is read back and written again");
+        }
+        rmrf(d3);
+    }
     std::printf("MIDNIGHT\n");
     {
         const std::string d2 = tmpDir("b");

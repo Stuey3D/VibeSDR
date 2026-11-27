@@ -140,7 +140,7 @@ public:
      *  track thinned to ≤ `maxPts` points (first and last kept), 4 decimals. Comma-joined ELEMENTS, no brackets. */
     /** ★★★ beta96 maps2 the gallery's day card (vibe_posgal.h): each sonde with a position heard within `maxAge` s — its
      *  serial, type, last position, altitude, the highest it reached and its frequency. At most `maxRows`, newest first. */
-    struct HeardSonde { std::string serial, type; double lat = NAN, lon = NAN, alt = NAN, maxAlt = NAN, hz = 0, first = 0, last = 0; };
+    struct HeardSonde { std::string serial, type; double lat = NAN, lon = NAN, alt = NAN, maxAlt = NAN, hz = 0, first = 0, last = 0, snr = NAN; };   // ★ beta96 snr
     std::vector<HeardSonde> heardSondes(double now, double maxAge, size_t maxRows) {
         std::lock_guard<std::mutex> lk(m_);
         std::vector<HeardSonde> out;
@@ -148,7 +148,7 @@ public:
             if (now - r.last > maxAge || !std::isfinite(r.lat) || !std::isfinite(r.lon) || r.serial.empty()) continue;
             HeardSonde h;
             h.serial = r.serial; h.type = r.model.empty() ? std::string(r.kind) : r.model;
-            h.lat = r.lat; h.lon = r.lon; h.alt = r.alt; h.maxAlt = r.maxAlt; h.hz = r.hz; h.first = r.first; h.last = r.last;
+            h.lat = r.lat; h.lon = r.lon; h.alt = r.alt; h.maxAlt = r.maxAlt; h.hz = r.hz; h.first = r.first; h.last = r.last; h.snr = r.snr;
             out.push_back(std::move(h));
         }
         std::sort(out.begin(), out.end(), [](const HeardSonde& a, const HeardSonde& b) { return a.last > b.last; });
@@ -187,7 +187,7 @@ public:
         for (const auto& r : rows_) if (now - r.last <= maxAge) v.push_back(&r);
         std::sort(v.begin(), v.end(), [](const SondeRow* a, const SondeRow* b) { return a->last > b->last; });
         char b[512];
-        std::snprintf(b, sizeof b, "\"frames\":%llu,\"sondes\":[", (unsigned long long)frames_);
+        std::snprintf(b, sizeof b, "\"frames\":%llu,\"snrv\":2,\"sondes\":[", (unsigned long long)frames_);   // ★ beta96 snrv 2: "snr" = S/N in the scan box (before: the eye figure)
         std::string o = b;
         bool first = true;
         for (const SondeRow* r : v) {

@@ -130,6 +130,11 @@ int main() {
     CHECK(downLine && upLine && ephLine, "housekeeping lines: downlink %d uplink %d position %d", downLine, upLine, ephLine);
     size_t upLines = 0; for (auto& l : lines) if (l.find("uplink channels") != std::string::npos) upLines++;
     CHECK(upLines <= 2, "an unchanged uplink packet is not repeated every frame (%zu lines)", upLines);
+    {   // ★ beta96 every packet line keeps its SNR (" · SNR n dB"), before a message's raw bytes
+        size_t withSnr = 0; bool order = true;
+        for (auto& l : lines) { const size_t k = l.find(" \xc2\xb7 SNR "); if (k != std::string::npos) { ++withSnr; const size_t h = l.find("1A 30 01"); if (h != std::string::npos && h < k) order = false; } }
+        CHECK(withSnr > 0 && withSnr == lines.size() && order, "packet lines carry their SNR (%zu of %zu), a message's bytes stay last", withSnr, lines.size());
+    }
     for (auto& l : lines) if (l.find("subscriber") != std::string::npos && l.find("1A") == std::string::npos) { CHECK(false, "a message line without its raw bytes: %s", l.c_str()); break; }
 
     /* §1b ★★★ beta94 THE BOX FOLLOWS THE DECODER (Stuart 11-25): picked bird A's pass is over while the whole-band decoder

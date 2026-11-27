@@ -1419,6 +1419,9 @@ if node --no-warnings scripts/test_wefax_lost.ts >/dev/null; then pass=$((pass+1
 # ★★ NAVTEX MESSAGES (src/utils/navtex.ts, 2026-10-05): ZCZC…NNNN blocks from the text stream with a damaged header
 #    or trailer, [start lost] / [end lost], one PREV like WEFAX, every chunk size.
 if node --no-warnings scripts/test_navtex.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_navtex.ts"; fi
+# ★★ beta96 THE MESSAGE SNR SCALE (src/utils/snrColour.ts, docs/v12/MESSAGE-SNR.md): every mode's typical good decode
+#    green and a just-decoded one red; the chip text, contrast, NAVTEX's bands and the server's, the layer's ADS-B copy.
+if node --no-warnings scripts/test_snr_colour.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_snr_colour.ts"; fi
 # ★★ NAVTEX STATIONS (V12 beta 4): scripts/navtex-stations/navtex-stations.json (NGA Pub. 117) → the clients' and the
 #    server's readers through scripts/gen-navtex-stations.mjs — stale output fails here. The rule's cases are in
 #    test_navtex.ts above and vibeserver/test-bgdecode.cpp.
@@ -2164,6 +2167,10 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   #    rendered line = the worst slice of its characters, the faded lines red), the timeline, the quality bar, an old server
   node scripts/test-web-navtex-snr.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ beta96 THE MESSAGE SNR CHIP as the web draws it: ADS-B (no bars), AIS (snrv 2 only), LoRa messages per SF — the
+  #    band colours per mode, dark text, inside the row, no sideways push, at 900 / 390 px on a dark and a light page
+  node scripts/test-web-msg-snr.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 2026-11-02 THE SHIPPING MAP: the NAVTEX fixtures + a ship store (test-ais-store --write) + a DSC distress call —
   #    the layers present, ships / DSC / arrows on the map, the KEY, a ship's card, DSC first from the gallery's DSC row
   VIBE_AIS_STORE_BIN="$OUT/test-ais-store" node scripts/test-web-shipping-map.mjs; rc=$?
@@ -2196,6 +2203,10 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   # ★★ V12 2026-11-16 the AVIATION MAP in the web client: two radio processes (ADS-B + DATALINK), one table, headless Edge
   VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-avmap.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★★ beta96 the AIRCRAFT list sizes by its OWN width (Stuart 11-26: "the signal hides the aircraft details") — the real
+  #     page, the panel at 232 / 300 / 400 / 600 px and two phones: the callsign always shows >= 7 characters
+  VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-adsb-list-width.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/vdl2-clip.cu8" "$OUT/adsb-syn-clip.u8"
 else

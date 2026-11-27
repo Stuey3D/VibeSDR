@@ -7873,7 +7873,7 @@ static void posGalTick() {
         for (const auto& h : g_sd.tracker().heardSondes((double)now, 120, 64)) {
             vibe::posgal::Row r;
             r.id = h.serial; r.type = h.type; r.lat = h.lat; r.lon = h.lon; r.altM = h.alt; r.topM = h.maxAlt;
-            r.mhz = h.hz / 1e6; r.first = (int64_t)h.first; r.last = (int64_t)h.last;
+            r.mhz = h.hz / 1e6; r.first = (int64_t)h.first; r.last = (int64_t)h.last; r.snr = h.snr;   // ★ beta96 snr kept
             g_sdCard->seen(r);
         }
         g_sdCard->tick();

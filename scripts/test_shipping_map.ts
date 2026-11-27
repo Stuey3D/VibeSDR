@@ -54,6 +54,14 @@ yes('ship keys never collide with the NAVTEX keys', it.every((x) => x.key.starts
 eq('the rows: nearest first', shipRows(shipShips(null, store), { lat: 50.8, lon: -1.3 }).map((r) => r.name), ['LIVE ONE (stored)', 'OLD SHIP']);
 eq('a server with the store switched off', storeSanitise({ vessels: [], count: 0, total: 0, off: 1 })?.off, true);
 
+// ★★ beta96 the store keeps each ship's last SNR (vibe_ais_store.h, snrv 2): the stored row shows the same chip; an older
+//    store (no snrv) gives none
+{ const j = { now: 1, count: 2, total: 2, snrv: 2, vessels: [{ mmsi: 235000009, kind: 'A', name: 'KEPT', lat: 50, lon: -1, snr: 18, seen: 600, age: 900, posAge: 600, count: 3 },
+                                                    { mmsi: 235000010, kind: 'A', name: 'OLDREC', lat: 50.1, lon: -1, seen: 600, age: 900, posAge: 600, count: 1 }] };
+  const st = storeSanitise(j)!;
+  eq('stored SNR kept from a snrv 2 store', st.vessels.map((v) => v.snr), [18, undefined]);
+  eq('the stored ship row carries the chip', shipRows(st.vessels, null).map((r) => [r.snr, r.snrMode]), [[18, 'ais'], [undefined, undefined]]);
+  eq('an older store (no snrv): no SNR', storeSanitise({ ...j, snrv: undefined })!.vessels.map((v) => v.snr), [undefined, undefined]); }
 console.log('── DSC: the box and the gallery ──');
 const calls = [{ id: 1, utc: 999_000, rf: 2187500, lat: 50.1, lon: -4.2, level: 3, line: 'DISTRESS 232001234 sinking', self: '232001234', distressId: '232001234' },
                { id: 2, utc: 500_000, rf: 2187500, lat: null, lon: null, level: 0, line: 'no position', self: '1', distressId: '' }] as any;

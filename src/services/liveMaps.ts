@@ -253,9 +253,20 @@ export const LIVE_ROW_CAP = 300;
 
 // ── the MESSAGES feed ──────────────────────────────────────────────────────────────────────────────────────────────
 /** One datalink message as the feed shows it. ⚖ `text` only where the server sent it (the owner's opt-in, own session). */
-export interface LiveMsg { id: string; key: string; t: number; who: string; src: string; label: string; labelName: string; text?: string }
+export interface LiveMsg { id: string; key: string; t: number; who: string; src: string; label: string; labelName: string; text?: string;
+  /** ★ beta96 that message's SNR (dB) and its scale key (src/utils/snrColour.ts) — this server's own decode only */
+  snr?: number; snrMode?: string }
 /** What the feed is built from: an aircraft (the merged table's row), its message count and its last label. */
-export interface MsgSource { key: string; who: string; src: string; n: number; age: number; label?: string; labelName?: string; text?: string }
+export interface MsgSource { key: string; who: string; src: string; n: number; age: number; label?: string; labelName?: string; text?: string;
+  snr?: number; snrMode?: string }
+/** ★ beta96 the datalink report's last-message SNRs by every key an aircraft goes by (icao / reg / flight — as the bodies
+ *  map) — the merged table's rows look theirs up here. Only this server's own decodes have one. */
+export function avSnrByKey(aircraft: { icao?: string; reg?: string; flight?: string; snr?: number; sm?: string }[] | null | undefined):
+    Map<string, { snr: number; snrMode: string }> {
+  const m = new Map<string, { snr: number; snrMode: string }>();
+  for (const a of aircraft ?? []) if (a.snr != null && a.sm) for (const k of [a.icao, a.reg, a.flight]) if (k) m.set(k, { snr: a.snr, snrMode: a.sm });
+  return m;
+}
 export const MSG_CAP = 200;
 /** ★★ The feed, newest first: on each report an aircraft whose count grew (or a first sight with a label) adds its last
  *  message, timed `age` seconds before `nowMs`. Bounded (MSG_CAP). `seen` keeps each key's last count. Pure: returns the
@@ -268,7 +279,8 @@ export function msgFeedUpdate(feed: LiveMsg[], seen: Map<string, number>, from: 
     seen.set(a.key, a.n);
     if (was != null && a.n <= was) continue;
     const t = Math.round(nowMs / 1000 - Math.max(0, a.age || 0));
-    add.push({ id: `${a.key}#${a.n}`, key: a.key, t, who: a.who, src: a.src, label: a.label || '', labelName: a.labelName || '', ...(a.text ? { text: a.text } : {}) });
+    add.push({ id: `${a.key}#${a.n}`, key: a.key, t, who: a.who, src: a.src, label: a.label || '', labelName: a.labelName || '', ...(a.text ? { text: a.text } : {}),
+               ...(a.snr != null && a.snrMode ? { snr: a.snr, snrMode: a.snrMode } : {}) });
   }
   if (seen.size > 4096) { const drop = seen.size - 4096; let i = 0; for (const k of seen.keys()) { if (i++ >= drop) break; seen.delete(k); } }
   if (!add.length) return feed;

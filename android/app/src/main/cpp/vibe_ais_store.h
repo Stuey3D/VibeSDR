@@ -76,6 +76,8 @@ struct Rec {
     uint16_t count = 0; uint8_t nTrk = 0, ch = 0;
     uint32_t imo = 0;
     int16_t alt = -1, spare = 0;   ///< ★ beta95 spare bit 0 = DX (Vessel::dx) · bit 1 = coarse (type 27) position
+                                   ///< ★ beta96 the HIGH BYTE = the last frame's SNR + 64 (1–255 → −63…191 dB), 0 = not kept
+                                   ///<   (snrCode / snrOf) — older stores and writers leave it 0, older readers never look
     char name[24] = {}, call[8] = {}, dest[24] = {}, eta[12] = {};
     TrkPt trk[kTrack] = {};                                ///< oldest first
     /** ★ beta92 which radios heard it (bit n = <gallery>/radios.idx line n, vibe_log_radio.h) — the last 4 bytes of the
@@ -98,6 +100,11 @@ inline double metres(const TrkPt& a, double lat, double lon) {
     return std::sqrt(dx * dx + dy * dy);
 }
 
+/** ★ beta96 a ship's last SNR as the record's spare high byte: SNR + 64, 1–255; 0 = none. */
+inline int snrCode(const Vessel& v) {
+    if (!v.hasSnr || !(v.snr == v.snr)) return 0;
+    return (int)std::max(1L, std::min(255L, std::lround(v.snr) + 64));
+}
 /** ★ A ship from the AIS service → a record: the state, and the track points (UTC) it has newer than `trackAfter`. */
 inline Rec fromVessel(const Vessel& v, double svcNow, int64_t wallNow) {
     Rec r;
@@ -113,7 +120,7 @@ inline Rec fromVessel(const Vessel& v, double svcNow, int64_t wallNow) {
     { const asmsg::AtonStatus st = asmsg::atonStatus(v.atonStatus);
       if (st.valid) r.flags |= uint8_t(4 | (st.light << 3) | (st.racon << 5) | (st.alarm ? 128 : 0)); }
     r.count = (uint16_t)std::min(65535, v.count); r.ch = (uint8_t)v.ch; r.imo = v.imo; r.alt = (int16_t)std::min(32767, v.altM);
-    r.spare = int16_t((v.dx ? 1 : 0) | (v.coarse ? 2 : 0));
+    r.spare = int16_t((v.dx ? 1 : 0) | (v.coarse ? 2 : 0) | (snrCode(v) << 8));
     putStr(r.name, sizeof r.name, v.name); putStr(r.call, sizeof r.call, v.callsign); putStr(r.dest, sizeof r.dest, v.dest);
     if (v.etaMonth > 0 && v.etaDay > 0) {
         char b[24]; std::snprintf(b, sizeof b, "%02d-%02d %02d:%02d", v.etaMonth, v.etaDay, v.etaHour < 24 ? v.etaHour : 0, v.etaMin < 60 ? v.etaMin : 0);
@@ -142,6 +149,7 @@ inline Vessel toVessel(const Rec& r) {
     if (r.len > 0) { v.bow = r.len; v.stern = 0; v.port = r.beam; v.stbd = 0; }
     v.virt = r.flags & 1; v.offPos = r.flags & 2; v.count = r.count; v.ch = r.ch;
     v.dx = r.spare & 1; v.coarse = r.spare & 2;
+    { const int c = (uint16_t(r.spare) >> 8) & 0xFF; v.hasSnr = c != 0; v.snr = c ? float(c - 64) : 0.f; }   // ★ beta96
     // ★ the status byte back in its IALA A-126 page-7 form (vibe_ais_asm.h atonStatus reads it)
     if (r.flags & 4) v.atonStatus = (7 << 5) | (((r.flags >> 5) & 3) << 3) | (((r.flags >> 3) & 3) << 1) | ((r.flags >> 7) & 1);
     return v;
@@ -198,6 +206,7 @@ inline void merge(Rec& have, const Rec& in0) {
     if (old.first && (!out.first || old.first < out.first)) out.first = old.first;
     out.count = (uint16_t)std::min<uint32_t>(65535, (uint32_t)std::max(have.count, in.count));
     out.radios = have.radios | in.radios;   // ★ beta92 every radio that heard it
+    if (!(uint16_t(out.spare) & 0xFF00)) out.spare = int16_t((uint16_t(out.spare) & 0x00FF) | (uint16_t(old.spare) & 0xFF00));   // ★ beta96 the SNR a newer record lacks
     // tracks: union, time order, a point within 20 s of another dropped (the same fix through two radios)
     std::vector<TrkPt> pts;
     for (int i = 0; i < have.nTrk && i < kTrack; ++i) pts.push_back(have.trk[i]);
@@ -494,7 +503,7 @@ inline std::string toJson(const std::vector<Rec>& v, int64_t now, bool tracks, s
     const std::vector<std::string> reg = vibe::logradio::readRegistry(dir);
     std::vector<std::pair<std::string, uint64_t>> perRadio;
     uint64_t untagged = 0;
-    std::string o = "{\"now\":" + std::to_string((long long)now) + ",\"count\":" + std::to_string(v.size()) + ",\"total\":" + std::to_string(total) + ",\"vessels\":[";
+    std::string o = "{\"now\":" + std::to_string((long long)now) + ",\"snrv\":2,\"count\":" + std::to_string(v.size()) + ",\"total\":" + std::to_string(total) + ",\"vessels\":[";
     bool first = true;
     for (const Rec& r : v) {
         if (!first) o += ',';

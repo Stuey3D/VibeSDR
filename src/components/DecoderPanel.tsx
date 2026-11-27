@@ -39,7 +39,9 @@ import { outlineKeyLabel, outlineKeyA11y } from '../utils/lrptOutline';
 import DecoderImageCanvas, { type DecoderImageHandle } from './DecoderImageCanvas';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
-import { NavtexQualityRow, SnrStripText, SnrTimeline } from './NavtexQuality';   // ★★ beta96 decode quality + SNR
+import { NavtexQualityRow, SnrStripText, SnrTimeline } from './NavtexQuality';
+import { SnrChip } from './SnrChip';   // ★ beta96 the colour-coded SNR per message
+import { spotSnrMode } from '../utils/snrColour';   // ★★ beta96 decode quality + SNR
 import { bodyTextBase, snrRanges } from '../utils/navtexQuality';
 import { type NavtexAssembler, type NavtexMessage, navtexTitle, navtexLostPct, navtexBody, navtexFileName,
          navtexFileText } from '../utils/navtex';
@@ -249,10 +251,16 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         <Text style={[dp.spotCell, dp.spotMode, compact && dp.spotModeCompact, { fontFamily: font }, !isCW && { color: digiModeStyle(s.mode).colour }]}>
           {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
         </Text>
+        {/* ★ beta96 FT8/FT4/FT2/JS8/WSPR/JTTY: the shared chip, coloured by the margin over THAT mode's threshold;
+             CW/PSK/RTTY keep the plain number (no threshold sourced on their scales yet) */}
+        {spotSnrMode(s.mode) && s.snr !== undefined ? (
+          <View style={dp.spotSnrBox}><SnrChip mode={spotSnrMode(s.mode)!} db={s.snr} small bare /></View>
+        ) : (
         <Text style={[dp.spotCell, dp.spotSnr,
           (s.snr ?? -99) >= 0 ? dp.snrOk : dp.snrLow, { fontFamily: font }]}>
           {s.snr !== undefined ? s.snr : ''}
         </Text>
+        )}
         {!compact && (
         <Text style={[dp.spotCell, dp.spotCountry, { fontFamily: font }]} numberOfLines={1}>
           {abbrCountry(s.country)}
@@ -2329,6 +2337,7 @@ const makeDp = (T: DecoderTokens) => StyleSheet.create({
   spotBand:    { width: 38 },
   spotMode:    { width: 40 },
   spotSnr:     { width: 30, textAlign: 'right' },
+  spotSnrBox:  { width: 30, alignItems: 'flex-end', justifyContent: 'center' },   // ★ beta96 the FT8-family chip
   spotCall:    { flex: 1.2, fontSize: 13, fontWeight: '700', marginLeft: 6 },
   spotCountry: { flex: 0.9, textAlign: 'right' },
   spotDist:    { width: 56, textAlign: 'right', marginLeft: 4 },

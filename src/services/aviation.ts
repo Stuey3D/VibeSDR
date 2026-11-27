@@ -33,6 +33,9 @@ export interface AvAircraft {
   from?: string; to?: string; oooi?: string; oooiTime?: string; app?: string;
   label?: string; labelName?: string; text?: string;
   level: number; n: number; age: number; via: string;
+  /** ★ beta96 the LAST message's SNR (dB) and its scale key ("acars" "vdl2" "hfdl300"… — src/utils/snrColour.ts); only
+   *  for a message the aircraft sent; undefined from an older server */
+  snr?: number; sm?: string;
 }
 /** A band the server's datalink mode steps through (hwinfo / vibeserver.json avdataBands). */
 export interface AvBand { id: string; name: string; region: string; hz: number; channels: number; chLo?: number; chHi?: number }   // ★ beta96 chLo/chHi: first / last channel (Hz)
@@ -40,7 +43,9 @@ export interface AvBand { id: string; name: string; region: string; hz: number; 
  *  ★ V12 2026-11-24 `gainNote`: on a radio the mode sets no gain on (the Airspy HF+) what its front end IS doing, in place
  *    of a dB figure ("HF+ AGC · attenuator 12 dB"); `rateNote`: the capture was raised for ACARS + VDL2 (the owner's 8 MS/s
  *    switch) and will be given back. */
-export interface AvReport { band: string; bandName: string; hz: number; msgs: number; dropped: number; aircraft: AvAircraft[]; gain?: number; gainAuto?: number;
+export interface AvReport { band: string; bandName: string; hz: number; msgs: number; dropped: number;
+  /** ★★ beta96 messages in the last minute (the server's rolling 60 s, AIS's rule); undefined = an older server */
+  msgRate?: number; aircraft: AvAircraft[]; gain?: number; gainAuto?: number;
   gainNote?: string; rateNote?: string;
   /** ★ what the applications read: positions, OOOI events, ADS-C and CPDLC messages, and those with text no layout fitted */
   apps?: { pos: number; oooi: number; adsc: number; cpdlc: number; unparsed: number } }
@@ -68,13 +73,20 @@ export function parseAvReport(m: unknown): AvReport | null {
       from: icao4(a.from) && icao4(a.to) ? icao4(a.from) : undefined, to: icao4(a.from) && icao4(a.to) ? icao4(a.to) : undefined, oooi: oooi && /^(out|off|on|in)$/.test(oooi) ? oooi : undefined, oooiTime: str(a.oooiTime, 5),
       app: str(a.app, 10), label: str(a.label, 4), labelName: str(a.labelName, 60), text: str(a.text, 300),
       level: num(a.level) ?? -120, n: num(a.n) ?? 0, age: num(a.age) ?? 0, via: str(a.via, 60) ?? '',
+      ...(num(a.snr) != null && str(a.sm, 10) ? { snr: num(a.snr), sm: str(a.sm, 10) } : {}),
     });
   }
   const ap = (o.apps && typeof o.apps === 'object' ? o.apps : null) as Record<string, unknown> | null;
   const apps = ap ? { pos: num(ap.pos) ?? 0, oooi: num(ap.oooi) ?? 0, adsc: num(ap.adsc) ?? 0, cpdlc: num(ap.cpdlc) ?? 0, unparsed: num(ap.unparsed) ?? 0 } : undefined;
-  return { band: str(o.band, 10) ?? '', bandName: str(o.bandName, 20) ?? '', hz: num(o.hz) ?? 0, msgs: num(o.msgs) ?? 0,
+  return { band: str(o.band, 10) ?? '', bandName: str(o.bandName, 20) ?? '', hz: num(o.hz) ?? 0, msgs: num(o.msgs) ?? 0, msgRate: num(o.msgRate),
            dropped: num(o.dropped) ?? 0, aircraft, gain: num(o.gain), gainAuto: num(o.gainAuto),
            gainNote: str(o.gainNote, 60), rateNote: str(o.rateNote, 120), apps };
+}
+/** ★★ beta96 (Stuart 11-26: "a messages per minute like ais … it will allow me to check antenna performance quickly"): the
+ *  status line's rate — " · 12 msg/min", AIS's words and rounding (tracks.ts aisStatus); '' from an older server. */
+export function avRateText(r: AvReport | null): string {
+  const m = r?.msgRate;
+  return m == null || !isFinite(m) ? '' : ` · ${m.toFixed(m < 10 ? 1 : 0)} msg/min`;
 }
 /** ★ The status line's gain part — the same words on the web and in the app: " · gain 43.4 dB auto", or the radio's own
  *  state where the mode sets no gain (" · HF+ AGC"); then " · capture raised to 8 MS/s …" while it is. */

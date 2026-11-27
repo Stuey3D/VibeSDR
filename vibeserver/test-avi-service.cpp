@@ -211,5 +211,36 @@ int main(int argc, char** argv) {
     }
     hfPlusAndCombined();
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
+    {   // ★★ beta96 MESSAGES PER MINUTE (Stuart 11-26: "like ais … check antenna performance quickly") — the last 60 s
+        std::printf("── messages per minute ──\n");
+        vibeavi::Tracker tr(false);
+        auto rate = [&](double t) { const std::string j = tr.json(t); const size_t k = j.find("\"msgRate\":"); return k == std::string::npos ? -1.0 : std::atof(j.c_str() + k + 10); };
+        vibeacars::Block b; b.reg = "G-EUPT"; b.flight = "BA123"; b.label = "H1"; b.hz = 131.725e6; b.levelDb = -30;
+        for (int i = 0; i < 30; ++i) tr.addAcars(b, 1000 + i);                 // 30 in the first 30 s
+        const double r1 = rate(1030);
+        CHECK(r1 > 59 && r1 < 61, "30 messages in the first 30 s listened = 60 /min, not 30 (the span is the time listened): %.2f", r1);
+        for (int i = 0; i < 30; ++i) tr.addAcars(b, 1030 + i);                 // another 30: 60 in the last minute
+        const double r2 = rate(1060);
+        CHECK(r2 > 59 && r2 < 61, "60 in the last 60 s = 60 /min: %.2f", r2);
+        const double r3 = rate(1090);
+        CHECK(r3 > 29 && r3 < 31, "half of them older than a minute → 30 /min: %.2f", r3);
+        CHECK(rate(1200) == 0, "a quiet minute → 0 /min (the window empties; the total stays)");
+        CHECK(tr.json(1200).find("\"msgs\":60") != std::string::npos, "the running total is unchanged");
+        tr.clear();
+        CHECK(rate(5000) == 0, "cleared: 0 /min");
+    }
+    {   // ★★ beta96 THE LAST MESSAGE'S SNR per aircraft (docs/v12/MESSAGE-SNR.md) — from the aircraft only
+        std::printf("── message SNR ──\n");
+        vibeavi::Tracker tr(false);
+        vibeacars::Block b; b.reg = "G-EUPT"; b.flight = "BA123"; b.label = "H1"; b.hz = 131.725e6; b.levelDb = -30; b.snrDb = 17.26f; b.downlink = true;
+        tr.addAcars(b, 10);
+        CHECK(tr.json(11).find("\"snr\":17.3,\"sm\":\"acars\",") != std::string::npos, "a downlink's SNR is the row's: %s", tr.json(11).c_str());
+        b.downlink = false; b.snrDb = 30;
+        tr.addAcars(b, 12);
+        CHECK(tr.json(13).find("\"snr\":") == std::string::npos, "an uplink (the ground station's signal) leaves no SNR on the aircraft");
+        vibeacars::Block c; c.reg = "G-NONE"; c.hz = 131.725e6; c.levelDb = -30; c.downlink = true; c.snrDb = 0;
+        vibeavi::Tracker t2(false); t2.addAcars(c, 1);
+        CHECK(t2.json(2).find("\"snr\":0.0,") != std::string::npos, "0 dB is a number, not 'none'");
+    }
     return g_fail ? 1 : 0;
 }

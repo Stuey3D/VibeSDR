@@ -35,11 +35,14 @@ const list = adsbToAircraft([
 ], rx);
 const rows = adsbListRows(list);
 eq('nearest first, unplaced by signal last', rows.map((r) => r.label), ['EMG', 'NEAR', 'FAR', '400003', '400004']);
-eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, bars: 0, trend: '●', altCol: 'hsl(265,90%,62%)',
+eq('row text', rows[2], { hex: '400002', label: 'FAR', alt: '36,000 ft', kt: '451 kt', range: '60 NM N', placed: true, emergency: false, badge: '', military: false, trend: '●', altCol: 'hsl(265,90%,62%)',
                         info: '', flag: '', op: '', logo: '' });
-// ★ Signal bars (adsbBars): 3 from -12 dBFS, 2 from -22, else 1; none without a level.
-{ const { adsbBars } = await import('../src/services/adsbList.ts');
-  eq('bars', [adsbBars(-3), adsbBars(-12), adsbBars(-15), adsbBars(-22), adsbBars(-30), adsbBars(undefined)], [3, 3, 2, 2, 1, 0]); }
+// ★★ beta96 (Stuart 11-26): the 3-bar meter gave way to the server's SNR (dB over the floor) — the row carries the number,
+//    SnrChip colours it ('adsb' scale, src/utils/snrColour.ts); nothing from a server without it.
+{ const m = await import('../src/services/adsbList.ts');
+  eq('no bars any more', 'adsbBars' in m, false);
+  const r2 = adsbListRows(adsbToAircraft([{ hex: '400009', flight: 'SNR', snr: 18.4, rssi: -20 }, { hex: '40000a', flight: 'OLD', rssi: -20 }], rx));
+  eq('the SNR rides on the row', r2.map((r) => [r.label, r.snr]), [['SNR', 18.4], ['OLD', undefined]]); }
 eq('ground + emergency', [rows[0].alt, rows[0].emergency], ['GND', true]);
 eq('unplaced cannot be focused', rows[3].placed, false);
 eq('hex label is capitals', adsbListRows([{ icao: 'abc123' }])[0].label, 'ABC123');
@@ -84,6 +87,32 @@ eq('SE in Display Zoom (320): clear of the zoom stack', adsbListWidth(320), 240)
 eq('320 leaves the right 60 + margins', 320 - 10 - adsbListWidth(320) >= 60 + 10, true);
 eq('wide: capped at 300', adsbListWidth(1366), 300);
 eq('never below 160', adsbListWidth(100), 160);
+
+// ★★★ beta96 the row by the list's own width (Stuart 11-26: "the signal hides the aircraft details") — at every width the
+//     list can be (160–300 pt), the callsign column holds a flag + 7 characters, and the chip too when it sits beside it;
+//     the columns give way in the web's order: speed, then the chip moves under, then altitude over range.
+{
+  const { adsbRowLayout, adsbCallRoom, CALL_MIN, CHIP_ROOM } = await import('../src/services/adsbList.ts');
+  const old = (w: number) => w - 2 - 16 - 12 - (50 + 40 + 60) - CHIP_ROOM;   // the beta96 row before: the callsign's room beside the chip
+  eq('before: the SE in Display Zoom (240) left the callsign under 3 characters beside the chip', old(240) < 25, true);
+  let worst = 1e9, order = true, prev: ReturnType<typeof adsbRowLayout> | null = null;
+  for (let w = 160; w <= 300; w++) {
+    const l = adsbRowLayout(w), room = adsbCallRoom(w, l) - (l.chipUnder ? 0 : CHIP_ROOM);
+    worst = Math.min(worst, room);
+    // narrower never brings a column back: kt only shows when nothing else has given; stacked implies chip under
+    if (l.kt && (l.chipUnder || l.stacked)) order = false;
+    if (l.stacked && !l.chipUnder) order = false;
+    if (prev && ((prev.kt && !l.kt) || (!prev.chipUnder && l.chipUnder) || (!prev.stacked && l.stacked))) order = false;   // prev is NARROWER: wider never loses what it had
+    prev = l;
+  }
+  eq(`every width 160–300 pt: the callsign keeps >= ${CALL_MIN} pt (worst ${worst})`, worst >= CALL_MIN, true);
+  eq('…and the columns give way in order (speed, chip under, stacked)', order, true);
+  eq('300 pt (a phone): every column, the chip beside', adsbRowLayout(300), { kt: true, chipUnder: false, stacked: false });
+  eq('240 pt (an SE in Display Zoom): speed gone, the chip under the callsign', adsbRowLayout(240), { kt: false, chipUnder: true, stacked: false });
+  eq('160 pt: altitude over range', adsbRowLayout(160).stacked, true);
+  eq('the list widths the app makes (320 / 375 / 390 / 768 pt windows) all hold the callsign',
+     [320, 375, 390, 768].every((W) => { const w = adsbListWidth(W), l = adsbRowLayout(w); return adsbCallRoom(w, l) - (l.chipUnder ? 0 : CHIP_ROOM) >= CALL_MIN; }), true);
+}
 
 // ── collapse state ──────────────────────────────────────────────────────────────────────────────
 eq('open unless shut', [parseListOpen(null), parseListOpen('1'), parseListOpen('0'), parseListOpen('x')], [true, true, false, true]);

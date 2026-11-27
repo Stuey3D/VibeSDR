@@ -6,6 +6,7 @@
 #include "vibe_avi_tx.h"   // ★ §5: the listener's decoder on USB audio (the server's "hfdl" decoder)
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,6 +29,7 @@ static std::vector<float> burstSymbols(int mode, const std::vector<uint8_t>& mpd
 static void modulate(const std::vector<cf32>& sym, std::vector<cf32>& out, double fOff, double snrDb, double echoDb, int echoDelay, std::mt19937& rng) {
     vibeavitx::hfdlModulate(sym, out, fOff, snrDb, echoDb, echoDelay, rng);
 }
+static std::vector<float> g_snr;   // ★ beta96 the decoded messages' reported SNR (Message::snrDb), for the table
 static int synthOnce(int mode, double snr, double fOff, double echoDb, int echoDelay, uint32_t seed) {
     std::mt19937 rng(seed);
     char flt[7]; std::snprintf(flt, sizeof flt, "TST%03u", seed % 1000);
@@ -39,12 +41,12 @@ static int synthOnce(int mode, double snr, double fOff, double echoDb, int echoD
     int good = 0;
     for (size_t o = 0; o < x.size(); o += 4096)
         d.feed(x.data() + o, int(std::min<size_t>(4096, x.size() - o)), [&](const vibehfdl::Message& m) {
-            if (m.flight == flt && std::fabs(m.lat - 51.5) < 1e-3) ++good;
+            if (m.flight == flt && std::fabs(m.lat - 51.5) < 1e-3) { ++good; g_snr.push_back(m.snrDb); }
             dig(m.flight.data(), m.flight.size());
         });
     // the decoder holds a burst until its longest possible end: flush with silence
     std::vector<cf32> z(4096, cf32(0, 0));
-    for (int i = 0; i < 10; ++i) d.feed(z.data(), 4096, [&](const vibehfdl::Message& m) { if (m.flight == flt) ++good; });
+    for (int i = 0; i < 10; ++i) d.feed(z.data(), 4096, [&](const vibehfdl::Message& m) { if (m.flight == flt) { ++good; g_snr.push_back(m.snrDb); } });
     return good > 0;
 }
 
@@ -159,9 +161,11 @@ int main(int argc, char** argv) {
         const int mode = argc > 2 ? std::atoi(argv[2]) : 0;
         const double echo = argc > 3 ? std::atof(argv[3]) : -99;
         if (argc > 4) { std::printf("%d\n", synthOnce(mode, std::atof(argv[4]), 3.0, echo, echo > -90 ? 5 : 0, 177)); return 0; }
-        for (double snr = -6; snr <= 12; snr += 2) {
+        for (double snr = -10; snr <= 12; snr += 2) {
+            g_snr.clear();
             int ok = 0; for (int i = 0; i < 10; ++i) ok += synthOnce(mode, snr, 3.0, echo, echo > -90 ? 5 : 0, uint32_t(i * 77 + snr * 10 + 100));
-            std::printf("mode %d SNR %+3.0f dB: %d of 10\n", mode, snr, ok);
+            std::sort(g_snr.begin(), g_snr.end());
+            std::printf("mode %d SNR %+3.0f dB: %d of 10, reported SNR %.1f dB\n", mode, snr, ok, g_snr.empty() ? -99.f : g_snr[g_snr.size() / 2]);
         }
         return 0;
     }
@@ -223,8 +227,14 @@ int main(int argc, char** argv) {
              *  silence still commits early at the silence-to-pre-key step (0–1 of 10): not a condition HF produces (its
              *  noise floor is never digital zero), left as a known limit in AVIATION.md. */
             for (double snr : { -4.0, 0.0, 4.0, 10.0, 25.0 }) {
+                g_snr.clear();
                 int ok = 0; for (int i = 0; i < N; ++i) ok += synthOnce(mode, snr, 3.0, -99, 0, uint32_t(1000 + i * 31 + mode * 7 + int(snr)));
-                std::printf("  %+3.0f dB %2d", snr, ok);
+                std::sort(g_snr.begin(), g_snr.end());
+                const float med = g_snr.empty() ? -99.f : g_snr[g_snr.size() / 2];
+                std::printf("  %+3.0f dB %2d (snr %.1f)", snr, ok, med);
+                /* ★ beta96 the reported SNR is the equaliser's own figure (MESSAGE-SNR.md's HFDL row): it reads ~4.5–6 dB OVER the
+                 *  symbol-bandwidth SNR here (−6 → 2, 0 → 6, +10 → 15) — the colour thresholds are on THIS scale. Held to it. */
+                if (snr >= 0 && snr <= 10 && g_snr.size() >= 3) CHECK(med - float(snr) >= 3.0f && med - float(snr) <= 8.0f, "HFDL mode %d reported SNR %.1f dB at %.0f dB", mode, med, snr);
                 if (snr >= 4 && mode != 3) CHECK(ok >= N - (snr > 20 ? 2 : 1), "mode %d at %.0f dB: %d of %d", mode, snr, ok, N);
                 if (snr >= 10) CHECK(ok >= N - (snr > 20 ? 2 : 1), "mode %d at %.0f dB: %d of %d", mode, snr, ok, N);
             }

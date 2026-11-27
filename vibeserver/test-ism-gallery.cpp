@@ -123,6 +123,11 @@ int main() {
         ok(want.substr(0, 8) == "17:01:12", "the clock is 17:01:12 UTC");
         ok(body.find(want) != std::string::npos, "the line exactly: \"" + want.substr(0, want.size() - 1) + "\"");
         ok(countOf(body, "Oregon Scientific THN132N") == 3, "three lines for three readings (the folded frames are not lines)");
+        // ★ beta96 a reading's burst SNR rides at the line's end (none when not measured — 0, as above)
+        { vibeism::Tracker tr; vibeism::Reading r = oregon(11.5, 2); r.snrDb = 18.2f; vibeism::Heard h;
+          ok(tr.accept(r, 1, &h) && std::fabs(h.snr - 18.2) < 0.01, "the Heard carries the burst SNR");
+          ok(vibestation::snrToken(h.snr) == " \xc2\xb7 SNR 18 dB" && vibestation::snrToken(NAN).empty() && vibestation::snrToken(-7.4) == " \xc2\xb7 SNR \xe2\x88\x92" "7 dB",
+             "the token: \" · SNR 18 dB\", nothing for none, U+2212 for a minus"); }
         ok(body.rfind("ISM 433.92 MHz \xc2\xb7 every reading heard on ", 0) == 0, "the file says what it is on its first line");
         ok(index(dir).find("\"k\":\"ism\"") != std::string::npos && index(dir).find("\"o\":\"live\"") != std::string::npos, "indexed as kind ism, a listener's");
         const std::string date = gallery::utcStamp(T0, "%Y-%m-%d");

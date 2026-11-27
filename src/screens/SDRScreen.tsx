@@ -20,7 +20,7 @@ import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../se
 import { AV_EMPTY, AV_SRC, avCompose, avHave, avLayersOf, avMerge, avNowRule, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';
 // ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules (the web's too)
 import { chipHex } from '../services/adsbList';   // ★ beta96 stage 6 the live ADS-B aircraft on the AIR & SEA map
-import { liveChrome, livePresent, liveChips, liveProfile, liveTabs, liveTabPick, aircraftOrder, msgFeedUpdate, msgFilter, avLayerOf, shipLayerOf,
+import { liveChrome, livePresent, liveChips, liveProfile, liveTabs, liveTabPick, aircraftOrder, msgFeedUpdate, msgFilter, avSnrByKey, avLayerOf, shipLayerOf,
          AV_ID, SHIP_ID, TAB_LABEL, LIVE_ROW_CAP, LIVE_CHIP_COLOUR, type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../services/liveMaps';   // ★ V12 2026-11-16 the AVIATION MAP
 import { digiStationsSanitise, digiStationsMerge, digiStationRows, digiTotalsOf, type StoredStation, type DigiTotals } from '../services/digiStations';   // ★ beta90 the DIGI MODES MAP
 import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the logs' radio filter
@@ -12968,13 +12968,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     const planesAll = avNowRule(avMerge(avOn ? avReportS : null, avSharedS), avSharedS).planes;
     const bodies = new Map<string, string>();
     if (avOn && avReportS) for (const a of avReportS.aircraft) if (a.text) { const k = a.icao || a.reg || a.flight; if (k) bodies.set(k, a.text); }
+    const snrs = avSnrByKey(avOn && avReportS ? avReportS.aircraft : null);   // ★ beta96 each message's SNR chip
     asMsgs.current = msgFeedUpdate(asMsgs.current, asMsgSeen.current, planesAll.map((p) => ({ key: `a:${p.key}`, who: p.flight || p.reg || p.icao || 'aircraft',
       src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age, label: p.label, labelName: p.labelName,
-      text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || '') })), Date.now());
+      text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || ''),
+      ...(snrs.get(p.icao || '') ?? snrs.get(p.reg || '') ?? snrs.get(p.flight || '') ?? {}) })), Date.now());
     const msgs = msgFilter(asMsgs.current, asMsgKey).slice(0, LIVE_ROW_CAP);
     const hm = (t: number) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
     const msgRows: TrackRow[] = msgs.map((m) => ({ key: `m:${m.id}`, colour: AV_SRC.find((x) => x.name === m.src.split(' + ')[0])?.colour ?? '#9fb0c2', flag: '', name: m.who,
-      second: [m.label, m.labelName, m.src, m.text ?? ''].filter(Boolean).join(' · '), sp: '', trend: 0 as const, range: '', brg: '', noPos: false, age: hm(m.t), em: false }));
+      second: [m.label, m.labelName, m.src, m.text ?? ''].filter(Boolean).join(' · '), sp: '', trend: 0 as const, range: '', brg: '', noPos: false, age: hm(m.t), em: false,
+      ...(m.snr != null && m.snrMode ? { snr: m.snr, snrMode: m.snrMode } : {}) }));
     /* ── ★★★ stage 6 ADS-B LIVE: the report's own aircraft (raw rows, so the card has the squawk, the emergency, the climb)
      *    as `adsb:<hex>` items, and they WIN over the shared table's row for the same aircraft (the web's asRender) ── */
     const liveHex = new Set<string>();

@@ -17,7 +17,8 @@ import { ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-n
 import { DecoderShell, DecoderHeader, DecoderTitle, DecoderKey, DecoderBody, DECODER_FONT, decoderBodyInset,
          useDecoderTokens, useDecoderStyles, engraveStyle, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
-import { sondeAge, sondeDetail, sondeEmpty, sondeLine, type SondeBand, type SondeReport } from '../services/sondes';
+import { sondeAge, sondeDetail, sondeEmpty, sondeLine, sondeSnrMode, type SondeBand, type SondeReport } from '../services/sondes';
+import { SnrChip } from './SnrChip';
 
 const SD_MAX_W = 760;
 
@@ -95,6 +96,8 @@ export default function SondesPanel(p: SondesPanelProps) {
                 <Text style={[s.txt, x.climb != null && x.climb < -2 && s.falling]}>{sondeLine(x)}</Text>
                 <Text style={s.detail} numberOfLines={2}>{sondeDetail(x)}</Text>
               </View>
+              {/* ★ beta96 the last frame's SNR, colour-coded by its margin over this type's threshold */}
+              {sondeSnrMode(x) ? <SnrChip mode={sondeSnrMode(x)!} db={x.snr} /> : null}
             </View>
           ))}
         </ScrollView>

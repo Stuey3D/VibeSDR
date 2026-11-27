@@ -23,7 +23,7 @@
 // The first five columns are DIFFERENCES from the value the client holds (absolute when it holds none): positions in
 // 1e-5°, the two "heard at" times in whole seconds of the server's ADS-B clock, and the message count. The rest are
 // absolute. Quantised: lat/lon 1e-5° (the report's own 5 decimals), altitudes 25 ft, speeds 1 kt, track and heading 1°,
-// signal 1 dB (rounded down, so the 1/2/3-bar thresholds read the same), tracked distance 1 NM (as the report).
+// signal 1 dB (rounded down), SNR in 3 dB bands on its colour edges (snrBand), tracked distance 1 NM (as the report).
 //
 // TIMES ON THE TICK GRID. The two "heard at" times are whole ticks: stamp(x) = floor(x − φ), where φ is fixed when
 // ADS-B starts so that each tick's own T = floor(now − φ) sits 0.85 s into its second. So everything heard since the last
@@ -62,6 +62,7 @@ namespace delta {
 enum Col {
     cLat = 0, cLon, cPosAt, cSeenAt, cMsgs,          // ★ differences (kDiffCols)
     cAlt, cRssi, cGs, cTrack, cVr, cGeom, cHdg, cTas, cIas, cSquawk, cEmerg, cTracked,   // absolute numbers
+    cSnr,                                            // ★ beta96 SNR over the floor, in 3 dB BANDS (snrBand below)
     cFlight, cCat, cCommb,                           // text / an object
     kCols
 };
@@ -84,6 +85,14 @@ inline int64_t fixedOf(double v, int dp) {
     return neg ? -n : n;
 }
 inline int64_t floorDiv(int64_t a, int64_t b) { int64_t q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) --q; return q; }
+/** ★★ beta96 (Stuart 11-26: "use coarser to save resources") THE SNR COLUMN IN 3 dB BANDS: k = floor((snr − 10) / 3), the
+ *  client shows 11.5 + 3k. The steps sit on ADS-B's colour edges (src/utils/snrColour.ts 'adsb': threshold 10, red under
+ *  13, green from 16 — 10 + 3 and 10 + 6), so rounding never changes a colour; and the column goes out only when an
+ *  aircraft's band changes. VIBE_ADSB_SNR_STEP (tenths of a dB, a measurement seam) = 10 → whole dB, 0 → no column. */
+#ifndef VIBE_ADSB_SNR_STEP
+#define VIBE_ADSB_SNR_STEP 30
+#endif
+inline int64_t snrBand(float snr) { return floorDiv(fixedOf(snr, 1) - (VIBE_ADSB_SNR_STEP == 30 ? 100 : 0), VIBE_ADSB_SNR_STEP > 0 ? VIBE_ADSB_SNR_STEP : 1); }
 /** JavaScript's Math.round(t / d) for an integer t — half rounds up. */
 inline int64_t jsRound(int64_t t, int64_t d) { return floorDiv(2 * t + d, 2 * d); }
 
@@ -138,6 +147,7 @@ inline Row rowOf(const Aircraft& a, double now, double phi) {
     put(cSeenAt, stampOf(a.seen, phi));
     put(cMsgs, a.messages);
     put(cRssi, floorDiv(fixedOf(a.level, 1), 10));
+    if (VIBE_ADSB_SNR_STEP > 0) put(cSnr, snrBand(a.snr));
     return r;
 }
 

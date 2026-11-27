@@ -74,12 +74,17 @@ export interface AisReport {
   notices?: AisNotice[];
   /** ★★★ beta96 the maritime combination: "ais+dsc" while AIS runs with DSC channel 70 (vibe_maritime_combo.h); its calls so far. */
   combo?: 'ais+dsc'; dscCalls?: number;
+  /** ★ beta96 2 = a vessel's "snr" is its last frame's (vibe_ais.h burstSnr_); older servers read the floor AFTER the
+   *  frame (~3 dB whatever the ship) — no chip from them. */
+  snrv?: number;
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
   course?: number; speed?: number; alt?: number; altBad?: number; comment?: string; status?: string; micE?: string; path?: string; via?: string;
   raw?: string; line?: string; wx?: Record<string, number>; killed?: number; msg?: number; seen: number; age: number; count: number;
   posAge: number; trail?: [number, number][];
+  /** ★ beta96 its last frame's SNR (dB, the carrier over the widest IQ filter's floor) — none from an audio-only frame */
+  snr?: number;
 }
 export interface AprsMessage { age: number; from: string; to: string; text: string; kind: string; id?: string }
 export interface AprsList {
@@ -109,7 +114,7 @@ export function aisSanitise(m: any): AisReport | null {
       cog: num(v.cog) ?? undefined, hdg: num(v.hdg) ?? undefined, rot: num(v.rot) ?? undefined, turn: num(v.turn) ?? undefined,
       draught: num(v.draught) ?? undefined, len: num(v.len) ?? undefined, beam: num(v.beam) ?? undefined, eta: str(v.eta, 16),
       alt: num(v.alt) ?? undefined, trend: num(v.trend) ?? undefined, line: str(v.line, 200), ch: str(v.ch, 2),
-      level: num(v.level) ?? undefined, snr: num(v.snr) ?? undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
+      level: num(v.level) ?? undefined, snr: (num(m.snrv) ?? 0) >= 2 ? num(v.snr) ?? undefined : undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
       posAge: num(v.posAge) ?? -1, count: num(v.count) ?? 0, trail: num(v.trail) ?? undefined,
       light: num(v.light) ?? undefined, racon: num(v.racon) ?? undefined, alarm: num(v.alarm) ?? undefined, met: aisMetSanitise(v.met),
       ...aisDxSanitise(v),   // ★ beta95 DX / unconfirmed / held / implausible
@@ -121,7 +126,7 @@ export function aisSanitise(m: any): AisReport | null {
   return { notices, type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
            chA: num(m.chA) ?? 0, chB: num(m.chB) ?? 0, repaired: num(m.repaired) ?? 0, dropped: num(m.dropped) ?? 0,
            capture: num(m.capture) ?? -1, noise: num(m.noise) ?? 0, vessels: vs, safety,
-           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined,
+           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined, snrv: num(m.snrv) ?? undefined,
            ...(m.combo === 'ais+dsc' ? { combo: 'ais+dsc' as const, dscCalls: num(m.dsc?.calls) ?? 0 } : {}) };
 }
 export function aprsSanitise(d: any): AprsList | null {
@@ -138,7 +143,7 @@ export function aprsSanitise(d: any): AprsList | null {
               alt: num(s.alt) ?? undefined, altBad: s.altBad === 1 ? 1 : undefined, comment: str(s.comment, 200), status: str(s.status, 200), micE: str(s.micE, 20), path: str(s.path, 80),
               via: str(s.via, 16), raw: str(s.raw, 400), line: str(s.line, 300), wx: Object.keys(wx).length ? wx : undefined,
               killed: num(s.killed) ?? undefined, msg: num(s.msg) ?? undefined, seen: num(s.seen) ?? 0, age: num(s.age) ?? 0,
-              count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail });
+              count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail, ...(num(s.snr) != null ? { snr: num(s.snr)! } : {}) });
   }
   const messages = Array.isArray(d.messages) ? d.messages.slice(-60).map((m: any) => ({ age: num(m?.age) ?? 0, from: str(m?.from, 16), to: str(m?.to, 12), text: str(m?.text, 200), kind: str(m?.kind, 10), id: str(m?.id, 8) || undefined })) : [];
   return { baud: num(d.baud) ?? 1200, frames: num(d.frames) ?? 0, repaired: num(d.repaired) ?? 0, dupes: num(d.dupes) ?? 0, stations: st, messages };
@@ -370,6 +375,9 @@ export interface TrackRow {
   range: string; brg: string; noPos: boolean; age: string; em: boolean;
   /** ★ beta95 a DX ship (aisDx.ts): the list tags it in gold */
   dx?: boolean;
+  /** ★ beta96 the message's SNR (dB, its decoder's own measure) and which scale colours it (src/utils/snrColour.ts) —
+   *  the row's colour-coded chip; absent = no chip (an older server, a source that does not measure). */
+  snr?: number; snrMode?: string;
 }
 /** ★ NEAREST FIRST (no position last, then the newest) — the web's aisRows order. */
 export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] {
@@ -389,6 +397,7 @@ export function aisListRows(r: AisReport | null, rx: LatLon | null): TrackRow[] 
       : dxs === 'implausible' ? AIS_DX_SHORT.implausible : 'no position',
     brg: rb ? compass8(rb.brg) : ub ? compass8(ub.brg) : '',
     noPos: v.lat == null, age: '', em: v.kind === 'sart',
+    ...(v.snr != null ? { snr: v.snr, snrMode: 'ais' } : {}),   // ★ beta96 the ship's last frame's SNR (live, or the store's: aisSanitise keeps it only from snrv ≥ 2)
   }; });
 }
 /** ★ The safety strip: the newest safety-related broadcasts (types 12/14), at most three, newest first. */
@@ -469,12 +478,15 @@ export function aprsListRows(l: AprsList | null, rx: LatLon | null): TrackRow[] 
       sp: s.speed != null && s.speed >= 2 ? `${Math.round(s.speed)} km/h` : s.wx?.tempC != null ? `${s.wx.tempC.toFixed(1)} °C` : '',
       trend: 0, range: rb ? kmText(rb.km) : s.lat != null ? '' : 'no position', brg: rb ? compass8(rb.brg) : '',
       noPos: s.lat == null, age: ago(s.seen), em: false,
+      ...(s.snr != null ? { snr: s.snr, snrMode: 'aprs' } : {}),   // ★ beta96 its last frame's SNR (IQ only)
     };
   });
 }
 
 // ── the APRS decoder box (the web's renderAprs) ───────────────────────────────────────────────────────────────────
-export interface AprsBoxRow { key: string; colour: string; call: string; line: string; right: string; noPos: boolean; raw: string }
+export interface AprsBoxRow { key: string; colour: string; call: string; line: string; right: string; noPos: boolean; raw: string;
+  /** ★ beta96 the station's last frame's SNR (the box's chip) */
+  snr?: number }
 /** "12s" · "4m" · "2h" — the box's short age (the web's aprsAgo). */
 export function aprsAgo(s: number): string { return s < 60 ? `${Math.round(s)}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`; }
 /** ★ The box's station rows, newest first (the server's order), at most 80: the call, the readable line without its
@@ -489,7 +501,7 @@ export function aprsBoxRows(l: AprsList | null, rx: LatLon | null): AprsBoxRow[]
     }
     const line = (st.line || '').replace(/^[^·]*·\s*/, '');
     return { key: st.key, colour: aprsColour(st), call: st.name || st.from, line: line || st.kind,
-             right: `${rb ? rb + ' km · ' : ''}${aprsAgo(st.seen)}`, noPos: st.lat == null, raw: st.raw || '' };
+             right: `${rb ? rb + ' km · ' : ''}${aprsAgo(st.seen)}`, noPos: st.lat == null, raw: st.raw || '', ...(st.snr != null ? { snr: st.snr } : {}) };
   });
 }
 /** The messages heard (newest first, at most 20) — "G4ABC → M0XYZ: text" (an ack carries its id). */

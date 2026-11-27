@@ -17,6 +17,7 @@
 // ★★ WHAT IS KEPT: sky dots (vibe_skyplot.h, one per satellite per 5 s, the machine's one file, tagged with this radio);
 //    at the pass's end (the pick sets) or a stop, this radio's ORBCOMM sky plot as a PNG for the gallery.
 #pragma once
+#include "vibe_station_sink.h"   // ★ beta96 snrToken
 
 #include <algorithm>
 #include <chrono>
@@ -202,7 +203,8 @@ private:
         if (r.t - pktSecAt_ >= 1.0) { pktSecAt_ = r.t; pktSec_ = 0; }
         if (++pktSec_ > kMaxPktsPerSec) { dropped_++; return; }
         const std::string sat = s.name;
-        if (o_.text) o_.text(shortName_(sat) + " \xc2\xb7 " + what + (ty == kMessage ? " \xc2\xb7 " + r.p.hex() : std::string()));
+        // ★ beta96 the packet's SNR in the line (the gallery's log keeps it; the viewers draw " · SNR n dB" as the chip)
+        if (o_.text) o_.text(shortName_(sat) + " \xc2\xb7 " + what + vibestation::snrToken(r.snrDb) + (ty == kMessage ? " \xc2\xb7 " + r.p.hex() : std::string()));
         if (o_.json) {
             char b[160];
             std::snprintf(b, sizeof b, "{\"type\":\"orbcomm_pkt\",\"data\":{\"t\":%.1f,\"norad\":%lld,\"type\":\"%s\",\"snr\":%.1f,\"rf\":%.0f,", r.t, a.norad, typeName(ty), r.snrDb, r.rfHz);

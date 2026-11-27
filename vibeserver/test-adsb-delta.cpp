@@ -158,7 +158,7 @@ struct Sky {
             if (U(0, 1) > q.rx) continue;   // not heard this second
             const int altQ = int(std::round(q.alt / 25) * 25);
             double t = t0 + U(0.0, 0.5);
-            auto send = [&](const Frame& f) { Frame g = f; g.level = float(-30 + 25 * q.rx + U(-2, 2)); tr.accept(g, t); t += U(0.01, 0.2); };
+            auto send = [&](const Frame& f) { Frame g = f; g.level = float(-30 + 25 * q.rx + U(-2, 2)); g.snr = float(12 + 25 * q.rx + U(-2, 2)); tr.accept(g, t); t += U(0.01, 0.2); };
             if (q.ground) send(survFrame(q.icao, 4, 1, 0));
             else { send(posFrame(q.icao, q.lat, q.lon, altQ, false)); send(posFrame(q.icao, q.lat, q.lon, altQ, true)); }
             if (U(0, 1) < 0.7) send(velFrame(q.icao, q.gs, q.trk, int(q.vr)));
@@ -207,6 +207,15 @@ static void unit() {
     CHECK(delta::fixedOf(-0.000004, 5) == 0, "a tiny negative prints -0.00000 → 0");
     CHECK(delta::fixedOf(-12.04, 1) == -120 && delta::floorDiv(-120, 10) == -12, "rssi -12.04 → -12.0 → -12 (as the text)");
     CHECK(delta::floorDiv(-121, 10) == -13, "rssi -12.1 → -13 (rounded down: the bars' thresholds hold)");
+    {   // ★★ beta96 the SNR column's 3 dB bands sit on ADS-B's colour edges (snrColour.ts adsb: red < 13, green ≥ 16): the
+        //    value the client shows (11.5 + 3k) is always the same colour as the true figure
+        auto colour = [](double v) { return v < 13 ? 0 : v < 16 ? 1 : 2; };
+        int bad = 0;
+        for (int t = -100; t <= 600; ++t) { const double v = t / 10.0; if (colour(11.5 + 3 * double(delta::snrBand(float(v)))) != colour(v)) ++bad; }
+        CHECK(bad == 0, "SNR bands never change a colour (%d of 701 figures did)", bad);
+        CHECK(delta::snrBand(12.9f) == 0 && delta::snrBand(13.0f) == 1 && delta::snrBand(15.95f) == 1 && delta::snrBand(16.0f) == 2 && delta::snrBand(9.9f) == -1,
+              "the band edges: 13.0 and 16.0 start a band");
+    }
     CHECK(delta::jsRound(4505, 10) == 451 && delta::jsRound(-4505, 10) == -450, "JS Math.round on tenths (half up)");
     CHECK(delta::jsRound(35012, 25) == 1400 && delta::jsRound(35013, 25) == 1401 && delta::jsRound(-1000, 25) == -40, "altitude in 25 ft");
 

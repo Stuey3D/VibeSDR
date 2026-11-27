@@ -71,6 +71,7 @@ struct Station {
     bool killed = false, messaging = false;
     double first = 0, last = 0, posAt = -1;
     int count = 0;
+    float snr = NAN;   ///< ★ beta96 its last frame's SNR (Run::frameSnr_: carrier over the floor in the widest IQ filter), NAN = not measured
     struct Pt { double t, lat, lon; };
     std::deque<Pt> trail;
 };
@@ -133,7 +134,8 @@ public:
         std::function<std::string()> satName;
     };
     /** One entry of the frame log. */
-    struct LogEntry { double t; std::string from, to, path, ctl, sat, hex, text; int pid = -1, fec = 0, fixed = 0, len = 0; bool crc = false, aprs = false; };
+    struct LogEntry { double t; std::string from, to, path, ctl, sat, hex, text; int pid = -1, fec = 0, fixed = 0, len = 0; bool crc = false, aprs = false;
+                      float snr = NAN; };   // ★ beta96 the frame's SNR (NAN = audio-only)
     static constexpr size_t kLogMax = 60, kLogJoin = 40, kHexMax = 256;
     static constexpr size_t kMaxStations = 500, kTrailMax = 120, kMsgMax = 60;
     static constexpr double kKeepSec = 6 * 3600, kDupeSec = 30;
@@ -345,7 +347,7 @@ private:
         if (e.sat.empty()) e.sat = o_.sat;
         if (e.sat.empty()) e.sat = vibesat::byCallsign(ax.src.call);
         if (e.sat.empty()) for (const Addr& d : ax.digis) if (d.h) { const std::string n = vibesat::byCallsign(d.call); if (!n.empty()) e.sat = n; }
-        e.fec = f.fec; e.fixed = f.fixed; e.crc = f.crc; e.aprs = aprs; e.len = int(ax.info.size());
+        e.fec = f.fec; e.fixed = f.fixed; e.crc = f.crc; e.aprs = aprs; e.len = int(ax.info.size()); e.snr = curSnr_;
         static const char* hx = "0123456789abcdef";
         const size_t n = std::min(ax.info.size(), kHexMax);
         for (size_t i = 0; i < n; ++i) {
@@ -366,7 +368,7 @@ private:
         if (!aprs && o_.heard) {
             vibestation::Heard h;
             h.key = e.from; h.kind = "frame"; h.name = e.sat.empty() ? e.from : e.sat + " " + e.from;
-            h.freqHz = o_.rfHz ? o_.rfHz() : 0;
+            h.freqHz = o_.rfHz ? o_.rfHz() : 0; h.snr = e.snr;   // ★ beta96 into the day log
             h.line = e.from + ">" + e.to + (e.path.empty() ? "" : "," + e.path) + " " + e.ctl
                    + (e.sat.empty() ? "" : " \xc2\xb7 " + e.sat) + (e.fec ? std::string(" \xc2\xb7 ") + (e.fec == vibepkt::kFx25 ? "FX.25" : "IL2P") : "")
                    + " \xc2\xb7 " + std::to_string(e.len) + " bytes: " + e.hex.substr(0, 64) + (e.hex.size() > 64 ? "\xe2\x80\xa6" : "");
@@ -384,6 +386,7 @@ private:
         if (!e.sat.empty()) o += ",\"sat\":\"" + jsonEsc(utf8Clean(e.sat)) + "\"";
         o += ",\"len\":" + std::to_string(e.len) + ",\"hex\":\"" + e.hex + "\",\"text\":\"" + jsonEsc(e.text) + "\"";
         if (e.aprs) o += ",\"aprs\":1";
+        if (e.snr == e.snr) o += ",\"snr\":" + fmt(e.snr, 1);   // ★ beta96
         o += "}";
     }
     /** The wall clock for sat_tlm's "t" (the run's own clock is for ages, and is a test seam). */
@@ -418,6 +421,7 @@ private:
         s.from = p.from; s.name = p.name; s.raw = p.raw; s.path = p.path;
         if (!p.path.empty()) s.via = viaOf(p.path);
         if (!curSat_.empty()) s.sat = curSat_;
+        s.snr = curSnr_;   // ★ beta96 this frame's SNR (NAN from an audio-only frame: nothing claimed)
         if (p.kind != "message" && p.kind != "ack" && p.kind != "bulletin") s.kind = s.kind.empty() || p.hasPos || p.kind == "weather" ? p.kind : s.kind;
         else if (s.kind.empty()) s.kind = "station";
         if (p.hasPos) {
@@ -447,12 +451,13 @@ private:
             if (p.hasPos) j += ",\"lat\":" + fmt(p.lat, 5) + ",\"lon\":" + fmt(p.lon, 5);
             if (!p.to.empty()) j += ",\"to\":\"" + jsonEsc(p.to) + "\",\"text\":\"" + jsonEsc(utf8Clean(p.text)) + "\"";
             if (!s.sat.empty()) j += ",\"sat\":\"" + jsonEsc(utf8Clean(s.sat)) + "\"";
+            if (curSnr_ == curSnr_) j += ",\"snr\":" + fmt(curSnr_, 1);   // ★ beta96
             o_.json(j + "}}");
         }
         telemetry_(p, curSat_);
         if (o_.heard) {
             vibestation::Heard h;
-            h.key = s.key; h.kind = p.kind; h.name = s.key; h.freqHz = o_.rfHz ? o_.rfHz() : 0;
+            h.key = s.key; h.kind = p.kind; h.name = s.key; h.freqHz = o_.rfHz ? o_.rfHz() : 0; h.snr = curSnr_;   // ★ beta96
             h.line = utf8Clean(s.line);
             if (p.hasPos) h.line += " \xc2\xb7 " + fmt(p.lat, 4) + " " + fmt(p.lon, 4);
             // ★ V12 beta90 1.9: "via ISS" — the satellite that carried it (with the digipeater's call when it differs)
@@ -501,6 +506,7 @@ private:
         }
         if (s.killed) o += ",\"killed\":1";
         if (s.messaging) o += ",\"msg\":1";
+        if (s.snr == s.snr) o += ",\"snr\":" + fmt(s.snr, 1);   // ★ beta96 the last frame's SNR
         o += ",\"seen\":" + fmt(t - s.last, 0) + ",\"age\":" + fmt(t - s.first, 0) + ",\"count\":" + std::to_string(s.count)
            + ",\"posAge\":" + fmt(s.posAt >= 0 ? t - s.posAt : -1, 0);
         if (trails && s.trail.size() > 1) {
@@ -607,7 +613,8 @@ private:
                 const std::complex<float> z = r.z[size_t(i)];
                 const std::complex<float> d = z * std::conj(prev);
                 r.out[size_t(i)] = (d.real() != 0 || d.imag() != 0) ? std::atan2(d.imag(), d.real()) : 0.f;
-                if (est) { const float e = std::norm(z); acc += afcA_ * (d - acc); p2 += afcA_ * (e - p2); p4 += afcA_ * (e * e - p4); }
+                if (est) { const float e = std::norm(z); acc += afcA_ * (d - acc); p2 += afcA_ * (e - p2); p4 += afcA_ * (e * e - p4);
+                           snrBit_(e, r.rate); }   // ★ beta96 one add a sample: the per-bit power ring (frameSnr_)
                 if (std::norm(z) > 0) prev = z;
             }
             r.prev = prev;
@@ -679,6 +686,8 @@ private:
         for (const auto& r : seen1200_) if (r.h == h && std::fabs(r.t - t) < 3.0 && r.path != path) return false;
         seen1200_[seenP_] = { h, t, path }; seenP_ = (seenP_ + 1) % kSeen;
         ++(path ? fromNarrow_ : fromAudio_);
+        // ★ beta96 where an IQ copy ended on the power ring — its SNR is read when the held frames go out (flushHeld_)
+        if (path && bitW_ > 0) { snrPend_[snrPendP_] = { h, bitW_, int(f.bytes.size()) }; snrPendP_ = (snrPendP_ + 1) % kSnrPend; }
         /* ★★★ 2026-11-24 held ~0.3 s (signal time) beside the other paths' copies, then resolveCandidates (vibe_aprs.h):
          *  a repaired copy one path got wrong never goes out beside the right copy another path got clean. */
         if (held_.empty()) heldT_ = t;
@@ -691,7 +700,14 @@ private:
         if (!all && now - heldT_ < kHoldSec) return;
         std::vector<Frame> v; v.swap(held_);
         conflicts1200_ += uint64_t(resolveCandidates(v));
-        for (const Frame& f : v) onFrame(f);
+        for (const Frame& f : v) {
+            // ★ beta96 the frame's SNR from where its IQ copy ended (an audio-only frame has none: NAN)
+            const uint32_t h = frameHash(f.bytes);
+            curSnr_ = NAN;
+            for (const SnrPend& q : snrPend_) if (q.h == h && q.at) { curSnr_ = frameSnr_(q.at, q.bytes); break; }
+            onFrame(f);
+        }
+        curSnr_ = NAN;
     }
 public:
     static constexpr double kHoldSec = 0.3;
@@ -701,6 +717,41 @@ public:
     void flush() { flushHeld_(true); }
 private:
     std::vector<Frame> held_; double heldT_ = 0; uint64_t conflicts1200_ = 0;
+    /* ★★ beta96 (Stuart 11-26: a colour-coded SNR per message, to compare antennas) THE FRAME'S SNR on the IQ paths: the
+     *  carrier's power over the noise floor in the WIDEST channel filter, S/N = (P − floor) / floor. FM is a constant
+     *  envelope, so its power while keyed is the carrier's. One mean a BIT (1200 Bd) into a ring (one add a sample on the
+     *  widest filter, which the AFC already reads); the floor follows the quiet bits (falls in ~20 bits, climbs over ~15 s).
+     *  A frame is the loudest run of its length (bytes × 8 × 1.02 stuffing + 24 flag bits) ending within 64 bits before
+     *  / 48 after where its copy came out. Per FRAME ≤ ~2,800 adds. An audio-only frame (no IQ) has no SNR. */
+    static constexpr size_t kBitRing = 4096;            // 3.4 s at 1200 Bd: a 330-byte frame + the hold; 16 KB
+    float bitP_[kBitRing] = {};
+    double bitAcc_ = 0; int bitN_ = 0; double bitPh_ = 0; uint64_t bitW_ = 0; float floorP_ = 0;
+    struct SnrPend { uint32_t h = 0; uint64_t at = 0; int bytes = 0; };
+    static constexpr int kSnrPend = 16;
+    SnrPend snrPend_[kSnrPend]; int snrPendP_ = 0;
+    float curSnr_ = NAN;
+    void snrBit_(float e, double rate) {
+        bitAcc_ += e; ++bitN_;
+        bitPh_ += 1200.0 / rate;
+        if (bitPh_ < 1.0) return;
+        bitPh_ -= 1.0;
+        const float b = float(bitAcc_ / bitN_); bitAcc_ = 0; bitN_ = 0;
+        bitP_[bitW_++ & (kBitRing - 1)] = b;
+        if (floorP_ <= 0 || b < floorP_) floorP_ += (b - floorP_) * (floorP_ <= 0 ? 1.0f : 0.05f); else floorP_ += (b - floorP_) * 6e-5f;
+    }
+    float frameSnr_(uint64_t at, int bytes) const {
+        const int run = int(bytes * 8 * 1.02) + 24;
+        const uint64_t hi = std::min(bitW_, at + 48), lo = at > uint64_t(run + 64) ? at - uint64_t(run + 64) : 0;
+        if (floorP_ <= 0 || hi <= lo + uint64_t(run) || bitW_ - lo >= kBitRing) return NAN;
+        double sum = 0, best = 0;
+        for (uint64_t k = lo; k < hi; ++k) {
+            sum += bitP_[k & (kBitRing - 1)];
+            if (k >= lo + uint64_t(run)) sum -= bitP_[(k - uint64_t(run)) & (kBitRing - 1)];
+            if (k + 1 >= lo + uint64_t(run) && sum > best) best = sum;
+        }
+        const double S = best / run - floorP_;
+        return S > 0 ? float(10 * std::log10(S / floorP_)) : -30.f;
+    }
     struct Seen { uint32_t h = 0; double t = -100; int path = 0; };
     static constexpr int kSeen = 16;
     Seen seen1200_[kSeen];

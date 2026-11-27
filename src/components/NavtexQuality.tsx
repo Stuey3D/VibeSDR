@@ -12,7 +12,7 @@
  */
 import React, { useMemo, useState } from 'react';
 import { StyleSheet, Text, View, type NativeSyntheticEvent, type StyleProp, type TextLayoutEventData, type TextStyle } from 'react-native';
-import { lineRangesOf, lineWorst, navtexQualityDetail, navtexQualityLine, navtexSnrLine, navtexSplitPct, snrBand, snrColour, SNR_COLOURS,
+import { lineRangesOf, lineWorst, navtexQualityDetail, navtexQualityLine, navtexSnrLine, navtexSplitPct, snrBand, snrColour, SNR_COLOURS, SNR_RED_DB,
          type NavtexSnr, type NavtexSplit } from '../utils/navtexQuality';
 
 export function SnrTimeline({ snr, height = 4, maxWidth }: { snr?: NavtexSnr | null; height?: number; maxWidth?: number }) {
@@ -20,7 +20,7 @@ export function SnrTimeline({ snr, height = 4, maxWidth }: { snr?: NavtexSnr | n
   const red = snr.tl.filter((d) => snrBand(d) === 'red').length;
   return (
     <View accessible accessibilityRole="image" style={[st.tl, { height, maxWidth }]}
-          accessibilityLabel={`SNR timeline: ${red} of ${snr.tl.length} segments under 5 dB`}>
+          accessibilityLabel={`SNR timeline: ${red} of ${snr.tl.length} segments under ${SNR_RED_DB} dB`}>
       {snr.tl.map((db, i) => <View key={i} style={{ flex: 1, backgroundColor: snrColour(db) }} />)}
     </View>
   );

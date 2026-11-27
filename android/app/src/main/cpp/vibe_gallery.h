@@ -1275,13 +1275,14 @@ struct NavtexMsg {
     int minSnr = 0, redPct = 0;   ///< the lowest slice; the share of characters decoded under 5 dB
 };
 
-/** ★★ beta96: the SNR colour scale — < 5 dB red (that text may be junk), 5–10 amber, > 10 green. */
-static constexpr double kSnrRed = 5, kSnrGreen = 10;
+/** ★★ beta96: the SNR colour scale (src/utils/snrColour.ts — the colour is the margin over NAVTEX's ~6 dB decode threshold
+ *  in the bit bandwidth): < 9 dB red (at the edge: that text may be junk), 9–12 amber, ≥ 12 green. Keep with the TS. */
+static constexpr double kSnrRed = 9, kSnrGreen = 12;
 static constexpr size_t kMaxSlices = 120;
 
 /** ★★ beta96: the index-line members for a NAVTEX message's quality (Meta::qualJson) — what is there, nothing else.
  *  "nqc"/"nqf"/"nql" characters clean (both copies agreed) / FEC / lost, "nqd" copies disagreed; "snr" mean SNR (dB, bit
- *  bandwidth), "sdb"/"ndb" signal / noise dBFS, "smin" the lowest slice, "red" % of characters under 5 dB, "ts" slice
+ *  bandwidth), "sdb"/"ndb" signal / noise dBFS, "smin" the lowest slice, "red" % of characters under kSnrRed (9 dB), "ts" slice
  *  seconds, "tl" slice SNRs, "tc" their character ends. */
 inline std::string navtexQualityJson(const NavtexMsg& m) {
     std::string o; char b[96];

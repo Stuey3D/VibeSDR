@@ -119,6 +119,8 @@
     return destination(fix.lat, fix.lon, fix.track, fix.gs * dt / 3600);
   }
 
+  /** ★ beta96 the message-SNR scale for ADS-B (src/utils/snrColour.ts SNR_SCALES.adsb + SNR_COLOURS) — see the card's SNR row. */
+  const SNR_ADSB = { thr: 10, red: '#e5484d', amber: '#f0a020', green: '#3dbb5f' };
   const CAT_NAME = { A1: 'Light aircraft', A2: 'Small aircraft', A3: 'Large aircraft', A4: 'High-vortex large (B757)',
                      A5: 'Heavy', A6: 'High performance', A7: 'Rotorcraft', B1: 'Glider', B2: 'Lighter than air',
                      B3: 'Parachutist', B4: 'Ultralight', B6: 'Unmanned aerial vehicle', B7: 'Space vehicle',
@@ -1624,6 +1626,17 @@
       const seen = num(a.seen);
       row('Heard', seen == null ? '' : seen < 2 ? 'just now' : Math.round(seen) + ' s ago');
       row('Signal', num(a.rssi) != null ? a.rssi.toFixed(1) + ' dBFS' + (num(a.messages) != null ? ' · ' + a.messages + ' msgs' : '') : '');
+      /* ★★ beta96 (Stuart 11-26: the 3-bar meter gave way to a colour-coded SNR): the server's reply SNR over the 1090 MHz
+       *  floor, smoothed ×0.25 a reply (vibe_adsb.h — about the last four replies). The colour is the margin over ADS-B's
+       *  decode threshold — src/utils/snrColour.ts 'adsb' (thr 10 dB; red < 3 dB over, amber 3–6, green ≥ 6); ONE RULE,
+       *  TWO READERS: scripts/test_snr_colour.ts fails if SNR_ADSB here parts from it. Nothing from an older server. */
+      if (num(a.snr) != null) {
+        const m = a.snr - SNR_ADSB.thr, col = m < 3 ? SNR_ADSB.red : m < 6 ? SNR_ADSB.amber : SNR_ADSB.green;
+        const tip = 'SNR ' + Math.round(a.snr) + ' dB over the noise floor, smoothed over the last few replies \u2014 ADS-B decodes from about '
+          + SNR_ADSB.thr + ' dB: red under ' + (SNR_ADSB.thr + 3) + ', green from ' + (SNR_ADSB.thr + 6);
+        rowHtml('SNR', '<span title="' + esc(tip) + '" style="display:inline-block;padding:0 4px;border-radius:3px;font-weight:700;color:#111111;background:'
+          + col + '">' + Math.round(a.snr) + ' dB</span> <span style="opacity:.7">last few replies</span>');
+      }
       const logo = imageBase != null && imgKey(a.logo) ? '<img src="' + esc(imageBase + 'logo/' + imgKey(a.logo)) + '" alt="' + esc(a.op || '') + '">' : '';
       const badge = !logo && opBadge(a) ? '<span class="badge">' + esc(opBadge(a)) + '</span>' : '';
       const sil = imageBase != null && imgKey(a.sil) ? '<img class="sil" src="' + esc(imageBase + 'silhouette/' + imgKey(a.sil)) + '" alt="">' : '';

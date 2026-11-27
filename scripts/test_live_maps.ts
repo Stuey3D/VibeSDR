@@ -4,7 +4,7 @@
 // MESSAGES feed and its filter, the fade, the basemap profile, the old toggles carried over.
 //   npx tsx scripts/test_live_maps.ts
 import { liveOf, liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveTabs, liveTabPick, openerOf, aircraftOrder,
-         msgFeedUpdate, msgFilter, fadeOf, liveProfile, avLayersFrom, shipLayersFrom, avLayerOf, shipLayerOf, MAP_LAYERS, LIVE_LAYERS,
+         msgFeedUpdate, msgFilter, avSnrByKey, fadeOf, liveProfile, avLayersFrom, shipLayersFrom, avLayerOf, shipLayerOf, MAP_LAYERS, LIVE_LAYERS,
          MSG_CAP, type LiveMsg } from '../src/services/liveMaps';
 
 let passes = 0, fails = 0;
@@ -110,6 +110,12 @@ eq('the count grew: a new message on top', [feed[0].id, feed[0].label, feed.leng
 eq('tap an aircraft: its messages only', msgFilter(feed, 'A').map((m) => m.id), ['A#4', 'A#3']);
 eq('no filter: all', msgFilter(feed, '').length, 3);
 eq('⚖ text only where sent', [feed.some((m) => 'text' in m), msgFeedUpdate([], new Map(), [{ key: 'Z', who: 'Z', src: 'VDL2', n: 1, age: 0, label: 'H1', text: 'owner' }], t0)[0].text], [false, 'owner']);
+// ★★ beta96 each message keeps ITS SNR (the report's last-message SNR when the count grew), with its scale key
+{ const fm = msgFeedUpdate([], new Map(), [{ key: 'S', who: 'S', src: 'VDL2', n: 1, age: 0, label: 'H1', snr: 17.5, snrMode: 'vdl2' },
+                                           { key: 'T', who: 'T', src: 'ADS-B', n: 1, age: 0, label: 'H1' }], t0);
+  eq('the SNR rides on the message; none without one', fm.map((m) => [m.key, m.snr, m.snrMode]), [['S', 17.5, 'vdl2'], ['T', undefined, undefined]]);
+  const by = avSnrByKey([{ icao: '4CA97B', reg: 'EI-EST', snr: 12, sm: 'acars' }, { flight: 'X1' }]);
+  eq('the report\'s SNRs by every key the aircraft goes by', [by.get('4CA97B'), by.get('EI-EST'), by.get('X1')], [{ snr: 12, snrMode: 'acars' }, { snr: 12, snrMode: 'acars' }, undefined]); }
 let big: LiveMsg[] = []; const s2 = new Map<string, number>();
 for (let i = 0; i < 500; i++) big = msgFeedUpdate(big, s2, [{ key: 'K' + (i % 7), who: 'K', src: 'VDL2', n: i, age: 0, label: 'H1' }], t0 + i * 1000);
 eq('bounded', big.length, MSG_CAP);

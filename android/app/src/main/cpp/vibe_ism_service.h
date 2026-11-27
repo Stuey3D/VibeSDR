@@ -369,7 +369,7 @@ public:
         d.r = r; d.nick = nick; d.line = line; d.last = t;
         ++decoded_;
         prune(t);
-        if (!repeat && out) { out->kind = r.kind; out->name = deviceName(r, nick); out->line = line; out->freqHz = r.freqHz; out->secret = r.secret; }
+        if (!repeat && out) { out->kind = r.kind; out->name = deviceName(r, nick); out->line = line; out->freqHz = r.freqHz; out->secret = r.secret; out->snr = r.snrDb > 0 ? r.snrDb : NAN; }
         return !repeat;
     }
     void prune(double t) {
@@ -477,7 +477,7 @@ private:
         d.line = meterLine(d);
         ++decoded_;
         prune(t);
-        if (!repeat && out) { out->kind = "meter"; out->name = deviceName(d.r, 0); out->line = d.line; out->core = core; out->freqHz = d.r.freqHz; out->secret = false; }
+        if (!repeat && out) { out->kind = "meter"; out->name = deviceName(d.r, 0); out->line = d.line; out->core = core; out->freqHz = d.r.freqHz; out->secret = false; out->snr = d.r.snrDb > 0 ? d.r.snrDb : NAN; }
         return !repeat;
     }
     /** The line as listed: the core, then "every 16 s" (once two frames have been heard), then "signal 24 dB". */

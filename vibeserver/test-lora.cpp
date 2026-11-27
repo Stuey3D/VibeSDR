@@ -14,6 +14,7 @@
 #include "vibe_ism_service.h"
 #include <chrono>
 #include <thread>
+#include <algorithm>
 #include <cstdio>
 #include <random>
 #include <string>
@@ -88,6 +89,7 @@ static std::vector<uint8_t> lwUplink(uint32_t devAddr, int fcnt, int port, size_
 static std::string str(const Msg& m) { return m.proto + "/" + m.what; }
 
 // ── the PHY ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+static std::vector<float> g_loraSnr;   // ★ beta96 the decoded frames' reported SNR (Frame::snrDb) — the sensitivity table prints it
 static bool roundTrip(int sf, double bw, int cr, double snr, double cfo, std::mt19937& rng, int len = 24) {
     Phy p; p.sf = sf; p.cr = cr; p.bw = bw; p.ldro = ldroFor(sf, bw);
     std::vector<uint8_t> pl(static_cast<size_t>(len)); for (auto& b : pl) b = uint8_t(rng());
@@ -113,7 +115,7 @@ static bool roundTrip(int sf, double bw, int cr, double snr, double cfo, std::mt
     bool got = false;
     for (size_t i = 0; i < sig.size(); i += 16384) {
         ch.feed(sig.data() + i, std::min<size_t>(16384, sig.size() - i));
-        d.run(s, [&](Frame&& f) { if (f.bytes == pl && f.cr == cr) got = true; });
+        d.run(s, [&](Frame&& f) { if (f.bytes == pl && f.cr == cr) { if (!got) g_loraSnr.push_back(f.snrDb); got = true; } });
     }
     // flush the channeliser's last block
     std::vector<cf> z(8192, cf(0, 0)); ch.feed(z.data(), z.size()); d.run(s, [&](Frame&& f) { if (f.bytes == pl && f.cr == cr) got = true; });
@@ -277,8 +279,13 @@ int main(int argc, char** argv) {
             for (double d : {-3.0, -2.0, -1.0, 0.0, 1.0}) {
                 int n = 0;
                 std::uniform_real_distribution<double> U(-10e3, 10e3);
+                g_loraSnr.clear();
                 for (int t = 0; t < trials; ++t) n += roundTrip(sf, 125e3, 1, lim[sf] + d, U(rng), rng, 20);
-                std::printf("  %+.0f dB %3d %%", d, 100 * n / trials);
+                std::sort(g_loraSnr.begin(), g_loraSnr.end());
+                const float med = g_loraSnr.empty() ? -99.f : g_loraSnr[g_loraSnr.size() / 2];
+                std::printf("  %+.0f dB %3d %% (snr %.1f)", d, 100 * n / trials, med);
+                // ★ beta96 the frame's reported SNR (the preamble's dechirped peaks, LoRa's own in-band definition) is honest
+                if (d == 0.0 && g_loraSnr.size() >= 10) ok(std::fabs(med - lim[sf]) <= 3.0, "SF" + std::to_string(sf) + ": reported SNR " + std::to_string(med) + " dB at Semtech's " + std::to_string(lim[sf]));
                 if (d == 0.0) atLim = n; if (d == 1.0) plus1 = n;
             }
             std::printf("\n");

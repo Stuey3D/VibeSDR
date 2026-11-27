@@ -390,7 +390,7 @@ export interface AdsbAircraft extends AdsbInfo {
   alt_baro?: number | 'ground'; alt_geom?: number;
   gs?: number; track?: number; mag_heading?: number; tas?: number; ias?: number;
   baro_rate?: number; squawk?: string; emergency?: string | number;
-  seen?: number; messages?: number; rssi?: number;
+  seen?: number; messages?: number; rssi?: number; snr?: number;   // ★ beta96 snr: dB over the 1090 MHz floor
   /** ★ how far the server has followed it, NM — the sum of its position steps (vibe_adsb.h setPos) */
   tracked_nm?: number;
 }

@@ -45,7 +45,9 @@ import { parseOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKey
          outlineLabelSize, OUTLINE_INK, type Outline } from '../utils/lrptOutline';
 import { useLrptOutline } from '../services/lrptOutlineLive';   // ★ beta92 the DIGI MODES MAP row (the web's words)
 import SkyPlotView from './SkyPlotView';
-import { NavtexQualityRow, SnrStripText, SnrTimeline } from './NavtexQuality';   // ★★ beta96 NAVTEX decode quality + SNR
+import { NavtexQualityRow, SnrStripText, SnrTimeline } from './NavtexQuality';
+import { SnrLogText } from './SnrChip';   // ★ beta96 the day logs' kept SNRs
+import { SNR_LOG_MODE } from '../utils/snrColour';   // ★★ beta96 NAVTEX decode quality + SNR
 import { fileBodyStart, fileTextBase, navtexSnrLine, snrOfItem, snrRanges, splitOfItem, type NavtexQualityFields } from '../utils/navtexQuality';   // ★★ 2026-11-24 THE SKY PLOT (src/utils/skyPlot.ts)
 import { parseSkyPlotJson, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyMode, type SkyPlotData } from '../utils/skyPlot';
 
@@ -445,6 +447,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       const shown = (showTr && trText != null ? trText : text) || 'Loading…';
                       const q = open.k === 'navtex' && shown === text && textOk ? snrOfItem(open) : null;
                       const base = q ? fileTextBase(text) : -1, from = q ? fileBodyStart(text) : -1;
+                      // ★ beta96 a day log's kept SNRs as chips (the file as received, never a translation)
+                      if (!q && shown === text && textOk && SNR_LOG_MODE[open.k]) return <SnrLogText text={shown} kind={open.k} selectable style={s.mono} />;
                       return <SnrStripText text={shown} selectable style={s.mono}
                                            ranges={q && base >= 0 && from >= 0 ? snrRanges(q, base, text.length, from) : null} />;
                     })()}

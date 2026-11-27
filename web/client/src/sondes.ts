@@ -6,7 +6,8 @@
  * chosen one draws its track (the report carries it — no extra request).
  * ★ The report is parsed by the app's own code (src/services/sondes.ts — one rule, two readers). Everything escaped here.
  */
-import { sondeAge, sondeCard, sondeDetail, sondeEmpty, sondeIcon, sondeLine, sondeStatus, sondeTrail, type Sonde, type SondeBand, type SondeReport } from '../../../src/services/sondes';
+import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per frame
+import { sondeSnrMode, sondeAge, sondeCard, sondeDetail, sondeEmpty, sondeIcon, sondeLine, sondeStatus, sondeTrail, type Sonde, type SondeBand, type SondeReport } from '../../../src/services/sondes';
 
 function esc(s: unknown): string {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
@@ -16,7 +17,7 @@ export function sondeRows(r: SondeReport | null): string {
   if (!r || !r.sondes.length) return `<div class="trkEmpty">${esc(sondeEmpty(r))}</div>`;
   return r.sondes.map((s) => `<div class="trkRow${s.lat == null ? ' nopos' : ''}" role="button" tabindex="0" data-key="${esc(s.serial)}">`
     + `<span class="id"><b>${esc(sondeLine(s))}</b><small>${esc(sondeDetail(s))}</small></span>`
-    + `<span class="sp">${esc(sondeAge(s.age))}</span><span class="rg">${s.lat == null ? '<span class="dim">no position</span>' : ''}</span></div>`).join('');
+    + `<span class="sp">${snrChipHtml(sondeSnrMode(s), s.snr)}${esc(sondeAge(s.age))}</span><span class="rg">${s.lat == null ? '<span class="dim">no position</span>' : ''}</span></div>`).join('');
 }
 /** The map's items: the sondes with a position. */
 export function sondeItems(r: SondeReport | null): Array<Sonde & { key: string }> {

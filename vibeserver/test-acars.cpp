@@ -13,6 +13,7 @@
 #include "vibe_avi_tx.h"   // ★ the transmitters (shared with the benchmark rows)
 
 #include <chrono>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,7 +31,8 @@ static void dig(const void* p, size_t n) { const uint8_t* b = static_cast<const 
 using vibeavitx::makeBlock; using vibeavitx::airBits;   // ★ vibe_avi_tx.h (the transmitters)
 template <class... A> static void addBurst(A&&... a) { vibeavitx::acarsBurst(std::forward<A>(a)...); }
 
-struct Res { int good = 0, rep = 0, wrong = 0; };
+struct Res { int good = 0, rep = 0, wrong = 0; std::vector<float> snr;   // ★ beta96 the good blocks' Block::snrDb
+             float med() const { if (snr.empty()) return -99; auto v = snr; std::sort(v.begin(), v.end()); return v[v.size() / 2]; } };
 
 /** A synthetic run: `nb` blocks per channel on the three EU channels, carrier C/N0 `cn0` dB-Hz. */
 static Res synth(double fs, double cn0, int nb, uint32_t seed, bool repair = true, bool print = false) {
@@ -68,7 +70,7 @@ static Res synth(double fs, double cn0, int nb, uint32_t seed, bool repair = tru
             std::string s(b.raw.begin(), b.raw.end());
             bool match = false;
             for (auto& v : sent) { std::string t; for (size_t j = 0; j + 3 < v.size(); ++j) t += char(v[j] & 0x7F); if (t == s) { match = true; break; } }
-            if (match) { ++r.good; if (b.repaired) ++r.rep; } else ++r.wrong;
+            if (match) { ++r.good; if (b.repaired) ++r.rep; r.snr.push_back(b.snrDb); } else ++r.wrong;
             dig(s.data(), s.size()); dig(&b.repaired, sizeof b.repaired);
             if (print) std::printf("      %s %s %s\n", b.reg.c_str(), b.flight.c_str(), b.text.c_str());
         });
@@ -246,8 +248,10 @@ int main(int argc, char** argv) {
             for (double cn0 : { 42.0, 45.0, 48.0, 51.0, 54.0, 60.0 }) {
                 Res r = synth(fs, cn0, nb, uint32_t(cn0 * 10 + fs / 1e5));
                 Res r0 = synth(fs, cn0, nb, uint32_t(cn0 * 10 + fs / 1e5), false);
-                std::printf("              %4.0f        : %3d (%2d)  wrong %d | %3d\n", cn0, r.good, r.rep, r.wrong, r0.good);
+                std::printf("              %4.0f        : %3d (%2d)  wrong %d | %3d   reported SNR %.1f dB\n", cn0, r.good, r.rep, r.wrong, r0.good, r.med());
                 CHECK(r.wrong == 0, "a wrong block at %.0f dB-Hz", cn0);
+                // ★ beta96 the reported SNR (carrier over the channel floor) tracks C/N0 − ~38.5 dB once clear of the threshold
+                if (cn0 >= 51) CHECK(std::fabs(r.med() - float(cn0 - 38.5)) <= 2.5f, "ACARS reported SNR %.1f dB at %.0f dB-Hz", r.med(), cn0);
                 if (cn0 >= 54) CHECK(r.good == 3 * nb, "all blocks at %.0f dB-Hz (%d of %d)", cn0, r.good, 3 * nb);
             }
         }

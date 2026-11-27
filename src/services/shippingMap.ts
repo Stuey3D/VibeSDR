@@ -101,7 +101,7 @@ export interface StoredShips { now: number; count: number; total: number; off: b
 /** ★ /vibeserver/gallery/ais-ships.json — the live report's vessel shape, sanitised the same way. */
 export function storeSanitise(j: any): StoredShips | null {
   if (!j || typeof j !== 'object' || !Array.isArray(j.vessels)) return null;
-  const r = aisSanitise({ type: 'ais', vessels: j.vessels.slice(0, 2048) });
+  const r = aisSanitise({ type: 'ais', vessels: j.vessels.slice(0, 2048), snrv: j.snrv });   // ★ beta96 the store keeps each ship's SNR (snrv 2)
   const pts = new Map<number, [number, number][]>();
   for (const v of j.vessels.slice(0, 2048)) {
     const m = Number(v?.mmsi);

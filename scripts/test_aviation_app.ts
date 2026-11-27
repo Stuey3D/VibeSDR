@@ -1,7 +1,7 @@
 // test_aviation_app.ts — V12 aviation, the clients' half (src/services/aviation.ts): the datalink report parsed
 // defensively (bounded, control characters out, bad numbers dropped), the bands list, the list line (never the body),
 // the HFDL status line. The server's own shapes are checked end to end in scripts/test-server-avdata.mjs.
-import { avAge, avAppsText, avCard, avDetail, avFix, avGainText, avLine, avRoute, avTrackItems, avTrackRows, hfdlStatusText, parseAvBands, parseAvReport } from '../src/services/aviation';
+import { avAge, avAppsText, avCard, avDetail, avFix, avGainText, avLine, avRoute, avTrackItems, avTrackRows, hfdlStatusText, parseAvBands, parseAvReport, avRateText } from '../src/services/aviation';
 
 let fail = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fail++; };
@@ -61,5 +61,21 @@ ok(!!wide && avGainText(wide).endsWith(' · capture raised to 8 MS/s for ACARS +
 const b3 = parseAvBands([{ id: 'acars', name: 'ACARS', region: 'x', hz: 131675000, channels: 4 }, { id: 'vdl2', name: 'VDL2', region: 'y', hz: 136862500, channels: 12 },
                          { id: 'acars+vdl2', name: 'ACARS + VDL2', region: 'z', hz: 134250000, channels: 16 }]);
 ok(b3.length === 3 && b3[2].id === 'acars+vdl2' && b3[2].channels === 16, 'three bands: the third is the combined one');
+// ★★ beta96 messages per minute (Stuart 11-26: "like ais … check antenna performance quickly")
+{
+  const r1 = parseAvReport({ type: 'avdata', band: 'vdl2', bandName: 'VDL2', hz: 136862500, msgs: 400, msgRate: 23.4, aircraft: [] });
+  ok(r1?.msgRate === 23.4 && avRateText(r1) === ' · 23 msg/min', `the rate parsed and worded as AIS's: "${avRateText(r1)}"`);
+  const r2 = parseAvReport({ type: 'avdata', band: 'acars', bandName: 'ACARS', hz: 131725000, msgs: 3, msgRate: 2.5, aircraft: [] });
+  ok(avRateText(r2) === ' · 2.5 msg/min', 'under 10: one decimal');
+  const r3 = parseAvReport({ type: 'avdata', band: 'acars', bandName: 'ACARS', hz: 131725000, msgs: 3, aircraft: [] });
+  ok(avRateText(r3) === '', 'an older server (no msgRate): nothing said, never "0 msg/min"');
+}
+{ // ★★ beta96 the last message's SNR + its scale key (vibe_avi_service.h "snr","sm") — both, or neither
+  const r4 = parseAvReport({ type: 'avdata', aircraft: [{ reg: 'G-A', snr: 14.2, sm: 'vdl2', via: 'VDL2' }, { reg: 'G-B', snr: 'x', sm: 'vdl2' },
+    { reg: 'G-C', snr: 9 }, { reg: 'G-D', snr: 3, sm: 'hfdl1200\u0000' }] });
+  ok(!!r4 && r4.aircraft[0].snr === 14.2 && r4.aircraft[0].sm === 'vdl2', 'the SNR and its scale are read');
+  ok(!!r4 && r4.aircraft[1].snr === undefined && r4.aircraft[2].snr === undefined && r4.aircraft[2].sm === undefined, 'a bad number, or no scale: neither (never a guessed scale)');
+  ok(!!r4 && r4.aircraft[3].sm === 'hfdl1200', 'control characters out of the key');
+}
 console.log(fail ? `${fail} FAILED` : 'all passed');
 process.exit(fail ? 1 : 0);

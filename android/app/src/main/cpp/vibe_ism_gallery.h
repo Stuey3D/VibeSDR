@@ -30,6 +30,7 @@
 //    a car heard before and after a restart is two rows. The new process numbers its devices above the ones the day
 //    already named (nickFloor → Tracker::reserveNicks), so "TPMS #2" never means two cars on one card.
 #pragma once
+#include "vibe_station_sink.h"   // ★ beta96 snrToken (" · SNR 18 dB")
 #include "vibe_gallery.h"
 #include "vibe_ism_sink.h"
 
@@ -263,7 +264,7 @@ public:
         readings_++;
         char lead[48];
         std::snprintf(lead, sizeof lead, "%s  %.3f  ", gallery::utcStamp(t, "%H:%M:%S").c_str(), h.freqHz / 1e6);
-        buf_ += lead + gallery::printable(h.line, 400) + "\n";
+        buf_ += lead + gallery::printable(h.line, 400) + vibestation::snrToken(h.snr) + "\n";   // ★ beta96 the burst's SNR kept
         cardDirty_ = true;
         trimRows();
         if (buf_.size() >= kFlushBytes) flushLog(t);

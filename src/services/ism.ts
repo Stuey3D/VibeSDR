@@ -39,7 +39,9 @@ export interface IsmDevice {
   relays?: string[]; direct?: number;
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
-export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
+export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number;
+  /** ★ beta96 the frame's SNR (dB, LoRa's in-band definition) and spreading factor — the chip's scale is per SF */
+  snr?: number; sf?: number }
 export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number;
   /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
   found: number; foundKnown: number }
@@ -136,7 +138,8 @@ export function ismSanitise(msg: any): IsmReport | null {
     });
   }
   const msgsOf = (a: any): IsmMsg[] => (Array.isArray(a) ? a.slice(0, 60) : []).filter((m: any) => m && typeof m.text === 'string')
-    .map((m: any) => ({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '', net: str(m.net, 12), node: str(m.node, 16), ch: str(m.ch, 20), freq: num(m.freq) }));
+    .map((m: any) => ({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '', net: str(m.net, 12), node: str(m.node, 16), ch: str(m.ch, 20), freq: num(m.freq),
+      ...(num(m.snr) !== undefined && num(m.sf) !== undefined ? { snr: num(m.snr), sf: num(m.sf) } : {}) }));
   const lo = msg.lora && typeof msg.lora === 'object' ? msg.lora : null;
   return {
     type: 'ism', band: str(msg.band, 8), bandName: str(msg.bandName, 40), centre: num(msg.centre) ?? 0, custom: num(msg.custom),
@@ -207,7 +210,8 @@ function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n
   const lat = num(d.lat), lon = num(d.lon);
   const pos = lat !== undefined && lon !== undefined && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0);
   const msgs: IsmMsg[] = [];
-  for (const m of Array.isArray(d.msgs) ? d.msgs.slice(0, 5) : []) if (m && typeof m.text === 'string') msgs.push({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '' });
+  for (const m of Array.isArray(d.msgs) ? d.msgs.slice(0, 5) : []) if (m && typeof m.text === 'string') msgs.push({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '',
+    ...(num(m.snr) !== undefined && num(m.sf) !== undefined ? { snr: num(m.snr), sf: num(m.sf) } : {}) });
   return {
     node: str(d.node, 16), short: meshName(d.short, 8) || undefined, long: meshName(d.long, 40) || undefined, hw: str(d.hw, 40), role: str(d.role, 20), chan: str(d.chan, 20),
     net: str(d.net, 30), mtype: str(d.mtype, 24), what: str(d.what, 24), lat: pos ? lat : undefined, lon: pos ? lon : undefined,
@@ -311,8 +315,9 @@ export function ismBandLabel(freq: number | undefined, bands: IsmBand[]): string
   for (const b of bands) { const d = Math.abs(b.hz - freq); if (d <= bd) { bd = d; best = b; } }
   return best ? best.id : String(Math.round(freq / 1e6));
 }
-export function ismMsgLines(r: IsmReport | null, bands: IsmBand[] = []): Array<{ ago: string; band: string; text: string }> {
-  return (r?.msgs ?? []).map((x) => ({ ago: ismAgo(x.ago), band: ismBandLabel(x.freq, bands), text: `${ismNetName(x.net || '')}${x.ch ? ' ' + x.ch : ''} · ${x.from || x.node || '?'}: ${x.text}` }));
+export function ismMsgLines(r: IsmReport | null, bands: IsmBand[] = []): Array<{ ago: string; band: string; text: string; snr?: number; sf?: number }> {
+  return (r?.msgs ?? []).map((x) => ({ ago: ismAgo(x.ago), band: ismBandLabel(x.freq, bands), text: `${ismNetName(x.net || '')}${x.ch ? ' ' + x.ch : ''} · ${x.from || x.node || '?'}: ${x.text}`,
+                                        ...(x.snr != null && x.sf != null ? { snr: x.snr, sf: x.sf } : {}) }));   // ★ beta96 the frame's SNR + SF (the chip)
 }
 /** A meter's own fields, sanitised. */
 function meterFields(d: any, num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): Partial<IsmDevice> {

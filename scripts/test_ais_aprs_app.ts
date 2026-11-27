@@ -66,6 +66,16 @@ const ar = app.aisListRows(aa, rx);
 eq('AIS list order = web (nearest first, no position last)', ar.map((r) => r.key), keysOf(web.aisRows(wa, rx)));
 eq('AIS list order without a receiver = web', app.aisListRows(aa, null).map((r) => r.key), keysOf(web.aisRows(wa, null)));
 const wr = web.aisRows(wa, rx);
+// ★★ beta96 each ship's last frame's SNR: the same chip on both (snrColour.ts 'ais'), none without one
+for (const r of ar) {
+  if (r.snr == null) { ok(`AIS row ${r.key}: no SNR, no chip`, r.snrMode === undefined); continue; }
+  ok(`AIS row ${r.key}: the web's row carries the same ${Math.round(r.snr)} dB chip`, r.snrMode === 'ais' && wr.includes(`>${Math.round(r.snr) < 0 ? '\u2212' : ''}${Math.abs(Math.round(r.snr))} dB</span>`));
+}
+ok('AIS: an older server (no snrv): no chips — its "snr" read the floor after the frame', ar.every((r) => r.snr == null) && !wr.includes('snrChip'));
+{ const aa2 = app.aisSanitise({ ...aisMsg, snrv: 2 })!, wa2 = web.aisSanitise({ ...aisMsg, snrv: 2 })!;
+  const ar2 = app.aisListRows(aa2, rx), wr2 = web.aisRows(wa2, rx);
+  ok('AIS snrv 2: rows carry the SNR chip', ar2.some((r) => r.snr != null && r.snrMode === 'ais'));
+  for (const r of ar2) if (r.snr != null) ok(`AIS row ${r.key}: the web's row has the same ${Math.round(r.snr)} dB chip`, wr2.includes(`>${Math.round(r.snr) < 0 ? '\u2212' : ''}${Math.abs(Math.round(r.snr))} dB</span>`)); }
 for (const r of ar) {
   ok(`AIS row ${r.key}: name in the web's row`, wr.includes(web.esc(r.name)));
   ok(`AIS row ${r.key}: second line in the web's row`, wr.includes(web.esc(r.second.split(' · ')[0])));
@@ -160,6 +170,14 @@ const pk = app.aprsPacketSanitise({ key: 'M0ABC-9', from: 'M0ABC-9', kind: 'posi
 eq('APRS packet sanitised', pk, { key: 'M0ABC-9', from: 'M0ABC-9', kind: 'position', line: 'M0ABC-9 · car', raw: 'r', lat: 50.96, lon: -1.34, to: undefined, text: undefined });
 eq('APRS packet without a key', app.aprsPacketSanitise({ from: 'X' }), null);
 const trails = new Map<string, [number, number][]>([['M0ABC-9', [[50.95, -1.35]]]]);
+// ★★ beta96 a station's last frame's SNR (IQ only): read alike, the same chip on the map list, the box and the web
+{ const d2 = { ...aprsData, stations: (aprsData as any).stations.map((x: any, i: number) => (i === 0 ? { ...x, snr: 11.6 } : x)) };
+  const a2 = app.aprsSanitise(d2)!, w2 = web.aprsSanitise(d2)!;
+  ok('APRS SNR read alike', a2.stations[0].snr === 11.6 && w2.stations[0].snr === 11.6 && a2.stations[1]?.snr === undefined);
+  const r2 = app.aprsListRows(a2, rx);
+  ok('APRS map row carries the chip', r2.some((r) => r.snr === 11.6 && r.snrMode === 'aprs') && r2.filter((r) => r.snrMode).length === 1);
+  ok('APRS web row has the same 12 dB chip', web.aprsRows(w2, rx).includes('>12 dB</span>') && (web.aprsRows(w2, rx).match(/snrChip/g) || []).length === 1);
+  ok('APRS box row carries it', app.aprsBoxRows(a2, rx)[0].snr === 11.6); }
 const copy = app.aprsSanitise(aprsData)!;
 eq('APRS packet moves its station', app.aprsApplyPacket(copy, trails, pk), true);
 eq('… to the new position, heard now', [copy.stations[0].lat, copy.stations[0].lon, copy.stations[0].seen], [50.96, -1.34, 0]);

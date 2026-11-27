@@ -19,6 +19,7 @@ import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
 import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { flagEmoji } from '../../../src/services/adsbInfo';
+import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
 
@@ -69,12 +70,17 @@ export interface AisReport {
   notices?: AisNotice[];
   /** ★★★ beta96 the maritime combination: "ais+dsc" while AIS runs with DSC channel 70 (vibe_maritime_combo.h); its calls so far. */
   combo?: 'ais+dsc'; dscCalls?: number;
+  /** ★ beta96 2 = a vessel's "snr" is its last frame's (vibe_ais.h burstSnr_); older servers read the floor AFTER the
+   *  frame (~3 dB whatever the ship) — no chip from them. */
+  snrv?: number;
 }
 export interface AprsStation {
   key: string; from: string; kind: string; name?: string; sym: string; symName?: string; lat?: number; lon?: number;
   course?: number; speed?: number; alt?: number; altBad?: number; comment?: string; status?: string; micE?: string; path?: string; via?: string;
   raw?: string; line?: string; wx?: Record<string, number>; killed?: number; msg?: number; seen: number; age: number; count: number;
   posAge: number; trail?: [number, number][];
+  /** ★ beta96 its last frame's SNR (dB, the carrier over the widest IQ filter's floor) — none from an audio-only frame */
+  snr?: number;
 }
 export interface AprsList {
   baud: number; frames: number; repaired: number; dupes: number; stations: AprsStation[];
@@ -102,7 +108,7 @@ export function aisSanitise(m: any): AisReport | null {
       cog: num(v.cog) ?? undefined, hdg: num(v.hdg) ?? undefined, rot: num(v.rot) ?? undefined, turn: num(v.turn) ?? undefined,
       draught: num(v.draught) ?? undefined, len: num(v.len) ?? undefined, beam: num(v.beam) ?? undefined, eta: str(v.eta, 16),
       alt: num(v.alt) ?? undefined, trend: num(v.trend) ?? undefined, line: str(v.line, 200), ch: str(v.ch, 2),
-      level: num(v.level) ?? undefined, snr: num(v.snr) ?? undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
+      level: num(v.level) ?? undefined, snr: (num(m.snrv) ?? 0) >= 2 ? num(v.snr) ?? undefined : undefined, seen: num(v.seen) ?? 0, age: num(v.age) ?? 0,
       posAge: num(v.posAge) ?? -1, count: num(v.count) ?? 0, trail: num(v.trail) ?? undefined,
       light: num(v.light) ?? undefined, racon: num(v.racon) ?? undefined, alarm: num(v.alarm) ?? undefined, met: aisMetSanitise(v.met),
       ...aisDxSanitise(v),   // ★ beta95 DX / unconfirmed / held / implausible
@@ -114,7 +120,7 @@ export function aisSanitise(m: any): AisReport | null {
   return { notices, type: 'ais', rate: num(m.rate) ?? 0, now: num(m.now) ?? 0, msgs: num(m.msgs) ?? 0, msgRate: num(m.msgRate) ?? 0,
            chA: num(m.chA) ?? 0, chB: num(m.chB) ?? 0, repaired: num(m.repaired) ?? 0, dropped: num(m.dropped) ?? 0,
            capture: num(m.capture) ?? -1, noise: num(m.noise) ?? 0, vessels: vs, safety,
-           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined,
+           gain: num(m.gain) ?? undefined, gainAuto: num(m.gainAuto) ?? undefined, snrv: num(m.snrv) ?? undefined,
            ...(m.combo === 'ais+dsc' ? { combo: 'ais+dsc' as const, dscCalls: num(m.dsc?.calls) ?? 0 } : {}) };
 }
 export function aprsSanitise(d: any): AprsList | null {
@@ -131,7 +137,7 @@ export function aprsSanitise(d: any): AprsList | null {
               alt: num(s.alt) ?? undefined, altBad: s.altBad === 1 ? 1 : undefined, comment: str(s.comment, 200), status: str(s.status, 200), micE: str(s.micE, 20), path: str(s.path, 80),
               via: str(s.via, 16), raw: str(s.raw, 400), line: str(s.line, 300), wx: Object.keys(wx).length ? wx : undefined,
               killed: num(s.killed) ?? undefined, msg: num(s.msg) ?? undefined, seen: num(s.seen) ?? 0, age: num(s.age) ?? 0,
-              count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail });
+              count: num(s.count) ?? 0, posAge: num(s.posAge) ?? -1, trail, ...(num(s.snr) != null ? { snr: num(s.snr)! } : {}) });
   }
   const messages = Array.isArray(d.messages) ? d.messages.slice(-60).map((m: any) => ({ age: num(m?.age) ?? 0, from: str(m?.from, 16), to: str(m?.to, 12), text: str(m?.text, 200), kind: str(m?.kind, 10), id: str(m?.id, 8) || undefined })) : [];
   return { baud: num(d.baud) ?? 1200, frames: num(d.frames) ?? 0, repaired: num(d.repaired) ?? 0, dupes: num(d.dupes) ?? 0, stations: st, messages };
@@ -300,11 +306,11 @@ export function aisRows(r: AisReport, rx: LatLon | null): string {
     // ★★ beta95 DX (aisDx.ts): the tag in the range column, which never truncates; unconfirmed / implausible say so there
     const dxs = aisDxState(v);
     const ub = dxs === 'unconf' && rx && v.uLat != null && v.uLon != null ? rangeBearing(rx, v.uLat, v.uLon) : null;
-    const where = rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
+    const where = snrChipHtml('ais', v.snr) + (rb ? `${dxs === 'dx' ? '<span class="dxTag">DX</span>' : ''}${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${compass8(rb.brg)}</span>`
       : v.lat != null ? (dxs === 'dx' ? '<span class="dxTag">DX</span>' : '')
       : dxs === 'unconf' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.unconf}${ub ? ` ${Math.round(ub.nm)} NM ${compass8(ub.brg)}` : ''}</span>`
       : dxs === 'implausible' ? `<span class="dim" title="${esc(aisDxWords(v))}">${AIS_DX_SHORT.implausible}</span>`
-      : '<span class="dim">no position</span>';
+      : '<span class="dim">no position</span>');   // ★ beta96 the last frame's SNR chip first (the column never truncates)
     const second = [aisKindWord(v), dxs === 'unconf' ? 'unconfirmed position' : dxs === 'implausible' ? 'position implausible' : '',
       v.navName && v.nav !== 0 && v.nav !== 15 ? v.navName : '', v.dest ? '→ ' + v.dest : '', aisMetShort(v.met?.[0])].filter(Boolean).map(esc).join(' · ');
     return `<div class="trkRow${v.lat == null ? ' nopos' : ''}${v.kind === 'sart' ? ' em' : ''}${dxs === 'dx' ? ' dx' : ''}" role="button" tabindex="0" data-key="${esc(v.mmsi)}">`
@@ -375,7 +381,8 @@ export function aprsRows(l: AprsList, rx: LatLon | null): string {
   return l.stations.map((s) => {
     const rb = rx && s.lat != null && s.lon != null ? rangeBearing(rx, s.lat, s.lon) : null;
     const second = [s.symName, s.comment || s.status].filter(Boolean).map((x) => esc(x)).join(' · ');
-    const where = rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km <span class="brg">${compass8(rb.brg)}</span>` : s.lat != null ? '' : '<span class="dim">no position</span>';
+    const where = snrChipHtml('aprs', s.snr)   // ★ beta96 its last frame's SNR (IQ only)
+      + (rb ? `${rb.km < 10 ? rb.km.toFixed(1) : Math.round(rb.km)} km <span class="brg">${compass8(rb.brg)}</span>` : s.lat != null ? '' : '<span class="dim">no position</span>');
     const sp = s.speed != null && s.speed >= 2 ? `${Math.round(s.speed)} km/h` : s.wx?.tempC != null ? `${s.wx.tempC.toFixed(1)} °C` : '';
     return `<div class="trkRow${s.lat == null ? ' nopos' : ''}" role="button" tabindex="0" data-key="${esc(s.key)}">`
       + `<span class="id"><b><i class="sw" style="background:${aprsColour(s)}"></i>${esc(aprsName(s))}</b><small>${second || esc(s.kind)}</small></span>`
@@ -493,6 +500,7 @@ const CSS = `
 .trkRow .ag{color:#8596a7}
 .trkRow .brg,.trkRow .dim{color:#8596a7}
 .trkRow.dx{box-shadow:inset 3px 0 0 #ffd34d}.trkRow.dx.sel{box-shadow:inset 3px 0 0 #ffd34d}
+.trkRow .snrChip{margin:0 5px 0 0}
 .trkRow .dxTag{display:inline-block;margin-right:5px;padding:0 4px;border-radius:3px;background:#ffd34d;color:#111;font:700 9.5px/14px ui-monospace,Menlo,monospace;letter-spacing:.6px;vertical-align:1px}
 .trkView i.up{color:#6dd36d;font-style:normal}
 .trkView i.dn{color:#ff8a6b;font-style:normal}

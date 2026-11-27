@@ -28,8 +28,9 @@ export interface AdsbListRow {
   /** The emergency's badge ("7700 EMERGENCY", "7600 RADIO FAIL", "7500 HIJACK", "EMERGENCY"), '' when none. */
   badge: string;
   military: boolean;
-  /** Signal, 1–3 bars (adsbBars), 0 when the report has no level. */
-  bars: number;
+  /** ★ beta96 the reply SNR over the 1090 MHz floor, dB (the server's, smoothed over the last few replies); undefined from
+   *  an older server or another source — the row then shows no chip (Stuart 11-26: the 3-bar meter gave way to it). */
+  snr?: number;
   /** ▲ ▼ ● beside the altitude (trendGlyph), and the altitude's colour (altColour) — '' when none. */
   trend: string;
   altCol: string;
@@ -41,13 +42,9 @@ export interface AdsbListRow {
   logo: string;
 }
 
-/** ★ SIGNAL BARS (Stuart, 2026-10-24: "a little 3 bar graph like everywhere else next to the flight number"). From
- *  the reply level in dBFS — relative to the radio's gain, so it compares aircraft with each other, not with other
- *  servers: 3 bars from −12 dBFS, 2 from −22, else 1. ★ ONE RULE, TWO READERS: web/client/src/adsb.ts adsbBars. */
-export function adsbBars(rssi: number | undefined | null): number {
-  if (rssi == null || !Number.isFinite(rssi)) return 0;
-  return rssi >= -12 ? 3 : rssi >= -22 ? 2 : 1;
-}
+/* ★★ beta96 (Stuart 11-26: "adsb should drop its 3 bar signal meter for the new colour coded snr"): the bars (3 from
+ *  −12 dBFS, 2 from −22 — a level relative to the radio's gain) are gone; the row shows the server's SNR in dB over the
+ *  noise floor, coloured by its margin over ADS-B's decode threshold (src/utils/snrColour.ts 'adsb'). */
 
 export function altText(a: Aircraft): string {
   if (a.onGround) return 'GND';
@@ -131,7 +128,7 @@ export function adsbListRows(list: Aircraft[]): AdsbListRow[] {
     emergency: !!emergencyBadge(a.squawk, a.emergency),
     badge: emergencyBadge(a.squawk, a.emergency),
     military: mil(a),
-    bars: adsbBars(a.rssi),
+    snr: a.snr != null && Number.isFinite(a.snr) ? a.snr : undefined,
     trend: trendGlyph(a),
     altCol: !a.onGround && a.altitude != null && Number.isFinite(a.altitude) ? altColour(a.altitude) : '',
     info: a.info ?? '',
@@ -165,6 +162,31 @@ export function adsbListRowsFit(areaH: number): number {
  *  (an SE in Display Zoom, 320 pt) that is 250 pt, which still holds a callsign, FL, kt and NM + bearing. */
 export function adsbListWidth(areaW: number): number {
   return Math.max(160, Math.min(300, Math.round(areaW - EDGE * 2 - RIGHT_KEEP)));
+}
+
+/* ── ★★★ beta96 THE ROW BY THE LIST'S OWN WIDTH (Stuart 11-26: "the signal hides the aircraft details") ───────────────
+ * The web list at ~232 px showed the SNR chip and no callsign: fixed altitude / speed / range columns took the row and the
+ * chip beside the name never shrinks. The same arithmetic here: at 240 pt (an SE in Display Zoom) 8 + 4·3 + 50 + 40 + 60 + 8
+ * left 62 pt, and the chip (~41 pt with its margin) left the callsign ~3 characters. So the row is laid out from the LIST's
+ * width (adsbListWidth — the window's, never the device's), giving way in the web's order and never with the callsign:
+ * speed first, then the chip moves under the callsign (the head of the second line), then altitude goes over range in one
+ * column at the end. The web's is a container query on #adsbList (web/client/index.html) — the same order. */
+export const ROW_PAD = 8, ROW_GAP = 4;
+export const COL_ALT = 58, COL_KT = 40, COL_RNG = 60;
+/** ★ What the callsign needs: a flag (~15 pt) and 7 characters of the 12 pt decoder font (~53 pt); the chip beside it. */
+export const CALL_MIN = 68, CHIP_ROOM = 41;
+export interface AdsbRowLayout { kt: boolean; chipUnder: boolean; stacked: boolean }
+/** The callsign column's width (pt) for a row `listW` wide laid out as `l`. */
+export function adsbCallRoom(listW: number, l: AdsbRowLayout): number {
+  const cols = l.stacked ? [Math.max(COL_ALT, COL_RNG)] : [COL_ALT, ...(l.kt ? [COL_KT] : []), COL_RNG];
+  return listW - 2 - ROW_PAD * 2 - cols.length * ROW_GAP - cols.reduce((a, b) => a + b, 0);   // 2: the list's border
+}
+/** ★ The fullest layout whose callsign column still holds the callsign (and the chip, when it sits beside it). */
+export function adsbRowLayout(listW: number): AdsbRowLayout {
+  const tries: AdsbRowLayout[] = [{ kt: true, chipUnder: false, stacked: false }, { kt: false, chipUnder: false, stacked: false },
+                                  { kt: false, chipUnder: true, stacked: false }];
+  for (const l of tries) if (adsbCallRoom(listW, l) >= CALL_MIN + (l.chipUnder ? 0 : CHIP_ROOM)) return l;
+  return { kt: false, chipUnder: true, stacked: true };
 }
 
 /** ★ The collapse state, as it is kept per device ('1' open, '0' a pill). Open unless somebody shut it. */

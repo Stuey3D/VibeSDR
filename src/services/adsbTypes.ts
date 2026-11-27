@@ -49,6 +49,8 @@ export interface AdsbAircraftRaw extends AdsbInfo {
   seen?: number;
   messages?: number;
   rssi?: number;
+  /** ★ beta96 the reply's SNR over the 1090 MHz floor, dB (smoothed like rssi) — the list's colour-coded chip */
+  snr?: number;
   /** ★ how far the server has followed it, NM (vibe_adsb.h setPos) */
   tracked_nm?: number;
   /** ★ V12 Mode S Comm-B: what the aircraft told a ground radar, CONFIRMED registers only (vibe_adsb_commb.h). */
@@ -153,7 +155,7 @@ export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
     if (a.alt_baro === 'ground') r.alt_baro = 'ground';
     else if (num(a.alt_baro) !== undefined) r.alt_baro = num(a.alt_baro);
     for (const k of ['seen_pos', 'alt_geom', 'gs', 'track', 'mag_heading', 'tas', 'ias',
-                     'baro_rate', 'seen', 'messages', 'rssi', 'tracked_nm'] as const) {
+                     'baro_rate', 'seen', 'messages', 'rssi', 'snr', 'tracked_nm'] as const) {
       const v = num(a[k]);
       if (v !== undefined) (r as unknown as Record<string, number>)[k] = v;
     }
@@ -214,6 +216,7 @@ export function adsbToAircraft(list: AdsbAircraftRaw[], rx: { lat: number; lon: 
       course: a.track ?? a.mag_heading,
       squawk: a.squawk,
       rssi: a.rssi,
+      snr: a.snr,
       msgs: a.messages,
       lat: a.lat, lon: a.lon,
       distKm: hasPos && rxOk ? haversineKm(rx!.lat, rx!.lon, a.lat!, a.lon!) : undefined,
