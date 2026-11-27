@@ -131,6 +131,13 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="chat"]'); return !!c && !c.hidden && !!c.querySelector('#chatPhrases') && !!c.querySelector('#chatLog'); })()`), `${tag} ${w}: CHAT opens its card — the log and the canned replies`);
     await shutTransients(p);
     ok(await p.ev(`!!document.getElementById('chatPanel')?.contains(document.getElementById('chatPhrases'))`), `${tag} ${w}: …folded, the chat's nodes are home again`);
+    // ★ Stuart 14:59: the locked ✕'s nudge speaks in the bar's own width — "leaving", never under the ✕ or RATE
+    { await p.ev(`window.__vibeMapNudge('Ask in the chat before leaving'); 1`); await sleep(400);
+      const nz = JSON.parse(await p.ev(`JSON.stringify((() => { const r = (e) => { const b = e?.getBoundingClientRect(); return b && b.width ? b : null; }; const bar = r(document.getElementById('mapShLine')), x = r(${V}.querySelector('.trkTop .exit')), rt = r(${V}.querySelector('.mDock[data-dock="rate"]:not([hidden]) .hCard'));
+        const hit = (a, c) => a && c && a.left < c.right - 1 && a.right > c.left + 1 && a.top < c.bottom - 1 && a.bottom > c.top + 1; const e = document.getElementById('mapShLine');
+        return { text: e.textContent, clear: !hit(bar, x) && !hit(bar, rt), oneLine: e.scrollWidth <= e.clientWidth + 1 }; })())`));
+      ok(/^ASK IN CHAT( BEFORE LEAVING)?$/.test(nz.text) && nz.clear && nz.oneLine, `${tag} ${w}: the locked ✕'s nudge fits the bar ("${nz.text}", clear of the ✕ and RATE)`);
+      await sleep(2800); }
     // ★ a press on a locked control points at where to ask: the bar and CHAT pulse for ~2.5 s, then nothing runs (Stuart 14:46)
     await p.ev(`window.__vibeMapAskPulse(); 1`); await sleep(200);
     const pz = JSON.parse(await p.ev(`JSON.stringify({ bar: !!document.querySelector('#mapShLine.askPulse'), chat: !!document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"] .hCard.askPulse') || !document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"]:not([hidden])'), run: document.getAnimations().filter(a => a.playState === 'running').length })`));

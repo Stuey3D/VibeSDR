@@ -1156,7 +1156,7 @@ let askNudgeTimer: ReturnType<typeof setTimeout> | null = null;
 /** ★ A reach for a locked control: flash "ASK IN CHAT BEFORE TUNING" on the banner and the CHAT key. Once per
  *  2.5 s — a drum flick or a held key is one reach, not forty. */
 function nudgeAsk() {
-  if (trackViewUp()) mapAskPulse();   // ★ on a map: the shared-tuner bar and CHAT show where to ask
+  if (trackViewUp()) { mapNudge = { words: 'ASK IN CHAT BEFORE TUNING', until: Date.now() + 2600 }; mapAskPulse(); setTimeout(() => mapSharedSync(), 2700); }   // ★ on a map: the bar and CHAT show where to ask
   const now = Date.now();
   if (now - askNudgeAt < 2500) return;
   askNudgeAt = now;
@@ -9801,6 +9801,7 @@ function mapShBuild(): HTMLElement {
  *  with a radar pulse each, ~2.5 s, then stop; a press again restarts it (never stacks). tracks.ts .askPulse (transform
  *  and opacity only; reduced motion = one flash). */
 let mapAskT: ReturnType<typeof setTimeout> | null = null;
+let mapNudge: { words: string; until: number } | null = null;
 function mapAskPulse() {
   const v = document.querySelector('.trkView:not([hidden])');
   const els = [document.getElementById('mapShLine'), v?.querySelector('.mDock[data-dock="chat"] .hCard')].filter(Boolean) as HTMLElement[];
@@ -9809,6 +9810,7 @@ function mapAskPulse() {
   mapAskT = setTimeout(() => { mapAskT = null; for (const e of els) e.classList.remove('askPulse'); }, 2600);
 }
 (window as any).__vibeMapAskPulse = mapAskPulse;
+(window as any).__vibeMapNudge = (why: string) => { const o = mapShOpenView(); o?.v.onDialLocked?.(why); };   // ★ for the drivers
 function mapShChatSync() {
   const src = document.getElementById('mChat') as HTMLButtonElement | null;
   const b = document.getElementById('mapChat') as HTMLButtonElement | null;
@@ -9873,7 +9875,7 @@ function mapSharedSync() {
   const st = mapBarLine({   // ★★★ beta96 map cards: Stuart's bar words ("Shared VFO: Ask before changing mode or exiting 2/5")
     shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true || (o.v === asView && asViewOnly),
     listeners: listenerCount, max: listenerMax, ask: askNow, scanLocked: scanLockOn,
-    said: scanLockOn ? scanLockLine(scanLockPhase, scanLockDone, scanLockTotal) : bannerSaidText || null,
+    said: scanLockOn ? scanLockLine(scanLockPhase, scanLockDone, scanLockTotal) : (mapNudge && Date.now() < mapNudge.until ? null : bannerSaidText || null),
     exitMoves: o.exitMoves,
   });
   g.hidden = !st.show;
@@ -9888,6 +9890,8 @@ function mapSharedSync() {
     // ★ as the bar: the words as TEXT, the person glyph as markup (no translated string is parsed as HTML)
     const person = / 👤$/.test(st.text);
     line.textContent = person ? st.text.replace(/ 👤$/, ' ') : st.text;
+    // ★ Stuart 14:59: a locked press says what to do in the bar's OWN width — leaving or tuning, the right words
+    if (mapNudge && Date.now() < mapNudge.until) line.textContent = mapNudge.words;
     if (person) line.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>');
     line.title = st.why || (alone ? 'Nobody else is listening — free to tune' : 'Others share this dial — ask in the chat before you change it');
     // ★ Stuart 14:42: one line — too wide for the room between the ✕ and RATE, it says less ("Shared VFO · Ask · 2/5")
@@ -9895,8 +9899,10 @@ function mapSharedSync() {
     requestAnimationFrame(() => {
       if (!line.isConnected || line.scrollWidth <= line.clientWidth + 1) return;
       const t = line.dataset.long || '', n = /(\d+\/\d+)\s*$/.exec(t)?.[1] ?? '', head = t.split(':')[0].trim();
+      if (mapNudge && Date.now() < mapNudge.until) { line.textContent = 'ASK IN CHAT'; return; }
       const word = /ask/i.test(t) ? 'Ask' : /free/i.test(t) ? 'Free' : /lock/i.test(t) ? 'Locked' : '';
-      if (head && word) line.textContent = [head, word, n].filter(Boolean).join(' · ');
+      if (head && word && head.length < 24) line.textContent = [head, word, n].filter(Boolean).join(' · ');
+      else line.textContent = ['ASK IN CHAT', n].filter(Boolean).join(' · ');
     });
     line.setAttribute('aria-label', st.text.replace(/👤/, 'listening') + ' — open the chat');
     mapShChatSync();
@@ -9905,7 +9911,11 @@ function mapSharedSync() {
   if (o.v === asView) {
     const gain = document.getElementById('adsbGain'); if (gain) { if (adsbOn) gain.dataset.dial = '1'; else delete gain.dataset.dial; }
   }
-  if (!o.v.onDialLocked) o.v.onDialLocked = (why) => { nudgeAsk(); showPill(why, 4000); mapAskPulse(); };
+  if (!o.v.onDialLocked) o.v.onDialLocked = (why) => {
+    nudgeAsk(); showPill(why, 4000);
+    mapNudge = { words: /leav|exit/i.test(why) ? 'ASK IN CHAT BEFORE LEAVING' : 'ASK IN CHAT BEFORE TUNING', until: Date.now() + 2600 };
+    mapAskPulse(); mapSharedSync();
+  };
   mapServersSync();   // ★★★ tweak 3 the SERVERS chip — every map, always
   mapDeckVars();
   o.v.setDialLock(st.show || scanLockOn ? st.why : '', o.exitMoves);

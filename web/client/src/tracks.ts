@@ -746,7 +746,9 @@ const CSS = `
 .trkCard2[data-card="tune"] .mapGainHost .mrow{margin:0}
 /* ★★ the ASK PULSE (main.ts mapAskPulse): a breath and a radar ring, three times, transform + opacity only */
 .trkView .askPulse{position:relative;overflow:visible!important;animation:trkAskBreathe .8s ease-in-out 3}
-.trkView .askPulse::after{content:"";position:absolute;inset:-2px;border-radius:inherit;border:2px solid #ffcc88;pointer-events:none;animation:trkAskRing .8s ease-out 3;opacity:0}
+.trkView .askPulse::after{content:"";position:absolute;inset:-2px;border-radius:inherit;border:2px solid #ffcc88;pointer-events:none;animation:trkAskRing .8s ease-out 3;opacity:0;z-index:-1}
+.trkView .askPulse{z-index:0}
+.trkView .trkTop{z-index:789!important}   /* ★ the bar and its ring under the edge chips (790): a ring never sits over a chip's words */
 @keyframes trkAskBreathe{0%,100%{opacity:1}50%{opacity:.72}}
 @keyframes trkAskRing{0%{transform:scale(1);opacity:.9}100%{transform:scale(1.6);opacity:0}}
 @media (prefers-reduced-motion:reduce){.trkView .askPulse{animation:trkAskFlash .6s ease-out 1}.trkView .askPulse::after{animation:none}}
