@@ -1,6 +1,6 @@
 /* test_aircraft_feeds_app.ts — ★★ V12 beta96 the phone's AIRCRAFT FEEDS card rules (src/utils/aircraftFeeds.ts, the Setup page's
  * feedsFromForm / feedsTitle / beastAddrWhy) and the AIR & SEA MAP limits' words. Silent, no network. */
-import { feedFromForm, feedsBlob, parseFeeds, feedTitle, feedAddrWhy, feedDefaults, feedStatusLines, mapViewersOf, mapTimeMinOf, mapCostLine, mapViewersLine, feedFmtWord, feedTestWords, feedFindWords, feedKey } from '../src/utils/aircraftFeeds';
+import { feedFromForm, feedsBlob, parseFeeds, feedTitle, feedAddrWhy, feedDefaults, feedStatusLines, mapViewersOf, mapTimeMinOf, mapCostLine, mapViewersLine, feedFmtWord, feedTestWords, feedFindWords, feedKey, feedWithSite, feedIsAdsb } from '../src/utils/aircraftFeeds';
 let pass = 0, fail = 0;
 const ok = (c: boolean, w: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${w}`); };
 console.log('── the phone\'s aircraft feeds card ──');
@@ -38,5 +38,16 @@ ok(found.hits.length === 1 && found.hits[0].src.host === '192.168.86.12' && foun
 const none = feedFindWords({ found: false, line: 'Nothing found on 192.168.86.13 — tried 30005: nothing listening', hint: 'Is it on?', hits: [] });
 ok(none.hits.length === 0 && none.text === 'Nothing found on 192.168.86.13 — tried 30005: nothing listening Is it on?', 'nothing found: what was tried, and the hint');
 ok(feedKey(pi.src!) === 'beast|connect|192.168.86.12|30005|adsb', 'the key a TEST result is kept under');
+console.log('── ★★ b96-2 "Not at this site" (Stuart 11-27, docs/v12/RANGE-FEED.md) ──');
+ok(feedIsAdsb(pi.src!) && !feedIsAdsb(hf.src!) && feedIsAdsb({ fmt: 'sbs', dir: 'listen', port: 30003, label: 'adsb' }), 'ADS-B: a Beast feed, or BaseStation labelled ADS-B');
+const piOff = feedWithSite(pi.src!, true);
+ok(piOff.offsite === true && pi.src!.offsite === undefined, 'the tick marks an ADS-B feed off-site (a copy)');
+ok(feedWithSite(hf.src!, true).offsite === undefined && feedWithSite(piOff, false).offsite === undefined, '…never an HFDL one (the outline is ADS-B only); unticked = no key at all');
+ok(feedsBlob([piOff, hf.src!]) === JSON.stringify([{ ...pi.src!, offsite: true }, hf.src]), 'stored as "offsite":true on that feed only (the engine\'s vibe_feeds.h SourceCfg::offsite)');
+const back = parseFeeds(feedsBlob([piOff, hf.src!]));
+ok(back[0].offsite === true && back[1].offsite === undefined, 'read back: off-site kept');
+ok(parseFeeds('[{"fmt":"sbs","dir":"listen","port":32010,"label":"hfdl","offsite":true}]')[0].offsite === undefined
+   && parseFeeds('[{"fmt":"beast","dir":"connect","host":"h","port":30005,"offsite":"yes"}]')[0].offsite === undefined
+   && parseFeeds('[{"fmt":"beast","dir":"connect","host":"h","port":30005}]')[0].offsite === undefined, 'only true on an ADS-B feed counts; an old config (no key) = at this site');
 console.log(`\ntest_aircraft_feeds_app: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

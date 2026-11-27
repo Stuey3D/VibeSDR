@@ -134,6 +134,36 @@ const C = { text: '#fff', textDim: '#999', border: '#333', trackOff: '#222', tra
   await tick(5);
   ok(JSON.stringify(asked[asked.length - 1].src) === JSON.stringify(list[0]) && allText(m.container).includes('✓ Connected — UberSDR HFDL, 23 aircraft'), 'its result under the row');
 
+  console.log('── ★★ b96-2 "Not at this site": the tick, the tag ──');
+  {
+    let l2: FeedSource[] = [];
+    const q = mount();
+    const draw2 = () => q.render(<AircraftFeedsSetup C={C} list={l2} onChange={(l) => { l2 = l; draw2(); }} status={[]} error="" test={test} />);
+    draw2();
+    const tickBox = () => find(q.container, (x) => x.type === 'TouchableOpacity' && x.props.accessibilityRole === 'checkbox' && /^Not at this site/.test(String(x.props.accessibilityLabel)));
+    ok(!!tickBox() && tickBox()!.props.accessibilityState?.checked === false, '"Not at this site" is a tick in the add form, unticked');
+    ok(/Not at this site — its aircraft are shown but not counted in this server’s range outline/.test(allText(q.container)), '…with its words');
+    await press(tickBox());
+    ok(tickBox()!.props.accessibilityState?.checked === true, 'pressed: ticked');
+    await type(inputBy(q.container, (p) => p.accessibilityLabel === "The other receiver's address"), '192.168.86.30');
+    next = { found: true, line: 'Found: PiAware ADS-B (Beast, port 30005) — 40 aircraft', hint: '', tried: [],
+             hits: [{ src: { fmt: 'beast', dir: 'connect', host: '192.168.86.30', port: 30005, label: 'adsb', name: 'Friend' }, name: 'Friend', line: 'PiAware ADS-B (Beast, port 30005) — 40 aircraft' }] };
+    await press(button(q.container, 'FIND'));
+    await press(find(q.container, (x) => x.type === 'TouchableOpacity' && x.props.accessibilityLabel === 'Add Friend'));
+    ok(l2.length === 1 && l2[0].offsite === true, `★ the ADS-B feed added with the tick is off-site (${JSON.stringify(l2[0])})`);
+    ok(tickBox()!.props.accessibilityState?.checked === false, '…and the tick clears for the next feed');
+    ok(allText(q.container).includes('off-site'), '★ the list tags it "off-site"');
+    await press(tickBox());
+    await type(inputBy(q.container, (p) => p.accessibilityLabel === "The other receiver's address"), '192.168.86.11');
+    next = { found: true, line: 'Found: UberSDR HFDL (port 8080) — 23 aircraft', hint: '', tried: [],
+             hits: [{ src: { fmt: 'uberhfdl', dir: 'connect', host: '192.168.86.11', port: 8080, label: 'hfdl', name: 'UberSDR HFDL' }, name: 'UberSDR HFDL', line: 'UberSDR HFDL (port 8080) — 23 aircraft' }] };
+    await press(button(q.container, 'FIND'));
+    await press(find(q.container, (x) => x.type === 'TouchableOpacity' && x.props.accessibilityLabel === 'Add UberSDR HFDL'));
+    ok(l2.length === 2 && l2[1].offsite === undefined, 'an HFDL feed never carries it (the outline is ADS-B only)');
+    ok(findAll(q.container, (x) => x.type === 'Text' && allText(x) === 'off-site').length === 1, '…so one tag, on the ADS-B row only');
+    ok(q.errors.length === 0, 'no error escaped');
+  }
+
   console.log('── no engine test: no dead buttons ──');
   const n = mount();
   n.render(<AircraftFeedsSetup C={C} list={list} onChange={() => {}} status={[]} error="" />);
