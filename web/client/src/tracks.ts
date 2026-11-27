@@ -959,9 +959,13 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
   flex-direction:column;align-items:center!important;justify-content:center!important;gap:2px;border:1.5px solid var(--hc)!important;border-top-width:0!important;border-radius:0 0 12px 12px!important;transform:none!important}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab>*{flex:none;margin:0!important}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTabChev{display:block;width:16px;height:16px;line-height:16px;text-align:center;transform-origin:50% 50%;transform:rotate(-90deg)}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{position:absolute;top:0;right:0;border-top-width:0!important;border-right-width:1.5px!important;border-radius:0 0 12px 12px!important;
-  transform:none!important;padding:4px 8px!important;z-index:2;white-space:nowrap}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTuck{transform:rotate(-90deg)}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{position:absolute;top:calc(var(--trk-tab-h,48px) + 4px);right:0;border-width:1.5px!important;border-radius:12px!important;
+  transform:none!important;padding:4px 8px!important;z-index:3;white-space:nowrap}
+/* ★ Stuart 19:xx (iPhone: the TIME card opened sideways IN the row, HEALTH's tab on top of its digits, CHAT hidden under it):
+ *  out, the card DROPS below its own tab like every card here; the tab stays in the row at its width, lit, and tucks it */
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock):not(.tucked) .hTab{visibility:visible!important;pointer-events:auto!important;background:var(--bar-bg-hi,#1d2a38)!important}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock):not(.tucked) .hTabChev{transform:rotate(90deg)}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard .hTuck{transform:rotate(-90deg)}
 /* the cards drop from under the row */
 .trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:calc(var(--trk-tab-h,48px) + 4px)!important;bottom:calc(var(--sai-b) + 8px)!important;
   max-height:none;justify-content:flex-start;width:min(320px,calc(100% - var(--trk-cl-left,96px) - 8px))!important}
@@ -1013,7 +1017,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★★★ an EDGE piece (portrait's side chips and tabs, the ✕ corner, the LIST drawer) sits on the PHYSICAL edge and pads its
  *  CONTENT in by that edge's inset; free-standing controls (the ? and scale, zoom, credits) stand IN by it. */
 .trkView .mChipsR .mDock .hCard{padding-right:calc(4px + var(--sai-r))!important}
-.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard{padding-right:calc(8px + var(--sai-r))!important}
+.trkView:not([data-short]) .mChipsR #srvHealth .hCard,.trkView:not([data-short]) .mChipsR .mTime .hCard{padding-right:calc(8px + var(--sai-r))!important}
 .trkView .mDock[data-dock="rate"] .hCard{padding-right:var(--sai-r)!important}
 .trkView .mChipsL .mDock .hCard{padding-left:calc(4px + var(--sai-l))!important}
 .trkView .mChipsBL .mDock .hCard{padding-left:calc(6px + var(--sai-l))!important}
@@ -1398,6 +1402,18 @@ export class TrackView {
     // ★ a drag inside a card scrolls the card — it never reaches the map underneath (Stuart 18:1x, the CHAT card on an iPhone)
     for (const ev of ['touchstart', 'touchmove', 'pointerdown', 'pointermove', 'wheel', 'mousedown', 'dblclick'])
       this.cardsEl.addEventListener(ev, (e) => { if ((e.target as HTMLElement | null)?.closest?.('.trkCard2')) e.stopPropagation(); }, { passive: true });
+    // ★ Stuart 19:xx (iPhone, short landscape): health / time keep their TAB in the top row while their card is out (the card
+    //   drops below it, like every card here) — so the tab, pressed again, tucks the card, as every other tab shuts its own
+    r.querySelector('.mChipsR')?.addEventListener('click', (e) => {
+      const tab = (e.target as HTMLElement | null)?.closest?.('.hTab') as HTMLElement | null, d = tab?.parentElement;
+      if (!tab || !d || !this.root.hasAttribute('data-short') || !d.classList.contains('edgeDock') || d.classList.contains('mDock')) return;
+      if (d.classList.contains('tucked')) {   // opening: ONE of health / time out at a time (their cards share the drop below the row)
+        for (const o of Array.from(this.root.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked)')) as HTMLElement[]) if (o !== d) (o.querySelector('.hTuck') as HTMLElement | null)?.click();
+        return;
+      }
+      e.stopPropagation();
+      (d.querySelector('.hTuck') as HTMLElement | null)?.click();
+    }, true);
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
     for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => {
       // ★ the LIST stepped aside for a card: its chip brings it back (the card folds), never shuts it

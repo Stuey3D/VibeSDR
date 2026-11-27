@@ -343,6 +343,37 @@ async function radioDatalink(p, url) {
       await p.ev(`window.__vibeSessionLeft(100); 1`); await sleep(1500);
       const e = await st();
       ok(e && !e.tucked, `TIME: the next, more urgent stage brings it out again (${JSON.stringify(e)})`);
+      // ★★ Stuart 19:xx (iPhone: the TIME card opened sideways IN the row, HEALTH's tab over its digits, CHAT under it): out,
+      //    a health / time card DROPS below its own tab; every top-row tab stays visible, the thing at its centre, no overlap
+      const rowCheck = async (what) => {
+        const R = JSON.parse(await p.ev(`JSON.stringify((() => { const V = ${V}; const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+          const tabs = [['x', V.querySelector('.trkTop .exit')], ...[...V.querySelectorAll('.mChipsL .mDock:not([hidden]), .mChipsR > .mDock:not([hidden])')].map((d) => [d.dataset.dock, d.querySelector('.hCard')]),
+            ...[...V.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not([hidden])')].map((d) => [d.dataset.dock || d.id, d.querySelector('.hTab')])].filter(([, e]) => e && e.getClientRects().length);
+          const out = tabs.map(([id, e]) => { const b = box(e), x = (b.l + b.r) / 2, y = (b.t + b.b) / 2, h = document.elementFromPoint(x, y); return { id, ...b, vis: getComputedStyle(e).visibility, top: !!h && (e === h || e.contains(h)) }; });
+          const cards = [...V.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked):not([hidden]) > .hCard')].map((c) => ({ id: c.parentElement.dataset.dock || c.parentElement.id, ...box(c) }));
+          return { tabs: out, cards }; })())`));
+        const bad = R.tabs.filter((t) => t.vis === 'hidden' || !t.top).map((t) => t.id);
+        const lap = []; for (let i = 0; i < R.tabs.length; i++) for (let j = i + 1; j < R.tabs.length; j++) { const A = R.tabs[i], B = R.tabs[j]; if (A.l < B.r - 1 && A.r > B.l + 1 && A.t < B.b - 1 && A.b > B.t + 1) lap.push(A.id + '×' + B.id); }
+        const rowB = Math.max(...R.tabs.map((t) => t.b));
+        ok(!bad.length && !lap.length, `${what}: every top-row tab visible and the thing at its centre, none overlapping (${bad.concat(lap).join(' ') || R.tabs.map((t) => t.id).join(' ')})`);
+        ok(R.cards.length >= 1 && R.cards.every((c) => c.t >= rowB - 1), `${what}: the opened card drops below the row (${JSON.stringify(R.cards)} row bottom ${Math.round(rowB)})`);
+        await shot(`landscape-932x370-${what.replace(/\W+/g, '-')}.png`);
+        return R;
+      };
+      await rowCheck('TIME out');
+      { // the TIME tab, pressed while its card is out, tucks it (it stays in the row)
+        const t = JSON.parse(await p.ev(`JSON.stringify(${TD}.querySelector('.hTab').getBoundingClientRect())`));
+        await p.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: t.left + t.width / 2, y: t.top + t.height / 2 }] });
+        await p.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await sleep(800);
+        const f = await st(); ok(f && f.tucked, `TIME: its tab, pressed while the card is out, tucks it (${JSON.stringify(f)})`);
+      }
+      { // and HEALTH the same: its tab opens the card below it, the row intact
+        const hx = await p.ev(`(() => { const d = document.getElementById('srvHealth'); if (!d || d.hidden || !d.getClientRects().length) return ''; if (d.classList.contains('tucked')) d.querySelector('.hTab').click(); return d.classList.contains('tucked') ? 'tucked' : 'out'; })()`);
+        await sleep(800);
+        if (hx === 'out') { await rowCheck('HEALTH out'); await p.ev(`(() => { const d = document.getElementById('srvHealth'); d.querySelector('.hTab').click(); return 1; })()`); await sleep(600);
+          ok(await p.ev(`document.getElementById('srvHealth').classList.contains('tucked')`), 'HEALTH: its tab, pressed again, tucks it'); }
+        else console.log('   (no server health pill on this stack:', hx || 'none', ')');
+      }
     }
     // ── safe areas: a notch on the left (59 px), the corner on the right (20), the home bar (21) ──
     await p.size(932, 430, true); await sleep(1200);
