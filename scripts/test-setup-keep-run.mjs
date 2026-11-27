@@ -108,7 +108,10 @@ console.log('── the card: an RTL at 2.4 MS/s (the Sony)');
   ok(/costs CPU all the time/.test($('bgWholeNote').innerHTML) && /land on the map in VDL2 too/.test($('bgWholeNote').innerHTML), 'the background note: CPU, and listeners join it');
   ok(/also this radio's <b>Background decoding<\/b>/.test($('mapBgNote').innerHTML), 'the landing card says the map is populated');
   ok(/SHARES its 137 MHz capture/.test(P.keepSatWords(RADIO)) && /SHARES/.test($('bgSatNote').textContent), 'the satellites line: VDL2 shares the capture');
-  ok(/data-bgmode="ism"/.test($('bgModeList').innerHTML) && /data-bgmode="adsb" disabled/.test($('bgModeList').innerHTML), 'the background card draws every map (ISM too), one at a time');
+  // ★★★ b96-wholeradio-pick one at a time = radio buttons, nothing greyed for being ticked (scripts/test-setup-bg-pick.mjs clicks them)
+  ok(/data-bgmode="ism"/.test($('bgModeList').innerHTML) && /type="radio" name="bgModePick" data-bgmode="adsb">/.test($('bgModeList').innerHTML)
+     && !/is ticked/.test($('bgModeList').innerHTML) && /2\.4 MS\/s: this radio runs one of these at a time/.test($('bgRateNote').textContent),
+     'the background card draws every map (ISM too), one at a time: radio buttons, one line above');
   ok(!RADIO.adsbKeepRunning && !RADIO.landingAdsb, 'still no ADS-B pair (an older server idles the radio, never lands in ADS-B)');
   // switching to ADS-B (the newest tick wins where only one fits)
   P.keepSetModes(['vdl2', 'adsb']);

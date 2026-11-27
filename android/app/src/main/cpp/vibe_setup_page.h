@@ -5343,29 +5343,34 @@ function bgWholeRender() {
   $("bgKindManual").checked = !whole; $("bgKindWhole").checked = whole;
   $("bgWholeBox").classList.toggle("hide", !whole);
   if ($("hwBg")) $("hwBg").style.display = whole ? "none" : "";
+  // ★★★ b96-wholeradio-pick (Stuart 11-27: "it should be a selection dot instead so that if adsb is ticked but user changes to ism
+  //     it switches"). A radio that runs ONE mode at a time (no ACARS + VDL2 capture) draws RADIO BUTTONS: picking another
+  //     switches straight to it. Either way a row is greyed only for a REAL reason (the radio's range, CPU, rate, switched
+  //     off) — the gate with nothing chosen — never for another mode being ticked: on a wide radio's checkboxes a new tick
+  //     replaces what it cannot run beside (bgPickMode). Stored exactly as before (bgMode).
+  const one = !F.comboOk;
+  const free = keepGate(F.avail, F.comboOk, F.comboWhy, F.rate, [], F.comboMin, "");
   const list = $("bgModeList");
   let html = "", group = "";
   if (whole) for (const o of offers) {
     if (!o.drawn) continue;
+    const fr = free.find(x => x.id === o.id) || o;
     if (o.group !== group) { group = o.group; html += `<div class="lbl" style="margin-top:8px">${esc(KEEP_GROUP_WORDS[group] || group)}</div>`; }
     const cost = keepCostWords(o.pct);
-    html += `<label style="display:flex;align-items:flex-start;gap:10px;margin-top:4px;${o.enabled ? "" : "opacity:.5"}">`
-      + `<input type="checkbox" data-bgmode="${o.id}"${o.on ? " checked" : ""}${o.enabled ? "" : " disabled"}>`
+    html += `<label style="display:flex;align-items:flex-start;gap:10px;margin-top:4px;${fr.enabled ? "" : "opacity:.5"}">`
+      + `<input type="${one ? "radio" : "checkbox"}"${one ? ' name="bgModePick"' : ""} data-bgmode="${o.id}"${o.on ? " checked" : ""}${fr.enabled ? "" : " disabled"}>`
       + `<span>${esc(o.name)}${cost ? ` <span class="hint" style="display:inline">\u00b7 ${esc(cost)}</span>` : ""}`
-      + (o.why ? `<br><span class="hint" style="display:inline">${esc(o.why)}</span>` : "") + `</span></label>`;
+      + (fr.why ? `<br><span class="hint" style="display:inline">${esc(fr.why)}</span>` : "") + `</span></label>`;
     if (o.id === "ism" && o.on) html += keepIsmSelect(o.tok, 'data-bgband="ism"');
   }
   list.innerHTML = html;
   for (const sel of list.querySelectorAll("select[data-bgband]")) sel.addEventListener("change", () => { bgSetWhole(["ism:" + sel.value]); });
-  for (const cb of list.querySelectorAll("input[data-bgmode]")) cb.addEventListener("change", () => {
-    const cur = keepParse(radio().bgMode);
-    let id = cb.dataset.bgmode;
-    if (id === "ism") id = "ism:" + keepIsmDefault();
-    bgSetWhole(cb.checked ? [...cur, id] : cur.filter(x => keepBase(x) !== keepBase(id)));
-  });
-  $("bgRateNote").textContent = whole && F.rate > 0
-    ? (F.comboOk ? `${keepRateWords(F.rate)} detected: one mode at a time, or ACARS & VDL2 together (this capture holds both).`
-                 : `${keepRateWords(F.rate)} detected: you can choose one of these modes.`) : "";
+  for (const cb of list.querySelectorAll("input[data-bgmode]")) cb.addEventListener("change", () => bgPickMode(cb.dataset.bgmode, cb.checked, one));
+  // ★ one line above the list (it was repeated under every row)
+  $("bgRateNote").textContent = !whole ? ""
+    : one ? (F.rate > 0 ? `${keepRateWords(F.rate)}: this radio runs one of these at a time.` : "This radio runs one of these at a time.")
+    : `${F.rate > 0 ? keepRateWords(F.rate) + ": " : ""}one of these at a time, or ACARS & VDL2 together (this capture holds both). `
+      + "A new tick replaces what it cannot run beside; to stop, choose Manual above.";
   const chosen = offers.filter(o => o.on).map(o => o.tok);
   const nm = keepIsCombo(chosen) ? "ACARS + VDL2" : chosen.length ? keepTokName(chosen[0]) : "";
   const cost = keepCostWords(keepIsCombo(chosen) ? F.comboPct : (offers.find(o => o.on) || {}).pct);
@@ -5373,7 +5378,7 @@ function bgWholeRender() {
   const land = keepParse(r.landingModes).join(",");
   const landOnMap = (r.landingMap === "avmar" || r.landingMap === "amateur") && !!land;
   $("bgWholeNote").innerHTML = !whole ? "" : single ? `This radio is <b>single use</b> (Operating mode): ${esc(singleWords(single))} runs instead, whatever is chosen here.`
-    : !nm ? (stored.length ? `This radio cannot run ${esc(stored.map(keepTokName).join(" + "))} with its current settings, so it idles as it would with nothing chosen until it can.` : "Tick the mode the radio runs with nobody connected.")
+    : !nm ? (stored.length ? `This radio cannot run ${esc(stored.map(keepTokName).join(" + "))} with its current settings, so it idles as it would with nothing chosen until it can.` : (one ? "Choose" : "Tick") + " the mode the radio runs with nobody connected.")
     : `<b>It costs CPU all the time</b>` + (cost ? ` (${esc(cost)}; the benchmark sets nothing here \u2014 it is your choice)` : "")
       + " and this radio never idles: it is not parked or handed to another program, and the manual profiles do not run. "
       + (landOnMap && land === chosen.join(",") ? `New listeners land on the map in ${esc(nm)} too, so they join it already populated.`
@@ -5382,6 +5387,23 @@ function bgWholeRender() {
   // ★ the release card says the background mode holds the radio (its old note, in the background's words)
   if ($("releaseKeepNote")) { $("releaseKeepNote").textContent = nm ? `${nm} runs on this radio when nobody is connected (Background decoding), so it is never let go while that is chosen.` : ""; $("releaseKeepNote").classList.toggle("hide", !nm); }
   for (const id of ["bgAdsbNote", "releaseAdsbNote", "bgKeepNote"]) if ($(id)) $(id).classList.add("hide");
+}
+/** ★★★ b96-wholeradio-pick a mode picked in the list. One-mode radio (radio buttons): that mode, nothing else. Wide radio
+ *  (checkboxes): a tick joins what it can run beside (ACARS + VDL2) and replaces the rest; the LAST tick cannot be taken off —
+ *  an empty list would be Manual, and the card would flip under the owner's hand (the 11-27 recording); the line above says
+ *  Manual is how it stops. */
+function bgPickMode(id, on, one) {
+  const cur = keepParse(radio().bgMode);
+  const tok = id === "ism" ? (cur.find(t => keepBase(t) === "ism") || "ism:" + keepIsmDefault()) : id;
+  if (on) {   // ★ the pair only where it is the pair; anything else replaces (keepParse puts tokens in table order, so the
+              //   "newest first" of bgSetWhole cannot decide it once a third is ticked)
+    const both = [...cur.filter(x => keepBase(x) !== id), tok];
+    bgSetWhole(!one && keepIsCombo(both.map(keepBase)) ? both : [tok]);
+    return;
+  }
+  const next = cur.filter(x => keepBase(x) !== id);
+  if (one || !next.length) { bgWholeRender(); return; }   // ★ drawn again as it is: the mode stays chosen
+  bgSetWhole(next);
 }
 function bgSetWhole(ids) {
   const r = radio();
