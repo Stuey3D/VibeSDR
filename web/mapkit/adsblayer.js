@@ -31,6 +31,10 @@
  *     opts.onSelect(hex | null)      // the selection changed ON THE MAP (an icon tapped, the card closed) — the host's
  *                                    // list follows it (Stuart, 2026-10-24: clicking an icon left the list's row stale)
  *     layer.destroy()
+ *     ★★★ beta97 THE MAP CARDS (the app; docs/v12/MAP-CONTROL-CARDS.md): opts.keys === false builds NO keys at all — the host
+ *     draws its own (the app's React Native MAP card) and calls layer.actions.{auto, fit, rings, range, labels, centre}();
+ *     opts.onCtl(state) hears every change ({auto: 'on'|'off'|'paused', fit, rings, range, rangeOffered, labels, rx}),
+ *     layer.ctlState() reads it. Default (keys on): exactly as before — the keys call the same actions.
  *
  *   map — a MapLibre map (VibeMapGL's vm.map), the Leaflet-shaped adapter vibemapgl-compat.js
  *           installs (its ._gl is used), or a real Leaflet map (the no-WebGL-2 fallback: DOM markers,
@@ -1097,27 +1101,29 @@
     let firstCamera = true;
 
     /* ── the control: AUTO · FIT · RINGS · ⌖, inside the map ──────────────────────────────────── */
-    const ctl = doc.createElement('div');
-    ctl.className = 'vsadsb-ctl vsadsb-' + th;
+    /* ★★★ beta97 opts.keys === false: no keys built (the host's own controls call layer.actions) */
+    const keysOn = opts.keys !== false;
+    const ctl = keysOn ? doc.createElement('div') : null;
+    if (ctl) ctl.className = 'vsadsb-ctl vsadsb-' + th;
     // ★ beta96 data-k names each key for a host that hosts the control (ctlHost) and hides some of them (the map cards)
-    const mk = (txt, title) => { const b = doc.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; b.dataset.k = txt.length === 1 ? 'centre' : txt.toLowerCase(); ctl.appendChild(b); return b; };
+    const mk = (txt, title) => { if (!ctl) return null; const b = doc.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; b.dataset.k = txt.length === 1 ? 'centre' : txt.toLowerCase(); ctl.appendChild(b); return b; };
     const bAuto = mk('AUTO', 'Auto-zoom: keep every aircraft in view');
     const bFit = mk('FIT', 'Fit to aircraft: the receiver need not be in the middle');
     const bRings = mk('RINGS', 'Range rings in nautical miles around the receiver');
     /* ★★ V12 beta94 RANGE — the range outline (rangeRing). Drawn only once this server has answered with one (an older
      *  server has none: no button — AGENTS.md, never a control that cannot act). */
     const bRange = mk('RANGE', 'ADS-B RANGE outline: the furthest aircraft heard on each bearing (not the distance rings)');
-    bRange.hidden = true;
+    if (bRange) bRange.hidden = true;
     /* ★ LABELS (Stuart, 2026-10-24: "on a busy screen they may be a bit of a mess"): off = no labels, except the aircraft
      *  you have selected, which keeps its own so you can still read it. */
     const bLabels = mk('LABELS', 'Callsign and altitude beside each aircraft');
     const bCentre = mk('⌖', 'Recentre on the aircraft');
-    bCentre.setAttribute('aria-label', 'Recentre');
+    if (bCentre) bCentre.setAttribute('aria-label', 'Recentre');
     // ★ The map must not take the control's taps as map gestures (a drag that starts on a button).
-    for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) ctl.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
+    if (ctl) for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) ctl.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     /* ★★ beta96 opts.ctlHost — an element of the HOST's to draw these keys in (the web map's MAP card, Stuart 11-27:
      *  "the controls need work"); absent = inside the map, as always. The keys behave exactly the same either way. */
-    (opts.ctlHost && opts.ctlHost.appendChild ? opts.ctlHost : container).appendChild(ctl);
+    if (ctl) (opts.ctlHost && opts.ctlHost.appendChild ? opts.ctlHost : container).appendChild(ctl);
 
     /* ── ★★ THE LEGEND (Stuart, 2026-10-24: "a little (i) button above the aircraft list which pops out a legend") —
      *  what the aircraft colours and the altitude ARROW colours mean, drawn by the layer itself so the key can never
@@ -1149,7 +1155,15 @@
     for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) leg.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     container.appendChild(leg);
     function placeLegend() { leg.style.bottom = ((obstacle ? obstacle.h : 0) + 8) + 'px'; }
+    /** ★★★ beta97 the keys' state, for a host drawing its own (opts.onCtl / layer.ctlState) */
+    function ctlState() {
+      return { auto: !prefs.autoZoom ? 'off' : paused ? 'paused' : 'on', fit: !!prefs.fit, rings: !!prefs.rings && !!rx,
+               range: !!prefs.range, rangeOffered: !!(rangeData || liveHas()), labels: prefs.labels !== false, rx: !!rx };
+    }
+    let ctlSig = '';
     function paintCtl() {
+      if (opts.onCtl) { const st = ctlState(), sig = JSON.stringify(st); if (sig !== ctlSig) { ctlSig = sig; try { opts.onCtl(st); } catch (e) { console.error('adsblayer: onCtl threw', e); } } }
+      if (!ctl) return;
       bAuto.classList.toggle('on', !!prefs.autoZoom && !paused);
       bAuto.classList.toggle('paused', !!prefs.autoZoom && paused);
       bAuto.title = !prefs.autoZoom ? 'Auto-zoom is off — tap to keep every aircraft in view'
@@ -1172,16 +1186,27 @@
       prefs[k] = v;
       if (onPrefs) { try { onPrefs(Object.assign({}, prefs)); } catch (e) { console.error('adsblayer: onPrefs threw', e); } }
     }
-    bAuto.addEventListener('click', () => {
-      if (prefs.autoZoom && paused) { paused = false; az.reset(); cameraStep(true); }
-      else { setPref('autoZoom', !prefs.autoZoom); paused = false; az.reset(); if (prefs.autoZoom) cameraStep(true); }
-      paintCtl();
-    });
-    bFit.addEventListener('click', () => { setPref('fit', !prefs.fit); az.reset(); paintCtl(); if (prefs.autoZoom && !paused) cameraStep(true); });
-    bRings.addEventListener('click', () => { setPref('rings', !prefs.rings); paintCtl(); drawRings(); });
-    bLabels.addEventListener('click', () => { setPref('labels', prefs.labels === false); paintCtl(); labelAt = 0; kick(); });
-    bRange.addEventListener('click', () => { setPref('range', !prefs.range); paintCtl(); drawRange(); if (prefs.range) fetchRange(false); });
-    bCentre.addEventListener('click', () => { paused = false; az.reset(); paintCtl(); cameraStep(true); });
+    /* ★★★ beta97 the keys' actions as functions — the keys call them, and a host with its own controls calls layer.actions */
+    const actions = {
+      auto() {
+        if (prefs.autoZoom && paused) { paused = false; az.reset(); cameraStep(true); }
+        else { setPref('autoZoom', !prefs.autoZoom); paused = false; az.reset(); if (prefs.autoZoom) cameraStep(true); }
+        paintCtl();
+      },
+      fit() { if (!rx) return; setPref('fit', !prefs.fit); az.reset(); paintCtl(); if (prefs.autoZoom && !paused) cameraStep(true); },
+      rings() { if (!rx) return; setPref('rings', !prefs.rings); paintCtl(); drawRings(); },
+      labels() { setPref('labels', prefs.labels === false); paintCtl(); labelAt = 0; kick(); },
+      range() { setPref('range', !prefs.range); paintCtl(); drawRange(); if (prefs.range) fetchRange(false); },
+      centre() { paused = false; az.reset(); paintCtl(); cameraStep(true); },
+    };
+    if (ctl) {
+      bAuto.addEventListener('click', actions.auto);
+      bFit.addEventListener('click', actions.fit);
+      bRings.addEventListener('click', actions.rings);
+      bLabels.addEventListener('click', actions.labels);
+      bRange.addEventListener('click', actions.range);
+      bCentre.addEventListener('click', actions.centre);
+    }
     /* ── ★★ V12 beta94 THE RANGE OUTLINE (vibe_adsb_range.h; ADSB.md "The range outline") ─────────────────────────────
      *  GET <imageBase>range — this radio's outline over the owner's window (7 / 30 / 90 days or all time), the all-time
      *  one and the furthest catch ever. Fetched when the map opens, then every 15 minutes (RANGE_POLL_MS) while it is shown and the page
@@ -2353,6 +2378,9 @@
         return true;
       },
       prefs() { return Object.assign({}, prefs); },
+      /** ★★★ beta97 the keys' actions and state, for a host drawing its own controls (opts.keys === false) */
+      actions,
+      ctlState() { return ctlState(); },
       /** ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas): a host whose AREA marker took a press asks whether an
        *  aircraft is under it (client px; more slack on touch) — true = this layer selected it and the area must not. */
       pickAt(clientX, clientY, touch) {
@@ -2398,7 +2426,7 @@
         if (rangeDrawTimer) clearTimeout(rangeDrawTimer);
         doc.removeEventListener('visibilitychange', onVis);
         closePopup();
-        try { ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }
+        try { if (ctl) ctl.remove(); leg.remove(); } catch (e) { /* gone with the map */ }
         for (const ev of ['pointerdown', 'touchstart', 'wheel', 'keydown']) container.removeEventListener(ev, onInput, { capture: true });
         container.removeEventListener('click', onMinClick, true);
         container.removeEventListener('error', onCardImgError, true);

@@ -1821,9 +1821,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
    *  is drawn by the ADS-B layer — its silhouettes, tones, rings, AUTO / FIT, the glide to each new fix, the heading from
    *  the last two fixes — the rest (HFDL ground stations) by the track layer. The web's TrackView aircraft:true. */
   var acLayer=null,acHexKey={},acKeyHex={},acObst=null;
-  /* ★★★ beta97 the layer's AUTO · FIT · RINGS · RANGE · LABELS · ⌖ keys live in a host that is never in the page — the MAP
-   *  card's React Native keys press them (__cardsCtl) and read their state back (cardsState) */
-  var acCtl=document.createElement('div');
+  /* ★★★ beta97 the layer builds NO keys (keys:false): the MAP card's React Native keys call its actions (__cardsCtl) and
+   *  hear its state (onCtl → cardsState) */
   /* ★★ beta96 stage 6 the ADS-B layer's toggles (AUTO · FIT · RINGS · RANGE · LABELS) on the AIR & SEA map, remembered per
    *  device as the ADS-B map's were (adsbPrefs → React Native → storage, never back into the page's source) */
   var ADSB_PREFS=${JSON.stringify(opts?.adsbPrefs ?? null)};
@@ -1831,7 +1830,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     if(acLayer||(KIND!=='avdata'&&KIND!=='airsea')||!window.VibeAdsbLayer)return acLayer;
     /* ★ beta91 the owner's logos / silhouettes on this server, as on the ADS-B map (adsbMake) — the datalink's aircraft carry
      *  the same keys now (vibe_aircraft_info.h) */
-    try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{ctlHost:acCtl,receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
+    try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{keys:false,onCtl:function(){if(window.__cardsTell)window.__cardsTell(true);},receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
       prefs:KIND==='airsea'&&ADSB_PREFS?ADSB_PREFS:undefined,
       onPrefs:KIND==='airsea'?function(p){trkPost({t:'adsbPrefs',prefs:p});}:undefined,
       imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')},
@@ -1903,28 +1902,29 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   trkFitMake();   // ★ the auto fit runs from the start (on), even before the first report
   /* ★★★ beta97 THE MAP CARDS' BRIDGE (MapChrome): React Native's MAP card keys, its zoom keys, its scale and the KEY.
    *  The aircraft camera is the ADS-B layer's keys (in their detached host); the track camera the shared auto fit. */
-  function acKey(k){return acCtl.querySelector('[data-k="'+k+'"]');}
-  function useAc(){return !!acLayer&&(KIND==='avdata'||trkCam==='aircraft');}
+  function useAc(){return !!acLayer&&!!acLayer.actions&&(KIND==='avdata'||trkCam==='aircraft');}
   window.__cardsCtl=function(k){try{
-    if(k==='auto'){if(useAc()){var b=acKey('auto');if(b)b.click();}else{var af=trkFitMake();if(af){var st=af.state();if(st.on&&st.paused)af.resume();else af.set(!st.on);}}}
-    else if(k==='fit'){if(useAc()){var ba=acKey('auto');if(ba&&!(ba.classList.contains('on')))ba.click();}else window.__trkFit();}
-    else if(k==='centre'){var bc=acKey('centre');if(useAc()&&bc)bc.click();else{var mm=GLVM?GLVM.map:map;if(RX_LAT||RX_LON){if(mm.easeTo)mm.easeTo({center:[RX_LON,RX_LAT]});else mm.panTo([RX_LAT,RX_LON]);}}}
-    else{var bk2=acKey(k);if(bk2)bk2.click();}
+    var A=acLayer&&acLayer.actions;
+    if(k==='auto'){if(useAc())A.auto();else{var af=trkFitMake();if(af){var st=af.state();if(st.on&&st.paused)af.resume();else af.set(!st.on);}}}
+    /* ★ FIT = frame it now and AUTO carries on */
+    else if(k==='fit'){if(useAc()){if(acLayer.ctlState().auto!=='on')A.auto();}else window.__trkFit();}
+    else if(k==='centre'){if(useAc())A.centre();else{var mm=GLVM?GLVM.map:map;if(RX_LAT||RX_LON){if(mm.easeTo)mm.easeTo({center:[RX_LON,RX_LAT]});else mm.panTo([RX_LAT,RX_LON]);}}}
+    else if(A&&(k==='rings'||k==='range'||k==='labels'))A[k]();
   }catch(e){console.error('cards ctl',e);}cardsTell(true);};
   window.__cardsZoom=function(d){try{var mm=GLVM?GLVM.map:map;if(d>0)mm.zoomIn();else mm.zoomOut();}catch(e){}};
   window.__cardsKey=function(on,top,left){try{document.documentElement.style.setProperty('--keyTop',(Number(top)||64)+'px');document.documentElement.style.setProperty('--keyLeft',(Number(left)||64)+'px');
     legEl.classList.toggle('open',!!on);if(on)setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);if(acLayer&&acLayer.toggleLegend)acLayer.toggleLegend(!!on);}catch(e){}};
   var cardsSig='';
   function cardsTell(force){try{
-    var auto='off',ac=useAc();
-    if(ac){var b=acKey('auto');auto=b&&b.classList.contains('paused')?'paused':b&&b.classList.contains('on')?'on':'off';}
+    var auto='off',ac=useAc(),cs=acLayer&&acLayer.ctlState?acLayer.ctlState():null;
+    if(ac&&cs)auto=cs.auto;
     else{var af=trkFit;if(af){var st=af.state();auto=st.on?(st.paused?'paused':'on'):'off';}}
-    var rg=acKey('range');
     var mm=GLVM?GLVM.map:map,c=mm.getCenter(),z=mm.getZoom(),gl=!!(mm.getCanvas);
     var mpp=40075016.686*Math.cos((c.lat||0)*Math.PI/180)/((gl?512:256)*Math.pow(2,z));
-    var o={t:'cardsState',auto:auto,aircraft:!!acLayer&&ac,rings:!!(acKey('rings')&&acKey('rings').classList.contains('on')),
-      range:!!(rg&&rg.classList.contains('on')),rangeOffered:!!(rg&&!rg.hidden),labels:!!(acKey('labels')&&acKey('labels').classList.contains('on')),mpp:Math.round(mpp*100)/100};
+    var o={t:'cardsState',auto:auto,aircraft:!!cs&&ac,rings:!!(cs&&cs.rings),range:!!(cs&&cs.range),rangeOffered:!!(cs&&cs.rangeOffered),
+      labels:!cs||cs.labels!==false,mpp:Math.round(mpp*100)/100};
     var sig=JSON.stringify(o);if(!force&&sig===cardsSig)return;cardsSig=sig;trkPost(o);}catch(e){}}
+  window.__cardsTell=cardsTell;
   setInterval(function(){if(document.visibilityState!=='hidden')cardsTell(false);},1000);
   (function(){var mm=GLVM?GLVM.map:map;try{mm.on('moveend',function(){cardsTell(false);});
     /* ★ a tap on the map folds the open card (the web's rule) — a tap, not a drag */
