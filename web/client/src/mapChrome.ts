@@ -21,7 +21,7 @@ import { padRehighlight } from './gamepad';
 import { loadVibemapSource } from './chunkCache';
 import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
 import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
-import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId, shortMap } from '../../../src/utils/mapCards';
+import { CARD_IDS, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId, shortMap } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
 import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT } from './healthTuck';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
@@ -947,6 +947,27 @@ export interface TrackViewOpts {
   liveIds?: string[];
   /** ★★★ beta96 a TUNE row the server says this radio cannot run, pressed: its reason (the host's pill). */
   onTuneRefused?: (why: string) => void;
+  /** ★★★ beta97 A MAP THE HOST DRAWS (the amateur / spots map, the directory's community map): the host makes its map in
+   *  `holder` (under every chip) and TrackView makes none — it keeps the scale chip, the credits' fold and (given
+   *  `points`) the shared AUTO / FIT on it. Used through mapChromeApi.ts (MapHost). */
+  hostMap?: (holder: HTMLElement) => MapHost | null | Promise<MapHost | null>;
+}
+/** ★★★ beta97 what a host-drawn map gives the chrome (TrackViewOpts.hostMap; mapChromeApi.ts re-exports it). */
+export interface MapHost {
+  /** Leaflet-like for the scale chip: getCenter() → {lat,lng}, getZoom() in LEAFLET zoom (MapLibre's + 1), on('a b', f). */
+  map: any;
+  /** The camera the auto fit drives: a Leaflet map, a MapLibre map or a VibeMapGL vm (mapAutoFit.ts attach). Default `map`. */
+  fitMap?: any;
+  /** The VibeMapGL vm when it is the GPU map (for host layers that ask — whenMap). */
+  gl?: any;
+  /** Every point AUTO / FIT should frame ([lat, lon]) — given, the shared auto fit runs on this map. */
+  points?: () => Array<[number, number]>;
+  receiver?: () => { lat: number; lon: number } | null;
+  maxZoom?: number;
+  /** What one point is, for the AUTO key's words ("station shown"). */
+  what?: string;
+  /** The map goes with the view (hide / destroy). */
+  destroy?: () => void;
 }
 /** ★★ beta96 an AREA-class item (the click order's last tier): a sea area, an area-shaped NAVTEX warning, a forecast arrow. */
 export function isAreaItem(it: any): boolean {
@@ -2764,6 +2785,7 @@ export class TrackView {
   }
   hide() {
     if (!this.open) return;
+    { const h = this.hostNow; this.hostNow = null; try { h?.destroy?.(); } catch (e) { console.error('[mapChrome] host map destroy', e); } }
     this.tuneOpen(false);
     this.cardsTell(new Set());   // ★ every card the host filled gives its nodes back (CHAT's log and replies)
     this.root.hidden = true;
@@ -2799,7 +2821,57 @@ export class TrackView {
   }
   destroy() { this.hide(); this.root.remove(); }
 
+  private hostNow: MapHost | null = null;
+  /** ★★★ beta97 the host's map instead of our own (TrackViewOpts.hostMap) — the chrome round it as for ours. */
+  private async bootHost(my: number, make: NonNullable<TrackViewOpts['hostMap']>) {
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:absolute;inset:0;z-index:0';
+    this.mapHost.insertBefore(holder, this.mapHost.firstChild);
+    let hm: MapHost | null = null;
+    try { hm = await make(holder); } catch (e) { console.error('[mapChrome] the host map', e); }
+    if (my !== this.gen) { try { hm?.destroy?.(); } catch { /* tidy */ } return; }
+    if (!hm) { this.note('The map could not be loaded here — the list still updates.'); return; }
+    this.hostNow = hm;
+    this.acMap = hm.map;
+    const w = window as any;
+    if (hm.points && w.VibeAutoFit) {
+      try {
+        this.af = w.VibeAutoFit.attach(hm.fitMap ?? hm.map, {
+          points: hm.points, receiver: hm.receiver ?? (() => null), button: this.fitBtn, maxZoom: hm.maxZoom,
+          what: hm.what || this.o.listTitle.toLowerCase().replace(/s$/, ''),
+          onState: () => this.zoomStateSync(), obstacle: () => this.cardsObstacle(),
+        });
+      } catch (e) { console.error('[mapChrome] auto fit', e); this.af = null; }
+    }
+    this.fitBtn.hidden = !this.af;
+    (this.root.querySelector('.fitOnce') as HTMLElement).hidden = !this.af;
+    try { this.watchAttrib(); this.attribAuto(); this.scaleDock(); } catch (e) { console.error('[mapChrome] host map chrome', e); }
+    this.zoomStateSync();
+    this.mapSay({ gl: hm.gl ?? null, lm: hm.gl ? null : hm.map });
+    this.navMarks();
+  }
+  /* ★★★ beta97 for a host's map (mapChromeApi.ts): the shared auto fit — frame now, let it look again, hold it */
+  fitNow() { try { this.af?.fitNow(); } catch (e) { console.error('[mapChrome] fit', e); } }
+  fitPoke() { try { this.af?.poke(); } catch (e) { console.error('[mapChrome] fit', e); } }
+  fitPause() { try { this.af?.pause(); } catch (e) { console.error('[mapChrome] fit', e); } }
+  /** A card's title (and its chip's caption, its names for a screen reader) — SERVERS as the community map's RECEIVERS. */
+  retitle(id: CardId, title: string) {
+    const ct = this.root.querySelector(`.trkCard2[data-card="${id}"] .ct`) as HTMLElement | null;
+    if (ct) ct.textContent = title;
+    this.root.querySelector(`.trkCard2[data-card="${id}"]`)?.setAttribute('aria-label', title);
+    const cap = this.root.querySelector(`[data-cbtn="${id}"] .cap`) as HTMLElement | null;
+    if (cap) cap.textContent = title;
+    this.root.querySelector(`[data-cbtn="${id}"]`)?.setAttribute('aria-label', `${title} — open the ${title.toLowerCase()} card`);
+  }
+  /** A card's body for the host's own rows; `avail` offers its chip. The host owns what is in it from then on. */
+  cardBody(id: CardId, avail = true): HTMLElement {
+    this.cardsAvail(id, avail); this.cardsLayout();
+    return this.root.querySelector(`.trkCard2[data-card="${id}"] .cb`) as HTMLElement;
+  }
+  /** The host's own section in MAP CONTROLS (shown once asked for). */
+  controlsSlot(): HTMLElement { (this.root.querySelector('.ctlSect') as HTMLElement).hidden = false; return this.slot('ctl'); }
   private async boot(my: number) {
+    if (this.o.hostMap) return this.bootHost(my, this.o.hostMap);
     const w = window as any;
     const { TRACK_LAYER_JS } = await import('./generated/trackLayerSource');
     if (my !== this.gen) return;

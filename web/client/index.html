@@ -1382,47 +1382,12 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .adsbChip:active { background: rgba(255, 160, 0, 0.20); }
 .adsbChip:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
 .adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
-/* ★ V12 beta91 the Mictronics ODC-By notice at the list's foot (adsbInfo.ts ADSB_DATA_CREDIT — the card's words) */
-/* ★★ beta95 ONE COLUMN TEMPLATE FOR EVERY ROW: fixed widths for altitude / speed / range (was auto, so each row sized its
-   own and a row with "tracked 214 NM" squeezed its name column). Range fits "214 NM NE" and "tracked 999 NM". */
-/* ★★ beta96 ADS-B's live list inside the AIR & SEA map's AIRCRAFT tab (TrackView scrolls it — no list of its own in it) */
+/* ★★ beta96 the AIR & SEA map's slots: GAIN's pop-over and the feed warning over the map */
 .trkView .slot-top { display: contents; }
 .trkView .slot-over > * { pointer-events: auto; }
 .trkView .slot-over { position: absolute; inset: 0; pointer-events: none; z-index: 8; }
 .trkView #adsbGainPop { top: 8px; }
 .trkView #adsbFeedWarn { top: 8px; }
-/* ★ the chip's gap from the name (the TrackView's .trkRow .snrChip margin — 5 px on its RIGHT — glued it to the callsign) */
-/* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
-/* ★ The (i) beside the list's header: the map layer's colour key (toggleLegend), opened above the list. */
-/* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
-   own, max 12 px high) or its ICAO code as a small badge, then type · registration · route */
-/* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
-/* ★★ Emergencies at the top, breathing red (the map's breath: 1.2 s, never a hard blink); military beneath them in the
- *  map's military blue. Both carry a badge beside the callsign. */
-@keyframes adsbEmBreathe { 0%, 100% { background: rgba(224, 64, 64, 0.08); } 50% { background: rgba(224, 64, 64, 0.30); } }
-
-/* ★★★ beta96 THE LIST SIZES BY ITS OWN WIDTH, NEVER THE WINDOW'S (Stuart 11-26, a ~232 px panel on a wide Safari window:
- *  "the signal hides the aircraft details" — the fixed columns took the row, the chip beside the name never shrinks, so the
- *  callsign ellipsised to nothing; the only narrow rule was a viewport @media, which never fires for a narrow PANEL).
- *  A container query on the list itself; as it narrows, in this order, and the callsign is never what gives:
- *   ≥ 420 px  every column (the desktop panel, 430 px);
- *   < 420     the speed goes;
- *   < 360     the SNR chip (and a MIL / emergency tag) moves UNDER the callsign, to the head of the second line;
- *   < 320     altitude over range in one column at the end, "tracked" goes (a 320 px phone's panel is 308);
- *   < 210     the bearing word goes.
- *  scripts/test-web-adsb-list-width.mjs holds it (real page, real server: 232 / 300 / 400 / 600 px and two phones). */
-
-
-
-
-/* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
-     ellipsis; the message rate goes too (the count is what matters at a glance). */
-@media (max-width: 560px) {
-  /* ★ the bar SCROLLS now (#adsbTopScroll), so the stats stay — only the title's second word goes */
-  /* ★ edges FADE, so a word scrolled half out of view thins away instead of being sliced ("%" alone beside EXIT) */
-  }
-/* ★ only a browser without container queries (before Safari 16) falls back to the window's width */
-
 
 /* ── NDB: #adsbView's rules for #ndbView ── */
 #ndbView { position: fixed; inset: 0; z-index: 47; display: flex; flex-direction: column; background: #090602; }
@@ -1437,14 +1402,6 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 .adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
 #ndbList { max-height: 259px; max-height: min(7 * 37px, 34vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
   border-top: 1px solid rgba(255, 160, 0, 0.14); scrollbar-width: thin; scrollbar-color: rgba(255, 160, 0, 0.35) transparent; }
-/* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
-    /* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
-   own, max 12 px high) or its ICAO code as a small badge, then type · registration · route */
-/* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
-/* ★★ Emergencies at the top, breathing red (the map's breath: 1.2 s, never a hard blink); military beneath them in the
- *  map's military blue. Both carry a badge beside the callsign. */
-@keyframes adsbEmBreathe { 0%, 100% { background: rgba(224, 64, 64, 0.08); } 50% { background: rgba(224, 64, 64, 0.30); } }
-
 #ndbList .adsbEmpty { padding: 10px 9px; opacity: .6; font-size: 11.5px; line-height: 1.5; }
 /* ★ A phone: the speed column goes before anything is squeezed to an ellipsis. (beta96: the bar's and the old live
      list's rules went with #ndbTop / #ndbLive — NDB's pieces live in the AIR & SEA map's slots, ndb.ts NdbView.mount.) */

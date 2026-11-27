@@ -50,16 +50,16 @@ import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
-         navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
+         navMetStatus,  navFcGale, navBuilding,   type NavWarnReport, type NavMetReport } from '../../../src/services/navtexWarn';
 import { NAV_HAZARD_COLOURS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../../../src/services/navtexIcons';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
-import { SHIPPING_TITLE, shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+import {  shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent,  shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaAreasInView, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avStatus } from './avdata';   // ★ V12 the aircraft datalink
-import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
+import {  AV_EMPTY,  avCompose, avLegendHtml,  sharedSanitise,
          type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 // ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules
 import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProfile, liveTabs, liveTabPick, avLayersFrom, avLayerOf, shipLayerOf,
@@ -68,7 +68,7 @@ import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProf
 import { avMerge, avNowRule, avHave, avName, type AvLayerId } from '../../../src/services/aviationMap';
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
-import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
+import { sondeCard, sondeIcon, sondeItems,  sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
 import { airSeaOffer, AirSeaViewer, type AirSeaOffer } from '../../../src/services/airSeaViewer';
 import { AircraftDeltaStore } from '../../../src/services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★ beta96 the standalone AIR & SEA map: its gate, tickets, deltas
@@ -85,7 +85,7 @@ import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { fitDefault, rateWords } from '../../../src/utils/mapCards';
 import { acTagsFor, acTagHtml } from '../../../src/utils/acTags';   // ★★★ beta96 MIL / emergency tags, one source   // ★★★ beta96 the map control cards' shared rules
-import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
+import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon,   aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
@@ -102,7 +102,7 @@ import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeL
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
-import { initGamepad, pushBack, padAdjuster, activePadLayout, padRehighlight, driveInput, onDriveInput } from './gamepad';
+import { initGamepad, pushBack, padAdjuster, activePadLayout,  driveInput, onDriveInput } from './gamepad';
 import { padListRow, padListRebuild } from './padList';
 import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
@@ -9891,7 +9891,7 @@ function adsbUiOff() {
  *  bar; NEWEST / FURTHEST / LONGEST TRACKED under the list's header (AIRCRAFT only); the antenna warning and the gain
  *  pop-over over the map. Idempotent (every render). Parked back in #adsbChrome (hidden) when ADS-B ends. */
 function adsbChromeMount(v: TrackView, tab: string) {
-  const top = v.slot('top'), head = v.slot('head'), over = v.slot('over');
+  const head = v.slot('head'), over = v.slot('over');
   // ★★★ beta96 map cards: GAIN and the capture warning are the TUNE card's (they set the radio); CHAT stays in the bar
   const tune = v.slot('tune');
   for (const id of ['adsbCapture', 'adsbGain']) { const el = $(id); if (el.parentElement !== tune) tune.appendChild(el); }
@@ -10457,7 +10457,6 @@ let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_K
  *  WEATHER. Opened from NAVTEX's MAP, a DSC call's MAP, the gallery's rows — each with its own layer first — and AIS
  *  mode's own map gains the other layers. A layer with no data here is absent (no toggle). */
 let shipLayers: ShipLayers = shipLayersOf(lsGet(SHIP_LAYERS_KEY), lsGet(NAV_LAYERS_KEY));
-let shipFocus: ShipFocus = 'navtex';
 let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null; ships: StoredShips | null; dscG: DscPin2[] } = { st: null, w: null, m: null, ships: null, dscG: [] };
 /** ★★★ beta96 the shipping layers' sources as the AIR & SEA map draws them — navLast and the live AIS report, or the same
  *  through the map's scope (airSeaScope.ts: OTHER RADIOS ON THIS SERVER, THIS SESSION). `dscOk` = this box's own calls. */
@@ -11117,10 +11116,6 @@ async function asStoredPoll() {
 function asStoredStart() {
   void asStoredPoll();
   if (!asStoredT) asStoredT = setInterval(() => { void asStoredPoll(); }, 120_000);
-}
-/** ★ beta96 ADS-B's chips (NEWEST / FURTHEST / LONGEST TRACKED): that aircraft on the map, its row lit. */
-function asFocusAircraft(hex: string) {
-  if (!asView?.focus(`adsb:${cleanHex(hex)}`)) showPill('No position heard from that aircraft yet — it is not on the map', 3500);
 }
 /** EXIT <MODE> leaves the mode (the map goes with it); CLOSE MAP puts the map away and the mode carries on. */
 function asExit() {
@@ -15593,11 +15588,6 @@ function renderDscKeys() {
     host.appendChild(b);
   }
   for (const ch of channels) host.appendChild(dscKey(ch, dscChannelOn(ch, dial, md)));
-}
-function openDscMap(calls: DscCall[]) {
-  const pins: DscPin[] = calls.filter((c) => c.lat !== null && c.lon !== null)
-    .map((c) => ({ lat: c.lat as number, lon: c.lon as number, label: c.line, level: c.level }));
-  openPinsMap(pins);
 }
 function openPinsMap(pins: DscPin[]) {
   if (!pins.length) return;

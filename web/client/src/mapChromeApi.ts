@@ -15,10 +15,10 @@
  *
  * ★ KEEP IT STABLE: add, never rename or remove — a second map is built on it. The ids are mapCards.ts CARD_IDS.
  */
-import { TrackView, type TrackViewOpts, type LatLon, type LayerGlyph } from './mapChrome';
+import { TrackView, type TrackViewOpts, type LatLon, type LayerGlyph, type MapHost } from './mapChrome';
 import type { CardId } from '../../../src/utils/mapCards';
 
-export type { CardId, LatLon, LayerGlyph };
+export type { CardId, LatLon, LayerGlyph, MapHost };
 /** What the map draws: its title and exit words, and how an item looks (icon, label, card) — TrackViewOpts. */
 export type MapChromeOpts = TrackViewOpts;
 export interface MapLayer { id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string; glyph?: LayerGlyph }

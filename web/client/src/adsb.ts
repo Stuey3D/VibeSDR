@@ -12,10 +12,8 @@
  *   HTML, and the callsign is cut to the characters a callsign has.
  */
 import type { AdsbAircraft, AdsbReport } from './spectrum';
-import { acTagHtml } from '../../../src/utils/acTags';
 import { dataUrl } from './origin';
-import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the reply SNR chip
-import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
+
 
 export type LatLon = { lat: number; lon: number };
 
@@ -28,7 +26,6 @@ export function rangeBearing(rx: LatLon, lat: number, lon: number): { nm: number
   const y = Math.sin(dl) * Math.cos(p2), x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
   return { nm, brg: (Math.atan2(y, x) / D2R + 360) % 360 };
 }
-const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 function esc(v: unknown): string {
   return String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -57,10 +54,6 @@ export function altColour(ft: number): string {
     if (f <= a1) { h = h0 + (h1 - h0) * (f - a0) / (a1 - a0); break; }
   }
   return `hsl(${h.toFixed(0)},90%,62%)`;
-}
-function emergency(a: AdsbAircraft): boolean {
-  const sq = String(a.squawk ?? '');
-  return sq === '7500' || sq === '7600' || sq === '7700' || (!!a.emergency && a.emergency !== 'none' && a.emergency !== 0 && a.emergency !== '0');
 }
 
 /* ★★ MILITARY — the map's rule (adsblayer.js MIL_BLOCKS / MIL_CALLS): an ICAO address in a block a state keeps for its
@@ -98,12 +91,9 @@ export function adsbStatus(r: AdsbReport | null): string {
 }
 
 /** ★ A chip names an aircraft as the list does: its callsign, else its registration (adsb_info), else its address. */
-const flightName = (a: { flight?: unknown; r?: unknown }, hex: string) => String(a.flight || '').trim() || String(a.r || '').trim() || hex.toUpperCase();
-const hasName = (a: { flight?: unknown; r?: unknown }) => !!(String(a.flight || '').trim() || String(a.r || '').trim());
 /** ★★ A chip's tap shows the aircraft ON THE MAP — so a chip names only one that is on it (Stuart, 2026-10-25: "I am
  *  clicking the longest tracked and it isnt selecting it"). The longest-followed aircraft is often far out and down to
  *  the odd message: heard, but its last position over 60 s old, so the report carries none and the map cannot select it. */
-const onMap = (a: { lat?: unknown; lon?: unknown }) => num(a.lat) != null && num(a.lon) != null;
 
 /** ★★ THE LIST HEADER'S THREE CHIPS (Stuart, 2026-10-25, the top bar crowded on a portrait iPhone 17 Pro Max: "move the
  *  furthest flight chip to just the header of the aircraft list, and with that we can add a newest flight detected,
@@ -141,13 +131,6 @@ export function adsbImageBase(): string {
    *  server's. The door forwards /r/<id>/adsb/… to the radio, which keeps the trails (and the owner's logos). */
   const m = /^\/r\/[^/?#]+/.exec(location.pathname);
   return dataUrl(location.origin + (m ? m[0] : '') + '/adsb/');   // ★ beta93: direct when the page was proxied (origin.ts)
-}
-/** ★ Windows draws regional-indicator pairs as two letters, not a flag: there the code is shown as a small chip. */
-function flagHtml(iso: unknown): string {
-  const c = String(iso ?? '').toUpperCase();
-  if (!/^[A-Z]{2}$/.test(c)) return '';
-  const win = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent || '');
-  return win ? `<span class="cc" title="${esc(c)}">${esc(c)}</span>` : `<span class="flag" title="${esc(c)}">${flagEmoji(c)}</span>`;
 }
 
 
