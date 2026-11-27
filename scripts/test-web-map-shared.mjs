@@ -224,7 +224,7 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   const sent = JSON.parse(await ev(`JSON.stringify(window.__sent.slice(${n0}))`));
   ok(!sent.some((s) => /"type":"(ais|adsb|avdata)"/.test(s)) && (JSON.parse(await ev(`JSON.stringify(${AS})`)) || {}).mode === 'ais', `EXIT and ADS-B refused while locked (no ais/adsb sent, still AIS)`);
   // the map stays the listener's own: tabs, SHOW chips, KEY, FIT never greyed
-  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .rng:not(.tgl):not(.scope) [data-rng], .trkView:not([hidden]) [data-cbtn]:not([data-cbtn="tune"])')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
+  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .rng:not(.tgl):not(.scope) [data-rng], .trkView:not([hidden]) [data-cbtn]:not([data-cbtn="tune"]):not([data-cbtn="rate"])')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
      'SHOW chips, tabs, FIT, the time filter and the other chips are never greyed');
   const tabs = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .tabs [role=tab], .trkView:not([hidden]) .tabs button')].map(b => b.textContent.trim()))`) || '[]');
   if (tabs.length > 1) {

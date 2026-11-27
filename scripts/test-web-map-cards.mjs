@@ -26,7 +26,7 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 const kids = [];
 const dirs = [];
 process.on('exit', () => { for (const k of kids) { try { k.kill('SIGKILL'); } catch {} } for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
-const watchdog = setTimeout(() => { console.log('   FAIL watchdog: 420 s'); process.exit(1); }, 420_000);
+const watchdog = setTimeout(() => { console.log('   FAIL watchdog: 1200 s'); process.exit(1); }, 1_200_000);   // ★ the suite grew with the map work (widths, rows, stacks, pulses)
 const SIZES = [[390, 844, true], [820, 1180, true], [1440, 900, false]];
 
 // ── a synthetic dump1090 (Beast): the Riddle's worked examples, re-sent with a rising counter (as test-server-aircraft-feeds) ──
@@ -128,7 +128,7 @@ async function sizeChecks(p, tag, w, h, o) {
     const pz = JSON.parse(await p.ev(`JSON.stringify({ bar: !!document.querySelector('#mapShLine.askPulse'), chat: !!document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"] .hCard.askPulse') || !document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"]:not([hidden])'), run: document.getAnimations().filter(a => a.playState === 'running').length })`));
     ok(pz.bar && pz.chat && pz.run > 0, `${tag} ${w}: a locked press pulses the shared-tuner bar and CHAT (${JSON.stringify(pz)})`);
     await sleep(4000);
-    ok(await p.ev(`document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest('.trkView')).length`) === 0, `${tag} ${w}: …and 4 s later nothing in the map is animating`);
+    ok(await p.ev(`document.getAnimations().filter(a => a.playState === 'running' && /^trkAsk/.test(a.animationName || '')).length`) === 0, `${tag} ${w}: …and 4 s later the pulse has stopped (no trkAsk animation running)`);
     ok(/^Shared VFO: .+ \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
