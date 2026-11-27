@@ -740,6 +740,8 @@ body.askLocked .mapGainHost .gRow{opacity:.45}
 .trkView .mChipsR .mTime[data-stage="1"]{--tc:rgba(255,225,77,.7);--tn:#ffe14d;--tcap:rgba(255,225,77,.9)}
 .trkView .mChipsR .mTime[data-stage="2"]{--tc:rgba(255,90,90,.75);--tn:#ff6b6b;--tcap:rgba(255,140,140,.95)}
 .mTime .hCard{border-color:var(--tc)!important}
+.trkView .mChipsR>.edgeDock:not(.mDock) .hCard{border-right-width:1.5px!important;margin-right:-1.5px}
+.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{margin-right:0}
 .mTime .hTab{color:var(--tn);border-color:var(--tc)!important}
 .mTime .tClock{display:flex;flex-direction:column;align-items:center;gap:2px;padding:2px 6px 2px 2px}
 .mTime .tCap{font:700 9px/1.2 'Atkinson Hyperlegible',system-ui,sans-serif;letter-spacing:.08em;color:var(--tcap)}
@@ -793,7 +795,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView .mChipsR>.mDock{align-self:flex-end}
 .mDock[data-dock="rate"] .hCard{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;padding-right:var(--sai-r)}
 .trkView.rateOpen .trkCards .sideR{right:0!important;left:auto!important;top:var(--trk-rate-bottom,40px)!important}
-.trkView.rateOpen .trkCards .sideR>.trkCard2[data-card="rate"]{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;width:max(var(--trk-rate-w,160px),240px);transform-origin:top right}
+.trkView.rateOpen .trkCards .sideR>.trkCard2[data-card="rate"]{margin:-1.5px -1.5px 0 0;border-radius:0 0 0 12px!important;width:max(var(--trk-rate-w,160px),240px);transform-origin:top right}
 /* ★ no percentage max-width on the pill's boxes: in this shrink-to-fit row it resolved against the pill's own width and held
  *  it at the width of an EARLIER text — "ASK IN CHAT" overflowed a box with room to spare (map-cards e2e) */
 /* ★★★ Stuart 14:42: the shared-tuner message MIRRORS THE CONTROL DECK — attached to the top edge, centred, the deck
@@ -919,7 +921,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★ Stuart 12:34 ("no gap on mac but there is on iphone"): an old phone rule inset the cards' layer 6 px — the layer is the
  *  whole map on every width; only the drawer's CONTENT takes the safe area */
 .trkView[data-narrow] .trkCards{left:0!important;right:0!important;top:0!important;bottom:0!important}
-.trkCards .sideB>.trkCard2[data-card="list"]{border-left-width:0!important;border-bottom-width:0!important;border-radius:0 12px 0 0!important;
+.trkCards .sideB>.trkCard2[data-card="list"]{border-radius:0 12px 0 0!important;
   padding-left:var(--sai-l);padding-bottom:var(--sai-b);box-sizing:border-box}
 .trkCards .trkCard2.gpFocus,.trkCards .trkCard2 .gpFocus{outline-offset:-3px!important}
 /* ★★★★ SHORT LANDSCAPE (mapCards shortMap: the map under 480 px and wider than tall) — STUART'S SAFE RECTANGLE (11-27):
@@ -969,13 +971,14 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* the cards drop from under the row */
 .trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:calc(var(--trk-tab-h,48px) + 4px)!important;bottom:calc(var(--sai-b) + 8px)!important;
   max-height:none;justify-content:flex-start;width:min(320px,calc(100% - var(--trk-cl-left,96px) - 8px))!important}
-.trkView[data-short] .trkCards .sideL>.trkCard2{border-left-width:1.5px!important;border-top-width:0!important;border-bottom-width:1.5px!important;border-radius:0 0 12px 12px!important;transform-origin:top left!important}
+.trkView[data-short] .trkCards .cSide>.trkCard2{margin:0!important;border-radius:12px!important}
+.trkView[data-short] .trkCards .sideL>.trkCard2{transform-origin:top left!important}
 .trkView[data-short] .trkCards .sideR{top:calc(var(--trk-tab-h,48px) + 4px)!important;right:calc(var(--sai-r) + 8px)!important;bottom:calc(var(--sai-b) + 8px)!important;justify-content:flex-start}
-.trkView[data-short] .trkCards .sideR>.trkCard2{border-radius:0 0 12px 12px!important;transform-origin:top right!important}
+.trkView[data-short] .trkCards .sideR>.trkCard2{transform-origin:top right!important}
 /* the LIST / waterfall panel and its chip: from the SAFE left, under the row, above the bottom inset */
 .trkView[data-short] .trkCards .sideB{left:var(--sai-l)!important;right:auto!important;top:calc(var(--trk-tab-h,48px) + var(--trk-gap))!important;bottom:var(--sai-b)!important;width:clamp(300px,34vw,360px)!important;max-width:none!important}
 .trkView[data-short].lMax .trkCards .sideB{width:calc(100% - var(--sai-l) - var(--sai-r) - 16px)!important}
-.trkView[data-short] .trkCards .sideB>.trkCard2[data-card="list"]{padding-left:0!important;padding-bottom:0!important;height:100%!important;border-left-width:1px!important;border-bottom-width:1px!important;border-radius:0 12px 12px 0!important}
+.trkView[data-short] .trkCards .sideB>.trkCard2[data-card="list"]{padding-left:0!important;padding-bottom:0!important;height:100%!important}
 .trkView[data-short] .trkCard2[data-card="list"] .trkList .hd{padding-left:calc(var(--trk-lchip-w,76px) + 4px)!important}
 .trkView[data-short] .trkCard2[data-card="list"] .lMax,.trkView[data-short] .trkCard2[data-card="list"] .lSwap{top:22px;right:-19px;left:auto;width:19px;height:44px;border:1px solid #2c3a4a;border-left:0;border-radius:0 9px 9px 0;padding:0 0 0 2px;align-items:center;justify-content:flex-start}
 .trkView[data-short] .trkCard2[data-card="list"] .lSwap{top:74px}
@@ -1150,10 +1153,13 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="list"] .trkList{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 .trkCard2[data-card="list"] .trkList>.hd,.trkCard2[data-card="list"] .trkList>.filt,.trkCard2[data-card="list"] .trkList>.safety{flex:none}
 .trkCard2[data-card="list"] .trkList .rows{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-.trkCards .sideB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-left-width:0;border-radius:0 12px 0 0;transform-origin:bottom left}
 .trkCards .cSide>.trkCard2{border:1.5px solid var(--hc,#5BE36B);background:rgba(8,12,8,.92)}
-.trkCards .sideL>.trkCard2{border-left-width:0;border-radius:0 12px 12px 0;transform-origin:top left}
-.trkCards .sideR>.trkCard2{border-right-width:0;border-radius:12px 0 0 12px;transform-origin:top right}
+/* ★ Stuart 19:xx ("the pop-up boxes need a full border"): ONE border for every card, all four sides, always. Where a card
+ *  meets a screen edge (portrait / desktop) it sits its border's width PAST that edge, so the edge-side line is off screen
+ *  and the joined-to-the-edge look is unchanged; short landscape's cards (inside the safe rectangle) show all four. */
+.trkCards .sideB>.trkCard2{border-radius:0 12px 0 0;transform-origin:bottom left;margin:0 0 -1.5px -1.5px}
+.trkCards .sideL>.trkCard2{border-radius:0 12px 12px 0;transform-origin:top left;margin-left:-1.5px}
+.trkCards .sideR>.trkCard2{border-radius:12px 0 0 12px;transform-origin:top right;margin-right:-1.5px}
 @keyframes trkCardIn{from{opacity:.2;transform:scale(.35)}to{opacity:1;transform:none}}
 .trkCard2>.ch{cursor:pointer;font:700 9px/1 system-ui,sans-serif;letter-spacing:.16em;color:#B9C0B4}
 .trkCard2>.ch:hover{background:rgba(255,255,255,.04)}
@@ -1407,8 +1413,9 @@ export class TrackView {
     r.querySelector('.mChipsR')?.addEventListener('click', (e) => {
       const tab = (e.target as HTMLElement | null)?.closest?.('.hTab') as HTMLElement | null, d = tab?.parentElement;
       if (!tab || !d || !this.root.hasAttribute('data-short') || !d.classList.contains('edgeDock') || d.classList.contains('mDock')) return;
-      if (d.classList.contains('tucked')) {   // opening: ONE of health / time out at a time (their cards share the drop below the row)
-        for (const o of Array.from(this.root.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked)')) as HTMLElement[]) if (o !== d) (o.querySelector('.hTuck') as HTMLElement | null)?.click();
+      if (d.classList.contains('tucked')) {   // opening: ONE transient out at a time — the other of health / time, and any card
+        this.shortEdgeTuck(d);
+        this.closeTransients();
         return;
       }
       e.stopPropagation();
@@ -1537,6 +1544,11 @@ export class TrackView {
    *  one), on a tap or drag on the map, after their action (a mode picked in TUNE, a server picked). ── */
   private idleT: ReturnType<typeof setTimeout> | null = null;
   private overCard = false;
+  /** ★ short landscape: health / time's cards drop below the row like the cards — one transient out at a time, them included */
+  private shortEdgeTuck(except: HTMLElement | null = null) {
+    if (!this.root.hasAttribute('data-short')) return;
+    for (const o of Array.from(this.root.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked)')) as HTMLElement[]) if (o !== except) (o.querySelector('.hTuck') as HTMLElement | null)?.click();
+  }
   /** Shut every transient card (LIST stays). True when one was shut. */
   closeTransients(): boolean {
     const t = this.cardOrder.filter((x) => !STICKY_CARDS.has(x));
@@ -1590,6 +1602,7 @@ export class TrackView {
     //     is the layout's (a phone shows the newest: LIST comes back when the transient one shuts)
     void cardToggle;
     this.cardOrder = cardOpenRule(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on);
+    if (on && !STICKY_CARDS.has(id)) this.shortEdgeTuck();
     if (save) this.cardsSave();
     this.cardsLayout();
     this.fitPauseForCards();
