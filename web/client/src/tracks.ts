@@ -502,7 +502,15 @@ const CSS = `
 .trkRow .id small{display:block;color:#93a3b4;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .trkRow .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
 .trkRow .sp,.trkRow .rg,.trkRow .ag{font:12px/1.2 ui-monospace,Menlo,monospace;color:#cfd9e3;white-space:nowrap;text-align:right}
-.trkRow .ag{color:#8596a7}
+.trkRow .ag{color:#8596a7;min-width:2.6em}
+.trkRow .ag .agS{display:none}
+.trkRow.kvRow{grid-template-columns:minmax(0,1fr) auto auto!important}
+.trkRow .id b .kv{display:inline-flex;align-items:stretch;flex:none;margin-left:6px;border:1px solid #33475a;border-radius:4px;font:600 9.5px/14px ui-monospace,Menlo,monospace;color:#b8c6d4;white-space:nowrap;vertical-align:1px}
+.trkRow .id b .kv span{padding:0 4px}
+.trkRow .id b .kv i{width:1px;background:#33475a}
+.trkRow .ag{text-align:right}
+.trkView[data-narrow] .trkRow .ag .agL{display:none}.trkView[data-narrow] .trkRow .ag .agS{display:inline}.trkView[data-narrow] .trkRow .brg{display:none}
+.trkView[data-narrow] .trkRow{grid-template-columns:minmax(0,1fr) auto auto auto;column-gap:7px}
 .trkRow .brg,.trkRow .dim{color:#8596a7}
 .trkRow.dx{box-shadow:inset 3px 0 0 #ffd34d}.trkRow.dx.sel{box-shadow:inset 3px 0 0 #ffd34d}
 .trkRow .snrChip{margin:0 5px 0 0}
@@ -527,8 +535,12 @@ const CSS = `
   .trkTop .scr .ttl{white-space:nowrap}
   .trkTop .st{flex:1 0 100%}
   .trkList{left:6px;right:6px;width:auto;max-height:34%}
-  .trkRow{grid-template-columns:minmax(0,1fr) auto auto}
-  .trkRow .ag{display:none}
+  /* ★ Stuart 13:08 ("the time received is missing"): the age stays at every width, compact ("13s", "2m"); the bearing
+   *  letters drop first, the subtitle always truncates first */
+  .trkRow{grid-template-columns:minmax(0,1fr) auto auto auto;column-gap:7px}
+  .trkRow .brg{display:none}
+  .trkRow .ag .agL{display:none}
+  .trkRow .ag .agS{display:inline}
   .vtl-card{top:6px !important;right:6px !important;left:52px;max-width:none !important;max-height:30% !important;font-size:11px !important}
 }
 /* ★★★ beta96 THE MAP CONTROL CARDS (Stuart 11-27, docs/v12/MAP-CONTROL-CARDS.md): the map takes centre stage. ONE bar with

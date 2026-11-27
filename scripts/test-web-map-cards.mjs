@@ -452,6 +452,22 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       const w = await p.ev(`Math.round(${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect().width)`);
       ok(want === 'full' ? w === ww : w >= want, `${ww}×${hh}: the LIST drawer ${w} px wide (${want === 'full' ? 'the full width' : '≥ ' + want})`);
     }
+    // ── every row keeps its age at phone widths (Stuart 13:08: "the time received is missing") ──
+    for (const [ww, hh] of [[375, 667], [390, 844]]) {
+      await rowsAt(ww, hh, true);
+      const bad = await p.ev(`(() => { const rows = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); const R = rows.getBoundingClientRect(); const out = [];
+        for (const r of [...rows.querySelectorAll('.trkRow')].slice(0, 12)) { const a = r.querySelector('.ag'); const b = a?.getBoundingClientRect();
+          if (!a || !b.width || !a.textContent.trim() || b.right > R.right + 1 || a.scrollWidth > a.clientWidth + 1) out.push(r.dataset.key); } return out.join(','); })()`);
+      ok(!bad, `${ww}×${hh}: every row shows its age, whole${bad ? ' — not: ' + bad : ''}`);
+    }
+    // ── the FL | distance pill beside the tags; no bearing in the rows (Stuart 13:10) ──
+    for (const [ww, hh, mob] of [[375, 667, true], [390, 844, true], [1440, 900, false]]) {
+      await rowsAt(ww, hh, mob);
+      const q = JSON.parse(await p.ev(`JSON.stringify((() => { const rows = [...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].slice(0, 10);
+        const pill = rows.filter(r => { const k = r.querySelector('.id b .kv'); if (!k) return false; const b = k.getBoundingClientRect(), B = r.querySelector('.id b').getBoundingClientRect(); return b.width > 0 && b.right <= B.right + 1; }).length;
+        return { n: rows.length, pill, brg: rows.filter(r => r.querySelector('.brg')).length }; })())`));
+      ok(q.n > 0 && q.pill === q.n && q.brg === 0, `${ww}×${hh}: every row wears its FL | distance pill whole, no bearing (${JSON.stringify(q)})`);
+    }
     // ── HELP grows out of its ?: its bottom-right corner on the button ──
     for (const [ww, hh, mob] of [[750, 950, false], [390, 844, true], [1440, 900, false]]) {
       await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);

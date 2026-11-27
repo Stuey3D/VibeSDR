@@ -10289,10 +10289,20 @@ function trkFlagHtml(flag: string | undefined): string {
 }
 function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean;
                      snr?: number; snrMode?: string; mil?: boolean }): string {   // ★ beta96 snr: the message's SNR chip (stored ships, sondes …)
-  return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}<span class="nmT">${escapeHtml(x.name)}</span>${acTagsFor({ mil: x.mil }).map(acTagHtml).join('')}</b><small>${escapeHtml(x.second)}</small></span>`
-    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${snrChipHtml(x.snrMode, x.snr)}${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
+  /* ★★★ Stuart 13:10 ("make the fl/dist a little pill next to the mil/emerg badge"): line 1 = the name, its tags and a
+   *  small FL | distance pill (speed | distance for a ship); the right side only the SNR chip and the age; no bearing */
+  return `<div class="trkRow kvRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}<span class="nmT">${escapeHtml(x.name)}</span>${acTagsFor({ mil: x.mil }).map(acTagHtml).join('')}${trkKvPill(x.sp, x.range)}</b><small>${escapeHtml(x.second)}</small></span>`
+    + `<span class="rg">${snrChipHtml(x.snrMode, x.snr)}${x.dx ? '<span class="dxTag">DX</span>' : ''}</span><span class="ag"><span class="agL">${escapeHtml(x.age)}</span><span class="agS">${escapeHtml(trkAgeShort(x.age))}</span></span></div>`;
 }
+/** The row's little FL | distance pill ("FL241 | 87nm", "12 kn | 4.2nm", "FL051 | no pos") — '' when it has neither. */
+function trkKvPill(a: string, b: string): string {
+  const d = b.trim().replace(/^no position$/i, 'no pos').replace(/\s+(NM|nm)$/, 'nm').replace(/\s+km$/, 'km');
+  const parts = [a.trim(), d].filter(Boolean);
+  return parts.length ? `<span class="kv">${parts.map((t) => `<span>${escapeHtml(t)}</span>`).join('<i></i>')}</span>` : '';
+}
+/** ★ the age's compact form for a narrow list: "13 s" → "13s", "2 min" → "2m", "1 h ago" → "1h"; "now" stays */
+function trkAgeShort(a: string): string { const m = /^(\d+)\s*([a-z])/i.exec(a.trim()); return m ? `${m[1]}${m[2].toLowerCase()}` : a.replace(/\s*ago$/, ''); }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
 function shipDscPins(now: number, src: ShipSrc = shipSrcRaw()): DscPin2[] {
   const live = dscPinsFromCalls(dscCalls.list as any);
@@ -10364,9 +10374,9 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
       items.push(...fgTag('navst', navItems(r, 'web')));
       out.push(sec('NAVTEX STATIONS'));
       if (!r.stations.length) out.push(`<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`);
-      for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
-        + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
-        + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
+      for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow kvRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
+        + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i><span class="nmT">${escapeHtml(navName(g.name, g.conf))}</span>${trkKvPill('', range)}</b><small>${escapeHtml(second)}</small></span>`
+        + `<span class="rg"></span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
       status.push(navStatus(r));
     } else if (id === 'weather' && m) {
       items.push(...fgTag('weather', navMetItems(seaPlaceMet(navMetVisible(m, navRange)), now, 'web')));   // ★ the arrow inside its area's outline
