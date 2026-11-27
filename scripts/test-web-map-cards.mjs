@@ -339,6 +339,39 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`(document.querySelector('.trkView:not([hidden]) .maplibregl-ctrl-zoom-in, .trkView:not([hidden]) .leaflet-control-zoom-in') || {}).click?.(); 1`); await sleep(1500);
     const sc2 = await p.ev(`${V}.querySelector('.mScale .hCard').textContent.trim()`);
     ok(!!sc && sc2 !== sc.text, `…its reading follows the zoom (${sc && sc.text} → ${sc2})`);
+    // ── 750×950: a card that would cover the LIST sends it aside (measured); the cards are opaque; it comes back as it was ──
+    await p.size(750, 950, false); await sleep(700); await shutTransients(p);
+    await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(500);
+    await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 40; window.__lst = r.scrollTop; return 1; })()`);
+    await p.ev(`${BTN('layers')}.click(); 1`); await sleep(600);
+    const aside = JSON.parse(await p.ev(`JSON.stringify((() => { const l = ${V}.querySelector('.trkCard2[data-card="list"]'), y = ${V}.querySelector('.trkCard2[data-card="layers"]');
+      const bg = getComputedStyle(y).backgroundColor; const a = /rgba/.test(bg) ? Number(bg.split(',')[3]) : 1;
+      return { aside: l.classList.contains('stepAside'), vis: getComputedStyle(l).visibility, alpha: a, chipDim: ${V}.querySelector('.mDock[data-dock="list"]').classList.contains('aside') }; })())`));
+    ok(aside.aside && aside.vis === 'hidden' && aside.chipDim, `750×950: LAYERS would cover the LIST — it steps aside, its chip dimmed (${JSON.stringify(aside)})`);
+    ok(aside.alpha === 1, `the cards are opaque (alpha ${aside.alpha})`);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="layers"] > .ch').click(); 1`); await sleep(500);
+    ok(await p.ev(`(() => { const l = ${V}.querySelector('.trkCard2[data-card="list"]'); return !l.classList.contains('stepAside') && l.querySelector('.rows').scrollTop === window.__lst; })()`), '…LAYERS folded: the LIST back, the same scroll');
+    await p.size(1440, 900, false); await sleep(700);
+    await p.ev(`${BTN('layers')}.click(); 1`); await sleep(600);
+    ok(await p.ev(`!${V}.querySelector('.trkCard2[data-card="list"]').classList.contains('stepAside')`), '1440×900: no overlap — the LIST stays');
+    await shutTransients(p);
+    // ── the LIST drawer flush to the map's left and bottom (Stuart 12:34: "no gap on mac but there is on iphone") ──
+    for (const [ww, hh, mob] of [[1440, 900, false], [390, 844, true]]) {
+      await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);
+      await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(600);
+      const fl = JSON.parse(await p.ev(`JSON.stringify((() => { const h = ${V}.querySelector('.trkMapHost').getBoundingClientRect(), c = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); return { l: Math.round(c.left - h.left), b: Math.round(h.bottom - c.bottom), lb: parseFloat(${V}.style.getPropertyValue('--trk-list-bottom')) || 0 }; })())`));
+      ok(fl.l === 0 && Math.abs(fl.b - fl.lb) <= 1, `${ww}×${hh}: the LIST drawer flush — left ${fl.l} px, bottom ${fl.b} px (the attribution's line ${fl.lb})`);
+    }
+    // ── HELP grows out of its ?: its bottom-right corner on the button ──
+    for (const [ww, hh, mob] of [[750, 950, false], [390, 844, true], [1440, 900, false]]) {
+      await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);
+      await p.ev(`${BTN('help')}.click(); 1`); await sleep(700);
+      const d = await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="help"]').getBoundingClientRect(), q = ${V}.querySelector('.mHelp').getBoundingClientRect();
+        const dx = Math.max(q.left - c.right, 0, c.right - q.right), dy = Math.max(q.top - c.bottom, 0, c.bottom - q.bottom); return Math.round(Math.hypot(dx, dy)); })()`);
+      ok(d <= 4, `${ww}×${hh}: HELP's corner sits on its ? (${d} px)`);
+      await shutTransients(p);
+    }
+    await p.size(1440, 900, false); await sleep(500);
     // ── one side or flanking, by the map's own height (Stuart's phones) ──
     for (const [ww, hh, want] of [[375, 667, 'R'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {
       await p.size(ww, hh, true); await sleep(700);

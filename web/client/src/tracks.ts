@@ -714,6 +714,9 @@ const CSS = `
  *  bottom, no rim on the edge sides, a square corner (the window's own corner clips it), the safe area inside it; the
  *  controller's green focus ring drawn INSIDE (no clipping at the edge, no layout shift) */
 .trkCards .trkCard2{background:#0b110d!important}
+/* ★ Stuart 12:34 ("no gap on mac but there is on iphone"): an old phone rule inset the cards' layer 6 px — the layer is the
+ *  whole map on every width; only the drawer's CONTENT takes the safe area */
+.trkView[data-narrow] .trkCards{left:0!important;right:0!important;top:0!important;bottom:0!important}
 .trkCards .sideB>.trkCard2[data-card="list"]{border-left-width:0!important;border-bottom-width:0!important;border-radius:0 12px 0 0!important;
   padding-left:env(safe-area-inset-left,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
 .trkCards .trkCard2.gpFocus,.trkCards .trkCard2 .gpFocus{outline-offset:-3px!important}

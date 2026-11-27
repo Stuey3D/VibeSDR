@@ -2,6 +2,7 @@
 // window decides how many cards (one on a phone, never the whole width), the oldest gives way, LIST alone in its column,
 // the defaults, FIT's outlier rule and its default layer.   npx tsx scripts/test_map_cards.ts
 import { mapBarLine } from '../src/services/dialChat';
+import { acTagsFor, acTagHtml } from '../src/utils/acTags';
 import { CARD_IDS, cardDefaults, cardLimit, cardPlace, cardSide, cardToggle, fitDefault, oneSide, rateWords, trimOutliers, MAP_HELP, MAP_HELP_NOTES, type CardId } from '../src/utils/mapCards';
 
 let pass = 0, fail = 0;
@@ -67,5 +68,9 @@ ok(L({ ask: { askFirst: true, tuneLocked: true, askState: 'idle' } }).text === '
 ok(L({ shared: false }).text === '2/5' && !L({ shared: false }).dialLocked, `own VFO each (not shared): just the count "${L({ shared: false }).text}"`);
 ok(!L({ standalone: true }).show && !L({ max: 1 }).show, 'the viewer and a one-listener radio: nothing');
 ok(L({ said: 'Tuning now' }).text === 'Tuning now', 'a tuning line in the chat is shown as it is');
+// ── the aircraft tags (acTags.ts): one source for both lists and the app ──
+ok(acTagsFor({ mil: true }).join() === 'mil' && acTagsFor({ squawk: '7700' }).join() === 'emerg' && acTagsFor({ squawk: 7600 }).join() === 'radio' && acTagsFor({ squawk: '7500', mil: true }).join() === 'hijack,mil', 'MIL, and 7700 EMERG · 7600 RADIO · 7500 HIJACK first');
+ok(acTagsFor({ emergency: 'general' }).join() === 'emerg' && acTagsFor({ emergency: 'none', squawk: '1200' }).length === 0, 'the ADS-B emergency status counts too; none and 1200 wear nothing');
+ok(/class="tag mil"[^>]*>MIL</.test(acTagHtml('mil')) && /class="tag em"[^>]*>EMERG</.test(acTagHtml('emerg')), 'the box is the ADS-B list\'s own .tag (mil / em)');
 console.log(`test_map_cards: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
