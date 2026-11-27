@@ -828,11 +828,10 @@ export class TrackView {
     r.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
-      const inCard = (e.target as HTMLElement)?.closest?.('.trkCard2') as HTMLElement | null;
-      const open = this.openCards.filter((id) => this.cardAvail.has(id));
-      const top = inCard ? inCard.dataset.card as CardId : open[open.length - 1];
-      if (inCard || (!this.sel && top)) { this.cardOpen(top, false, true); if (inCard) (r.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus(); }
-      else if (this.sel) this.select('');
+      // ★ the page's one back (gamepad.ts → main.ts hooks.back) runs first and may have shut a card for this very press
+      if (performance.now() - this.cardClosedAt < 80) return;
+      if (this.closeTopCard(e.target)) return;
+      if (this.sel) this.select('');
       else if (this.dialExit) this.onDialLocked?.(this.dialWhy);
       else o.onExit();
     });
@@ -855,6 +854,20 @@ export class TrackView {
   private narrow(): boolean { const w = this.root.clientWidth || window.innerWidth; return w < CARD_NARROW_W; }
   /** How many cards this window takes at once (the window's size, never the device). */
   cardLimit(): number { return cardLimitFor(this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight); }
+  private cardClosedAt = -1e9;
+  /** ★ BACK / Escape on the map: the card holding `from` (focus), else — unless an item's own card is open (the selection
+   *  goes first) — the top card. True = one was shut. The pad's BACK reaches it through main.ts hooks.back. */
+  closeTopCard(from: EventTarget | null = document.activeElement): boolean {
+    const inCard = (from as HTMLElement | null)?.closest?.('.trkCard2') as HTMLElement | null;
+    const open = this.openCards.filter((id) => this.cardAvail.has(id) && this.cardOrder.includes(id));
+    const shown = Array.from(this.cardsEl.querySelectorAll('.trkCard2')).map((c) => (c as HTMLElement).dataset.card as CardId);
+    const top = inCard && this.root.contains(inCard) ? inCard.dataset.card as CardId : this.sel ? undefined : [...open].reverse().find((id) => shown.includes(id));
+    if (!top) return false;
+    this.cardOpen(top, false, true);
+    this.cardClosedAt = performance.now();
+    if (inCard) (this.root.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus();
+    return true;
+  }
   isCardOpen(id: CardId): boolean { return this.cardOrder.includes(id); }
   get openCards(): CardId[] { return this.cardOrder.slice(); }
   private cardsKey(): string { return this.narrow() ? CARDS_KEY + '.narrow' : CARDS_KEY + '.wide'; }

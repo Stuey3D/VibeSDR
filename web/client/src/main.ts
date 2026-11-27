@@ -25556,6 +25556,8 @@ function initKeyboard() {
       const admin = document.getElementById('adminPanel');
       if (admin && !admin.hidden) { closeAdmin(); return true; }
       const anyOpen = !!document.querySelector('.open');
+      // ★★★ beta96 map cards: with nothing over the map, BACK shuts the map's top card before anything leaves the mode
+      if (!anyOpen) { const mv = mapShOpenView()?.v; if (mv?.closeTopCard()) return true; }
       closePanels();
       /* ★★ ADS-B: back with nothing else open LEAVES IT — the map is the mode, and its back closes it, as the
        *  HFDL map's does in the app. One layer at a time: a panel over the map closes first. */
