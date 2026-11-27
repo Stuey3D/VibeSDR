@@ -367,9 +367,15 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(700);
       return JSON.parse(await p.ev(`JSON.stringify((() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); const h = r.querySelector('.trkRow')?.offsetHeight || 1; return { n: r.clientHeight / h, total: r.querySelectorAll('.trkRow').length }; })())`)); };
     const r1 = await rowsAt(375, 667, true), r2 = await rowsAt(390, 844, true), r3 = await rowsAt(1440, 900, false);
-    ok(Math.abs(r1.n - 3) < 0.05, `375×667: 3 whole rows (${r1.n.toFixed(2)})`);
+    ok(r1.n >= 2.95 && r1.n <= 4.05 && Math.abs(r1.n - Math.round(r1.n)) < 0.05, `375×667: 3–4 whole rows (${r1.n.toFixed(2)})`);
     ok(Math.abs(r2.n - 4) < 0.05, `390×844: 4 whole rows (${r2.n.toFixed(2)})`);
-    ok(r3.n >= 6.95 && Math.abs(r3.n - Math.round(r3.n)) < 0.05 || r3.total < 7, `1440×900: 7 or more whole rows, the top under the chips' column (${r3.n.toFixed(2)})`);
+    ok(r3.n >= 3.95 && r3.n <= 7.05 && Math.abs(r3.n - Math.round(r3.n)) < 0.05, `1440×900: a compact 4–7 whole rows (${r3.n.toFixed(2)})`);
+    { const r4 = await rowsAt(2380, 1540, false);
+      ok(r4.n <= 7.05 && Math.abs(r4.n - Math.round(r4.n)) < 0.05, `2380×1540: normal ≤ 7 whole rows (${r4.n.toFixed(2)})`);
+      await p.ev(`${V}.querySelector('.lMax').click(); 1`); await sleep(700);
+      const mx = await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); return r.clientHeight / (r.querySelector('.trkRow')?.offsetHeight || 1); })()`);
+      ok(mx >= 2 * r4.n - 0.05, `…maximised shows at least twice the rows (${mx.toFixed(1)} vs ${r4.n.toFixed(1)})`);
+      await p.ev(`${V}.querySelector('.lMax').click(); 1`); await sleep(600); }
     // ── 390×844, LIST open: the ? and the scale lifted clear of the drawer, the (i) hidden; LIST shut, all back down ──
     { await rowsAt(390, 844, true); await sleep(400);
       const q = JSON.parse(await p.ev(`JSON.stringify((() => { const L = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect();
@@ -385,21 +391,28 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     { await rowsAt(390, 844, true);
       const t = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), d = ${V}.querySelector('.mDock[data-dock="list"]');
         const rows = c.querySelector('.rows').getBoundingClientRect(), chip = d.querySelector('.hCard').getBoundingClientRect();
-        return { title: getComputedStyle(c.querySelector('.ch')).display, chipVis: getComputedStyle(d).visibility, arrow: getComputedStyle(d.querySelector('.arw')).transform, clear: rows.bottom <= chip.top + 1, expanded: d.querySelector('[data-cbtn]').getAttribute('aria-expanded') }; })())`));
-      ok(t.title === 'none' && t.chipVis === 'visible' && t.arrow !== 'none' && t.clear && t.expanded === 'true', `the drawer has no title row; its chip stays in the corner, arrow down, the rows clear of it (${JSON.stringify(t)})`);
+        const cr = c.getBoundingClientRect(), x = chip.left + 8, y = chip.bottom - 8, hit = document.elementFromPoint(x, y);
+        return { title: getComputedStyle(c.querySelector('.ch')).display, chipVis: getComputedStyle(d).visibility, arrow: getComputedStyle(d.querySelector('.arw')).transform,
+          rowsToEdge: Math.abs(rows.bottom - (cr.bottom - parseFloat(getComputedStyle(c).paddingBottom))) <= 1, over: chip.left <= cr.left + 1 && chip.bottom >= cr.bottom - 1 && chip.top < rows.bottom,
+          onTop: !!hit && !!hit.closest('.mDock[data-dock="list"]'), expanded: d.querySelector('[data-cbtn]').getAttribute('aria-expanded') }; })())`));
+      ok(t.title === 'none' && t.chipVis === 'visible' && t.arrow !== 'none' && t.rowsToEdge && t.over && t.onTop && t.expanded === 'true', `no title row, no bottom strip: the rows reach the drawer's edge and the chip floats over its corner, on top for a tap (${JSON.stringify(t)})`);
       await p.ev(`${BTN('list')}.click(); 1`); await sleep(600);
       const u = JSON.parse(await p.ev(`JSON.stringify({ shut: ${V}.querySelector('.trkCard2[data-card="list"]').hidden || !${V}.querySelector('.trkCard2[data-card="list"]').offsetHeight, arrow: getComputedStyle(${V}.querySelector('.mDock[data-dock="list"] .arw')).transform })`));
       ok(u.shut && u.arrow === 'none', `…its chip folds it; the arrow points up (${JSON.stringify(u)})`);
       await p.ev(`${BTN('list')}.click(); 1`); await sleep(400); }
     // ── the right-bottom stack — (i), ?, the scale — never overlaps, LIST open or shut, phone and desktop (Stuart 12:44) ──
-    for (const [ww, hh, mob] of [[390, 844, true], [1440, 900, false]]) for (const listOn of [true, false]) {
+    for (const [ww, hh, mob, listOn, mx] of [[375, 667, true, true, false], [390, 844, true, true, false], [430, 932, true, true, false], [390, 844, true, true, true], [375, 667, true, true, true],
+                                             [390, 844, true, false, false], [1440, 900, false, true, false], [1440, 900, false, false, false]]) {
       await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);
       await p.ev(`(() => { const b = ${BTN('list')}; if ((b.getAttribute('aria-expanded') === 'true') !== ${listOn}) b.click(); return 1; })()`); await sleep(700);
+      await p.ev(`(() => { const t = ${V}.querySelector('.lMax'); if (t && (t.getAttribute('aria-pressed') === 'true') !== ${mx}) t.click(); return 1; })()`); await sleep(700);
       const hits = await p.ev(`(() => { const vis = (e) => e && getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0;
-        const els = [['?', ${V}.querySelector('.mHelp')], ['scale', ${V}.querySelector('.mChipsScale')], ['(i)', ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution')]].filter(([, e]) => vis(e));
+        const els = [['?', ${V}.querySelector('.mHelp')], ['scale', ${V}.querySelector('.mChipsScale')], ['(i)', ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution')], ['max', ${V}.querySelector('.lMax')]].filter(([, e]) => vis(e) && e.offsetParent !== null);
         const out = []; for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) { const a = els[i][1].getBoundingClientRect(), b = els[j][1].getBoundingClientRect();
-          if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) out.push(els[i][0] + '×' + els[j][0]); } return out.join(','); })()`);
-      ok(!hits, `${ww}×${hh} LIST ${listOn ? 'open' : 'shut'}: the ?, the scale and the (i) apart${hits ? ' — ' + hits : ''}`);
+          const g = els[i][0] === 'max' || els[j][0] === 'max' ? 8 : 0;   // ★ 8 px between tap targets
+          if (a.left < b.right + g - 1 && a.right > b.left - g + 1 && a.top < b.bottom + g - 1 && a.bottom > b.top - g + 1) out.push(els[i][0] + '×' + els[j][0]); } return out.join(','); })()`);
+      ok(!hits, `${ww}×${hh} LIST ${listOn ? (mx ? 'maximised' : 'open') : 'shut'}: the ?, the scale, the (i) and the maximise tab apart${hits ? ' — ' + hits : ''}`);
+      await p.ev(`(() => { const t = ${V}.querySelector('.lMax'); if (t && t.getAttribute('aria-pressed') === 'true') t.click(); return 1; })()`); await sleep(500);
     }
     // ── the tab row (Stuart 12:47): no "no pos" pill; it scrolls, a fade + arrow only at an edge with more beyond ──
     { await rowsAt(390, 844, true);
@@ -431,6 +444,13 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       await p.ev(`document.activeElement?.blur?.(); ${V}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 1`); await sleep(700);
       const g2 = await g();
       ok(Math.abs(g2.h - g0.h) <= 1 && g2.pressed === 'false', `…Escape restores it first, the LIST still open (${g2.h} px)`);
+    }
+    // ── the drawer's WIDTH from the viewport (Stuart 13:00 / 13:03): a phone's full width; wide, 30 % (420–640 px) ──
+    for (const [ww, hh, mob, want] of [[390, 844, true, 'full'], [1440, 900, false, 420], [2560, 1440, false, 560]]) {
+      await p.size(ww, hh, mob); await sleep(800); await shutTransients(p);
+      await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(700);
+      const w = await p.ev(`Math.round(${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect().width)`);
+      ok(want === 'full' ? w === ww : w >= want, `${ww}×${hh}: the LIST drawer ${w} px wide (${want === 'full' ? 'the full width' : '≥ ' + want})`);
     }
     // ── HELP grows out of its ?: its bottom-right corner on the button ──
     for (const [ww, hh, mob] of [[750, 950, false], [390, 844, true], [1440, 900, false]]) {

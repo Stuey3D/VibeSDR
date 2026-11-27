@@ -9710,6 +9710,8 @@ function mapShBuild(): HTMLElement {
     + '<button type="button" class="btn" id="mapChat" title="Chat">CHAT<span class="unread" id="mapChatUnread" hidden></span></button>';
   const openChat = () => {
     if (($('mChat') as HTMLButtonElement).disabled) return;
+    const o = mapShOpenView();   // ★★★ no top bar (Stuart 12:50): the pill opens the map's CHAT card
+    if (o) { o.v.cardOpen('chat', true, true); return; }
     if (!isPanelOpen('chatPanel')) togglePanel('chatPanel');
     chatOpened(isPanelOpen('chatPanel')); mapShChatSync();
   };
@@ -9734,7 +9736,44 @@ function mapShChatSync() {
   b.classList.toggle('askNudge', src.classList.contains('askNudge'));
   const su = document.getElementById('mChatUnread'), du = document.getElementById('mapChatUnread');
   if (su && du) { du.textContent = su.textContent; du.hidden = su.hidden; }
+  const o = mapShOpenView();
+  if (o) o.v.setChat({ show: !(mapShEl?.hidden ?? true), disabled: src.disabled, why: src.title, unread: su && !su.hidden ? parseInt(su.textContent || '0', 10) || 0 : 0 });
 }
+/* ★★★ THE MAP'S CHAT CARD (Stuart 12:50 / 12:53: "chat is canned anyway") — the chat's log and its canned replies, moved
+ *  into the card while it is open and home again after: the same nodes, so the chat's own code keeps drawing them. A
+ *  reply sent: the card stays ~2 s so it is seen landing, then folds. A message arriving while it is open restarts the
+ *  card's idle clock. */
+let mapChatHome: Array<{ el: HTMLElement; parent: Node; next: Node | null }> = [];
+let mapChatFoldT: ReturnType<typeof setTimeout> | null = null;
+function mapChatCard(v: TrackView, open: boolean) {
+  if (open) {
+    if (mapChatHome.length) return;
+    const host = v.chatHost();
+    for (const id of ['chatLog', 'chatPhrases']) {
+      const el = document.getElementById(id); if (!el || !el.parentNode) continue;
+      mapChatHome.push({ el, parent: el.parentNode, next: el.nextSibling });
+      host.appendChild(el);
+    }
+    chatOpened(true); mapShChatSync();
+    const log = document.getElementById('chatLog'); if (log) log.scrollTop = log.scrollHeight;
+  } else {
+    if (mapChatFoldT) { clearTimeout(mapChatFoldT); mapChatFoldT = null; }
+    for (const h of mapChatHome.reverse()) h.parent.insertBefore(h.el, h.next && h.next.parentNode === h.parent ? h.next : null);
+    mapChatHome = [];
+    chatOpened(isPanelOpen('chatPanel')); mapShChatSync();
+  }
+}
+(() => {   // the replies and incoming messages, wherever the nodes are
+  const ph = document.getElementById('chatPhrases'), log = document.getElementById('chatLog');
+  ph?.addEventListener('click', (e) => {
+    const o = mapShOpenView(); if (!o || !mapChatHome.length || !(e.target as HTMLElement).closest('button')) return;
+    if (mapChatFoldT) clearTimeout(mapChatFoldT);
+    mapChatFoldT = setTimeout(() => { mapChatFoldT = null; if (o.v.isCardOpen('chat')) o.v.cardOpen('chat', false, true); }, 2000);
+  });
+  if (log && typeof MutationObserver !== 'undefined') new MutationObserver(() => {
+    const o = mapShOpenView(); if (o && mapChatHome.length) { o.v.cardActivity(); log.scrollTop = log.scrollHeight; }
+  }).observe(log, { childList: true, subtree: true });
+})();
 /** The open full-screen track map, and whether its EXIT leaves a whole-radio mode (retunes the shared radio). */
 function mapShOpenView(): { v: TrackView; exitMoves: boolean } | null {
   if (asView?.open) return { v: asView, exitMoves: asBy === 'mode' && liveChrome('airsea', asMode()).exitLeavesMode };
@@ -9748,6 +9787,7 @@ function mapSharedSync() {
   const g = mapShBuild();
   const slot = o.v.slot('share');
   if (g.parentElement !== slot) slot.appendChild(g);
+  if (!o.v.onCard) o.v.onCard = (id, open) => { if (id === 'chat') mapChatCard(o.v, open); };
   const st = mapBarLine({   // ★★★ beta96 map cards: Stuart's bar words ("Shared VFO: Ask before changing mode or exiting 2/5")
     shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true || (o.v === asView && asViewOnly),
     listeners: listenerCount, max: listenerMax, ask: askNow, scanLocked: scanLockOn,
@@ -9755,6 +9795,7 @@ function mapSharedSync() {
     exitMoves: o.exitMoves,
   });
   g.hidden = !st.show;
+  o.v.setChat({ show: st.show });
   // ★ ADS-B's own CHAT key gives way to this one (one CHAT on the map, beside the line)
   const ac = document.getElementById('adsbChat'); if (ac) ac.hidden = st.show;
   const line = $('mapShLine') as HTMLButtonElement;
@@ -11251,6 +11292,18 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
                                         adsbR: AdsbReport | null; aisR: AisReport | null; avh: any; sh: any; on: (id: LiveLayerId) => boolean; present: LiveLayerId[] }) {
   const rate = asRateText();
   v.setRate(rate.text, rate.title);
+  { // ★★★ the RATE chip (Stuart 12:52): this radio's live rate, then each feed (aircraft and live / stalled — a feed's
+    //     message rate is not in the server's table, so its aircraft stand in)
+    const rr: Array<{ name: string; rate: string; live: boolean; words?: string }> = [];
+    const m = /^(.*?)\s+([\d.,]+)\s*(?:msg\/)?(\/?s|\/?min)$/.exec(rate.text);
+    if (rate.text) rr.push({ name: m ? m[1] : rate.text, rate: m ? `${m[2]}/${m[3].replace('/', '')}` : '', live: true, words: rate.title });
+    // ★ Stuart 13:00 ("needs to be messages per min, not a simple counter"): a feed's own messages a second, never a count;
+    //   a feed without one is left out, and no rate at all hides the chip
+    for (const f of avShared?.feeds ?? []) if (typeof f.perSec === 'number') rr.push({ name: f.title, rate: `${fmtRate(f.perSec)}/s`, live: /connected|listening|live|ok/i.test(f.state), words: `${(f.label || 'adsb').toUpperCase()} feed \u00b7 ${f.state || 'unknown'} \u00b7 messages a second` });
+    // the busiest first when this radio has no live mode (the viewer)
+    if (!rate.text) rr.sort((a, b) => (parseFloat(b.rate.replace(/,/g, '')) || 0) - (parseFloat(a.rate.replace(/,/g, '')) || 0));
+    v.setRateRows(rr);
+  }
   // ── TUNE: the live mode's own line (its frequency, gain, capture) ──
   const tune = [adsbOn ? adsbStatus(adsbReport) : '', avOn ? avStatus(avReport) : '', aisOn ? aisStatus(aisReport) : '', vmOn ? vorMapStatus(vmReport) : '',
                 sdOn ? sondeStatus(sdReport) : '', ndbOn && ndbView ? ndbView.status() : ''].filter(Boolean).join(' · ');

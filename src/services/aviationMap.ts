@@ -112,7 +112,7 @@ export interface AvStation { id: number; name: string; lat: number; lon: number;
 export interface AvAdsbState { live: boolean | null; last: number; off: boolean }
 /** ★★ beta96 a server-level aircraft feed (vibe_feeds.h — another receiver's Beast or BaseStation output): its name, label
  *  and state as aircraft.json says (never an address). */
-export interface AvFeed { title: string; label: string; state: string; aircraft: number }
+export interface AvFeed { title: string; label: string; state: string; aircraft: number; /** ★ messages a second (the server's own count — vibe_feeds.h "perSec") */ perSec?: number }
 export interface SharedAircraft { now: number; count: number; off: boolean; aircraft: AvPlane[]; stations: AvStation[]; adsb: AvAdsbState;
   /** ★★ beta96 the server's aircraft feeds, and the banner when one is down ("PiAware lost — reconnecting… · HFDL still live") */
   feeds: AvFeed[]; feedWarn: string }
@@ -165,7 +165,7 @@ export function sharedSanitise(j: any): SharedAircraft | null {
   const feeds: AvFeed[] = [];
   if (Array.isArray(j.feeds)) for (const f of j.feeds.slice(0, 8)) {
     if (!f || typeof f !== 'object') continue;
-    feeds.push({ title: str(f.title, 40) ?? 'feed', label: str(f.label, 6) ?? '', state: str(f.state, 12) ?? '', aircraft: Math.max(0, num(f.aircraft) ?? 0) });
+    feeds.push({ title: str(f.title, 40) ?? 'feed', label: str(f.label, 6) ?? '', state: str(f.state, 12) ?? '', aircraft: Math.max(0, num(f.aircraft) ?? 0), perSec: num(f.perSec) != null ? Math.max(0, num(f.perSec)!) : undefined });
   }
   return { now: num(j.now) ?? 0, count: num(j.count) ?? aircraft.length, off: j.off === 1, aircraft, stations, adsb, feeds, feedWarn: str(j.feedWarn, 300) ?? '' };
 }

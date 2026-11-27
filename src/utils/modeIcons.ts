@@ -30,7 +30,7 @@
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
   | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
-  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry';
+  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -62,6 +62,8 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
   zoomPause: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 }, { d: 'M8.4 7.4v5.2M11.6 7.4v5.2', w: 2 } ],
   zoomLens: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 } ],
   noEntry: [ { c: [12, 12, 10.2], w: 2.2 }, { d: 'M4.8 19.2 19.2 4.8', w: 2.4 } ],
+  // ★ the LIST's sort (Stuart 12:58): NEAREST — range rings round the receiver; LATEST is the house clock
+  nearest: [ { c: [12, 12, 8.5], w: 1.6 }, { c: [12, 12, 4.5], w: 1.6 }, { c: [12, 12, 1.5], fill: true } ],
   /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
   list: [
     { d: 'M9 6h11M9 12h11M9 18h11' },

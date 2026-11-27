@@ -660,7 +660,6 @@ const CSS = `
 /* ★ tweak 4: SERVERS top-left where the app has it, then TUNE, LAYERS; the zoom ± step over to the right, under MAP */
 .mChipsL{left:0;top:8px}
 .trkMapHost .maplibregl-ctrl-top-left,.trkMapHost .leaflet-top.leaflet-left{left:auto!important;right:0;top:var(--trk-zoom-top,72px)}
-.trkView[data-oneside] .trkMapHost .maplibregl-ctrl-top-left,.trkView[data-oneside] .trkMapHost .leaflet-top.leaflet-left{top:0}
 .mChipsR{right:0;top:8px}
 .mChipsRB{right:0;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
 .mDock{position:relative}
@@ -714,16 +713,97 @@ const CSS = `
  *  bottom, no rim on the edge sides, a square corner (the window's own corner clips it), the safe area inside it; the
  *  controller's green focus ring drawn INSIDE (no clipping at the edge, no layout shift) */
 .trkCards .trkCard2{background:#0b110d!important}
+/* ★ Stuart 13:04 ("remove the green border"): the drawer's rim is the cards' quiet grey; green is only ever the pad's focus */
+.trkCards .sideB>.trkCard2[data-card="list"]{border-color:#2c3a4a!important}
+.trkCard2[data-card="list"] .lMax{color:#2c3a4a!important}
+.trkCard2[data-card="list"] .lMax svg{color:var(--hc,#5BE36B)}
+/* ★ …and the chip over the last row: the row fades out under it (a gradient off the chip's plate, no layout) */
+.mDock[data-dock="list"].open .hCard{position:relative}
+.mDock[data-dock="list"].open .hCard::after{content:"";position:absolute;left:100%;top:-26px;bottom:0;width:40px;background:linear-gradient(to right,#0b110d,rgba(11,17,13,0));pointer-events:none}
+.mDock[data-dock="list"].open .hCard::before{content:"";position:absolute;left:0;right:0;top:-26px;height:26px;background:linear-gradient(to top,#0b110d,rgba(11,17,13,0));pointer-events:none}
+.mDock[data-dock="list"].open .hCard{box-shadow:none!important;border-color:transparent!important}
+/* a row's long title is a mouse's tooltip, never a touch's */
+@media (hover:none){.trkRow{-webkit-touch-callout:none}}
 .mHelp,.mChipsScale{transition:transform .2s ease}
+.trkList .hd .srt .srtT{display:inline-flex;align-items:center;gap:4px;border-radius:6px!important;margin:0!important;padding:3px 6px!important;background:#1e2a36;color:#ffd34d;border:1px solid #33475a}
+.trkList .hd .srt .srtT .sIco{width:14px;height:14px}
+.trkList .hd .srt .srtT .sw{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
+.trkView[data-narrow] .trkList .hd .srt .srtT .sw{display:none}
+/* ★ Stuart 12:58: the "heard but not on the map" sentence gone from the LIST on every width (those rows say "no position") */
+.trkCard2[data-card="list"]>.cb>.facts{display:none!important}
+/* the callsign and its tags never truncate: the subtitle gives way first */
+.trkRow .id b .nmT{flex:0 0 auto!important;overflow:visible!important}
+/* ★★★ Stuart 13:00 ("on the larger wider screen the list is super skinny"): the drawer's width from the viewport —
+ *  30 % of it, 340 to 640 px; a phone's is the full width */
+.trkView:not([data-narrow]) .trkCards .sideB{width:clamp(420px,30vw,640px)!important;max-width:calc(100% - 12px)}
+.trkCards .sideB>.trkCard2[data-card="list"]{width:100%!important;max-width:none!important}
+.trkView[data-narrow] .trkCards .sideB{right:0!important;width:auto!important}
+.trkView.stackAway .mHelp,.trkView.stackAway .mChipsScale{visibility:hidden}
+/* ★★★ Stuart 12:50–12:56 NO TOP BAR — the map runs to the top. The bar's pieces float over it: the big round X top-left
+ *  (red-tinted, never an edge tab), the shared-tuner pill top-centre (tap = chat), RATE then CHAT down the right edge, the
+ *  zoom below them. The old bar element stays for the drivers (its status line is off-screen), out of the flow. */
+.trkView .trkTop{position:absolute!important;left:0;right:0;top:0;z-index:801;background:none!important;border:0!important;box-shadow:none!important;min-height:0!important;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) var(--trk-pill-pad,72px) 0!important;display:flex!important;flex-wrap:wrap!important;justify-content:center;align-items:flex-start;gap:6px;pointer-events:none}
+.trkView .trkTop>*{pointer-events:auto}
+.trkView .trkTop .ttl,.trkView .trkTop .rate,.trkView .trkTop .spacer{display:none!important}
+.trkView .trkTop .st{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;flex:none!important}
+.trkView .trkTop .exit{position:fixed;left:0;top:env(safe-area-inset-top,0px);width:calc(52px + env(safe-area-inset-left,0px));height:52px;border-radius:0 0 14px 0!important;padding:0 0 0 env(safe-area-inset-left,0px)!important;box-sizing:border-box;
+  font-size:0!important;color:#fff;background:#5e1818!important;border:1px solid #d0554e!important;border-top-width:0!important;border-left-width:0!important;box-shadow:2px 2px 10px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:2}
+.trkView .trkTop .exit::before{content:"";width:18px;height:18px;background:linear-gradient(45deg,transparent 43%,#fff 43%,#fff 57%,transparent 57%),linear-gradient(-45deg,transparent 43%,#fff 43%,#fff 57%,transparent 57%)}
+.trkView .trkTop .exit:hover,.trkView .trkTop .exit:focus-visible{background:rgba(160,36,36,.96)!important;outline:2px solid #ffd34d;outline-offset:2px}
+.trkView .mChipsL{top:calc(env(safe-area-inset-top,0px) + 52px + 12px)}
+.trkView .mChipsR{top:env(safe-area-inset-top,0px)}
+.mDock[data-dock="rate"] .hCard{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;padding-right:env(safe-area-inset-right,0px)}
+.trkView.rateOpen .trkCards .sideR{right:0!important;left:auto!important;top:var(--trk-rate-bottom,40px)!important}
+.trkView.rateOpen .trkCards .sideR>.trkCard2[data-card="rate"]{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;width:max(var(--trk-rate-w,160px),240px);transform-origin:top right}
+.trkView .trkTop .slot-share{max-width:100%}
+.trkView .trkTop .slot-share .mapShLine{border-radius:999px!important;padding:7px 12px!important;box-shadow:0 2px 10px rgba(0,0,0,.45);background:rgba(28,22,10,.92)!important;white-space:normal;text-align:center;line-height:1.25;max-width:100%}
+.trkView .trkTop .slot-share .mapShLine.alone{background:rgba(10,26,14,.92)!important}
+.trkView .trkTop .slot-share .mapShLine.locked{background:rgba(40,14,10,.92)!important}
+.trkView .trkTop #mapChat{display:none!important}
+/* the RATE chip: a reading; a ⌄ only with several sources */
+.mDock[data-dock="rate"] .rateIc{gap:4px;font:700 11px/1 ui-monospace,Menlo,monospace;color:#dfe7ef;white-space:nowrap}
+.mDock[data-dock="rate"] .ru{color:#ffd34d}
+.mDock[data-dock="rate"] .rmore{color:#9fb0c2;font-size:10px}
+.mDock[data-dock="rate"] .rmore:empty{display:none}
+.mDock[data-dock="rate"] .arw{width:10px;height:10px;flex:none;transition:transform .2s ease}
+.mDock[data-dock="rate"].static .arw{display:none}
+.mDock[data-dock="rate"].static .mchip{cursor:default}
+.mDock[data-dock="rate"].open .arw{transform:rotate(180deg)}
+.mDock[data-dock="rate"] .cap{display:none}
+.trkView[data-narrow] .mDock[data-dock="rate"] .rn{display:none}
+.mDock[data-dock="rate"] .mchip{flex-direction:row!important;min-height:34px!important;padding:0 8px!important}
+.mDock[data-dock="rate"].open{visibility:visible}
+.mDock[data-dock="rate"].open .hCard{border-radius:0!important}
+.trkCard2[data-card="rate"] .rateRow{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:8px;padding:7px 10px;font:600 12px/1.2 system-ui,sans-serif}
+.trkCard2[data-card="rate"] .rateRow .dot{width:8px;height:8px;border-radius:50%;background:#5BE36B}
+.trkCard2[data-card="rate"] .rateRow.down .dot{background:#e0a040}
+.trkCard2[data-card="rate"] .rateRow .v{font:700 12px/1 ui-monospace,Menlo,monospace;color:#ffd34d;font-variant-numeric:tabular-nums}
+.trkCard2[data-card="rate"] .rateRow.down .v{color:#e0a040}
+/* the CHAT chip: a glyph and the unread badge; a single gentle pulse on a new message */
+.mDock[data-dock="chat"] .ic{position:relative}
+.mDock[data-dock="chat"] .unr{position:absolute;top:-6px;right:-9px;min-width:15px;height:15px;border-radius:8px;background:#e04040;color:#fff;font:700 9.5px/15px system-ui,sans-serif;text-align:center;padding:0 3px;box-sizing:border-box}
+.mDock[data-dock="chat"] .unr[hidden]{display:none}
+.mDock[data-dock="chat"].off{opacity:.45}
+.mDock[data-dock="chat"].pulse .hCard{animation:trkChatPulse 1.2s ease-out 1}
+@keyframes trkChatPulse{0%{transform:scale(1)}25%{transform:scale(1.12)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.mDock[data-dock="chat"].pulse .hCard{animation:none}}
+.trkCard2[data-card="chat"] .chatBody{display:flex;flex-direction:column;gap:6px;padding:6px 8px 8px;min-width:0}
+.trkCard2[data-card="chat"] .chatBody #chatLog{max-height:9.5em;overflow:auto;font-size:12px}
+.trkView[data-narrow] .trkCard2[data-card="chat"] .chatBody #chatLog{max-height:6.5em}
+.trkCard2[data-card="chat"] .chatBody #chatPhrases{display:flex;flex-wrap:wrap;gap:5px}
 /* ★★★ Stuart 12:44 ("empty space where it says LIST then a back button, why doesn't that go"): the drawer has NO title row —
  *  it opens straight onto its tabs and rows. Its CHIP is the toggle, always in the corner: the list glyph, the count and an
  *  arrow — up (open it) while shut, down (fold it) while open. The chip sits in the drawer's own bottom strip, so no row
  *  ever hides under it. */
 .trkCard2[data-card="list"]>.ch{display:none!important}
-.trkCards .sideB>.trkCard2[data-card="list"]{padding-bottom:calc(var(--trk-lchip-h,40px) + env(safe-area-inset-bottom,0px))!important}
+.trkCards .sideB>.trkCard2[data-card="list"]{padding-bottom:env(safe-area-inset-bottom,0px)!important}
+/* ★ Stuart 12:55 ("the collapse button can simply cut in over the data in that corner"): no strip — the rows run to the
+ *  drawer's bottom; the chip floats over the corner on its own opaque plate; a spacer after the last row lets it scroll clear */
+.trkCard2[data-card="list"] .rows::after{content:"";display:block;height:var(--trk-lchip-h,34px)}
 .trkView .mChipsBL{z-index:800}
 .mDock[data-dock="list"].open{visibility:visible}
-.mDock[data-dock="list"].open .hCard{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
+.mDock[data-dock="list"].open .hCard{background:#0b110d!important}
 .mDock[data-dock="list"] .arw{width:11px;height:11px;flex:none;margin-left:2px;opacity:.85;transition:transform .2s ease}
 .mDock[data-dock="list"].open .arw{transform:rotate(180deg)}
 /* the LIST chip on ONE line at every width — glyph, count, arrow — a slim strip under the drawer's rows */
@@ -1055,7 +1135,9 @@ export class TrackView {
        *  back: TUNE and LAYERS down the left edge, MAP CONTROLS on the right, LIST at the bottom (its card pops UP). */
       + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('servers', 'left', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card', false, SERVERS_SVG.replace('mIco', 'tIco'))}${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true, modeIconSvg('radio', 'tIco'))}`
       + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card', false, LAYER_GLYPH.aircraft)}</div>`
-      + `<div class="mChips mChipsR">${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
+      + `<div class="mChips mChipsR">${dock('rate', 'right', 'RATE', `<span class="ic rateIc"><span class="rv"><span class="rn"></span><span class="ru"></span></span><span class="rmore"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'every source\u2019s message rate')}`
+      + `${dock('chat', 'right', 'CHAT', `<span class="ic"><svg class="mIco" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="9" cy="10.5" r="1.1" fill="currentColor"/><circle cx="12" cy="10.5" r="1.1" fill="currentColor"/><circle cx="15" cy="10.5" r="1.1" fill="currentColor"/></svg><span class="unr" hidden></span></span>`, 'the chat')}`
+      + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
       + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
       // ★★★ the SCALE as its own little edge chip (Stuart 11-27: "scale could be its own little chip on the side of the
@@ -1071,6 +1153,8 @@ export class TrackView {
         + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
         + `<button class="lMax" type="button" aria-pressed="false" aria-label="Maximise the list" title="Maximise the list (M)"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`)
       + card('servers', 'SERVERS', `<div class="srvBody" role="group" aria-label="Servers and radios"></div>`)
+      + card('rate', 'RATE', `<div class="rateBody" role="list" aria-label="Message rate by source"></div>`)
+      + card('chat', 'CHAT', `<div class="chatBody"></div>`)
       + card('tune', 'TUNE', `<div class="facts"></div><div class="trkSlot slot-tune"></div><div class="tunePop" role="menu" aria-label="Tune the radio"></div>`)
       + card('layers', 'LAYERS', `<div class="facts"></div><div class="sect"><span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span></div>`
         + `<div class="sect scopeSect" hidden><span class="rng scope" role="group" aria-label="Sources"></span><div class="note scopeNote2"></div></div>`)
@@ -1109,6 +1193,8 @@ export class TrackView {
     for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => {
       // ★ the LIST stepped aside for a card: its chip brings it back (the card folds), never shuts it
       if (b.dataset.cbtn === 'list' && this.lpFired) { this.lpFired = false; return; }
+      if (b.dataset.cbtn === 'rate' && this.rateStatic) return;
+      if (b.dataset.cbtn === 'chat' && b.getAttribute('aria-disabled') === 'true') { this.onDialLocked?.(b.title); return; }
       if (b.dataset.cbtn === 'list' && this.listAside) { this.closeTransients(); return; }
       this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
     };
@@ -1248,8 +1334,13 @@ export class TrackView {
   }
   private cardsSave() { try { localStorage.setItem(this.cardsKey(), JSON.stringify(this.cardOrder.filter((x) => STICKY_CARDS.has(x)))); } catch { /* private window */ } }
   /** Open / shut a card. `save` = a person's press (remembered); the host's own opening (TUNE's list from elsewhere) too. */
+  /** The host's hook: a card opened or shut (CHAT fills its card on open). */
+  onCard: ((id: CardId, open: boolean) => void) | null = null;
+  /** Something happened in an open card (a chat message came): its idle clock starts again. */
+  cardActivity() { this.idleArm(); }
   cardOpen(id: CardId, on: boolean, save = false) {
     if (on && !this.cardAvail.has(id)) return;
+    if (on && id === 'rate' && this.rateStatic) return;
     // ★★★ tweak 5: LIST sticky, the rest transient — one transient at a time (mapCards.ts cardOpenRule); the window's limit
     //     is the layout's (a phone shows the newest: LIST comes back when the transient one shuts)
     void cardToggle;
@@ -1285,13 +1376,21 @@ export class TrackView {
   get chipsOneSide(): boolean { return this.oneSideNow; }
   private layoutSig = '';
   /** Put the open cards beside their chips (and the rest in the park), the chips pressed, the obstacle told. */
+  private cardsTold = new Set<CardId>();
+  /** Tell the host of every card that opened or shut since last time (however it happened: a press, another card, idle). */
+  private cardsTell(force?: Set<CardId>) {
+    const now = force ?? new Set(this.cardOrder);
+    for (const c of CARD_IDS) if (now.has(c) !== this.cardsTold.has(c)) { if (now.has(c)) this.cardsTold.add(c); else this.cardsTold.delete(c); this.onCard?.(c, now.has(c)); }
+  }
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
+    this.cardsTell();
     { /* ★★★ Stuart 11-27: a TALL window puts every chip down the LEFT (SERVERS, TUNE, LAYERS, MAP CONTROLS; LIST bottom-left);
        *  a shorter one flanks — MAP CONTROLS top-right. By the window, live as it is resized. */
       // ★ the whole stack measured: every offered chip's own height (a tucked one counts as out — no flapping as it tucks)
-      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden);
-      const stackH = docks.reduce((t, d) => t + Math.max(40, (d.querySelector('.hCard') as HTMLElement).offsetHeight) + 8, 16);
+      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden && d.dataset.dock !== 'rate' && d.dataset.dock !== 'chat' && d.dataset.dock !== 'scale');
+      const xH = ((this.root.querySelector('.trkTop .exit') as HTMLElement | null)?.offsetHeight || 48) + 14;   // ★ the X above SERVERS
+      const stackH = docks.reduce((t, d) => t + Math.max(40, (d.querySelector('.hCard') as HTMLElement).offsetHeight) + 8, 16 + xH);
       const one = oneSide(this.mapHost.clientHeight || 0, stackH);
       this.oneSideNow = one;
       const md = this.root.querySelector('.mDock[data-dock="map"]') as HTMLElement | null;
@@ -1321,7 +1420,8 @@ export class TrackView {
     const setv = (k: string, v: string) => { if (this.root.style.getPropertyValue(k) !== v) this.root.style.setProperty(k, v); };
     setv('--trk-chip-l', `${Math.ceil(dw('.mChipsL .mDock')) + 8}px`);
     setv('--trk-chip-r', `${Math.ceil(dw('.mChipsR .mDock')) + 8}px`);
-    { const md = this.root.querySelector('.mChipsR') as HTMLElement | null; const b = md?.getBoundingClientRect(); setv('--trk-zoom-top', b && b.height ? `${Math.ceil(b.height) + 16}px` : '0px'); }
+    { const md = this.root.querySelector('.mChipsR') as HTMLElement | null; const b = md?.getBoundingClientRect(), mh = this.mapHost.getBoundingClientRect();
+      setv('--trk-zoom-top', b && b.height ? `${Math.ceil(b.bottom - mh.top) + 10}px` : '0px'); }   // ★ always under RATE / CHAT / MAP
     { // ★ tweak 4: the LIST dock at the bottom-left — the scale bar steps right of it
       const ld = this.root.querySelector('.mChipsBL .mDock') as HTMLElement | null;
       const lb = ld && !ld.hidden ? (ld.classList.contains('tucked') ? (ld.querySelector('.hTab') as HTMLElement).getBoundingClientRect() : (ld.querySelector('.hCard') as HTMLElement).getBoundingClientRect()) : null;
@@ -1385,6 +1485,15 @@ export class TrackView {
     { const hb = (this.root.querySelector('.mHelp') as HTMLElement | null)?.getBoundingClientRect();
       if (hb && hb.width) { setv('--trk-help-r', `${Math.round(m.right - hb.right)}px`); setv('--trk-help-b', `${Math.round(m.bottom - hb.top)}px`); } }
     if (place.R.length) setv('--trk-cr-top', `${Math.max(6, Math.round(top(place.R)))}px`);
+    { // ★ the pill centred between the X (left) and the right column's widest chip, clear of both
+      const rc = this.root.querySelector('.mChipsR') as HTMLElement | null, x = this.root.querySelector('.trkTop .exit') as HTMLElement | null;
+      const rw = rc ? Math.max(0, ...Array.from(rc.querySelectorAll('.mDock:not([hidden]) .hCard')).map((e) => (e as HTMLElement).offsetWidth)) : 0;
+      const lw = (x?.offsetWidth || 48) + 10;
+      setv('--trk-pill-pad', `${Math.max(rw, lw) + 10}px`);
+      const rd = this.root.querySelector('.mDock[data-dock="rate"] .hCard') as HTMLElement | null, rb = rd?.getBoundingClientRect();
+      if (rb && rb.height) { setv('--trk-rate-bottom', `${Math.round(rb.bottom - m.top)}px`); setv('--trk-rate-w', `${Math.round(rb.width)}px`); }
+      this.root.classList.toggle('rateOpen', place.R.includes('rate'));
+    }
     if (place.B.length) { const b = dockTop('list'); if (b) setv('--trk-cb-bottom', `${Math.max(0, Math.round(m.bottom - b.bottom))}px`); }
     { /* ★★★ Stuart 11:48 "wrong layering": the LIST never grows over the chips on its edge — its top stops under the left
        *  column of chips (SERVERS, TUNE, LAYERS …), so every tab stays visible and pressable */
@@ -1404,7 +1513,7 @@ export class TrackView {
       const lcEl = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
       const rowsEl = lcEl?.querySelector('.rows') as HTMLElement | null;
       const rowH = (rowsEl?.querySelector('.trkRow') as HTMLElement | null)?.offsetHeight || 44;
-      const head = lcEl && rowsEl && lcEl.offsetHeight > 0 ? Math.max(40, lcEl.offsetHeight - rowsEl.clientHeight) : 96;
+      const head = lcEl && rowsEl && lcEl.offsetHeight > 0 ? Math.max(20, lcEl.offsetHeight - rowsEl.clientHeight) : 96;
       /* ★ Stuart 12:40 ("use the viewport size to determine the list size"): a continuous function of the VISUAL viewport
        *  (iOS Safari's toolbars and keyboard counted). Its height alone cannot tell an iPhone (390×844: 3–4 rows wanted)
        *  from a laptop window (1440×900: 8–9), so the share grows with the width too: 30 % of the height at phone width,
@@ -1412,7 +1521,11 @@ export class TrackView {
       const vv = (window as any).visualViewport as { width: number; height: number } | undefined;
       const vw = vv?.width || window.innerWidth, vh = vv?.height || window.innerHeight;
       const share = Math.min(0.55, Math.max(0.29, 0.29 + (vw - 400) / 4200));
-      let n = Math.max(3, Math.floor((vh * share - head) / rowH));
+      // ★ Stuart 12:55: the chip floats over the corner now — the strip it took is one more row at every size
+      // ★ Stuart 13:06 ("the smaller list could be even more compact"): NORMAL is compact on every size — 22 % of the
+      //   viewport's height in whole rows, 3 to 7 — so MAXIMISE is the big one (at least twice the rows)
+      void share;
+      let n = Math.min(7, Math.max(3, Math.round((vh * 0.22) / rowH)));
       while (n > 1 && head + n * rowH > room) n--;
       this.listNormH = Math.round(head + n * rowH);
       this.listMaxH = Math.max(this.listNormH, Math.round(m.height - capTop - (parseFloat(this.root.style.getPropertyValue('--trk-list-bottom')) || 0)));
@@ -1445,7 +1558,23 @@ export class TrackView {
       return { el, was, b, base: { l: b.left, r: b.right, t: b.top + was, b: b.bottom + was } };   // where it sits unlifted
     });
     let lift = 0;
-    for (const { b, base } of stack) if (L && b.width && base.l < L.r - 1 && base.r > L.l + 1 && base.b > L.t + 1 && base.t < L.b - 1) lift = Math.max(lift, Math.ceil(base.b - L.t + 6));
+    // ★ Stuart 12:56 ("? clips the maximise button"): the drawer's top counts its folder tab too, 8 px clear of it
+    const tab = list?.querySelector('.lMax') as HTMLElement | null, tabH = L && tab && tab.offsetHeight ? tab.offsetHeight : 0;
+    const top = L ? L.t - tabH : 0;
+    for (const { b, base } of stack) if (L && b.width && base.l < L.r - 1 && base.r > L.l + 1 && base.b > top - 7 && base.t < L.b - 1) lift = Math.max(lift, Math.ceil(base.b - top + 8));
+    // ★ maximised, the list IS the screen: the ? and the scale step out of the way (the scale has no map to measure)
+    { /* ★ Stuart 12:58 ("move the scale up slightly, then it can tuck in"): lifted, the scale must not reach the right
+       *  column (RATE, CHAT, MAP) or the zoom — it shortens (a smaller round distance) before anything overlaps */
+      const sc = stack.find((x) => x.el.classList.contains('mChipsScale'));
+      const obs = Array.from(this.root.querySelectorAll('.mChipsR, .trkMapHost .maplibregl-ctrl-top-left, .trkMapHost .leaflet-top.leaflet-left')) as HTMLElement[];
+      const floor = Math.max(0, ...obs.map((e) => { const r = e.getBoundingClientRect(); return r.height ? r.bottom : 0; }));
+      let want = 96;
+      if (sc && sc.b.width && L) { const over = floor + 8 - (sc.base.t - lift); want = Math.max(24, Math.min(96, Math.round(this.scaleMaxPx - over))); }
+      if (want !== this.scaleMaxPx) { this.scaleMaxPx = want; this.scaleDraw(); }
+    }
+    const hideStack = !!L && this.listMax;
+    this.root.classList.toggle('stackAway', hideStack);
+    if (hideStack) lift = 0;
     for (const { el, was, b, base } of stack) {
       if (lift !== was) { el.dataset.lift = String(lift); el.style.transform = lift ? `translateY(${-lift}px)` : ''; }
       if (el.classList.contains('mHelp') && b.width) {
@@ -1545,7 +1674,65 @@ export class TrackView {
     const el = this.root.querySelector('.trkTop .rate') as HTMLElement;
     if (el.textContent !== text) el.textContent = text;
     el.title = title;
+    if (!this.rateRowsHost) this.setRateRows(text ? [{ name: text.replace(/\s+[\d.,]+\s*(msg\/min|\/s|msg\/s|\/min)$/, ''), rate: (/[\d.,]+\s*(msg\/min|\/s|msg\/s|\/min)$/.exec(text)?.[0] ?? '').replace('msg/', '/'), live: true, words: title }] : [], false);
   }
+  /* ★★★ Stuart 12:52 THE RATE CHIP, top-right: the main live rate ("VDL2 153/min", "ADS-B 1,425/s"; a phone shows only
+   *  the number and unit). ONE source: a static reading, not a button. SEVERAL (this radio, a PiAware feed …): the main
+   *  one, "+N" and a ⌄ — a press grows a card down out of it, a row per source with its rate and live / stalled, updated
+   *  in place. Monitoring only: showing and hiding a source stays in MAP → SOURCES. */
+  private rateStatic = true;
+  private rateRowsHost = false;
+  setRateRows(rows: Array<{ name: string; rate: string; live: boolean; words?: string }>, host = true) {
+    if (host) this.rateRowsHost = true;
+    const d = this.root.querySelector('.mDock[data-dock="rate"]') as HTMLElement | null;
+    if (!d) return;
+    this.cardsAvail('rate', rows.length > 0);
+    if (!rows.length) { if (this.isCardOpen('rate')) this.cardOpen('rate', false); return; }
+    const many = rows.length > 1;
+    this.rateStatic = !many;
+    const b = d.querySelector('.mchip') as HTMLButtonElement;
+    d.classList.toggle('static', !many);
+    if (!many) { b.setAttribute('aria-disabled', 'true'); b.tabIndex = -1; b.removeAttribute('aria-expanded'); if (this.isCardOpen('rate')) this.cardOpen('rate', false); }
+    else { b.removeAttribute('aria-disabled'); b.tabIndex = 0; b.setAttribute('aria-expanded', String(this.isCardOpen('rate'))); }
+    const m = rows[0];
+    const set = (q: string, t: string) => { const e = d.querySelector(q) as HTMLElement; if (e.textContent !== t) e.textContent = t; };
+    set('.rn', m.name ? m.name + ' ' : ''); set('.ru', m.rate); set('.rmore', many ? `+${rows.length - 1}` : '');
+    const words = rows.map((r) => `${r.name} ${r.rate}${r.live ? '' : ' (stalled)'}`).join(' \u00b7 ');
+    b.title = many ? `${words} \u2014 tap for each source` : (m.words || words);
+    b.setAttribute('aria-label', many ? `Message rate: ${words}. Open the rate card` : `Message rate: ${words}`);
+    // the card: a row per source, written in place (keyed by position + name)
+    const body = this.root.querySelector('.trkCard2[data-card="rate"] .rateBody') as HTMLElement | null;
+    if (!body) return;
+    while (body.children.length > rows.length) body.lastElementChild!.remove();
+    rows.forEach((r, i) => {
+      let row = body.children[i] as HTMLElement | undefined;
+      if (!row) { row = document.createElement('div'); row.className = 'mRow rateRow'; row.setAttribute('role', 'listitem'); row.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="v"></span>'; body.appendChild(row); }
+      row.classList.toggle('down', !r.live);
+      const nm = row.querySelector('.nm') as HTMLElement, v = row.querySelector('.v') as HTMLElement;
+      if (nm.textContent !== r.name) nm.textContent = r.name;
+      const vt = r.live ? r.rate : `${r.rate} \u00b7 stalled`;
+      if (v.textContent !== vt) v.textContent = vt;
+      row.title = r.words || '';
+    });
+  }
+  /** ★★★ Stuart 12:50 the CHAT chip (right edge, under RATE): shown while the dial is shared; its unread count; a gentle
+   *  single pulse when a new message lands. Its card is filled by the host (onCard) — the canned replies, no typing. */
+  private chatUnread = 0;
+  setChat(o: { show: boolean; disabled?: boolean; unread?: number; why?: string }) {
+    const d = this.root.querySelector('.mDock[data-dock="chat"]') as HTMLElement | null;
+    if (!d) return;
+    this.cardsAvail('chat', o.show);
+    if (!o.show && this.isCardOpen('chat')) this.cardOpen('chat', false);
+    const b = d.querySelector('.mchip') as HTMLButtonElement;
+    if (o.disabled !== undefined) { d.classList.toggle('off', o.disabled); if (o.disabled) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); }
+    const n = Math.max(0, o.unread ?? this.chatUnread), u = d.querySelector('.unr') as HTMLElement;
+    u.hidden = !n; if (u.textContent !== String(n)) u.textContent = n > 99 ? '99+' : String(n);
+    if (n > this.chatUnread) { d.classList.remove('pulse'); void d.offsetWidth; d.classList.add('pulse'); setTimeout(() => d.classList.remove('pulse'), 1300); }
+    this.chatUnread = n;
+    b.title = b.getAttribute('aria-disabled') === 'true' ? (o.why || 'Chat is closed') : n ? `Chat \u2014 ${n} new` : 'Chat';
+    b.setAttribute('aria-label', `CHAT \u2014 ${n ? n + ' new message' + (n === 1 ? '' : 's') + '. ' : ''}open the chat`);
+  }
+  chatHost(): HTMLElement { return this.root.querySelector('.trkCard2[data-card="chat"] .chatBody') as HTMLElement; }
   /** The facts the old status paragraph carried, each in the card it belongs to ('' = none). */
   setFacts(f: Partial<Record<'list' | 'tune' | 'layers', string>>) {
     this.hostFacts = true;
@@ -1836,6 +2023,9 @@ export class TrackView {
     const t = this.root.querySelector('.ttl') as HTMLElement, x = this.root.querySelector('.exit') as HTMLElement;
     if (t.textContent !== title) { t.textContent = title; this.root.setAttribute('aria-label', title + ' map'); }
     if (x.textContent !== exitLabel) x.textContent = exitLabel;
+    // ★ the round X: what it does, said in words ("Close map", "Exit datalink", "Leave server")
+    const said = exitLabel.charAt(0).toUpperCase() + exitLabel.slice(1).toLowerCase();
+    if (x.getAttribute('aria-label') !== said) { x.setAttribute('aria-label', said); if (!x.classList.contains('dialLocked')) x.title = said; }
   }
   /** ★★★ beta96 THE DIAL LOCK ON A MAP (Stuart 11-26): while the server says this listener may not move the shared radio
    *  (ask before tuning, the owner's scan), the controls that WOULD move it are greyed with `why` — EXIT when `exitToo`
@@ -1962,8 +2152,14 @@ export class TrackView {
     if (sig === this.srtSig) return;
     this.srtSig = sig;
     host.setAttribute('aria-label', `Sort the ${what}`);
-    host.innerHTML = sort ? [['nearest', 'NEAREST', 'nearest first'], ['latest', 'LATEST', 'most recently heard first']].map(([id, l, w]) => `<button type="button" data-srt="${id}" aria-pressed="${id === sort}" title="Sort the ${esc(what)} ${w}">${l}</button>`).join('') : '';
-    for (const b of Array.from(host.querySelectorAll('[data-srt]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onSort(b.dataset.srt || ''); };
+    /* ★★★ Stuart 12:58 ("nearest latest takes a lot of room … a simple single button toggle"): ONE button wearing the
+     *  CURRENT sort — the rings for nearest, the clock for latest — a press swaps */
+    if (!sort) { host.innerHTML = ''; return; }
+    const next = sort === 'nearest' ? 'latest' : 'nearest';
+    const said = sort === 'nearest' ? `Sorted nearest first \u2014 press for latest` : `Sorted latest first \u2014 press for nearest`;
+    host.innerHTML = `<button type="button" class="srtT" data-srt="${sort}" data-next="${next}" aria-label="${esc(said.replace('Sorted', `The ${what} are sorted`))}" title="${esc(said)}">`
+      + `${modeIconSvg(sort === 'nearest' ? 'nearest' : 'clock', 'sIco')}<span class="sw">${sort === 'nearest' ? 'NEAR' : 'LATEST'}</span></button>`;
+    (host.querySelector('.srtT') as HTMLButtonElement).onclick = (e) => { e.stopPropagation(); onSort(next); };
   }
   /** ★★ beta96 the MESSAGES filter line ("Messages from RYR12K · ALL") — '' = none. */
   setFilter(words: string, onClear: () => void) {
@@ -2185,6 +2381,7 @@ export class TrackView {
   hide() {
     if (!this.open) return;
     this.tuneOpen(false);
+    this.cardsTell(new Set());   // ★ every card the host filled gives its nodes back (CHAT's log and replies)
     this.root.hidden = true;
     this.attribObs?.disconnect(); this.attribObs = null;
     for (const el of this.inerted) el.inert = false;
@@ -2416,6 +2613,7 @@ export class TrackView {
     try { if (this.vm?.map?.on) for (const ev of ['zoom', 'move', 'resize']) this.vm.map.on(ev, upd); } catch { /* none */ }
     upd();
   }
+  private scaleMaxPx = 96;
   private scaleDraw() {
     const map = this.scaleMap, chip = this.root.querySelector('.mScale') as HTMLElement | null;
     if (!map || !chip) return;
@@ -2423,7 +2621,7 @@ export class TrackView {
     if (!c || !Number.isFinite(z)) { chip.hidden = true; return; }
     const mpp = 40075016.686 * Math.cos(((c.lat ?? c[1]) * Math.PI) / 180) / (256 * Math.pow(2, z));   // metres per CSS px (Leaflet zoom)
     const nm = this.scaleKind() === 'nautical', unit = nm ? 1852 : 1000, word = nm ? 'nm' : 'km';
-    const maxPx = 96, max = (mpp * maxPx) / unit;
+    const maxPx = this.scaleMaxPx, max = (mpp * maxPx) / unit;
     const p10 = Math.pow(10, Math.floor(Math.log10(Math.max(max, 1e-6))));
     const nice = [5, 2, 1].map((k) => k * p10).find((v) => v <= max) ?? p10;
     const px = Math.max(12, Math.round((nice * unit) / mpp));
