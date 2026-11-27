@@ -9774,6 +9774,7 @@ function mapSharedSync() {
     const gain = document.getElementById('adsbGain'); if (gain) { if (adsbOn) gain.dataset.dial = '1'; else delete gain.dataset.dial; }
   }
   if (!o.v.onDialLocked) o.v.onDialLocked = (why) => { nudgeAsk(); showPill(why, 4000); };
+  mapServersSync();   // ★★★ tweak 3 the SERVERS chip — every map, always
   o.v.setDialLock(st.show || scanLockOn ? st.why : '', o.exitMoves);
 }
 (window as any).__vibeMapShared = () => {
@@ -10883,9 +10884,16 @@ function asScoped(nowC: number) {
   const seen = radiosSeen([avShared?.aircraft, navLast.ships?.vessels, navLast.st?.stations, navLast.dscG, sdStored, vmStored]);
   const offered = otherRadiosOffered({ mine: mapMine, radioCount: mapRadioCount, viewer: !asOnRadio(), seen });
   const sessOk = sessionOffered({ viewer: !asOnRadio(), onRadio: asOnRadio() });
-  const sc: MapScope = { mine: mapMine, others: !offered || mapOthers, t0: sessOk && asSess && asSessSt ? asSessSt.t0 : 0 };
-  const S = airSeaScope({ shared: avShared, sharedSkew: avSkew, ships: navLast.ships, nav: navLast.st, warn: navLast.w, met: navLast.m, dscG: navLast.dscG, navSkew,
-    adsb: adsbReport, ais: aisReport, av: avReport, sd: sdReport, vm: vmReport, sdStored, vmStored }, sc, nowC, asFirst);
+  /* ★★★ tweak 3 (Stuart 11-27): OTHER RADIOS ON THIS SERVER gave way to SOURCES in MAP CONTROLS — each radio and feed a
+   *  show / hide toggle; hiding one hides what ONLY it heard (an aircraft or ship another shown source heard stays). */
+  const sc: MapScope = { mine: mapMine, others: true, t0: sessOk && asSess && asSessSt ? asSessSt.t0 : 0 };
+  const hid = asSrcHidden;
+  const keep = (radios?: string[]) => !radios || !radios.length || radios.some((r) => !hid.has(r));
+  const shared = hid.size && avShared ? { ...avShared, aircraft: avShared.aircraft.filter((a: any) => keep(a.radios)) } : avShared;
+  const shipsK = hid.size && navLast.ships ? { ...navLast.ships, vessels: navLast.ships.vessels.filter((x: any) => keep(x.radios)) } : navLast.ships;
+  const mineHidden = !!mapMine && hid.has(mapMine);
+  const S = airSeaScope({ shared, sharedSkew: avSkew, ships: shipsK, nav: navLast.st, warn: navLast.w, met: navLast.m, dscG: navLast.dscG, navSkew,
+    adsb: mineHidden ? null : adsbReport, ais: mineHidden ? null : aisReport, av: mineHidden ? null : avReport, sd: sdReport, vm: vmReport, sdStored, vmStored }, sc, nowC, asFirst);
   const ship: ShipSrc = { st: S.nav, w: S.warn, m: S.met, ships: S.ships, dscG: S.dscG, ais: aisOn ? S.ais : null,
     dscOk: (p) => airSeaLiveOk(`dsc:${p.key}`, p.t - navSkew, sc, nowC, asFirst) };
   return { S, ship, sc, offered, sessOk };
@@ -11043,7 +11051,8 @@ function asRender() {
   v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id] })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
   // ★★★ beta96 OTHER RADIOS ON THIS SERVER: a SHOW chip of its own (only with 2+ sources, only on a radio)
-  v.setScope(othersOffered ? { label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS, on: mapOthers } : null, (on2) => mapOthersSet(on2, asRender));
+  v.setScope(null, () => { /* ★ tweak 3: SOURCES in MAP CONTROLS (asCardsSync) */ });
+  void othersOffered;
   // ★★★ beta96 TUNE: ONE chip, the list of what THIS radio can run (none without one)
   asTuneSet(v);
   v.setProfile(liveProfile('airsea', present, on));
@@ -11174,16 +11183,47 @@ function asRateText(): { text: string; title: string } {
   if (aisOn && aisReport) return { text: `AIS ${fmtRate(aisReport.msgRate)} msg/min`, title: 'AIS messages per minute on this radio' };
   return { text: '', title: '' };
 }
+/** ★★★ tweak 3 the SOURCES the viewer hid (this browser's own view, never sent) — radio ids and 'feed'. */
+const AS_SRC_KEY = 'vibesdr.mapSourcesHidden';
+const asSrcHidden = new Set<string>((() => { try { const j = JSON.parse(localStorage.getItem(AS_SRC_KEY) || '[]'); return Array.isArray(j) ? j.filter((x) => typeof x === 'string').slice(0, 64) : []; } catch { return []; } })());
+const AV_LAYER_IDS: LiveLayerId[] = ['adsb', 'acars', 'vdl2', 'hfdl', 'adsc'];
 /** The radios on this server (id → its label), read once per opening of the map (GET /vibeserver/radios). */
 let asRadioNames: Map<string, string> | null = null;
+let asRadioList: Array<{ id: string; label: string; sub: string }> = [];
+/* ★★★ tweak 3 THE SERVERS chip on every map (Stuart 11-27: "must ALWAYS be reachable on every map screen, even when EXIT is
+ *  hidden or the mode can't be left"): back to this server's radios (the front door's list, or the start page), or over
+ *  to another radio on it. Before this a web listener on a map-locked radio (an only-mode server, the landing map) could
+ *  leave only with the browser's own back button or by editing the address. */
+function doorRoot(): string { return location.pathname.replace(/\/r\/[^/]+(\/.*)?$/, '/') || '/'; }
+function mapServersSync() {
+  const o = mapShOpenView();
+  if (!o) return;
+  asRadioNamesLoad();
+  const onDoorRadio = /\/r\/[^/]+/.test(location.pathname);
+  const rows = [{ id: 'back', label: asStandalone ? 'Back to this server\u2019s start page' : onDoorRadio ? 'Back to this server\u2019s radios' : 'Leave this radio \u2014 back to the start page',
+                  sub: location.host }];
+  for (const r of asRadioList) if (r.id !== mapMine) rows.push({ id: `r:${r.id}`, label: `Switch to ${r.label}`, sub: r.sub || 'another radio on this server' });
+  o.v.setServers(rows, (id) => {
+    if (id === 'back') { if (asStandalone) { asClose(); return; } location.href = `${location.origin}${doorRoot()}`; return; }
+    if (id.startsWith('r:')) location.href = `${location.origin}${doorRoot()}r/${encodeURIComponent(id.slice(2))}/`;
+  });
+}
 let asRadioNamesAt = 0;
 function asRadioNamesLoad() {
   if (Date.now() - asRadioNamesAt < 60_000) return;
   asRadioNamesAt = Date.now();
   void fetch(P('/vibeserver/radios'), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
     const m = new Map<string, string>();
-    for (const x of Array.isArray(j?.radios) ? j.radios.slice(0, 32) : []) if (typeof x?.id === 'string') m.set(x.id, typeof x.label === 'string' && x.label ? x.label.slice(0, 40) : x.id);
-    asRadioNames = m;
+    const list: Array<{ id: string; label: string; sub: string }> = [];
+    for (const x of Array.isArray(j?.radios) ? j.radios.slice(0, 32) : []) if (typeof x?.id === 'string' && /^[0-9a-z]{1,16}$/.test(x.id)) {
+      const label = typeof x.label === 'string' && x.label ? x.label.slice(0, 40) : x.id;
+      m.set(x.id, label);
+      const mode = typeof x.mode === 'string' ? x.mode.toUpperCase().slice(0, 12) : '';
+      const users = typeof x.users === 'number' ? `${x.users} listener${x.users === 1 ? '' : 's'} max` : '';
+      list.push({ id: x.id, label, sub: [typeof x.driver === 'string' ? x.driver : '', mode, users].filter(Boolean).join(' · ') });
+    }
+    asRadioNames = m; asRadioList = list;
+    mapServersSync();
     if (asView?.open) asRender();
   }).catch(() => { /* an older server: the ids stand */ });
 }
@@ -11202,7 +11242,7 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   v.setFacts({
     tune,
     list: [clock, notPlaced ? `${notPlaced} heard but not on the map yet (no position)` : ''].filter(Boolean).join(' · '),
-    view: x.shc.warnWords,
+    layers: x.shc.warnWords,
   });
   // ── MAP: the furthest aircraft ──
   let far: { nm: number; name: string; brg: number } | null = null;
@@ -11231,23 +11271,38 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   const bump = (ids: string[] | undefined, k: 'ac' | 'ships') => { for (const id of ids ?? []) { const e = per.get(id) ?? { ac: 0, ships: 0 }; e[k]++; per.set(id, e); } };
   for (const a of avShared?.aircraft ?? []) bump((a as any).radios, 'ac');
   for (const sv of navLast.ships?.vessels ?? []) bump((sv as any).radios, 'ships');
-  const rows: Array<{ name: string; what: string; value: string; down?: boolean }> = [];
+  const rows: Array<{ id: string; name: string; what: string; value: string; on: boolean; down?: boolean }> = [];
   for (const [id, e] of per) {
     if (id === 'feed') continue;   // ★ the feeds are listed by name below
     const mine = id === mapMine && asOnRadio();
     const live = mine ? asRateText().text : '';
-    rows.push({ name: asRadioNames?.get(id) ?? `Radio ${id}`, what: (mine ? 'this radio' : 'a radio on this server') + (live ? ` · live: ${live}` : ''),
+    rows.push({ id, on: !asSrcHidden.has(id), name: asRadioNames?.get(id) ?? `Radio ${id}`, what: (mine ? 'this radio' : 'a radio on this server') + (live ? ` · live: ${live}` : ''),
                 value: [e.ac ? `${e.ac} aircraft` : '', e.ships ? `${e.ships} ships` : ''].filter(Boolean).join(' · ') || '—' });
   }
   if (asOnRadio() && mapMine && !per.has(mapMine) && airSeaOn()) {
     const live = asRateText().text;
-    rows.push({ name: asRadioNames?.get(mapMine) ?? 'This radio', what: `this radio${live ? ` · live: ${live}` : ''}`, value: avOn && avReport ? `${avReport.aircraft.length} aircraft` : adsbOn && adsbReport ? `${adsbReport.aircraft.length} aircraft` : aisOn && aisReport ? `${aisReport.vessels.length} ships` : '—' });
+    rows.push({ id: mapMine, on: !asSrcHidden.has(mapMine), name: asRadioNames?.get(mapMine) ?? 'This radio', what: `this radio${live ? ` · live: ${live}` : ''}`, value: avOn && avReport ? `${avReport.aircraft.length} aircraft` : adsbOn && adsbReport ? `${adsbReport.aircraft.length} aircraft` : aisOn && aisReport ? `${aisReport.vessels.length} ships` : '—' });
   }
+  // ★ every feed is tagged "feed" in the table (vibe_aircraft_share.h): the feed rows show and hide together
   for (const f of avShared?.feeds ?? []) {
     const up = /connected|listening|live|ok/i.test(f.state);
-    rows.push({ name: f.title, what: `${(f.label || 'adsb').toUpperCase()} feed · ${f.state || 'unknown'}`, value: `${f.aircraft} aircraft`, down: !up });
+    rows.push({ id: 'feed', on: !asSrcHidden.has('feed'), name: f.title, what: `${(f.label || 'adsb').toUpperCase()} feed · ${f.state || 'unknown'}`, value: `${f.aircraft} aircraft`, down: !up });
   }
-  v.setSources(rows.length > 1 ? rows : null);
+  v.setSources(rows.length > 1 ? rows : null, (id, on) => {
+    if (on) asSrcHidden.delete(id); else asSrcHidden.add(id);
+    try { localStorage.setItem(AS_SRC_KEY, JSON.stringify([...asSrcHidden])); } catch { /* private window */ }
+    asRender();
+  });
+  // ── the LAYERS chip: a glyph and a count per family present ──
+  const fam: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid'; n: number; colour: string; words: string }> = [];
+  const acN = x.otherPlanes.length + (adsbOn && x.adsbR ? x.adsbR.aircraft.length : 0);
+  if (acN && AV_LAYER_IDS.some((id) => x.present.includes(id) && x.on(id))) fam.push({ glyph: 'aircraft', n: acN, colour: AS_CHIP_COLOUR.adsb ?? '#ffd34d', words: `${acN} aircraft` });
+  if (x.present.includes('ships') && x.on('ships') && x.sh.ships) fam.push({ glyph: 'ship', n: x.sh.ships, colour: AS_CHIP_COLOUR.ships ?? '#4fa3ff', words: `${x.sh.ships} ships` });
+  if (x.present.includes('navst') && x.on('navst') && x.sh.stations) fam.push({ glyph: 'navtex', n: x.sh.stations, colour: AS_CHIP_COLOUR.navst ?? '#ffad42', words: `${x.sh.stations} NAVTEX stations` });
+  if (x.present.includes('sondes') && x.on('sondes')) { const n = sdOn ? sdReport?.sondes.length ?? 0 : sdStored.length; if (n) fam.push({ glyph: 'balloon', n, colour: AS_CHIP_COLOUR.sondes ?? '#c58cff', words: `${n} sondes` }); }
+  if (x.present.includes('vor') && x.on('vor')) { const n = vmOn ? vmReport?.heard ?? 0 : vmStored.length; if (n) fam.push({ glyph: 'navaid', n, colour: AS_CHIP_COLOUR.vor ?? '#7ee787', words: `${n} VOR stations` }); }
+  if (ndbOn && ndbView && x.on('ndb')) { const n = ndbView.count(); if (n) fam.push({ glyph: 'beacon', n, colour: AS_CHIP_COLOUR.ndb ?? '#ffb000', words: `${n} NDB beacons` }); }
+  v.setLayerSummary(fam);
   v.cardsLayout();   // ★ a layer's keys came or went (NDB's RINGS / UNHEARD): the MAP card's section follows
 }
 /** ★ beta96 stage 8 the KEY's NDB rows (the beacon marker: dot + 3-bar meter, ndblayer.js's colours). */

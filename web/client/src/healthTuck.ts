@@ -38,21 +38,28 @@ let hot = false, boxOpen = false;
 let dock: HTMLElement | null = null;
 let observer: MutationObserver | null = null;
 
-function apply(): void {
-  if (!dock) return;
-  const out = chipOut(pref, boxOpen, hot);
-  dock.classList.toggle('tucked', !out);
-  // ★ the tab sits on the right edge — the receiver badge (name, locator, time) steps left of it (Stuart, 2026-11-12:
-  //   "when collapsed the card slightly fouls the server name")
-  document.documentElement.classList.toggle('hTucked', !out);
-  dock.dataset.pref = pref;
-  const card = dock.querySelector<HTMLElement>('.hCard'), tab = dock.querySelector<HTMLElement>('.hTab');
+/** ★★★ beta96 THE EDGE DOCK, shared (Stuart 11-27, the map's chips: "collapse to the side of the screen exactly as the
+ *  SERVER HEALTH chips do"): out (the card) or tucked (the tab on the edge) — one rule for the health pill and the map's
+ *  TUNE / LAYERS / MAP / LIST chips (tracks.ts). The CSS is index.html's `.edgeDock` (`.left` mirrors it). */
+export function edgeDockSet(d: HTMLElement, out: boolean): void {
+  d.classList.toggle('tucked', !out);
+  const card = d.querySelector<HTMLElement>(':scope > .hCard'), tab = d.querySelector<HTMLElement>(':scope > .hTab');
   // ★ The hidden half leaves the tab order and the accessibility tree, so a keyboard never lands on a control that is
   //   off the screen.
   card?.toggleAttribute('inert', !out);
   if (card) card.setAttribute('aria-hidden', String(!out));
   tab?.toggleAttribute('inert', out);
   if (tab) { tab.setAttribute('aria-hidden', String(out)); tab.tabIndex = out ? -1 : 0; }
+}
+
+function apply(): void {
+  if (!dock) return;
+  const out = chipOut(pref, boxOpen, hot);
+  edgeDockSet(dock, out);
+  // ★ the tab sits on the right edge — the receiver badge (name, locator, time) steps left of it (Stuart, 2026-11-12:
+  //   "when collapsed the card slightly fouls the server name")
+  document.documentElement.classList.toggle('hTucked', !out);
+  dock.dataset.pref = pref;
 }
 
 function userTuck(): void { pref = nextPref(pref, 'userTuck'); apply(); }
@@ -68,15 +75,16 @@ function readBox(): void {
 }
 
 /** ★ A flick: further than 50 px, or faster than 0.5 px/ms (the app's thresholds). */
-function wireDrag(card: HTMLElement): void {
+function wireDrag(card: HTMLElement, d: HTMLElement | null = dock, sign = 1, onTuck: () => void = userTuck): void {
   let id = -1, x0 = 0, y0 = 0, dragging = false, lastX = 0, lastT = 0, vx = 0, swallowClick = false;
   card.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || dock?.classList.contains('tucked')) return;
+    if (e.button !== 0 || (d ?? dock)?.classList.contains('tucked')) return;
     id = e.pointerId; x0 = lastX = e.clientX; y0 = e.clientY; lastT = e.timeStamp; vx = 0; dragging = false;
   });
   card.addEventListener('pointermove', (e) => {
     if (e.pointerId !== id) return;
-    const dx = e.clientX - x0, dy = e.clientY - y0;
+    // ★ sign: +1 a right-edge dock (drag right to tuck), −1 a left-edge one (drag left) — the same thresholds
+    const dx = (e.clientX - x0) * sign, dy = e.clientY - y0;
     if (!dragging) {
       if (!(dx > 6 && Math.abs(dx) > Math.abs(dy))) return;
       dragging = true;
@@ -84,8 +92,8 @@ function wireDrag(card: HTMLElement): void {
       card.classList.add('dragging');
     }
     const dt = Math.max(1, e.timeStamp - lastT);
-    vx = (e.clientX - lastX) / dt; lastX = e.clientX; lastT = e.timeStamp;
-    card.style.transform = `translateX(${Math.max(0, dx)}px)`;
+    vx = (e.clientX - lastX) * sign / dt; lastX = e.clientX; lastT = e.timeStamp;
+    card.style.transform = `translateX(${Math.max(0, dx) * sign}px)`;
     e.preventDefault();
   });
   const end = (e: PointerEvent, cancelled: boolean) => {
@@ -94,12 +102,12 @@ function wireDrag(card: HTMLElement): void {
     if (!dragging) return;
     dragging = false;
     swallowClick = true; setTimeout(() => { swallowClick = false; }, 0);
-    const dx = e.clientX - x0;
+    const dx = (e.clientX - x0) * sign;
     // ★ Restore the transition BEFORE clearing the inline transform, in the same frame: the browser then animates
     //   from where the finger let go to wherever the class says — off the edge, or back home.
     card.classList.remove('dragging');
     card.style.transform = '';
-    if (!cancelled && (dx > 50 || vx > 0.5)) userTuck();
+    if (!cancelled && (dx > 50 || vx > 0.5)) onTuck();
   };
   card.addEventListener('pointerup', (e) => end(e, false));
   card.addEventListener('pointercancel', (e) => end(e, true));
@@ -107,12 +115,22 @@ function wireDrag(card: HTMLElement): void {
   card.addEventListener('click', (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); } }, true);
 }
 
-function wireTab(tab: HTMLElement): void {
-  tab.addEventListener('click', () => userShow());
-  // ★ The app's tab also comes out on a drag to the left.
+function wireTab(tab: HTMLElement, sign = 1, onShow: () => void = userShow): void {
+  tab.addEventListener('click', () => onShow());
+  // ★ The app's tab also comes out on a drag away from its edge.
   let id = -1, x0 = 0;
   tab.addEventListener('pointerdown', (e) => { id = e.pointerId; x0 = e.clientX; });
-  tab.addEventListener('pointerup', (e) => { if (e.pointerId === id && e.clientX - x0 < -20) userShow(); id = -1; });
+  tab.addEventListener('pointerup', (e) => { if (e.pointerId === id && (e.clientX - x0) * sign < -20) onShow(); id = -1; });
+}
+
+/** ★★★ beta96 an edge dock of the map's (tracks.ts): the same drag, flick, › and tab as the health pill's — `side` the
+ *  screen edge it tucks into. */
+export function wireEdgeDock(d: HTMLElement, side: 'left' | 'right', onTuck: () => void, onShow: () => void): void {
+  const sign = side === 'left' ? -1 : 1;
+  const card = d.querySelector<HTMLElement>(':scope > .hCard'), tab = d.querySelector<HTMLElement>(':scope > .hTab');
+  d.querySelector<HTMLElement>('.hTuck')?.addEventListener('click', (e) => { e.stopPropagation(); onTuck(); });
+  if (card) wireDrag(card, d, sign, onTuck);
+  if (tab) wireTab(tab, sign, onShow);
 }
 
 /** ★ Build (once) the card, its › and the tab inside #srvHealth, and return the element the pill's contents go in. */
@@ -120,6 +138,7 @@ export function healthTuckBody(el: HTMLElement): HTMLElement {
   let body = el.querySelector<HTMLElement>('.hBody');
   if (body) return body;
   dock = el;
+  el.classList.add('edgeDock');   // ★ beta96 the shared edge-dock CSS (index.html), also the map's chips'
   el.dataset.gpskip = '';   // ★ pointer-only: off the pad / keyboard route (gamepad.ts candidates)
   el.innerHTML =
       `<div class="hCard"><button type="button" class="hTuck" aria-label="Hide server health" title="Tuck away">›</button>`

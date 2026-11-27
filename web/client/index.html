@@ -4058,39 +4058,51 @@ select.btn { padding: 6px 8px; }
        fixed to the corner, no box of its own and no pointer events — holding the CARD (the frame you see, joined to
        the screen edge with a › on its left) and the TAB (a + and a ‹ that waits past the edge). Tucking slides the
        card out and the tab in. The dock keeps the id, so the ADS-B map, handheld mode and the tutorial still find it. */
-#srvHealth { position: fixed; top: 8px; right: 0; z-index: 60; pointer-events: none; --hc: #5BE36B; }
-#srvHealth .hCard { pointer-events: auto; display: flex; align-items: stretch; touch-action: pan-y; user-select: none;
+#srvHealth { position: fixed; top: 8px; right: 0; z-index: 60; }
+/* ★★★ beta96 THE EDGE DOCK is shared: the health pill and the map's TUNE / LAYERS / MAP / LIST chips (tracks.ts) — one
+       look, one slide (healthTuck.ts edgeDockSet / wireEdgeDock). `.left` mirrors it onto the left edge. */
+.edgeDock { pointer-events: none; --hc: #5BE36B; }
+.edgeDock .hCard { pointer-events: auto; display: flex; align-items: stretch; touch-action: pan-y; user-select: none;
              -webkit-user-select: none; cursor: grab;
              background: var(--ov-health, rgba(8,12,8,0.86)); border: 1.5px solid rgba(120,200,120,0.45);
              border-right-width: 0; border-radius: 12px 0 0 12px;
              padding: 4px calc(8px + env(safe-area-inset-right, 0px)) 5px 0;
              transition: transform .26s cubic-bezier(.215,.61,.355,1); }
-#srvHealth .hCard.dragging { transition: none; cursor: grabbing; }
-#srvHealth.tucked .hCard { transform: translateX(calc(100% + 4px)); pointer-events: none; }
+.edgeDock .hCard.dragging { transition: none; cursor: grabbing; }
+.edgeDock.tucked .hCard { transform: translateX(calc(100% + 4px)); pointer-events: none; }
 /* The › — inside the frame, on the left, pointing at the edge it tucks into (the app's arrow). */
-#srvHealth .hTuck { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+.edgeDock .hTuck { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
              width: 18px; margin: -4px 2px -5px 0; padding-left: 3px; cursor: pointer; color: var(--hc);
              font: 700 18px/1 system-ui, sans-serif; border-radius: 10px 0 0 10px; }
-#srvHealth .hTuck:hover { background: rgba(255,255,255,0.06); }
-#srvHealth .hTuck:focus-visible, #srvHealth .hTab:focus-visible { outline: 2px solid var(--hc); outline-offset: 1px; }
-#srvHealth .hBody { min-width: 0; }
+.edgeDock .hTuck:hover { background: rgba(255,255,255,0.06); }
+.edgeDock .hTuck:focus-visible, .edgeDock .hTab:focus-visible { outline: 2px solid var(--hc); outline-offset: 1px; }
+.edgeDock .hBody { min-width: 0; }
 /* The tab: the app's 26 x 52, rounded on the left and open on the right, in the pill's own colour. */
-#srvHealth .hTab { all: unset; box-sizing: border-box; position: absolute; top: 0; right: 0; pointer-events: auto;
+.edgeDock .hTab { all: unset; box-sizing: border-box; position: absolute; top: 0; right: 0; pointer-events: auto;
              width: calc(26px + env(safe-area-inset-right, 0px)); padding-right: env(safe-area-inset-right, 0px);
              height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
              cursor: pointer; color: var(--hc); background: var(--ov-health, rgba(8,12,8,0.86));
              border: 1.5px solid var(--hc); border-right-width: 0; border-radius: 12px 0 0 12px;
              transform: translateX(calc(100% + 2px)); transition: transform .26s cubic-bezier(.215,.61,.355,1); }
-#srvHealth.tucked .hTab { transform: translateX(0); }
-#srvHealth:not(.tucked) .hTab { pointer-events: none; }
-#srvHealth .hTabPlus { font: 800 18px/18px system-ui, sans-serif; }
-#srvHealth .hTabChev { font: 700 20px/20px system-ui, sans-serif; margin-top: -2px; }
+.edgeDock.tucked .hTab { transform: translateX(0); }
+.edgeDock:not(.tucked) .hTab { pointer-events: none; }
+.edgeDock .hTabPlus { font: 800 18px/18px system-ui, sans-serif; }
+.edgeDock .hTabChev { font: 700 20px/20px system-ui, sans-serif; margin-top: -2px; }
+/* ★ the LEFT edge: the same dock, mirrored (the map's TUNE / LAYERS) */
+.edgeDock.left .hCard { border-right-width: 1.5px; border-left-width: 0; border-radius: 0 12px 12px 0; flex-direction: row-reverse;
+             padding: 4px 0 5px calc(8px + env(safe-area-inset-left, 0px)); }
+.edgeDock.left.tucked .hCard { transform: translateX(calc(-100% - 4px)); }
+.edgeDock.left .hTuck { margin: -4px 0 -5px 2px; padding-left: 0; padding-right: 3px; border-radius: 0 10px 10px 0; }
+.edgeDock.left .hTab { right: auto; left: 0; width: calc(26px + env(safe-area-inset-left, 0px)); padding-right: 0;
+             padding-left: env(safe-area-inset-left, 0px); border-right-width: 1.5px; border-left-width: 0; border-radius: 0 12px 12px 0;
+             transform: translateX(calc(-100% - 2px)); }
+.edgeDock.left.tucked .hTab { transform: translateX(0); }
 /* ★ Critical and tucked: the tab breathes as the card's border does — it comes back out anyway, but a box that was
      already sliding it home should not leave a silent red tab. */
-#srvHealth.crit .hTab { animation: hBorderPulse 1.4s ease-in-out infinite; }
+.edgeDock.crit .hTab { animation: hBorderPulse 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  #srvHealth .hCard, #srvHealth .hTab { transition: none; }
-  #srvHealth.crit .hTab { animation: none; }
+  .edgeDock .hCard, .edgeDock .hTab { transition: none; }
+  .edgeDock.crit .hTab { animation: none; }
 }
 /* ★ CENTRED, BOTH ROWS. Whichever line is wider sets the pill's width, and the other must sit
      under it rather than hang off one end: with no battery the icon row is NARROWER than the

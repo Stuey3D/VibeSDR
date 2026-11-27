@@ -21,7 +21,10 @@ import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96
 import { flagEmoji } from '../../../src/services/adsbInfo';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
-import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, cardColumns, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
+import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
+import { modeIconSvg } from '../../../src/utils/modeIcons';
+import { edgeDockSet, wireEdgeDock } from './healthTuck';
+import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
 
 /** ★★ b96-rangefeed `approx`: words for a position that is not exact (the locator square's centre — rxPosition.ts) */
@@ -632,6 +635,50 @@ const CSS = `
 .trkView[data-narrow] .trkCards{left:6px;right:var(--trk-rail-w,76px);top:6px;bottom:6px;max-width:none}
 .trkView[data-narrow] .trkCards .col{width:100%}
 .trkView[data-narrow] .trkCard2{max-height:58%}
+/* ★★★ TWEAK 3+ (Stuart 11-27): the chips are EDGE DOCKS (index.html .edgeDock — the SERVER HEALTH pill's own look and
+ *  slide): TUNE and LAYERS down the LEFT edge, MAP CONTROLS top RIGHT, LIST bottom RIGHT (the health pill's side). */
+.mChips{position:absolute;z-index:790;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.mChipsL{left:0;top:84px}
+.mChipsR{right:0;top:8px}
+.mChipsRB{right:0;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
+.mDock{position:relative}
+.mDock[hidden]{display:none}
+.mDock .mchip{all:unset;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;padding:0 4px;color:#dfe7ef;border-radius:8px}
+.mDock .mchip:focus-visible{outline:2px solid var(--hc);outline-offset:1px}
+.mDock .mchip .cap{font:700 9px/1 system-ui,sans-serif;letter-spacing:.16em;color:#B9C0B4;text-align:center}
+.mDock.open .mchip .cap{color:#fff}
+.mDock.open .hCard{border-color:var(--hc)}
+.mDock .mchip .ic{display:flex;align-items:center;gap:5px;color:var(--hc);font:700 12px/1 ui-monospace,Menlo,monospace}
+.mDock .mchip .ic .cn{color:#e8eef5}
+.mDock .mchip .ic .cn:empty{display:none}
+.mDock .mIco{width:22px;height:22px;display:block}
+.mDock .lsum{display:flex;align-items:center;gap:9px}
+.mDock .lsum:empty::after{content:"—";color:#7f93a7}
+.mDock .le{display:inline-flex;align-items:center;gap:3px;font:700 12px/1 ui-monospace,Menlo,monospace;color:#e8eef5;font-variant-numeric:tabular-nums}
+.mDock .lg{display:inline-flex}
+.mDock .lg svg{display:block}
+/* ★ a phone-width window: the LAYERS chip is a slim column — each glyph over its count (the one-card breakpoint) */
+.trkView[data-narrow] .mDock .lsum{flex-direction:column;gap:5px}
+.trkView[data-narrow] .mDock .le{flex-direction:column;gap:2px;font-size:11px}
+/* ★ the ask shield's look: the TUNE chip fades while this listener must ask first (a press nudges — setDialLock) */
+.mDock.askFaded .hCard{opacity:.4;filter:grayscale(.7)}
+.trkCard2 .srvPick{all:unset;box-sizing:border-box;display:flex;flex-direction:column;gap:2px;width:100%;padding:8px 10px;cursor:pointer;border-bottom:1px solid #151f29}
+.trkCard2 .srvPick b{font:600 13px/1.25 system-ui,sans-serif;color:#e8eef5}
+.trkCard2 .srvPick small{font-size:11px;color:#93a3b4}
+.trkCard2 .srvPick:hover,.trkCard2 .srvPick:focus-visible{background:#1a2632;outline:none}
+.trkView .trkCards{position:absolute;inset:0;left:0;right:0;top:0;bottom:0;max-width:none;display:block;z-index:760;pointer-events:none}
+.trkCards .cSide{position:absolute;display:flex;flex-direction:column;gap:8px;width:var(--trk-card-w,340px);pointer-events:none;min-height:0}
+.trkCards .cSide>.trkCard2{pointer-events:auto}
+.trkCards .cL{left:var(--trk-chip-l,70px);top:84px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
+.trkCards .cR{right:var(--trk-chip-r,70px);top:8px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
+.trkCards .cB{right:var(--trk-chip-rb,70px);top:40%;bottom:calc(var(--trk-attrib-h,0px) + 8px);justify-content:flex-end}
+.trkCards.both .cR{bottom:62%}
+.trkCards .cSide>.trkCard2{max-height:100%}
+.trkCards .cB>.trkCard2{flex:0 1 auto}
+.trkView[data-narrow] .trkCards .cL{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto;top:6px}
+.trkView[data-narrow] .trkCards .cR,.trkView[data-narrow] .trkCards .cB{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto}
+.trkView[data-narrow] .trkCards .cB{right:var(--trk-chip-rb,64px);top:30%}
+.trkView[data-narrow] .trkCard2{max-height:100%}
 `;
 function addCss() {
   if (document.getElementById('trk-style')) return;
@@ -641,6 +688,27 @@ function runSource(src: string) { const el = document.createElement('script'); e
 const MIN_KEY = 'vibesdr.trkListMin';
 /** ★★★ beta96 the map control cards (docs/v12/MAP-CONTROL-CARDS.md): their rules are shared with the app (mapCards.ts). */
 const CARDS_KEY = 'vibesdr.mapCards';
+/** ★★★ tweak 3 the LAYERS chip's glyphs — the shapes the map draws: the aircraft and ship silhouettes (airSeaTune's,
+ *  as the TUNE list draws them), the NAVTEX station's disc and mast (navtexMap.ts navIcon), the balloon, the beacon. */
+export type LayerGlyph = 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid' | 'dot';
+const P16 = (d: string) => `<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="${d}"/></svg>`;
+const LAYER_GLYPH: Record<LayerGlyph, string> = {
+  aircraft: P16(TUNE_ICON_PATH.aircraft), ship: P16(TUNE_ICON_PATH.ship), balloon: P16(TUNE_ICON_PATH.balloon),
+  beacon: P16(TUNE_ICON_PATH.beacon), navaid: P16(TUNE_ICON_PATH.navaid),
+  navtex: '<svg viewBox="0 0 26 26" width="16" height="16" aria-hidden="true"><circle cx="13" cy="13" r="11" fill="currentColor" stroke="#0b1420" stroke-width="1.4"/>'
+    + '<path d="M13 7 L9.5 19 M13 7 L16.5 19 M10.6 15 H15.4" stroke="#0b1420" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>',
+  dot: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor"/></svg>',
+};
+/** A SHOW toggle's layer id → its glyph (the maps whose host gives no summary: the ISM maps). */
+function glyphOf(id: string): LayerGlyph {
+  return /^(adsb|acars|vdl2|hfdl|adsc|aircraft)/.test(id) ? 'aircraft' : /^(ships|ais|dsc)/.test(id) ? 'ship' : /^(navst|navtex)/.test(id) ? 'navtex'
+    : /sonde/.test(id) ? 'balloon' : /^(ndb|beacon)/.test(id) ? 'beacon' : /^vor/.test(id) ? 'navaid' : 'dot';
+}
+/** ★ the SERVERS chip: a rack of two servers (the house line style) */
+const SERVERS_SVG = '<svg class="mIco" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+  + '<rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.25h.01M7 16.75h.01M11 7.25h6M11 16.75h6"/></svg>';
+const LIST_SVG = '<svg class="mIco" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
+  + '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor"/></svg>';
 const FIT_KEY = 'vibesdr.mapFitTo';
 export { CARD_IDS, type CardId, trimOutliers };
 
@@ -751,6 +819,14 @@ export class TrackView {
     /* ★★★ beta96 THE MAP CONTROL CARDS (Stuart 11-27, docs/v12/MAP-CONTROL-CARDS.md): the bar holds only the way out, the
      *  title (wide windows), the SHARED TUNER line + CHAT ('share' slot), the card buttons and the live rate (top right).
      *  Everything else is in a card — LIST · TUNE · VIEW · MAP · KEY · SOURCES — that pops out of its button. */
+    /* ★★★ tweak 3+ (Stuart 11-27): each chip is an EDGE DOCK exactly as the SERVER HEALTH pill's (healthTuck.ts, index.html
+     *  .edgeDock) — out: the card with its caption and glyphs and a › (‹ on the left edge) that tucks it away; tucked: the
+     *  + tab on the edge that brings it back; the same drag, flick, slide and colours. The chip itself opens its card. */
+    const dock = (id: string, side: 'left' | 'right', cap: string, inner: string, what: string, dial = false) =>
+      `<div class="edgeDock mDock${side === 'left' ? ' left' : ''}" data-dock="${id}" data-side="${side}" hidden>`
+      + `<div class="hCard"><button type="button" class="hTuck" aria-label="Tuck ${esc(what)} away" title="Tuck away">${side === 'left' ? '‹' : '›'}</button>`
+      + `<button type="button" class="hBody mchip" data-cbtn="${id}"${dial ? ' data-dial="1"' : ''} aria-expanded="false" aria-label="${esc(cap)} — open ${esc(what)}"><span class="cap">${esc(cap)}</span>${inner}</button></div>`
+      + `<button type="button" class="hTab" aria-label="Show ${esc(what)}" title="${esc(cap)}"><span class="hTabPlus" aria-hidden="true">+</span><span class="hTabChev" aria-hidden="true">${side === 'left' ? '›' : '‹'}</span></button></div>`;
     const card = (id: string, title: string, body: string) => `<section class="trkCard2" data-card="${id}" role="region" aria-label="${esc(title)}" hidden>`
       + `<div class="ch"><span class="ct">${esc(title)}</span><button class="x" type="button" aria-label="Close ${esc(title.toLowerCase())}">×</button></div><div class="cb">${body}</div></section>`;
     /* ★★★ beta96 TWEAK 2 (Stuart 11-27, live on the preview): the bar is EXACTLY "EXIT | Shared VFO: … 2/5 | CHAT | the
@@ -758,24 +834,30 @@ export class TrackView {
      *  small RAIL down the map's right edge (.cardBtns in .trkMapHost), which costs the map nothing. */
     r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
       + `<span class="rate" role="status" aria-live="off"></span><span class="spacer"></span><span class="st" aria-live="polite"></span></div>`
-      + `<div class="trkMapHost"><span class="cardBtns" role="toolbar" aria-orientation="vertical" aria-label="Map controls">`
-      + CARD_IDS.map((id) => `<button class="cbtn" type="button" data-cbtn="${id}" aria-expanded="false" hidden>${CARD_LABEL[id]}<span class="cn"></span></button>`).join('')
-      + `</span><div class="trkCards"></div><div class="trkPark" hidden>`
+      /* ★★★ TWEAK 3 (Stuart 11-27, live): the HEALTH CARDS' shape — chips FLANKING the map that pop out a card and shrink
+       *  back: TUNE and LAYERS down the left edge, MAP CONTROLS on the right, LIST at the bottom (its card pops UP). */
+      + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true)}`
+      + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card')}</div>`
+      + `<div class="mChips mChipsR">${dock('servers', 'right', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card')}`
+      + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}</span>`, 'the map controls')}</div>`
+      + `<div class="mChips mChipsRB">${dock('list', 'right', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span></span>`, 'the list')}</div>`
+      + `<div class="trkCards"><div class="cSide cL"></div><div class="cSide cR"></div><div class="cSide cB"></div></div><div class="trkPark" hidden>`
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
         + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`)
+      + card('servers', 'SERVERS', `<div class="srvBody" role="group" aria-label="Servers and radios"></div>`)
       + card('tune', 'TUNE', `<div class="facts"></div><div class="trkSlot slot-tune"></div><div class="tunePop" role="menu" aria-label="Tune the radio"></div>`)
-      + card('view', 'VIEW', `<div class="facts"></div><div class="sect"><div class="sh">SHOW — YOUR VIEW ONLY</div><span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span></div>`
-        + `<div class="sect scopeSect" hidden><div class="sh">SOURCES SHOWN</div><span class="rng scope" role="group" aria-label="Sources"></span><div class="note scopeNote2"></div></div>`)
-      + card('map', 'MAP', `<div class="sect fitSect"><div class="sh">FIT</div><div class="row"><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">AUTO</button>`
-        + `<button class="btn fitOnce" type="button">FIT</button></div><div class="sh fitToH" style="margin-top:8px" hidden>FIT TO</div><div class="fitSel" role="radiogroup" aria-label="Fit to" hidden></div><div class="note fitNote"></div></div>`
-        + `<div class="sect ctlSect" hidden><div class="sh">LAYER</div><div class="trkSlot slot-ctl"></div><div class="note farNote"></div></div>`
-        + `<div class="sect rngSect"${o.ranges?.length ? '' : ' hidden'}><div class="sh">TIME</div>`
+      + card('layers', 'LAYERS', `<div class="facts"></div><div class="sect"><span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span></div>`
+        + `<div class="sect scopeSect" hidden><span class="rng scope" role="group" aria-label="Sources"></span><div class="note scopeNote2"></div></div>`)
+      + card('map', 'MAP CONTROLS', `<div class="sect rngSect"${o.ranges?.length ? '' : ' hidden'}><div class="sh">TIME</div>`
         + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
            + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
-        + `</div>`)
-      + card('key', 'KEY', `<div class="trkKey"><div class="kb">${o.legend || ''}</div></div>`)
-      + card('sources', 'SOURCES', `<div class="srcBody"></div>`)
+        + `</div>`
+        + `<div class="sect fitSect"><div class="sh">MAP</div><div class="row"><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">AUTO</button>`
+        + `<button class="btn fitOnce" type="button">FIT</button></div><div class="sh fitToH" style="margin-top:8px" hidden>FIT TO</div><div class="fitSel" role="radiogroup" aria-label="Fit to" hidden></div><div class="note fitNote"></div>`
+        + `<div class="ctlSect" hidden><div class="trkSlot slot-ctl" style="margin-top:8px"></div><div class="note farNote"></div></div></div>`
+        + `<div class="sect srcSect" hidden><div class="sh">SOURCES — TAP TO SHOW OR HIDE</div><div class="srcBody" role="group" aria-label="Sources"></div></div>`
+        + `<details class="sect keySect"${o.legend ? '' : ' hidden'}><summary>KEY</summary><div class="trkKey"><div class="kb">${o.legend || ''}</div></div></details>`)
       + `</div></div>`;
     this.root = r;
     this.mapHost = r.querySelector('.trkMapHost') as HTMLElement;
@@ -803,12 +885,17 @@ export class TrackView {
     for (const x of Array.from(r.querySelectorAll('.trkCard2 > .ch .x')) as HTMLButtonElement[]) {
       x.onclick = () => { const id = (x.closest('.trkCard2') as HTMLElement).dataset.card as CardId; this.cardOpen(id, false, true); (r.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null)?.focus(); };
     }
-    for (const c of [...Array.from(r.querySelectorAll('.trkCard2')), r.querySelector('.trkMapHost .cardBtns')] as HTMLElement[])
+    for (const d of Array.from(r.querySelectorAll('.mDock')) as HTMLElement[]) {
+      const id = d.dataset.dock as CardId;
+      edgeDockSet(d, true);
+      wireEdgeDock(d, d.dataset.side === 'left' ? 'left' : 'right', () => this.dockTuck(id, true), () => this.dockTuck(id, false));
+    }
+    for (const c of [...Array.from(r.querySelectorAll('.trkCard2')), ...Array.from(r.querySelectorAll('.mChips'))] as HTMLElement[])
       for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) c.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     (r.querySelector('.fitOnce') as HTMLButtonElement).onclick = () => this.fitOnce();
     this.cardsLoad();
     this.setToggles(o.toggles ?? [], o.toggled ?? {});
-    for (const id of CARD_IDS) this.cardsAvail(id, this.cardAvail.has(id) || (id === 'key' && !!o.legend));
+    for (const id of CARD_IDS) this.cardsAvail(id, this.cardAvail.has(id));
     this.viewSync();
     this.cardsLayout();
     if (typeof ResizeObserver !== 'undefined') { this.cardRo = new ResizeObserver(() => this.cardsLayout()); this.cardRo.observe(r); }
@@ -897,45 +984,82 @@ export class TrackView {
   /** Which cards may be offered (a card with nothing in it has no button — AGENTS.md: never a dead control). */
   private cardsAvail(id: CardId, on: boolean) {
     if (on) this.cardAvail.add(id); else this.cardAvail.delete(id);
-    const b = this.root.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null;
-    if (b) b.hidden = !on;
+    const d = this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null;
+    if (d) d.hidden = !on;
   }
+  /** ★ A chip tucked into its edge (its card shuts with it) or brought back out (its card stays shut until pressed). */
+  dockTuck(id: CardId, tucked: boolean) {
+    const d = this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null;
+    if (!d) return;
+    edgeDockSet(d, !tucked);
+    if (tucked && this.isCardOpen(id)) this.cardOpen(id, false, true);
+    if (!tucked) (d.querySelector('.mchip') as HTMLElement | null)?.focus({ preventScroll: true });
+    this.layoutSig = ''; this.cardsLayout();
+  }
+  get tuckedDocks(): CardId[] { return (Array.from(this.root.querySelectorAll('.mDock.tucked')) as HTMLElement[]).map((d) => d.dataset.dock as CardId); }
   private layoutSig = '';
-  /** Put the open cards in their columns (and the rest in the park), the buttons pressed, the obstacle told. */
+  /** Put the open cards beside their chips (and the rest in the park), the chips pressed, the obstacle told. */
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
-    { // ★ tweak 2: the cards stand beside the rail of buttons (its width follows its widest label)
-      const rail = this.root.querySelector('.trkMapHost .cardBtns') as HTMLElement | null;
-      const rw = rail ? rail.getBoundingClientRect().width : 0;
-      if (rw > 0) { const v = `${Math.ceil(rw) + (this.narrow() ? 12 : 16)}px`; if (this.root.style.getPropertyValue('--trk-rail-w') !== v) this.root.style.setProperty('--trk-rail-w', v); }
-    }
-    { // ★ the MAP card's AIRCRAFT / beacon keys section: shown while a layer put keys in it (ADS-B, NDB)
+    { // ★ the MAP card's layer keys: shown while a layer put keys in it (ADS-B, NDB)
       const sl = this.root.querySelector('.slot-ctl') as HTMLElement | null, sc = this.root.querySelector('.ctlSect') as HTMLElement | null;
       if (sl && sc) { const any = Array.from(sl.children).some((c) => !(c as HTMLElement).hidden); if (sc.hidden === any) sc.hidden = !any; }
     }
     if (this.cardsNarrowWas !== null && this.cardsNarrowWas !== this.narrow()) { this.cardsLoad(); }
     this.root.toggleAttribute('data-narrow', this.narrow());
     const W = this.root.clientWidth || window.innerWidth, H = this.root.clientHeight || window.innerHeight;
-    const cols = cardColumns(this.cardOrder.filter((id) => this.cardAvail.has(id)), W, H);
-    const open = cols.flat();
-    const sig = JSON.stringify([cols, this.narrow()]);
-    for (const b of Array.from(this.root.querySelectorAll('[data-cbtn]')) as HTMLElement[]) b.setAttribute('aria-expanded', String(open.includes(b.dataset.cbtn as CardId)));
+    // ★ the cards stand beside their chips: the chips' widths, the bottom chip's height
+    const cw = (sel: string) => { const e = this.root.querySelector(sel) as HTMLElement | null; const b = e?.getBoundingClientRect(); return b && b.width > 0 ? b : null; };
+    // ★ a tucked dock's card is off the edge: only its 26 px tab counts
+    const dw = (sel: string) => Math.max(0, ...(Array.from(this.root.querySelectorAll(sel)) as HTMLElement[]).filter((d) => !d.hidden)
+      .map((d) => (d.classList.contains('tucked') ? 26 : (d.querySelector('.hCard') as HTMLElement).getBoundingClientRect().width)));
+    void cw;
+    const setv = (k: string, v: string) => { if (this.root.style.getPropertyValue(k) !== v) this.root.style.setProperty(k, v); };
+    setv('--trk-chip-l', `${Math.ceil(dw('.mChipsL .mDock')) + 8}px`);
+    setv('--trk-chip-r', `${Math.ceil(dw('.mChipsR .mDock')) + 8}px`);
+    setv('--trk-chip-rb', `${Math.ceil(dw('.mChipsRB .mDock')) + 8}px`);
+    setv('--trk-card-w', `${W >= CARD_ROOMY_W ? CARD_W : CARD_W_SNUG}px`);
+    const place = cardPlace(this.cardOrder.filter((id) => this.cardAvail.has(id)), W, H);
+    const open = [...place.L, ...place.R, ...place.B];
+    const sig = JSON.stringify([place, this.narrow()]);
+    for (const b of Array.from(this.root.querySelectorAll('[data-cbtn]')) as HTMLElement[]) {
+      const on = open.includes(b.dataset.cbtn as CardId);
+      b.setAttribute('aria-expanded', String(on));
+      b.closest('.mDock')?.classList.toggle('open', on);
+    }
+    this.cardsEl.classList.toggle('both', place.R.length > 0 && place.B.length > 0);
     if (sig === this.layoutSig) return;
     this.layoutSig = sig;
-    // ★ every card to the park first (moving an element keeps it and its state — never innerHTML over the columns)
+    // ★ every card to the park first (moving an element keeps it and its state — never innerHTML over them)
     const focused = document.activeElement as HTMLElement | null;
     for (const c of Array.from(this.root.querySelectorAll('.trkCard2')) as HTMLElement[]) {
       if (!open.includes(c.dataset.card as CardId)) c.hidden = true;
       if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c);
     }
-    while (this.cardsEl.firstChild) this.cardsEl.firstChild.remove();
-    for (const col of cols) {
-      const d = document.createElement('div'); d.className = 'col';
-      for (const id of col) { const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement; c.hidden = false; d.appendChild(c); }
-      this.cardsEl.appendChild(d);
+    for (const side of ['L', 'R', 'B'] as const) {
+      const host = this.cardsEl.querySelector(side === 'B' ? '.cB' : `.c${side}`) as HTMLElement;
+      for (const id of place[side]) { const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement; c.hidden = false; host.appendChild(c); }
     }
     if (focused && focused !== document.activeElement && this.root.contains(focused) && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
     setTimeout(() => { this.placeAcObstacle(); try { this.af?.poke?.(); } catch { /* none */ } }, 0);
+  }
+  /** ★★★ tweak 3 the LAYERS chip: a glyph and a count per layer present ([plane] 157 [ship] 3 [NAVTEX] 40); a slim column
+   *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */
+  private lsumSig = '';
+  private lsumHost = false;
+  setLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; colour: string; words: string }>) {
+    this.lsumHost = true;
+    this.drawLayerSummary(entries);
+  }
+  private drawLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; colour: string; words: string }>) {
+    const sig = JSON.stringify(entries);
+    if (sig === this.lsumSig) return;
+    this.lsumSig = sig;
+    const el = this.root.querySelector('.mDock[data-dock="layers"] .lsum') as HTMLElement;
+    el.innerHTML = entries.map((e) => `<span class="le" title="${esc(e.words)}"><span class="lg" style="color:${esc(e.colour)}">${LAYER_GLYPH[e.glyph] ?? LAYER_GLYPH.dot}</span><span class="ln">${esc(e.n)}</span></span>`).join('');
+    const b = this.root.querySelector('[data-cbtn="layers"]') as HTMLElement;
+    b.setAttribute('aria-label', `Layers — ${entries.map((e) => e.words).join(', ') || 'what the map shows'}`);
+    this.layoutSig = ''; this.cardsLayout();
   }
   /** The live rate, top right ("ADS-B 1,425 msg/s" · "VDL2 153 msg/min") — '' = none (a viewer, nothing live). */
   setRate(text: string, title = '') {
@@ -944,9 +1068,9 @@ export class TrackView {
     el.title = title;
   }
   /** The facts the old status paragraph carried, each in the card it belongs to ('' = none). */
-  setFacts(f: Partial<Record<'list' | 'tune' | 'view', string>>) {
+  setFacts(f: Partial<Record<'list' | 'tune' | 'layers', string>>) {
     this.hostFacts = true;
-    for (const k of ['list', 'tune', 'view'] as const) {
+    for (const k of ['list', 'tune', 'layers'] as const) {
       const el = this.root.querySelector(`.trkCard2[data-card="${k}"] .facts`) as HTMLElement | null;
       const t = f[k] ?? '';
       if (el && el.textContent !== t) el.textContent = t;
@@ -956,15 +1080,36 @@ export class TrackView {
   /** The MAP card's aircraft note ("Furthest: RYR12K 213 NM SE") — '' = none. */
   setFarNote(t: string) { const el = this.root.querySelector('.farNote') as HTMLElement; if (el.textContent !== t) el.textContent = t; }
   private srcSig = '';
-  /** ★ SOURCES: what each radio and feed on this server is sending — null = no card (one source). */
-  setSources(rows: Array<{ name: string; what: string; value: string; down?: boolean }> | null) {
-    this.cardsAvail('sources', !!rows && rows.length > 1);
+  /** ★★★ tweak 3 SOURCES, in MAP CONTROLS: each radio and feed and what it adds ("PiAware 127", "RTL-SDR 36"), each row a
+   *  show / hide toggle for what ONLY it heard (this viewer's own view, never sent). null / one source = no section. */
+  setSources(rows: Array<{ id: string; name: string; what: string; value: string; on: boolean; down?: boolean }> | null, onToggle?: (id: string, on: boolean) => void) {
+    const sect = this.root.querySelector('.srcSect') as HTMLElement;
+    sect.hidden = !rows || rows.length < 2;
+    if (onToggle) this.onSource = onToggle;
     const sig = JSON.stringify(rows);
     if (sig === this.srcSig) return;
     this.srcSig = sig;
-    (this.root.querySelector('.srcBody') as HTMLElement).innerHTML = (rows ?? []).map((x) => `<div class="srcRow${x.down ? ' down' : ''}"><b>${esc(x.name)}</b><span class="sv">${esc(x.value)}</span><small>${esc(x.what)}</small></div>`).join('');
-    if (!rows || rows.length < 2) this.cardsLayout();
+    const body = this.root.querySelector('.srcBody') as HTMLElement;
+    body.innerHTML = (rows ?? []).map((x) => `<button type="button" class="srcRow${x.down ? ' down' : ''}" data-src="${esc(x.id)}" aria-pressed="${x.on}" title="${esc(x.on ? 'Shown — tap to hide what only this source heard' : 'Hidden — tap to show it again')}">`
+      + `<b>${esc(x.name)}</b><span class="sv">${esc(x.value)}</span><small>${esc(x.what)}</small></button>`).join('');
+    for (const b of Array.from(body.querySelectorAll('[data-src]')) as HTMLButtonElement[]) b.onclick = () => this.onSource?.(b.dataset.src || '', b.getAttribute('aria-pressed') !== 'true');
   }
+  private onSource: ((id: string, on: boolean) => void) | null = null;
+  private srvSig2 = '';
+  /** ★★★ tweak 3 THE SERVERS chip (Stuart 11-27: "must ALWAYS be reachable on every map screen, even when EXIT is hidden or
+   *  the mode can't be left"): back out to this server's radios / landing, or over to another radio on it. */
+  setServers(rows: Array<{ id: string; label: string; sub: string }>, onPick: (id: string) => void) {
+    this.onServer = onPick;
+    this.cardsAvail('servers', rows.length > 0);
+    const sig = JSON.stringify(rows);
+    if (sig === this.srvSig2) return;
+    this.srvSig2 = sig;
+    const body = this.root.querySelector('.srvBody') as HTMLElement;
+    body.innerHTML = rows.map((x) => `<button type="button" class="srvPick" data-srv="${esc(x.id)}"><b>${x.id === 'back' ? '‹ ' : ''}${esc(x.label)}</b><small>${esc(x.sub)}</small></button>`).join('');
+    for (const b of Array.from(body.querySelectorAll('[data-srv]')) as HTMLButtonElement[]) b.onclick = () => this.onServer?.(b.dataset.srv || '');
+    this.layoutSig = ''; this.cardsLayout();
+  }
+  private onServer: ((id: string) => void) | null = null;
   /* ── ★★★ beta96 FIT TO ONE LAYER (Stuart 11-27: "with this much data the fit button doesnt work, maybe the fit button
    *  fits to the adsb layer or user chosen layer") — the shared auto fit and FIT frame ONE layer (ADS-B by default where
    *  there is ADS-B, else the map's main layer; the viewer's choice remembered), and drop the furthest few per cent (one
@@ -1059,7 +1204,7 @@ export class TrackView {
       }
     };
     const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '']), toggles.map((x) => toggled[x.id] !== false)]);
-    if (sig === this.tglSig) { counts(); return; }
+    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` }))); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
     this.viewSync();
@@ -1072,6 +1217,7 @@ export class TrackView {
       + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
       + `${esc(x.label)}<span class="n"></span></button>`).join('');
     counts();
+    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` })));
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';
@@ -1101,7 +1247,7 @@ export class TrackView {
     const el = this.root.querySelector('.scopeNote2') as HTMLElement;
     if (el.textContent !== words) el.textContent = words;
     // ★ the VIEW button says a filter is on (its words are in the card)
-    (this.root.querySelector('[data-cbtn="view"]') as HTMLElement).classList.toggle('filtered', !!words);
+    (this.root.querySelector('[data-cbtn="layers"]') as HTMLElement).classList.toggle('filtered', !!words);
   }
   private tuneSig = '';
   private tuneRows: Array<{ id: string; name: string; freq: string; icon: string; group: string; live: boolean; why: string }> = [];
@@ -1162,7 +1308,7 @@ export class TrackView {
     const t = this.root.querySelector('.trkCard2 .tgl') as HTMLElement | null, sc = this.root.querySelector('.trkCard2 .scope') as HTMLElement | null;
     if (!t || !sc) return;
     const any = !t.hidden || !sc.hidden;
-    if (any !== this.cardAvail.has('view')) { this.cardsAvail('view', any); this.cardsLayout(); }
+    if (any !== this.cardAvail.has('layers')) { this.cardsAvail('layers', any); this.cardsLayout(); }
   }
   /** Open / shut the TUNE card (the old chip's list) — kept for the host and the drivers. */
   tuneOpen(on: boolean) {
@@ -1233,6 +1379,8 @@ export class TrackView {
       }
     };
     mark(x, this.dialExit);
+    // ★★★ tweak 3: the TUNE chip FADES while this listener must ask first (the ask shield's look); a press nudges
+    this.root.querySelector('.mDock[data-dock="tune"]')?.classList.toggle('askFaded', !!why);
     for (const el of Array.from(this.root.querySelectorAll('[data-dial], [data-dial] button')) as HTMLElement[]) if (el.tagName === 'BUTTON' || el.tagName === 'SELECT' || el.tagName === 'INPUT') mark(el, !!why);
   }
   get dialLocked(): { why: string; exit: boolean } { return { why: this.dialWhy, exit: this.dialExit }; }
@@ -1354,8 +1502,7 @@ export class TrackView {
     const d = this.root.querySelector('.trkKey') as HTMLElement | null;
     if (!d) return;
     (d.querySelector('.kb') as HTMLElement).innerHTML = html;
-    this.cardsAvail('key', !!html);   // ★ beta96 the KEY card, only with something to explain
-    this.cardsLayout();
+    (this.root.querySelector('.keySect') as HTMLElement).hidden = !html;   // ★ tweak 3 the KEY is a fold in MAP CONTROLS
   }
   private setMin(min: boolean, save = true) {
     this.list.classList.toggle('min', min);
@@ -1511,7 +1658,7 @@ export class TrackView {
     if (!this.open) return;
     this.tuneOpen(false);
     this.root.hidden = true;
-    this.attribObs?.disconnect(); this.attribObs = null; this.cardsEl.style.bottom = '';
+    this.attribObs?.disconnect(); this.attribObs = null;
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
     for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = ''; }
@@ -1684,7 +1831,7 @@ export class TrackView {
       // ★ on a wide map the attribution is to the right of the list; only where they share the width does it push up
       // ★ beta96 the cards always stop above the attribution line (a tall KEY card ran under it on a wide window, Stuart 11-27)
       void wide;
-      this.cardsEl.style.bottom = h > 0 ? `calc(${Math.round(h) + 8}px + env(safe-area-inset-bottom))` : '';
+      this.root.style.setProperty('--trk-attrib-h', `${Math.round(h)}px`);
     };
     this.attribObs = new ResizeObserver(sync);
     this.attribObs.observe(at); this.attribObs.observe(this.mapHost);
@@ -1716,17 +1863,23 @@ export class TrackView {
   }
   /** ★ beta96 the open cards' corner of the map (top-left; a phone's card spans the width) — the fits keep clear of it. */
   private cardsObstacle(): { corner: string; w: number; h: number } | null {
-    // ★ tweak 2: the rail and the cards sit down the map's RIGHT edge — the fits keep clear of that corner
+    // ★ tweak 3: chips and cards down BOTH edges — the fits keep clear of the bigger group's corner
     const m = this.mapHost.getBoundingClientRect();
     if (m.width <= 0) return null;
-    let left = m.right, bottom = m.top;
-    for (const el of [this.root.querySelector('.trkMapHost .cardBtns'), ...Array.from(this.cardsEl.querySelectorAll('.trkCard2'))] as Array<HTMLElement | null>) {
-      if (!el) continue;
-      const b = el.getBoundingClientRect(); if (b.width <= 0) continue;
-      left = Math.min(left, b.left); bottom = Math.max(bottom, b.bottom);
-    }
-    if (left >= m.right) return null;
-    return { corner: 'top-right', w: m.right - left + 8, h: Math.min(bottom - m.top + 8, m.height) };
+    const group = (sels: string) => {
+      let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
+      for (const el of Array.from(this.root.querySelectorAll(sels)) as HTMLElement[]) {
+        const x = el.getBoundingClientRect(); if (x.width <= 0 || x.height <= 0 || el.closest('[hidden]')) continue;
+        l = Math.min(l, x.left); r = Math.max(r, x.right); t = Math.min(t, x.top); b = Math.max(b, x.bottom);
+      }
+      return r > l ? { l, r, t, b } : null;
+    };
+    const L = group('.mChipsL .mDock:not(.tucked) .hCard, .trkCards .cL .trkCard2');
+    const R = group('.mChipsR .mDock:not(.tucked) .hCard, .mChipsRB .mDock:not(.tucked) .hCard, .trkCards .cR .trkCard2, .trkCards .cB .trkCard2');
+    const aL = L ? (L.r - m.left) * (L.b - m.top) : 0, aR = R ? (m.right - R.l) * (R.b - m.top) : 0;
+    if (!aL && !aR) return null;
+    return aL >= aR ? { corner: 'top-left', w: L!.r - m.left + 8, h: Math.min(L!.b - m.top + 8, m.height) }
+                    : { corner: 'top-right', w: m.right - R!.l + 8, h: Math.min(R!.b - m.top + 8, m.height) };
   }
   /** The list's corner of the map — the ADS-B layer keeps aircraft (and its fit) clear of it. */
   private placeAcObstacle() {
@@ -1769,6 +1922,7 @@ export class TrackView {
     // ★ beta96 a map whose host does not place its facts (the ISM maps): the status line heads the LIST card
     if (!this.hostFacts) { const f = this.root.querySelector('.trkCard2[data-card="list"] .facts') as HTMLElement; if (f.textContent !== status) f.textContent = status; }
     this.countEl.textContent = String(count);
+    { const c = this.root.querySelector('.mDock[data-dock="list"] .cn') as HTMLElement | null; if (c && c.textContent !== String(count)) c.textContent = String(count); }
     this.safetyEl.hidden = !safety;
     if (safety && this.safetyEl.innerHTML !== safety) this.safetyEl.innerHTML = safety;
   }

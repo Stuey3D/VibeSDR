@@ -9,40 +9,46 @@
  *     of the chosen layer are left out, so one aircraft at Tallinn cannot zoom the whole UK view out;
  *   • the layer FIT frames by default.
  */
-export const CARD_IDS = ['list', 'tune', 'view', 'map', 'key', 'sources'] as const;
+/* ★★★ TWEAK 3 (Stuart 11-27, live): the HEALTH CARDS' shape — four chips FLANKING the map, each popping out a card and
+ *  shrinking back: TUNE and LAYERS down the LEFT edge, MAP CONTROLS on the RIGHT, LIST at the BOTTOM (its card pops up).
+ *  KEY and SOURCES live inside MAP CONTROLS now. */
+export const CARD_IDS = ['tune', 'layers', 'servers', 'map', 'list'] as const;
 export type CardId = typeof CARD_IDS[number];
-export const CARD_LABEL: Record<CardId, string> = { list: 'LIST', tune: 'TUNE', view: 'VIEW', map: 'MAP', key: 'KEY', sources: 'SOURCES' };
-/** A window narrower than this is a phone's: ONE card at a time, the buttons on a row of their own. */
+export const CARD_LABEL: Record<CardId, string> = { tune: 'TUNE', layers: 'LAYERS', servers: 'SERVERS', map: 'MAP', list: 'LIST' };
+/** Where each chip sits and its card opens: L = the left edge, R = the right edge, B = the bottom (the card pops up). */
+export const CARD_SIDE: Record<CardId, 'L' | 'R' | 'B'> = { tune: 'L', layers: 'L', servers: 'R', map: 'R', list: 'B' };
+/** A window narrower than this is a phone's: ONE card at a time; the LAYERS chip stands as a slim column. */
 export const CARD_NARROW_W = 600;
-/** A card's width on a wide window (px / pt). */
+/** A card's width on a wide window (px / pt); narrower under CARD_ROOMY_W so a left and a right card leave the map. */
 export const CARD_W = 340;
-/** Tall enough for two cards stacked in one column. */
+export const CARD_W_SNUG = 290;
+export const CARD_ROOMY_W = 1100;
+/** Tall enough for the two left cards (TUNE, LAYERS) stacked. */
 export const CARD_TALL_H = 700;
 
-/** How many cards a window of w × h takes at once. */
+/** How many cards a window of w × h takes at once: one on a phone; else one per side, two on the left when tall. */
 export function cardLimit(w: number, h: number): number {
   if (w < CARD_NARROW_W) return 1;
-  const cols = Math.max(1, Math.min(3, Math.floor((w * 0.72) / (CARD_W + 8))));
-  return Math.min(CARD_IDS.length, cols * (h >= CARD_TALL_H ? 2 : 1));
+  return h >= CARD_TALL_H ? 5 : 3;
 }
-/** The cards to show, in their columns: LIST alone in the first (it is the tall one), the rest in the order opened. */
-export function cardColumns(open: CardId[], w: number, h: number): CardId[][] {
-  const narrow = w < CARD_NARROW_W, perCol = narrow ? 1 : h >= CARD_TALL_H ? 2 : 1;
+/** The open cards by side, the window's limit applied (the newest kept); a short window keeps one on the left. */
+export function cardPlace(open: CardId[], w: number, h: number): Record<'L' | 'R' | 'B', CardId[]> {
   const shown = open.slice(-cardLimit(w, h));
-  const ordered = [...shown.filter((x) => x === 'list'), ...shown.filter((x) => x !== 'list')];
-  const cols: CardId[][] = [];
-  for (const id of ordered) {
-    const last = cols[cols.length - 1];
-    if (!last || last.length >= perCol || (last[0] === 'list' && !narrow)) cols.push([id]); else last.push(id);
-  }
-  return cols;
+  const out: Record<'L' | 'R' | 'B', CardId[]> = { L: [], R: [], B: [] };
+  for (const id of shown) out[CARD_SIDE[id]].push(id);
+  if (h < CARD_TALL_H && out.L.length > 1) out.L = out.L.slice(-1);
+  if (h < CARD_TALL_H && out.R.length > 1) out.R = out.R.slice(-1);
+  return out;
 }
 /** A card opened (or shut): the new open list, the oldest giving way past the window's limit. */
 export function cardToggle(open: CardId[], id: CardId, on: boolean, w: number, h: number): CardId[] {
   const out = open.filter((x) => x !== id);
   if (on) out.push(id);
   const lim = cardLimit(w, h);
-  return out.slice(Math.max(0, out.length - lim));
+  let r = out.slice(Math.max(0, out.length - lim));
+  // ★ a short window holds one card on the left: the other left one gives way
+  if (h < CARD_TALL_H && w >= CARD_NARROW_W && on && CARD_SIDE[id] !== 'B') r = r.filter((x) => x === id || CARD_SIDE[x] !== CARD_SIDE[id]);
+  return r;
 }
 /** What opens by default: nothing on a phone (the map is the point), LIST on a wide window. */
 export function cardDefaults(w: number): CardId[] { return w < CARD_NARROW_W ? [] : ['list']; }
