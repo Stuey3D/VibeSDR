@@ -96,6 +96,26 @@ ok(doc.getElementById('ppm').value === '3', 'the radio tab shows the phone\'s pp
 ok(doc.getElementById('androidTunerBw').checked, '…and the phone\'s IF filter row');
 const vis = (id) => { for (let e = doc.getElementById(id); e; e = e.parentElement) if (e.classList && e.classList.contains('androidOff')) return false; return !!doc.getElementById(id); };
 ok(vis('ppm') && vis('androidTunerBw') && vis('adsb256') && !vis('ppb') && !vis('icomBaud'), 'an RTL\'s rows are offered and no other radio\'s (after the radio\'s own rows were drawn)');
+// ★★ beta96 (Stuart 11-26: "on android devices on remote setup … the button to add range and filters dont work"): the rows
+//    are drawn in #antRanges / #antFilters, whose generated inputs have no id — the containers must be kept, or a new row is
+//    added inside a hidden box. Add a range and a filter, type in them, and they must be visible and posted.
+{
+  doc.getElementById('antRangeAdd').click();
+  doc.getElementById('antFilterAdd').click();
+  // ★ then the page re-runs its phone pruning (a tab switch, the radio's own rows arriving late) — the real-phone order
+  const srvTab = tabs.find((b) => /server/i.test(b.textContent));
+  if (srvTab) { srvTab.click(); await new Promise((r) => setTimeout(r, 200)); }
+  if (radioTab) { radioTab.click(); await new Promise((r) => setTimeout(r, 300)); }
+  doc.getElementById('antRangeAdd').click();
+  const rIn = doc.querySelector('#antRanges [data-f="from"]'), fIn = doc.querySelector('#antFilters [data-f="from"]');
+  const shown = (e) => { for (let x = e; x; x = x.parentElement) if (x.classList && x.classList.contains('androidOff')) return false; return !!e; };
+  const fRow = doc.querySelector('#antFilters [data-l]');   // ★ a filter has no "from" until its type is ticked — the row itself
+  ok(shown(rIn), `+ Add range: the new row is VISIBLE on a phone (it was added inside a hidden box) — input ${!!rIn}`);
+  ok(shown(fRow), `+ Add filter: the new row is VISIBLE on a phone — row ${!!fRow}, from ${!!fIn}`);
+  if (rIn) { rIn.value = '137'; rIn.dispatchEvent(new w.Event('input', { bubbles: true })); }
+  const rTo = doc.querySelector('#antRanges [data-f="to"]');
+  if (rTo) { rTo.value = '138'; rTo.dispatchEvent(new w.Event('input', { bubbles: true })); }
+}
 doc.getElementById('ppm').value = '-4';
 doc.getElementById('androidTunerBw').checked = false;
 doc.getElementById('androidDsFixed').value = '2';
@@ -137,6 +157,7 @@ if (posted) {
      && bm.includes('drm') && bm.includes('seen@' + genNow) && bm.includes('sat') && !bm.includes('wfm') && !bm.includes('am'),
      `untouched new settings come back as they were (blocked: "drm" kept, + the seen@${genNow} stamp and SATELLITE off as new — ${patch.blockedModes})`);
   ok(!('ppb' in patch) && !('rfNotch' in patch) && !('icomBaud' in patch), 'no other radio\'s settings');
+  ok(typeof patch.antennaRanges === 'string' && /137/.test(patch.antennaRanges) && /138/.test(patch.antennaRanges), `the range typed on the page reaches the phone's settings: ${JSON.stringify(patch.antennaRanges)}`);
 }
 fs.rmSync(tmp, { recursive: true, force: true });
 w.close();
