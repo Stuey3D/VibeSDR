@@ -121,8 +121,9 @@ try {
   ok(lines.length >= 4, `the log holds ${lines.length} reading lines`);
   ok(lines.every((l) => /^\d\d:\d\d:\d\d  43[34]\.\d{3}  \S/.test(l)), `every line is "HH:MM:SS  433.xxx  …": ${lines[0]}`);
   const oregonLine = lines.find((l) => l.includes('Oregon'));
-  ok(!!oregonLine && /^\d\d:\d\d:\d\d  433\.9\d\d  Oregon Scientific THGR810 \/ THGN801 · 18\.4 °C · 62 % RH · battery OK · ch 2$/.test(oregonLine), `the Oregon line exactly as the list: ${oregonLine}`);
-  ok(lines.every((l) => listLines.has(l.slice(19))), 'every logged reading is a line the ISM list showed');
+  ok(!!oregonLine && /^\d\d:\d\d:\d\d  433\.9\d\d  Oregon Scientific THGR810 \/ THGN801 · 18\.4 °C · 62 % RH · battery OK · ch 2 · SNR \d{1,3} dB$/.test(oregonLine), `the Oregon line exactly as the list, + its SNR (beta96 snrToken): ${oregonLine}`);
+  // ★ beta96 (Stuart 11-26 "save snr history"): a day-log line ends " · SNR 18 dB" (vibe_station_sink.h snrToken) — the list's line before it
+  ok(lines.every((l) => listLines.has(l.slice(19).replace(/ · SNR (−|-)?\d{1,3} dB$/, ''))), 'every logged reading is a line the ISM list showed');
   const oregonCount = lines.filter((l) => l.includes('Oregon')).length;
   ok(oregonCount >= 2, `the clip looped: the Oregon is logged ${oregonCount} times (each loop is a new reading, the repeats inside it are not)`);
   const dl = log ? await fileOf(log.f, true) : null;
