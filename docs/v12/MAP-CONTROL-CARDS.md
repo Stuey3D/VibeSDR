@@ -33,10 +33,10 @@ how many cards can be open follows the window; a phone shows one at a time.
 | Always on (the bar) | |
 |---|---|
 | EXIT x / CLOSE MAP | first, as before |
-| title | wide windows only (hidden under 600 px; the dialog's aria-label keeps it) |
-| SHARED TUNER line + CHAT | the `share` slot (main.ts `mapSharedSync`, unchanged) — ADS-B's own CHAT in the `top` slot when the line is not shown |
-| card buttons | `.cardBtns` — LIST · TUNE · VIEW · MAP · KEY · SOURCES, each `[data-cbtn]`, `aria-expanded` |
-| live rate, top right | `.rate` — `ADS-B 1,425/s` (adsbReport.msgRate is per second), `VDL2 98 msg/min` (avReport.msgRate), `AIS 12 msg/min`; nothing on the viewer |
+| title | not shown (tweak 2); kept hidden for the dialog's name and the drivers |
+| "Shared VFO: … n/max" + CHAT | the `share` slot (main.ts `mapSharedSync` → `dialChat.mapBarLine`) — ADS-B's own CHAT in the `top` slot when the line is not shown |
+| card buttons | NOT in the bar: a rail on the map's top-right edge, `.trkMapHost .cardBtns` — each `[data-cbtn]`, `aria-expanded` |
+| live rate, right after CHAT | `.rate` — `ADS-B 1,425/s` (adsbReport.msgRate is per second), `VDL2 98 msg/min` (avReport.msgRate), `AIS 12 msg/min`; nothing on the viewer |
 
 The old status paragraph (`.st`) is kept for screen readers only (1 px, clipped) — drivers still read it. Its facts went:
 
