@@ -1639,7 +1639,7 @@ private:
             /* ★★ V12 beta90 PSK REPORTER takes CW too (Stuart 2026-11-21: "yes cw skimmer should go") — a listener's CW
              *  decoder, the CW skimmer and background CW skimming all spot here. The reporter keeps its own rules (owner
              *  switch + callsign, plausible calls only, each station once a batch, call + band + mode once an hour). */
-            if (std::isfinite(rfHz) && rfHz > 0) {
+            if (std::isfinite(rfHz) && rfHz > 0 && satVia().empty()) {   // ★★★ beta97 never a spot via a satellite (setSatVia)
                 vibe::spotreport::Spot rs;
                 rs.mode = "CW"; rs.call = sp.call; rs.rfHz = rfHz;
                 rs.snr = std::isfinite(sp.snrDb) ? (int)std::lround(sp.snrDb) : 0;
@@ -1671,8 +1671,8 @@ private:
         toStations_(mode, call, std::string(), snr, rfHz, utc);
         return true;
     }
-    static void noteReporter_(const std::string& mode, const std::string& call, double snrDb, double rfHz) {
-        if (!(std::isfinite(rfHz) && rfHz > 0)) return;
+    void noteReporter_(const std::string& mode, const std::string& call, double snrDb, double rfHz) {
+        if (!(std::isfinite(rfHz) && rfHz > 0) || !satVia().empty()) return;   // ★★★ beta97 never a spot via a satellite (setSatVia)
         vibe::spotreport::Spot rs;
         rs.mode = mode; rs.call = call; rs.rfHz = rfHz;
         rs.snr = std::isfinite(snrDb) ? (int)std::lround(snrDb) : 0;
@@ -2334,7 +2334,8 @@ private:
          *  listener's run or background decoding — goes to the process's reporter, which drops it at once unless the owner
          *  switched reporting on with a callsign. The station heard only: nothing about who was listening. Cheap (a map
          *  insert under a lock); the network is the reporter's own thread, every five minutes. */
-        {
+        const std::string via = satVia();   // ★★★ beta97 heard through a satellite: tagged, held back from PSK Reporter
+        if (via.empty()) {
             vibe::spotreport::Spot rs;
             rs.mode = m; rs.call = c; rs.grid = g; rs.snr = sp.snr; rs.rfHz = rfHz; rs.slotUtc = (double)ts / 1000.0;
             rs.dt = std::isfinite(sp.dt) ? sp.dt : 0.f; rs.drift = std::isfinite(sp.drift) ? sp.drift : 0.f;
@@ -2356,17 +2357,37 @@ private:
          *  on the air for everyone, as the callsign is. "" (and the field left out) when the engine has none, or its
          *  text is its own summary (textMade: the skimmers — their text goes out on band_skim / their own frames). */
         const std::string msg = sp.textMade ? std::string() : spotMsgJson(sp.text);
-        char buf[640];
+        // ★★★ beta97 "via":"JO-97","norad":43803 — additive (a client that does not read it ignores it); the catalogue's name,
+        //     cleaned as the message is (printable ASCII, quotes escaped)
+        std::string viaJ;
+        if (!via.empty()) {
+            char nb[32]; std::snprintf(nb, sizeof nb, ",\"norad\":%lld", satNorad());
+            viaJ = ",\"via\":\"" + spotMsgJson(via) + "\"" + nb;
+        }
+        char buf[720];
         const int n = std::snprintf(buf, sizeof(buf),
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
-            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu,\"dt\":%.2f%s%s%s}}",
+            "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu,\"dt\":%.2f%s%s%s%s}}",
             m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), how.c_str(), ctry.c_str(), (unsigned long long)ts,
             // ★ V12 (R36S handheld "Align to FT8", 2026-11-05): WSJT-X's DT, additive — a client that does not read it ignores it.
             std::isfinite(sp.dt) ? (double)sp.dt : 0.0,
-            msg.empty() ? "" : ",\"msg\":\"", msg.c_str(), msg.empty() ? "" : "\"");
+            msg.empty() ? "" : ",\"msg\":\"", msg.c_str(), msg.empty() ? "" : "\"", viaJ.c_str());
         if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1), GapSpots);
     }
 public:
+    /** ★★★ beta97 SPOTS VIA A SATELLITE (Stuart, JO-97's transponder: FT4 heard through it, decoded on the listener's own
+     *  Doppler-corrected channel). The server sets the bird while this host's channel (a listener's, or the shared dial's)
+     *  has a live Doppler lock, and clears it when the lock ends ("" = none). While set, every spot this host makes:
+     *   · carries "via" (the satellite's name) and "norad" in its digital_spot frame — the clients write "via JO-97";
+     *   · goes into the station store as ORIGIN kSatellite, never as a terrestrial reception on the downlink's band;
+     *   · is HELD BACK from PSK Reporter — a station heard through a satellite is not one heard on 2 m from this receiver's
+     *     grid, and whether (and how) such spots are reported is Stuart's decision, not made here. */
+    void setSatVia(const std::string& name, long long norad) {
+        std::lock_guard<std::mutex> lk(satViaMtx_);
+        satVia_ = name.size() > 40 ? name.substr(0, 40) : name; satNorad_ = name.empty() ? 0 : norad;
+    }
+    std::string satVia() const { std::lock_guard<std::mutex> lk(satViaMtx_); return satVia_; }
+    long long satNorad() const { std::lock_guard<std::mutex> lk(satViaMtx_); return satNorad_; }
     /** ★★ V12 beta94: a spot's decoded message as the BODY of a JSON string — OFF THE AIR, so anyone may have sent anything:
      *  printable ASCII only (a control byte or a non-ASCII byte is dropped; runs of spaces become one), '"' and '\\'
      *  escaped, at most kSpotMsgMax characters BEFORE escaping (FT8's longest standard message is 22 — ≤ 37 with a
@@ -2393,7 +2414,7 @@ private:
         if (!env_.stations) return;
         vibestations::Reception r;
         r.call = call; r.grid = grid; r.mode = mode; r.band = bandFor(rfHz); r.snr = snr; r.rfHz = rfHz; r.utc = utc;
-        r.origin = env_.stationOrigin;
+        r.origin = satVia().empty() ? env_.stationOrigin : (uint8_t)vibestations::kSatellite;   // ★★★ beta97 via a satellite
         env_.stations->spot(r);
     }
     /** ★ Band's mode chips as JSON (spotsMtx_ held). */
@@ -2886,6 +2907,8 @@ private:
     std::atomic<double> iqFixed_{0.0};        // ★★ ORBCOMM's fixed slice centre (buildOrbcommLocked_) — 0 = none
     std::atomic<double> iqAim_{0.0};          // ★★ beta92 the satellite lock's corrected frequency (setIqAim) — 0 = none
     DecoderTapPtr cwTap_;                    // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
+    mutable std::mutex satViaMtx_;            // ★★★ beta97 setSatVia
+    std::string satVia_; long long satNorad_ = 0;
     std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     std::unique_ptr<RttySkimRun> rttySkim_;   // ★ the RTTY skimmer (buildRttySkimLocked_) — shares cwIq_/cwWidth_, owns its workers
     std::unique_ptr<vibexpdr::Run> xpdr_;      // ★★★ beta94 the transponder finder (buildXpdrLocked_) — shares cwIq_/cwWidth_/iqFixed_

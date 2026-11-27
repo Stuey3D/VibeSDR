@@ -12212,6 +12212,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  so RxPipeline::setTune only raises tuneReq_: the recursive rotator moves with its phase continuous — no rebuild,
      *  no AGC reset, no audio gap (pipeline.cpp setTune). ★ Never clientRetune: that is the whole tune path (RDS clear,
      *  log label, resweep) and runs 25 times a second here. */
+    /** ★★★ beta97 the name a spot heard through this lock's bird carries ("via JO-97"): the catalogue's short id. */
+    static std::string satViaName(const vibe::sat::Track& t) { return !t.satId.empty() ? t.satId : t.satName; }
     void satApplyClient(ClientDsp* c) {
         std::lock_guard<std::mutex> lk(c->mtx);
         if (!c->rx || c->satBw <= 0) return;
@@ -12234,7 +12236,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         satEngine().stop(c->session);
         const bool pickGone = dropPick && satHasPick(c->session);
         if (pickGone) satDetachPick(c->session, "the dial left it");
-        if (auto h = decoders_.find(c->session)) h->setIqAim(0);   // ★★ beta92 a skimmer goes back to the dial
+        if (auto h = decoders_.find(c->session)) { h->setIqAim(0); h->setSatVia("", 0); }   // ★★ beta92 a skimmer goes back to the dial · ★★★ beta97 its spots are terrestrial again
         {
             std::lock_guard<std::mutex> lk(c->mtx);
             if (freezeAndTell) c->vfoHz = std::round(c->vfoHz + c->satShiftHz);
@@ -12279,7 +12281,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         satEngine().stop(kSatShared);
         const bool pickGone = dropPick && satHasPick(kSatShared);
         if (pickGone) satDetachPick(kSatShared, "the dial left it");
-        if (auto h = decoders_.shared()) h->setIqAim(0);   // ★★ beta92 a skimmer goes back to the dial
+        if (auto h = decoders_.shared()) { h->setIqAim(0); h->setSatVia("", 0); }   // ★★ beta92 a skimmer goes back to the dial · ★★★ beta97 spots terrestrial again
         const double actual = audioFreq.load() + satSharedShift_.load();
         satSharedShift_.store(0.0);
         satSharedSent_.clear();
@@ -12339,6 +12341,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         else satApplyShared();
                         // ★★ beta92 the room's skimmer (a CW beacon pick) centred on the corrected frequency (setIqAim)
                         if (auto h = decoders_.shared(); h && !useIcom()) h->setIqAim(audioFreq.load() + (moving ? t.shiftHz : 0.0));
+                        // ★★★ beta97 the room's spots are heard THROUGH the bird while the lock is live (DecoderHost::setSatVia)
+                        if (auto h = decoders_.shared()) h->setSatVia(moving ? satViaName(t) : std::string(), t.norad);
                         // ★ the readout twice a second, at once on a state change (TRACK ↔ COAST, ARMED → TRACK)
                         const std::string st = vibe::sat::lockName(t.state);
                         if (st != satSharedSent_ || mono - satSharedSentAt_ >= 0.5) {
@@ -12353,13 +12357,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         std::lock_guard<std::mutex> lk(clientMtx);
                         for (auto& kv : clientDsp) if (kv.second && kv.second->session == key) { c = kv.second; break; }
                     }
-                    if (!c) { satEngine().stop(key); if (auto h = decoders_.find(key)) h->setIqAim(0); continue; }   // ★ the listener's channel has gone: so has their lock
+                    if (!c) { satEngine().stop(key); if (auto h = decoders_.find(key)) { h->setIqAim(0); h->setSatVia("", 0); } continue; }   // ★ the listener's channel has gone: so has their lock
                     if (t.state == vibe::sat::LockState::Ended) { satEndListener(c, t.why, true); continue; }
                     double aimHz;
                     { std::lock_guard<std::mutex> lk(c->mtx); c->satShiftHz = moving ? t.shiftHz : 0.0; aimHz = c->vfoHz + c->satShiftHz; }
                     satApplyClient(c.get());
                     // ★★ beta92 this listener's skimmer (a CW beacon pick) centred on where the channel IS (setIqAim)
-                    if (auto h = decoders_.find(c->session)) h->setIqAim(aimHz);
+                    if (auto h = decoders_.find(c->session)) { h->setIqAim(aimHz); h->setSatVia(moving ? satViaName(t) : std::string(), t.norad); }   // ★★★ beta97 spots via the bird
                     const std::string st = vibe::sat::lockName(t.state);
                     bool send = false;
                     { std::lock_guard<std::mutex> lk(c->mtx);
@@ -12373,7 +12377,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ brief §9 TRAP: nobody here — an arm more than 30 min from its AOS goes (active locks run to LOS)
                 if (specListenerCount() == 0)
                     for (const auto& k : satEngine().dropOrphanArms(clk)) {
-                        if (auto h = k == kSatShared ? decoders_.shared() : decoders_.find(k)) h->setIqAim(0);   // ★★ beta92
+                        if (auto h = k == kSatShared ? decoders_.shared() : decoders_.find(k)) { h->setIqAim(0); h->setSatVia("", 0); }   // ★★ beta92 · beta97
                         if (k == kSatShared) satSharedShift_.store(0.0);
                     }
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
