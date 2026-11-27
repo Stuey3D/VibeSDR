@@ -774,8 +774,16 @@ body.askLocked .mapGainHost .gRow{opacity:.45}
 /* ★★ the radio page's SERVER HEALTH chip, lent to the map's right column (main.ts mapChromeAdopt) — in the flow, not fixed */
 .trkView .mChipsR #srvHealth{position:relative!important;top:auto!important;right:auto!important;left:auto!important;bottom:auto!important;transform:none!important;pointer-events:auto;align-self:flex-end}
 .trkView .mChipsR #rxBadge{position:relative!important;top:auto!important;right:auto!important;align-self:flex-end;padding-right:12px;margin-top:-4px}
+/* ★ Stuart 15:09: TIME is a slim tab on the edge ("Guaranteed time 6:53", vertical); a tap pops a small card — the time,
+ *  and what the limit means — that folds itself after 9 s or on a second tap */
 .mTime .hCard{padding:6px 5px!important;min-width:30px}
+.mTime .tBtn{all:unset;cursor:pointer;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.mTime .tBtn:focus-visible{outline:2px solid #ffd34d;outline-offset:2px}
 .mTime .tl{writing-mode:vertical-rl;transform:rotate(180deg);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#cfd9e3}
+.mTime .tw{display:none;max-width:220px;font:12px/1.35 system-ui,sans-serif;color:#cfd9e3;white-space:normal}
+.mTime.open .hCard{padding:9px 12px!important}
+.mTime.open .tl{writing-mode:horizontal-tb;transform:none;font-size:12px}
+.mTime.open .tw{display:block}
 .mTime.warn .tl{color:#ffd479}.mTime.crit .tl{color:#ff8a7d}
 .trkCard2[data-card="stats"] .stTabs{display:flex;gap:4px;padding:6px 8px 2px;flex-wrap:wrap}
 .trkCard2[data-card="stats"] .stTabs[hidden]{display:none}
@@ -1219,7 +1227,7 @@ export class TrackView {
       + `${dock('stats', 'left', 'STATS', `<span class="ic">${modeIconSvg('stats', 'mIco')}</span>`, 'the stats card')}</div>`
       + `<div class="mChips mChipsR">${dock('rate', 'right', 'RATE', `<span class="ic rateIc"><span class="rv"><span class="rn"></span><span class="ru"></span></span><span class="rmore"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'every source\u2019s message rate')}`
       + `${dock('chat', 'right', 'CHAT', `<span class="ic"><svg class="mIco" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="9" cy="10.5" r="1.1" fill="currentColor"/><circle cx="12" cy="10.5" r="1.1" fill="currentColor"/><circle cx="15" cy="10.5" r="1.1" fill="currentColor"/></svg><span class="unr" hidden></span></span>`, 'the chat')}`
-      + `<div class="edgeDock mDock mTime" data-dock="time" hidden><div class="hCard"><span class="tl" role="timer" aria-live="off"></span></div></div>`
+      + `<div class="edgeDock mDock mTime" data-dock="time" hidden><div class="hCard"><button type="button" class="tBtn" aria-expanded="false"><span class="tl" role="timer" aria-live="off"></span><span class="tw"></span></button></div></div>`
       + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
       + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
@@ -1912,9 +1920,12 @@ export class TrackView {
     };
   }
   /** ★★ Stuart 14:38 the TIME LIMIT on the map (the radio page's #rxTimeLeft, mirrored): shown only while a limit applies. */
-  setTimeLeft(text: string, cls = '') {
+  setTimeLeft(text: string, cls = '', why = '') {
     const d = this.root.querySelector('.mDock[data-dock="time"]') as HTMLElement | null;
     if (!d) return;
+    const btn = d.querySelector('.tBtn') as HTMLButtonElement;
+    if (!btn.dataset.wired) { btn.dataset.wired = '1'; btn.onclick = (e) => { e.stopPropagation(); const o = !d.classList.contains('open'); d.classList.toggle('open', o); btn.setAttribute('aria-expanded', String(o)); if (o) setTimeout(() => { d.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }, 9000); }; }
+    const w = d.querySelector('.tw') as HTMLElement; if (w.textContent !== why) w.textContent = why;
     d.hidden = !text;
     const t = d.querySelector('.tl') as HTMLElement;
     if (t.textContent !== text) t.textContent = text;

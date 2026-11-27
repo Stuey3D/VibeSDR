@@ -18,7 +18,7 @@ import { drawOutline, outlineOn, setOutlineOn } from './lrptOutlineDom';
 // ★★★ beta96 METEOR LRPT: the viewer's channel picker (AUTO = composite by day, infrared at night)
 import { LRPT_PICK_KEY, LrptRows, lrptChoices, lrptPickHint, lrptPickLabel, nextLrptPick, parseLrptChanFrame, pickFromStored, pickToStored, resolveLrptView, type LrptPick, type LrptView as LrptChanView } from '../../../src/utils/lrptChannels';
 import { bandPixels, lrptFitNow, lrptViewHint, lrptViewToggle, mapOutline, sameGaps, squashPlan, turnedTop, type LrptGap, type LrptView, type SquashPlan } from '../../../src/utils/lrptGaps';
-import { healthTuckBody, healthTuckLevel } from './healthTuck';
+import { healthTuckBody, healthTuckLevel, healthTuckOnMap } from './healthTuck';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, clearViewForAll, VIEW_KEYS } from './portable';
 import { initMenuCats, revealServerUnlock } from './menuCats';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
@@ -4289,23 +4289,25 @@ function mapChromeAdopt(on: boolean) {
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
   const col = v?.querySelector('.mChipsR') as HTMLElement | null;
   if (h) {
-    if (on && col) { if (h.parentElement !== col) { healthHome.parent = h.parentNode; healthHome.next = h.nextSibling; col.insertBefore(h, col.querySelector('[data-dock="map"]')); } }
-    else if (!on && healthHome.parent && h.parentNode !== healthHome.parent) h.parentNode && (healthHome.parent as Element).insertBefore(h, healthHome.next && healthHome.next.parentNode === healthHome.parent ? healthHome.next : null);
+    if (on && col) { if (h.parentElement !== col) { healthHome.parent = h.parentNode; healthHome.next = h.nextSibling; col.insertBefore(h, col.querySelector('[data-dock="map"]')); healthTuckOnMap(true); } }
+    else if (!on && healthHome.parent && h.parentNode !== healthHome.parent) { h.parentNode && (healthHome.parent as Element).insertBefore(h, healthHome.next && healthHome.next.parentNode === healthHome.parent ? healthHome.next : null); healthTuckOnMap(false); }
   }
-  /* ★ Stuart 15:01 ("time and health still not correct server ones"): the page's time is not a chip — it is the
+  /* ★ Stuart 15:09 took the badge OFF the map again (it read as stray text over the map's labels) — the TIME tab
+   *  carries the time; the badge goes home if an older build lent it. (Tried at 15:01: lending it under the health pill.)
+   *  ★ Stuart 15:01 ("time and health still not correct server ones"): the page's time is not a chip — it is the
    *  receiver badge (#rxBadge: the radio's name, where it is, "Guaranteed time 14:40"), right under the health pill. The
    *  same element is lent, straight under the lent health pill, exactly as the page shows it; the mirrored TIME chip went. */
   const b = document.getElementById('rxBadge');
-  if (b) {
-    if (on && col) { if (b.parentElement !== col) { badgeHome.parent = b.parentNode; badgeHome.next = b.nextSibling; const hh = document.getElementById('srvHealth'); col.insertBefore(b, hh && hh.parentElement === col ? hh.nextSibling : col.querySelector('[data-dock="map"]')); } }
-    else if (!on && badgeHome.parent && b.parentNode !== badgeHome.parent) (badgeHome.parent as Element).insertBefore(b, badgeHome.next && badgeHome.next.parentNode === badgeHome.parent ? badgeHome.next : null);
-  }
+  if (b && badgeHome.parent && b.parentNode !== badgeHome.parent) (badgeHome.parent as Element).insertBefore(b, badgeHome.next && badgeHome.next.parentNode === badgeHome.parent ? badgeHome.next : null);
+
   mapTimeSync();
 }
 function mapTimeSync() {
   const t = document.getElementById('rxTimeLeft');
   const text = t && !t.hidden ? (t.textContent || '').trim() : '';
-  void text; for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft('', '');   // ★ the page's own badge carries it now
+  // ★ the tab's card says what the limit means, in the soft-limit's own words (never an alarm)
+  const why = softLimit ? 'A soft limit: you keep listening after it, until somebody else is waiting for a place.' : 'When it runs out your session ends, so the next listener can have a turn.';
+  for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft(text, t?.className || '', why);
 }
 window.addEventListener('vibe:mapopened', () => { mapChromeAdopt(true); mapDeckVars(); });
 /** ★ the shared-tuner bar wears the control deck's material: the look (skin, transparency) is put on #mcard only

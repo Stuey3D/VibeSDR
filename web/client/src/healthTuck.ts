@@ -52,9 +52,13 @@ export function edgeDockSet(d: HTMLElement, out: boolean): void {
   if (tab) { tab.setAttribute('aria-hidden', String(out)); tab.tabIndex = out ? -1 : 0; }
 }
 
+/** ★★ Stuart 15:09: lent to a full-screen map, the pill is a TAB until asked for — the map is centre stage, so neither
+ *  'auto' nor a hot battery holds it out there; its › tucks it and its tab brings it back, as the map's own chips. */
+let onMap = false, mapPref: 'tucked' | 'shown' = 'tucked';
+export function healthTuckOnMap(on: boolean): void { onMap = on; if (on) mapPref = 'tucked'; apply(); }
 function apply(): void {
   if (!dock) return;
-  const out = chipOut(pref, boxOpen, hot);
+  const out = onMap ? mapPref === 'shown' : chipOut(pref, boxOpen, hot);
   edgeDockSet(dock, out);
   // ★ the tab sits on the right edge — the receiver badge (name, locator, time) steps left of it (Stuart, 2026-11-12:
   //   "when collapsed the card slightly fouls the server name")
@@ -62,8 +66,8 @@ function apply(): void {
   dock.dataset.pref = pref;
 }
 
-function userTuck(): void { pref = nextPref(pref, 'userTuck'); apply(); }
-function userShow(): void { pref = nextPref(pref, 'userShow'); apply(); }
+function userTuck(): void { if (onMap) { mapPref = 'tucked'; apply(); return; } pref = nextPref(pref, 'userTuck'); apply(); }
+function userShow(): void { if (onMap) { mapPref = 'shown'; apply(); return; } pref = nextPref(pref, 'userShow'); apply(); }
 
 /** Read the decoder box: open and not minimised is what the app calls a box being open. */
 function readBox(): void {
