@@ -1040,6 +1040,8 @@ const MC = VibeMapChrome.mountMapChrome({
 });
 MC.chips({ layers: true, stats: true });
 MC.retitle('servers', 'RECEIVERS');
+// ★ the old footer's words (privacy: where a receiver is drawn) — HELP's credit line now
+MC.credit('Shared by VibeServer owners who switched on “Share to the VibeSDR community map”. What the stations themselves broadcast, read straight from each receiver; a receiver is drawn at the centre of its four-character grid square, never its address.');
 MC.onRow(listRow);
 rxWire(); ctlWire();
 MC.show(null);

@@ -59,6 +59,13 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta97 2026-11-27 — THE AMATEUR MAP AND THE COMMUNITY MAP ON THE MAP CARDS (b97-maps-port; web/client/src/
+  //     mapChromeApi.ts hostMap, generated map-chrome.js). Locations checked against the code: the amateur map's window — ✕
+  //     top-left closes it; LAYERS / STATS left; MAP CONTROLS (TIME, SOURCES, RADIO, BAND, MODE, the clock, AUTO / FIT, KEY)
+  //     right; RATE top-right; the LIST drawer bottom-left. The community map — ✕ back to the directory; RECEIVERS (the SERVERS
+  //     chip, retitled) / LAYERS / STATS left; MAP CONTROLS (HEARD IN, NAVTEX's filters, ONLY THIS, AUTO / FIT, KEY) right;
+  //     the LIST (MESSAGES first) bottom-left. WEB ONLY — the app's amateur map is the app port's.
+  { v: 'V12 (experimental)', detail: 'THE AMATEUR MAP AND THE COMMUNITY MAP GET THE MAP CARDS \u2014 on the web, the amateur (digital modes) map and the directory\u2019s community map now work like the air & sea map: the map fills the window, with the red \u2715 top-left (it closes the amateur map\u2019s window, or takes you back to the directory). LAYERS (with counts) and STATS are down the left, and MAP CONTROLS on the right holds the time filter, AUTO and FIT, and the KEY. On the amateur map, MAP CONTROLS also has new BAND and MODE filters, the radio picker and the clock, and RATE (top right) shows how many stations a minute this radio is decoding. On the community map, the RECEIVERS card lists the servers sharing, each with LISTEN and ONLY THIS, and the NAVTEX type and station filters are in MAP CONTROLS. On both maps the old bars along the top and the side panels are gone. The LIST at the bottom left holds the stations (on the community map, the NAVTEX messages first: tap one to read it).' },
   // ★★★ V12 beta97 2026-11-27 — THE MAP DRAWER'S LIVE WATERFALL + SHORT LANDSCAPE (web only so far; web/client/src/mapWf.ts,
   //     src/utils/mapWfModel.ts, tracks.ts setWaterfall / data-short). Locations checked against the code: the swap tab =
   //     .lSwap at the drawer's top-left (the mirror of .lMax), .lSwapC on the collapsed LIST chip; short landscape = the
