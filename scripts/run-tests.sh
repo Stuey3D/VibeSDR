@@ -1741,6 +1741,10 @@ VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 --no-warnings
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ beta95 THE FRONT DOOR'S ONE MERGED COMMUNITY FEED: a layer any radio may share is at the door, the same DSC call /
 #    APRS station from two radios is one row, a save through the door follows. Door only, no radio. ~10 s.
+# ★★★ b97 THE AMATEUR MAP ON THE CARD SYSTEM — the built page (web/dist), its window, every size; no server needed. ~1 min.
+printf '\n\033[1m── the amateur map on the map card system (headless Edge, the built page) ──\033[0m\n'
+node scripts/test-web-digimap-cards.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── community map: the front door answers for every radio (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-community-door.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -2422,6 +2426,8 @@ npx tsx scripts/test_new_modes_clients.ts; rc=$?   # ★★★ beta96 new modes 
 if [ $rc -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The ship/station layer's generated copies (web client, app, /mapgl/vendor) match web/mapkit/tracklayer.js.
 if node scripts/gen-tracklayer-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ b97 the map card system's standalone copies (the amateur map's window, the directory's community map) match mapChrome.ts
+if node scripts/gen-mapchrome-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 CW (2026-10-25): the real server on a fake rtl_tcp replaying the bench's synthetic HF clip (five stations around
 #     7.030 MHz): the skimmer on a one-pipeline radio and a range-locked one, a second listener's own segment, ONE SIGNAL's

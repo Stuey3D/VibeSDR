@@ -185,13 +185,13 @@ const meshDone = (async () => {
 /* ── the pages ── */
 {
   const main = readFileSync('web/client/src/main.ts', 'utf8');
-  ok(/<title>VibeSDR — Amateur Map<\/title>/.test(main) && /<span id="amTitle">AMATEUR MAP<\/span>/.test(main), 'web: the window is the AMATEUR MAP');
+  ok(/<title>VibeSDR — Amateur Map<\/title>/.test(main) && /title: 'AMATEUR MAP', exitLabel: 'Close the map'/.test(main), 'web: the window is the AMATEUR MAP (b97: the card system\'s title, ✕ closes it)');
   ok(/\$\{AMATEUR_JS\}/.test(main) && /function aprsIn\(\) \{ return aprs\.filter\(\(a\) => \{ const f = firstAt\('aprs:' \+ a\.key, null\); return sess \? sessOk\(f\) : amKeep\(a\.age, win\); \}\); \}/.test(main), 'web: APRS through the window rule');
   ok(/for \(const a of aprsIn\(\)\) \{/.test(main) && /const aw = aprsIn\(\);/.test(main), 'web: APRS drawn and counted from the window');
   ok(/amDrawMesh\(meshLayer, mesh, win/.test(main) && /amDrawBeacons\(beaconLayer, beacons, win/.test(main), 'web: MESH and BEACONS drawn through the window');
-  ok(/ws\.hidden = !\(srvOk \|\| aprs\.length \|\| mesh\.length \|\| beacons\.length\);/.test(main), 'web: the window keys stand for every layer');
-  ok(/class="live" title="Live now/.test(main), 'web: the live layer\'s key marked');
-  ok(/id="amTabs" role="tablist"/.test(main) && /function amList\(\)/.test(main), 'web: the tabs');
+  ok(/const wOn = srvOk \|\| aprs\.length \|\| mesh\.length \|\| beacons\.length;/.test(main), 'web: the TIME keys (MAP CONTROLS) stand for every layer');
+  ok(/live: h\[0\] === liveLayer,/.test(main), 'web: the live layer marked LIVE in LAYERS');
+  ok(/MC\.listTabs\(tabs\.length > 1 \? tabs\.map\(\(t\) => \(\{ id: t, label: LBL\[t\], n: n\[t\] \}\)\) : \[\], tab,/.test(main) && /function listSync\(\)/.test(main), 'web: the LIST\'s tabs (the card system)');
   const mo = readFileSync('src/components/MapOverlay.tsx', 'utf8');
   ok(/AMATEUR_JS/.test(mo), 'app: the page carries the same rules');
   // ★★★ beta96 maps2 the app's tabs: TrackLiveList (React Native — the pad walks it) over the 'digi' page, its rows amListRows

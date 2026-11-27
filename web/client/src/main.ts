@@ -19934,9 +19934,10 @@ function openDigiModesMapImpl(o: DigiMapOpts = {}) {
   const win = o.window ? digiWindowOf(o.window) : digiMapWindowPref();
   // ★ The renderer source comes with the map, not with the page (see the import note at the top).
   //   Fetched even when the GPU map is on offer: the window falls back to it if MapLibre fails there.
-  void Promise.all([probeMapGL(), loadVibemapSource()]).then(([kit, m]) => {
+  // ★★★ b97 and the MAP CARD SYSTEM (mapChrome.ts as one plain script — gen-mapchrome-source.mjs), loaded with the map
+  void Promise.all([probeMapGL(), loadVibemapSource(), import('./generated/mapChromeSource')]).then(([kit, m, mc]) => {
     if (w.closed) return;
-    w.document.write(spotsMapHtml(kit, m.VIBEMAP_JS, { layer, focus: o.focus || '', window: win }));
+    w.document.write(spotsMapHtml(kit, m.VIBEMAP_JS, { layer, focus: o.focus || '', window: win }, mc.MAP_CHROME_JS));
     w.document.close();
   }).catch((e) => {
     // ★ A dropped link while the map's code was on its way. Say so in the window that is open,
@@ -19958,8 +19959,9 @@ addEventListener('message', (ev) => {
   amMeshRefresh();   // ★ beta96 maps2 the remembered nodes follow the window
 });
 setDigiModesMapOpener(openDigiModesMapImpl);
+(window as any).__vibeOpenDigiMap = openDigiModesMapImpl;   // ★ b97 for the drivers (scripts/test-web-digimap-cards.mjs), as __vibeOpenAirSeaViewer
 
-function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: DigiMapLayer; focus: string; window: string } = { layer: 'spots', focus: '', window: '24h' }): string {
+function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: DigiMapLayer; focus: string; window: string } = { layer: 'spots', focus: '', window: '24h' }, CHROME_JS = ''): string {
   const me = myPos();
   const pts = spotsMapPoints();
   const aprsPts = aprsMapPoints();
@@ -19984,71 +19986,16 @@ function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, open: { layer: D
   return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Amateur Map</title>
 ${glHead}
 <style>
-  :root{--amber:#ffb833;--dim:rgba(255,160,0,0.45);--bg:rgba(8,6,2,0.94);
-        --bdr:rgba(255,160,0,0.30);--hi:#ffe566}
-  html,body{height:100%;margin:0;background:#080601;
-    font:12px ui-monospace,"SF Mono",Menlo,monospace;color:var(--amber)}
-  #wrap{display:flex;flex-direction:column;height:100%}
-  /* Top bar — counts + the toggles, as UberSDR does. */
-  #top{display:flex;align-items:center;gap:14px;padding:7px 12px;
-    background:var(--bg);border-bottom:1px solid var(--bdr);flex:0 0 auto}
-  #count{color:var(--hi);font-weight:bold}
-  #top label{display:inline-flex;gap:4px;align-items:center;color:var(--dim);cursor:pointer}
-  #top .sp{flex:1 1 auto}
-  #main{position:relative;flex:1 1 auto;min-height:0}
-  #m{position:absolute;inset:0}
-  .panel{position:absolute;z-index:1000;background:var(--bg);
-    border:1px solid var(--bdr);border-radius:8px}
-  /* Docked stats — left column, scrollable, NOT covering the map. */
-  #stats{top:10px;left:10px;width:265px;max-height:calc(100% - 20px);overflow-y:auto;scrollbar-gutter:stable;padding:10px 12px}
-  #stats.hide,#legend.hide,#summary.hide{display:none}
-  .sect{font-size:9px;letter-spacing:1.5px;color:var(--dim);margin:10px 0 6px;
-    border-top:1px solid rgba(255,160,0,0.15);padding-top:8px}
-  .sect:first-child{border-top:none;margin-top:0;padding-top:0}
-  .row{display:flex;justify-content:space-between;gap:8px;margin:3px 0;font-size:11px}
-  .row b{color:var(--hi);font-weight:bold}
-  .bar{height:3px;background:rgba(255,160,0,0.12);border-radius:2px;margin:2px 0 5px}
-  .bar i{display:block;height:3px;border-radius:2px;background:var(--amber)}
-  .sub{font-size:9px;color:var(--dim);margin:-2px 0 6px}
-  /* Compass rose — 8 bearings, like UberSDR's. */
-  .rose{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 8px}
-  .rose div{font-size:10px}
-  .rose .n{color:var(--dim)}
-  .lrow .rx{display:inline-flex;width:12px;height:12px}
-  .lrow .lc{margin-left:auto;padding-left:8px;color:var(--dim)}
-  .lrow.foot{color:var(--dim);font-size:9px;margin-top:4px}
-  /* Legend — right. */
-  #legend{top:10px;right:10px;padding:8px 10px;min-width:110px}
-  .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:11px}
-  .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
+  /* ★★★ b97 THE MAP CARD SYSTEM (docs/v12/MAP-CONTROL-CARDS.md; window.VibeMapChrome = mapChrome.ts, inlined below): the map
+   *  takes the window; ✕ (closes it) top-left; LAYERS / STATS / MAP CONTROLS chips pop out their cards; the LIST drawer
+   *  bottom-left; RATE top-right while this radio decodes; HELP and the scale bottom-right. The old top bar (count, SHOW,
+   *  windows, radios, scope, FIT, the Stats / Summary / Legend / List ticks, the clock) and the stats / legend / summary / list
+   *  panels are DELETED (not hidden). Only what the map itself draws is styled here. */
+  :root{--amber:#ffb833;--dim:rgba(255,160,0,0.45)}
+  html,body{height:100%;margin:0;background:#0b1014}
+  .pop{font:12px ui-monospace,Menlo,monospace;color:#111;line-height:1.5}
   .mkl{pointer-events:none}
   .mkl b{display:block;width:12px;height:12px;font:bold 9px/12px ui-monospace,Menlo,monospace;text-align:center}
-  .sw.mk{width:14px;height:14px;flex:0 0 14px;box-shadow:0 0 0 1.2px #1a1a1a;font:bold 9px/14px ui-monospace,Menlo,monospace;text-align:center}
-  /* Summary strip — bottom, like UberSDR's latest/rarest row. */
-  #summary{bottom:10px;left:50%;transform:translateX(-50%);padding:8px 14px;
-    display:flex;gap:26px;font-size:11px;white-space:nowrap}
-  #summary .k{color:var(--dim);font-size:9px;letter-spacing:1px}
-  #summary .v{color:var(--hi)}
-  #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-    color:var(--dim);pointer-events:none;z-index:900;font-size:13px}
-  .pop{font:12px ui-monospace,Menlo,monospace;color:#111;line-height:1.5}
-  .maplibregl-ctrl-group{background:var(--bg);border:1px solid var(--bdr)}
-  .maplibregl-ctrl-group button .maplibregl-ctrl-icon{filter:invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg);opacity:.8}
-  .maplibregl-ctrl-top-left{top:0;left:285px}
-  /* ★ beta90 the scale bar clear of the stats column (vibemapgl.js / vibemap.js draw it bottom-left) */
-  .maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:285px}
-  .maplibregl-ctrl-scale{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
-  #m .leaflet-control-scale-line{background:rgba(8,6,2,0.75);border-color:var(--amber);color:var(--amber);font:10px ui-monospace,Menlo,monospace}
-  /* ★ beta90 the layers (SPOTS / APRS / a caller's overlay) and the time window */
-  #layers,#wins,#rads{display:inline-flex;gap:4px;align-items:center}
-  #wins button,#layers button,#rads button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);
-    border-radius:4px;padding:2px 7px;cursor:pointer}
-  #wins button[aria-pressed="true"],#layers button[aria-pressed="true"],#rads button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
-  #wins[hidden],#layers[hidden],#rads[hidden]{display:none}
-  /* ★★ beta92 FIT — every station the layers / window / radio show (the app's FIT key, DIGI_FIT_JS) */
-  #fitBtn{font:inherit;font-size:11px;letter-spacing:1px;color:var(--amber);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 9px;cursor:pointer}
-  #fitBtn:hover{border-color:var(--amber)}
-  #fitBtn.on{border-color:var(--amber);background:rgba(255,160,0,0.14)}
   /* ★★ beta92 an APRS symbol (src/utils/aprsSymbols.ts, 28 px) and its callsign under it from zoom 8 (body.aprsLb) */
   .apk{position:relative;width:28px;height:28px}
   .apk svg{display:block}
@@ -20056,64 +20003,23 @@ ${glHead}
     font:bold 11px/1.15 ui-monospace,Menlo,monospace;letter-spacing:.5px;color:#fff;padding:1px 3px;border-radius:3px;
     background:rgba(8,10,12,0.62);text-shadow:0 0 2px #000,0 1px 2px #000}
   body.aprsLb .apk .apl{display:block}
+  /* the KEY (digiMapStats.ts legend rows, in MAP CONTROLS) */
+  .lrow{display:flex;align-items:center;gap:7px;padding:2px 0;white-space:nowrap;font-size:12px}
+  .lrow .rx{display:inline-flex;width:12px;height:12px}
+  .lrow .lc{margin-left:auto;padding-left:8px;color:#93a3b4}
+  .lrow.foot{color:#93a3b4;font-size:10px;margin-top:4px}
   .lrow .asym{display:inline-flex;width:16px;height:16px;flex:0 0 16px}
-  /* ★★★ beta96 stage 7 THE AMATEUR MAP: its title, the live layer's dot, and the list with its tabs (SPOTS · APRS · MESH ·
-     BEACONS) bottom-right, clear of the stats column (left) and the legend (top-right) */
-  #amTitle{letter-spacing:2px;color:var(--hi)}
-  #layers button.live::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff4b4b;margin-right:5px;vertical-align:1px}
-  #layers .lbl{font-size:10px;color:var(--dim);letter-spacing:0.06em;margin-right:2px}
-  #layers .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:0}
-  #layers .n{margin-left:5px;opacity:0.85}
-  #scope{display:inline-flex;gap:4px;align-items:center}#scope[hidden]{display:none}
-  #scope button{font:inherit;font-size:11px;color:var(--dim);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 7px;cursor:pointer}
-  #scope button[aria-pressed="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
-  #scopeNote{color:var(--amber);font-size:11px}#scopeNote:empty{display:none}
-  #amList{right:10px;bottom:30px;width:300px;max-height:42%;display:flex;flex-direction:column;overflow:hidden}
-  #amList.hide{display:none}
-  #amTabs{display:flex;gap:4px;padding:6px 6px 4px;flex-wrap:wrap;border-bottom:1px solid rgba(255,160,0,0.15)}
-  #amTabs button{font:inherit;font-size:10px;letter-spacing:1px;color:var(--dim);background:transparent;border:1px solid var(--bdr);border-radius:4px;padding:2px 6px;cursor:pointer}
-  #amTabs button[aria-selected="true"]{color:#111;background:var(--amber);border-color:var(--amber)}
-  #amRows{overflow-y:auto;scrollbar-width:thin}
-  .amRow{display:flex;align-items:center;gap:7px;padding:3px 8px;cursor:pointer;font-size:11px}
-  .amRow:hover,.amRow:focus-visible{background:rgba(255,160,0,0.10);outline:none}
-  .amRow>i{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
-  .amRow .n{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
-  .amRow .n b{color:var(--hi);font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .amRow .n small{font-size:9.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .amRow .r{color:var(--dim);white-space:nowrap;font-size:10px}
-  .amEmpty{padding:10px;color:var(--dim)}
-  @media (max-width:640px){#amList{width:calc(100% - 230px);max-height:35%}}
-  @media (max-width:640px){#stats{width:200px}.maplibregl-ctrl-top-left{left:220px}.maplibregl-ctrl-bottom-left,.leaflet-bottom.leaflet-left{left:220px}
-    #top{flex-wrap:wrap;gap:8px}}
-  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:var(--dim);font-size:9px}
-  .maplibregl-ctrl-attrib a{color:var(--dim)}
+  .sw{width:11px;height:11px;border-radius:50%;flex:0 0 11px}
+  .sw.mk{width:14px;height:14px;flex:0 0 14px;box-shadow:0 0 0 1.2px #1a1a1a;font:bold 9px/14px ui-monospace,Menlo,monospace;text-align:center}
+  /* MAP CONTROLS: our filters (band, mode, radio, sources) and the clock */
+  .amSel{display:flex;flex-wrap:wrap;gap:4px}
+  .amClock{font:12px ui-monospace,Menlo,monospace;color:#93a3b4;margin-top:8px}
+  .amNote{color:#ffcf7a;font-size:11px;margin-top:6px}.amNote:empty{display:none}
+  .maplibregl-ctrl-attrib,.maplibregl-ctrl-attrib.maplibregl-compact{background:rgba(0,0,0,0.6);color:#9fb0c2;font-size:9px}
+  .maplibregl-ctrl-attrib a{color:#9fb0c2}
 ${ST}
-<div id="wrap">
-  <div id="top">
-    <span id="amTitle">AMATEUR MAP</span>
-    <span id="count">0</span><span style="color:var(--dim)" id="countWhat">stations</span>
-    <span id="layers" role="group" aria-label="Layers" hidden></span>
-    <span id="wins" role="group" aria-label="Time window" hidden></span>
-    <span id="rads" role="group" aria-label="Radio" hidden></span>
-    <span id="scope" role="group" aria-label="Sources" hidden></span>
-    <span id="scopeNote"></span>
-    <button type="button" id="fitBtn" title="Auto fit: every station shown and the receiver">FIT</button>
-    <label><input type="checkbox" id="tStats" checked>Stats</label>
-    <label><input type="checkbox" id="tSummary" checked>Summary</label>
-    <label><input type="checkbox" id="tLegend" checked>Legend</label>
-    <label><input type="checkbox" id="tList" checked>List</label>
-    <span class="sp"></span>
-    <span id="clock" style="color:var(--dim)"></span>
-  </div>
-  <div id="main">
-    <div id="m"></div>
-    <div id="empty"></div>
-    <div class="panel" id="stats"></div>
-    <div class="panel" id="legend"></div>
-    <div class="panel" id="summary"></div>
-    <div class="panel" id="amList"><div id="amTabs" role="tablist" aria-label="Lists"></div><div id="amRows"></div></div>
-  </div>
-</div>
+</head><body>
+<script>${CHROME_JS.replace(/<\/script/gi, '<\\/script')}${ES}
 <script>
 // ★★ MUTABLE, and everything that reads it lives in render(). The page used to be top-level
 //    procedural code over a const, which is exactly why it could never update.
@@ -20307,6 +20213,19 @@ function cleanStations(list) {
   return out;
 }
 function winSec() { return win === '1h' ? 3600 : win === '24h' ? 86400 : win === '7d' ? 8 * 86400 : win === '30d' ? 31 * 86400 : 0; }
+/* ★★★ b97 BAND and MODE (MAP CONTROLS): this viewer's own filter of the spots, remembered in this browser */
+const FILT_KEY = 'vibesdr.digiMapFilter';
+let bandOff = new Set(), modeOff = new Set(), FACETS = { bands: [], modes: [] };
+try { const f = JSON.parse(localStorage.getItem(FILT_KEY) || '{}') || {}; bandOff = new Set(Array.isArray(f.bandOff) ? f.bandOff : []); modeOff = new Set(Array.isArray(f.modeOff) ? f.modeOff : []); } catch (e) { /* private window */ }
+function filtSave() { try { localStorage.setItem(FILT_KEY, JSON.stringify({ bandOff: Array.from(bandOff), modeOff: Array.from(modeOff) })); } catch (e) { /* private window */ } }
+/** The bands and modes the window holds (before the filter), most heard first — the BAND and MODE chips. */
+function facetsOf(all) {
+  const b = new Map(), m = new Map();
+  for (const s of all) { const bk = s.band || '?', mk = s.fam || s.mode || '?'; b.set(bk, (b.get(bk) || 0) + 1); m.set(mk, (m.get(mk) || 0) + 1); }
+  const order = (mp) => Array.from(mp).sort((x, y) => y[1] - x[1] || String(x[0]).localeCompare(String(y[0])));
+  return { bands: order(b), modes: order(m) };
+}
+function filtOk(s) { return !bandOff.has(s.band || '?') && !modeOff.has(s.fam || s.mode || '?'); }
 /* ★ STORED + LIVE, each station once: the newer report wins the marker (its mode, band, SNR, time); a stored station
  *  keeps its count and its modes. Live spots are this page's own, all recent, and honour the window too. */
 function mergeSpots() {
@@ -20328,8 +20247,9 @@ function mergeSpots() {
     }
   }
   const all = Array.from(by.values());
-  unplaced = all.filter((s) => s.lat == null || s.lon == null).length;
-  spots = all.filter((s) => s.lat != null && s.lon != null);
+  FACETS = facetsOf(all);   // ★★★ b97 BAND and MODE in MAP CONTROLS: a view filter, this viewer's own
+  unplaced = all.filter((s) => (s.lat == null || s.lon == null) && filtOk(s)).length;
+  spots = all.filter((s) => s.lat != null && s.lon != null && filtOk(s));
   for (const s of spots) { const q = placeIn(s); s.plat = q[0]; s.plon = q[1]; }
 }
 /* ★★ SPREAD ACROSS THE SQUARE, NOT STACKED ON ITS CENTRE (Stuart 2026-11-22: "our map seems rather too neat and
@@ -20421,12 +20341,18 @@ function schedulePoll() {
   clearTimeout(pollT);
   pollT = setTimeout(() => { if (document.visibilityState === 'visible') fetchStations(false).then(schedulePoll); else schedulePoll(); }, 15000);
 }
-/* ★ THE CHROME: a layer key only for a layer that has something (or that the map was opened on — never a dead key; one
- *  layer alone draws no keys), and the time window only where this server keeps stations. */
+/* ★★★ b97 THE CHROME IS THE MAP CARD SYSTEM (window.VibeMapChrome — mapChrome.ts, docs/v12/MAP-CONTROL-CARDS.md):
+ *   LAYERS        SPOTS · APRS · MESH · BEACONS (and a caller's overlay), each with its count; LIVE on what this radio decodes
+ *   MAP CONTROLS  TIME (1 H … ALL, THIS SESSION), then ours: SOURCES (other radios), RADIO, BAND, MODE, the clock; AUTO / FIT;
+ *                 the KEY
+ *   LIST          the stations, in tabs (SPOTS · APRS · MESH · BEACONS), latest or nearest first
+ *   STATS         the summary, each mode's newest and furthest, the furthest per band, range and bearing, countries, totals
+ *   RATE          stations a minute THIS radio decodes, by mode; the others (background decoding, other radios) in its card
+ *  A layer key only for a layer that has something (or that the map was opened on — never a dead key); the time window only
+ *  where this server keeps stations. ✕ closes this window. No TUNE, no CHAT, no waterfall: nothing here moves the radio. */
+let MC = null;
 function paintChrome() {
-  const lay = document.getElementById('layers');
-  // ★★ beta96 stage 7: a key for each layer with something in the window (or live, or opened on) — the LIVE one first,
-  //   with its red dot (emphasised, never the only one shown)
+  if (!MC) return;
   let have = [];
   const n = amCounts();
   if (n.spots || srvOk || liveLayer === 'spots' || openedOn === 'spots') have.push(['spots', 'SPOTS']);
@@ -20435,57 +20361,170 @@ function paintChrome() {
   if (n.beacons || liveLayer === 'beacons' || openedOn === 'beacons') have.push(['beacons', 'BEACONS']);
   have = have.filter((h) => h[0] === liveLayer).concat(have.filter((h) => h[0] !== liveLayer));
   if (overlay) have.push(['overlay', overlay.label]);
-  lay.hidden = have.length < 2;
-  // ★★★ beta96 SHOW (Stuart 11-26): this viewer's own filter, labelled — a colour dot, the name, its count (never sent).
-  //     No TUNE here: nothing on this map moves the radio (a spot is a station somebody heard, not a frequency to go to).
-  lay.innerHTML = (have.length >= 2 ? '<span class="lbl" title="What this map shows you — your own view. Nothing here tunes the radio: a spot is a station heard, not a frequency to go to.">SHOW</span>' : '')
-    + have.map((h) => '<button type="button" data-layer="' + esc(h[0]) + '"' + (h[0] === liveLayer ? ' class="live" title="Live now — what this receiver is decoding"' : '')
-    + ' aria-pressed="' + (show[h[0]] ? 'true' : 'false') + '">' + (AM_DOT[h[0]] ? '<span class="dot" style="background:' + AM_DOT[h[0]] + '"></span>' : '') + esc(h[1])
-    + (h[0] === 'overlay' ? '' : '<span class="n">' + esc(n[h[0]] || 0) + '</span>') + '</button>').join('');
-  for (const b of lay.querySelectorAll('button')) b.onclick = () => {
-    const k = b.dataset.layer; show[k] = !show[k]; paintChrome(); render();
-  };
-  const ws = document.getElementById('wins');
-  ws.hidden = !(srvOk || aprs.length || mesh.length || beacons.length);   // ★ beta96 every layer follows the window
-  ws.innerHTML = WINDOWS.map((w) => '<button type="button" data-win="' + esc(w.id) + '" title="' + esc(w.words) + '" aria-pressed="' + (w.id === win && !sess ? 'true' : 'false') + '">' + esc(w.label) + '</button>').join('')
-    + (ON_RADIO ? '<button type="button" data-win="session" title="' + esc(SESSION_WORDS) + '" aria-pressed="' + (sess ? 'true' : 'false') + '">THIS SESSION</button>' : '');   // ★★★ beta96
-  for (const b of ws.querySelectorAll('button')) b.onclick = () => {
-    if (b.dataset.win === 'session') { if (sess) return; sess = true; mergeSpots(); paintChrome(); render(); fetchStations(true); return; }
-    if (b.dataset.win === win && !sess) return;
-    sess = false;
-    win = b.dataset.win;
-    try { if (window.opener) window.opener.postMessage({ type: 'vibesdr-digimap-window', window: win }, OPENER_ORIGIN); } catch (e) { /* the opener went */ }
-    paintChrome();
-    render();   // ★ beta96 APRS, MESH and BEACONS follow at once (they are this page's); the spots when the store answers
-    fetchStations(true);
-  };
-  // ★★★ beta96 OTHER RADIOS ON THIS SERVER — off: only this radio (the radio keys go: there is one radio to show)
-  const sc = document.getElementById('scope'), offered = othersOffered();
-  sc.hidden = !offered;
-  sc.innerHTML = offered ? '<button type="button" id="othersBtn" title="' + esc(OTHERS_WORDS) + '" aria-label="' + esc(OTHERS_WORDS) + '" aria-pressed="' + (others ? 'true' : 'false') + '">' + esc(OTHERS_LABEL) + '</button>' : '';
-  const ob = document.getElementById('othersBtn');
-  if (ob) ob.onclick = () => {
-    others = !others;
-    try { if (others) localStorage.removeItem(OTHERS_KEY); else localStorage.setItem(OTHERS_KEY, '0'); } catch (e) { /* private window */ }
-    if (!others) radioPick = '';
-    mergeSpots(); paintChrome(); render();
-  };
-  const notes = [];
-  if (offered && !others) notes.push('Only this radio’s own decodes');
-  if (sess) notes.push('Only what was first heard since ' + new Date(t0 * 1000).toISOString().slice(11, 16) + ' UTC (this session)');
-  document.getElementById('scopeNote').textContent = notes.join(' · ');
-  const rs = document.getElementById('rads');
-  rs.hidden = !srvOk || !show.spots || !radios || (offered && !others);
-  rs.innerHTML = !radios ? '' : ['<button type="button" data-radio="" title="Every radio on this server" aria-pressed="' + (radioPick ? 'false' : 'true') + '">ALL RADIOS</button>']
-    .concat(radios.map((r) => '<button type="button" data-radio="' + esc(r.id) + '" title="Only the stations ' + esc(r.name) + ' heard" aria-pressed="'
-      + (r.id === radioPick ? 'true' : 'false') + '">' + esc(r.name) + (r.n != null ? ' · ' + esc(r.n) : '') + '</button>')).join('');
-  for (const b of rs.querySelectorAll('button')) b.onclick = () => {
-    if ((b.dataset.radio || '') === radioPick) return;
-    radioPick = b.dataset.radio || '';
-    mergeSpots(); paintChrome(); render();
-  };
+  const WORDS = { spots: 'Digital spots: stations heard with a locator (FT8, FT4, WSPR, JS8 …)', aprs: 'APRS stations with a position', mesh: 'MeshCore and Meshtastic nodes', beacons: 'NCDXF beacons heard' };
+  // ★★★ beta96 SHOW (Stuart 11-26): this viewer's own filter — nothing here tunes the radio (a spot is a station heard)
+  // ★ one layer alone (the spots) draws no LAYERS chip — never a dead key (AGENTS.md)
+  const many = have.length >= 2 || !!(have[0] && have[0][0] !== 'spots');
+  if (many !== paintChrome.many) { paintChrome.many = many; MC.chips({ layers: many }); }
+  MC.layers(many ? have.map((h) => ({ id: h[0], label: h[1], words: WORDS[h[0]] || h[1], live: h[0] === liveLayer,
+    n: h[0] === 'overlay' ? undefined : (n[h[0]] || 0), colour: h[0] === 'overlay' ? overlay.colour : AM_DOT[h[0]], glyph: h[0] === 'beacons' ? 'beacon' : 'dot' })) : [],
+    Object.fromEntries(have.map((h) => [h[0], !!show[h[0]]])), (id, on) => { show[id] = on; paintChrome(); render(); });
+  // ★ TIME (MAP CONTROLS): the store's windows, and THIS SESSION on a map over a radio (beta96) — every layer follows it
+  const wOn = srvOk || aprs.length || mesh.length || beacons.length;
+  MC.ranges(wOn ? WINDOWS.map((w) => ({ id: w.id, label: w.label, words: w.words })).concat(ON_RADIO ? [{ id: 'session', label: 'THIS SESSION', words: SESSION_WORDS }] : []) : [],
+    sess ? 'session' : win, pickWindow, 'Show what was heard in…');
+  ctlSync();
 }
-
+function pickWindow(id) {
+  if (id === 'session') { if (sess) return; sess = true; mergeSpots(); paintChrome(); render(); fetchStations(true); return; }
+  if (id === win && !sess) return;
+  sess = false;
+  win = id;
+  try { if (window.opener) window.opener.postMessage({ type: 'vibesdr-digimap-window', window: win }, OPENER_ORIGIN); } catch (e) { /* the opener went */ }
+  paintChrome();
+  render();   // ★ beta96 APRS, MESH and BEACONS follow at once (they are this page's); the spots when the store answers
+  fetchStations(true);
+}
+/** Our section of MAP CONTROLS: SOURCES (other radios on this server), RADIO, BAND, MODE (the spots' own filters), the clock. */
+let ctlSig = '';
+function ctlSync() {
+  const host = MC.controls();
+  const offered = othersOffered();
+  const rOn = srvOk && show.spots && !!radios && !(offered && !others);
+  const sig = JSON.stringify([offered, others, rOn && radios, radioPick, FACETS.bands.map((x) => x[0]), FACETS.modes.map((x) => x[0]), Array.from(bandOff), Array.from(modeOff), sess]);
+  if (sig !== ctlSig) {
+    ctlSig = sig;
+    const chip = (attr, id, label, on, title) => '<button type="button" class="btn chip" ' + attr + '="' + esc(id) + '" aria-pressed="' + (on ? 'true' : 'false') + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(label) + '<span class="n"></span></button>';
+    const notes = [];
+    if (offered && !others) notes.push('Only this radio’s own decodes');
+    if (sess) notes.push('Only what was first heard since ' + new Date(t0 * 1000).toISOString().slice(11, 16) + ' UTC (this session)');
+    host.innerHTML = (offered ? '<div class="sh">SOURCES</div><div class="amSel" data-navrow>' + chip('data-others', '1', OTHERS_LABEL, others, OTHERS_WORDS) + '</div>' : '')
+      + (rOn ? '<div class="sh" style="margin-top:8px">RADIO</div><div class="amSel" data-navrow role="group" aria-label="Radio">' + chip('data-radio', '', 'ALL RADIOS', !radioPick, 'Every radio on this server')
+        + radios.map((r) => chip('data-radio', r.id, r.name + (r.n != null ? ' · ' + r.n : ''), r.id === radioPick, 'Only the stations ' + r.name + ' heard')).join('') + '</div>' : '')
+      + (FACETS.bands.length > 1 || bandOff.size ? '<div class="sh" style="margin-top:8px">BAND</div><div class="amSel" data-navrow role="group" aria-label="Bands">'
+        + FACETS.bands.map((x) => chip('data-band', x[0], x[0], !bandOff.has(x[0]), x[1] + ' station' + (x[1] === 1 ? '' : 's') + ' on ' + x[0])).join('') + '</div>' : '')
+      + (FACETS.modes.length > 1 || modeOff.size ? '<div class="sh" style="margin-top:8px">MODE</div><div class="amSel" data-navrow role="group" aria-label="Modes">'
+        + FACETS.modes.map((x) => chip('data-mode', x[0], x[0], !modeOff.has(x[0]), x[1] + ' station' + (x[1] === 1 ? '' : 's') + ' in ' + x[0])).join('') + '</div>' : '')
+      + '<div class="amNote">' + esc(notes.join(' · ')) + '</div><div class="amClock" id="amClock"></div>';
+    tick();
+  }
+  const bn = new Map(FACETS.bands), mn = new Map(FACETS.modes);
+  for (const b of host.querySelectorAll('[data-band] .n')) { const v = String(bn.get(b.parentElement.dataset.band) || 0); if (b.textContent !== v) b.textContent = v; }
+  for (const b of host.querySelectorAll('[data-mode] .n')) { const v = String(mn.get(b.parentElement.dataset.mode) || 0); if (b.textContent !== v) b.textContent = v; }
+}
+function ctlWire() {
+  MC.controls().addEventListener('click', (e) => {
+    const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.others) {
+      others = !others;
+      try { if (others) localStorage.removeItem(OTHERS_KEY); else localStorage.setItem(OTHERS_KEY, '0'); } catch (e2) { /* private window */ }
+      if (!others) radioPick = '';
+    } else if (t.dataset.radio !== undefined) { if ((t.dataset.radio || '') === radioPick) return; radioPick = t.dataset.radio || ''; }
+    else if (t.dataset.band !== undefined) { const b = t.dataset.band; if (bandOff.has(b)) bandOff.delete(b); else bandOff.add(b); filtSave(); refitWanted = true; }
+    else if (t.dataset.mode !== undefined) { const m = t.dataset.mode; if (modeOff.has(m)) modeOff.delete(m); else modeOff.add(m); filtSave(); refitWanted = true; }
+    else return;
+    mergeSpots(); paintChrome(); render();
+  });
+}
+/* ── THE LIST: a tab per layer with something in the window (and the live one); latest or nearest first; 300 rows a tab ── */
+let listSort = 'latest';
+function listSync() {
+  const n = amCounts();
+  const tabs = ['spots', 'aprs', 'mesh', 'beacons'].filter((t) => n[t] > 0 || t === liveLayer || t === openedOn);
+  const tab = tabs.indexOf(tabPick) >= 0 ? tabPick : tabs.indexOf(liveLayer) >= 0 ? liveLayer : tabs.indexOf(openedOn) >= 0 ? openedOn : tabs[0] || 'spots';
+  const LBL = { spots: 'SPOTS', aprs: 'APRS', mesh: 'MESH', beacons: 'BEACONS' };
+  MC.listTabs(tabs.length > 1 ? tabs.map((t) => ({ id: t, label: LBL[t], n: n[t] })) : [], tab, (id) => { tabPick = id; listSync(); });
+  const nowMs = srvNow ? srvNow * 1000 : Date.now();
+  const near = listSort === 'nearest';
+  const by = (a, b, ka, kb) => (near ? ((ka == null ? 1e9 : ka) - (kb == null ? 1e9 : kb)) : 0);
+  const kmOf = (x) => (x.km != null ? x.km : null);
+  let rows = [];
+  if (tab === 'spots') rows = spots.slice().sort((a, b) => by(a, b, kmOf(a), kmOf(b)) || b.timestamp - a.timestamp).slice(0, 300).map((s) => ({ key: s.callsign, colour: s.colour, name: s.callsign,
+      second: [s.mode, s.band, s.country, s.stored ? amSrcWords(s.src) : 'Heard by this page’s decoder'].filter(Boolean).join(' · '), pill: [s.km != null ? s.km + ' km' : '', s.snr != null ? (s.snr > 0 ? '+' : '') + s.snr + ' dB' : ''], age: amAgo((nowMs - s.timestamp) / 1000) }));
+  else if (tab === 'aprs') rows = aprsIn().slice().sort((a, b) => by(a, b, a.km, b.km) || a.age - b.age).slice(0, 300).map((a) => ({ key: a.key, colour: '#88CCEE', name: a.call,
+      second: [a.symName || 'APRS', a.comment].filter(Boolean).join(' · '), pill: [a.km != null ? a.km + ' km' : ''], age: amAgo(a.age) }));
+  else if (tab === 'mesh') rows = meshIn().slice().sort((a, b) => by(a, b, parseFloat(a.dist) || null, parseFloat(b.dist) || null) || a.age - b.age).slice(0, 300).map((x) => ({ key: x.key, colour: AM_MESH_COL[x.net] || '#67ea94', name: x.name,
+      second: [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' · '), pill: [x.dist || ''], age: amAgo(x.age) }));
+  else rows = beaconsIn().slice().sort((a, b) => a.age - b.age).map((x) => ({ key: x.key, colour: '#d2a8ff', name: x.call, second: x.where + ' · ' + x.bands.join(' '), age: amAgo(x.age) }));
+  const html = rows.map((r) => VibeMapChrome.mapRowHtml(r)).join('') || '<div class="trkRow" style="cursor:default"><span class="id"><small>' + esc(tab === 'mesh' ? 'No mesh node with a position in this window — ISM mode hears MeshCore and Meshtastic.'
+    : tab === 'beacons' ? 'No NCDXF beacon heard in this window — the NCDXF decoder tracks them.' : tab === 'aprs' ? 'No APRS station with a position in this window.' : 'No station with a locator in this window.') + '</small></span></div>';
+  const shownN = (show.spots ? n.spots : 0) + (show.aprs ? n.aprs : 0) + (show.mesh ? n.mesh : 0) + (show.beacons ? n.beacons : 0);
+  MC.list({ items: [], rowsHtml: html, count: rows.length, status: shownN + ' station' + (shownN === 1 ? '' : 's') + ' on the map' + (unplaced ? ' · ' + unplaced + ' heard without a locator' : '')
+    + (srvOk ? ' · ' + ((WINDOWS.find((w) => w.id === win) || { words: '' }).words) : ''), rx: me });
+  MC.listSort(tab === 'beacons' ? null : listSort, (s2) => { listSort = s2; listSync(); }, 'stations');
+}
+function rowPick(key) { focusKey = key || ''; MC.fitPause(); focusOnce(); }
+/* ── STATS (digiMapStats.ts digiStats — the app's same numbers), as the card system's tabs of rows ── */
+function statsSync(st, aw, ak) {
+  const km = (v) => Math.round(v).toLocaleString('en-GB') + ' km';
+  const who = (x) => [x.grid, x.country, x.band, x.mode].filter(Boolean).join(' · ');
+  const row = (label, value, name, key, x) => ({ key: key || '', label, value: String(value), name: name || '', lat: x && x.lat, lon: x && x.lon });
+  const secs = [];
+  const sum = [];
+  if (st.latest) sum.push(row('LATEST', st.latest.call, who(st.latest), st.latest.call, st.latest));
+  if (st.farthest) sum.push(row('FURTHEST', km(st.farthest.km), st.farthest.call + ' · ' + who(st.farthest), st.farthest.call, st.farthest));
+  if (st.closest) sum.push(row('CLOSEST', km(st.closest.km), st.closest.call + ' · ' + who(st.closest), st.closest.call, st.closest));
+  if (st.rarest) sum.push(row('RAREST', st.rarest[0], st.rarest[1] + ' station' + (st.rarest[1] === 1 ? '' : 's')));
+  sum.push(row('ON THE MAP', st.n, 'transmitters with a locator · ' + st.nCountries + ' countries · ' + st.nBands + ' bands'));
+  if (spotsSent > 0) sum.push(row('SENT', spotsSent.toLocaleString('en-GB'), 'spots to PSK Reporter' + (radioPick ? ' (every radio on this server)' : '')));
+  if (unplaced) sum.push(row('NO LOCATOR', unplaced, 'heard, not drawn: nothing to place them by'));
+  if (srvOk && decodesToday >= 0) sum.push(row('TODAY', decodesToday.toLocaleString('en-GB'), 'decodes (UTC)'));
+  if (srvOk && falseToday > 0) sum.push(row('FALSE', falseToday, 'decodes set aside today: no country holds the call'));
+  if (srvOk && notKeptToday > 0) sum.push(row('NOT KEPT', notKeptToday, 'today: the day’s list was full'));
+  if (srvOk && srvTrunc && srvTotal > stored.size) sum.push(row('DRAWN', stored.size + ' / ' + srvTotal, 'the newest in this window'));
+  secs.push({ mode: 'SUMMARY', rows: sum });
+  // ★ each MODE its newest and its furthest (Stuart's spec: "furthest spot per band/mode, newest")
+  const fams = Array.from(new Set(spots.map((s) => s.fam || s.mode))).sort((a, b) => (st.modeN[b] || 0) - (st.modeN[a] || 0));
+  for (const f of fams.slice(0, 8)) {
+    const its = spots.filter((s) => (s.fam || s.mode) === f);
+    const nw = its.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
+    const far = its.filter((s) => s.km != null).reduce((a, b) => (!a || b.km > a.km ? b : a), null);
+    secs.push({ mode: f, rows: [row('NEWEST', nw.callsign, who(nw), nw.callsign, nw), far ? row('FURTHEST', km(far.km), far.callsign + ' · ' + who(far), far.callsign, far) : null,
+      row('STATIONS', its.length, '')].filter(Boolean) });
+  }
+  const bands = Array.from(new Set(spots.map((s) => s.band).filter(Boolean)));
+  const fb = bands.map((b) => spots.filter((s) => s.band === b && s.km != null).reduce((a, x) => (!a || x.km > a.km ? x : a), null)).filter(Boolean).sort((a, b) => b.km - a.km);
+  if (fb.length) secs.push({ mode: 'BANDS', rows: fb.map((s) => row(s.band, km(s.km), s.callsign + ' · ' + [s.mode, s.country].filter(Boolean).join(' · '), s.callsign, s)) });
+  const rg = (st.dist || []).map((d) => row(d.lo + '–' + d.hi + ' km', d.n + ' (' + d.pct + '%)', '')).concat((st.bearing || []).map((b) => row('BEARING ' + b.d, b.n + ' (' + b.pct + '%)', '')));
+  if (rg.length) secs.push({ mode: 'RANGE', rows: rg });
+  if (st.countries.length) secs.push({ mode: 'COUNTRIES', rows: st.countries.slice(0, 12).map((c) => row(c[0], c[1], '')) });
+  if (show.aprs && aw.length) secs.push({ mode: 'APRS', rows: [row('STATIONS', aw.length, ''), aw[0] ? row('NEWEST', aw[0].call, aw[0].symName || '', aw[0].key, aw[0]) : null,
+    ak.length ? row('FURTHEST', km(ak[0].km), ak[0].call, ak[0].key, ak[0]) : null].filter(Boolean) });
+  MC.stats(secs.filter((x) => x.rows.length), (key) => { if (key) rowPick(key); });
+}
+/* ── RATE: what THIS radio decodes a minute (this page's own live spots, the last 5 min), by mode; the others — background
+ *  decoding and the server's other radios (the store's stations last heard in the last 5 min) — in its card. Nothing live:
+ *  no chip. ── */
+function rateSync() {
+  const nowMs = Date.now(), W = 300000;
+  const mine = new Map();
+  for (const s of live) if (s.timestamp && nowMs - s.timestamp <= W) { const f = s.fam || s.mode || '?'; mine.set(f, (mine.get(f) || 0) + 1); }
+  const rows = Array.from(mine).sort((a, b) => b[1] - a[1]).map(([f, c]) => ({ name: f, rate: Math.max(1, Math.round(c / 5)) + '/min', live: true, mine: true, words: f + ': stations this radio decoded a minute (the last 5 minutes)' }));
+  const nowS = srvNow || nowMs / 1000, oth = new Map();
+  const liveCalls = new Set(live.map((s) => s.callsign));
+  for (const s of stored.values()) {
+    if (!s.timestamp || nowS * 1000 - s.timestamp > W || liveCalls.has(s.callsign)) continue;
+    const ids = s.radios && s.radios.length ? s.radios.filter((r) => r !== MINE) : [];
+    const name = ids.length ? ((radios || []).find((r) => r.id === ids[0]) || { name: ids[0] }).name : (s.src & 1 ? 'Background decoding' : 'This server');
+    oth.set(name, (oth.get(name) || 0) + 1);
+  }
+  for (const [name, c] of Array.from(oth).sort((a, b) => b[1] - a[1])) rows.push({ name, rate: Math.max(1, Math.round(c / 5)) + '/min', live: true, words: name + ': stations heard a minute (the last 5 minutes)' });
+  MC.rate(rows);
+}
+/** ★ the card system, once: the map is made in its holder (makeMap) when it shows. */
+function mountChrome() {
+  MC = VibeMapChrome.mountMapChrome({
+    title: 'AMATEUR MAP', exitLabel: 'Close the map', listTitle: 'STATIONS', profile: 'spots',
+    onExit: () => { window.close(); },
+    // the stations are drawn by this page's own layers (and their popups) — the chrome draws none
+    icon: () => ({ html: '', w: 0, h: 0 }), label: () => '', card: () => '',
+    hostMap: makeMap,
+  });
+  MC.chips({ layers: false, stats: true });
+  MC.onRow(rowPick);
+  ctlWire();
+  MC.show(me);
+}
 /* ★★★ preferCanvas IS AN AUDIO FIX, WHICH IS NOT WHERE ANYONE WOULD LOOK FOR ONE. This map is a
  *     SAME-ORIGIN window.open, so it shares its main thread with the page that is playing the
  *     radio — the audio WebSocket is received and Opus is decoded on that same event loop. Leaflet
@@ -20542,7 +20581,7 @@ let L = null, map = null, spotLayer = null, aprsLayer = null, overlayLayer = nul
  *     calls, so the spots, the receiver and the range rings below are drawn by one piece of code
  *     whichever map is underneath. The spots are GPU circles; the greyline is on (Stuart wants it on
  *     digital spots too — HF propagates differently either side of it). */
-function bootGPU() {
+function bootGPU(holder) {
   if (!GL || !window.VibeMapGL || !window.VibeMapGLCompat) return false;
   try {
     const load = (path, kind) => fetch(path).then((r) => {
@@ -20550,8 +20589,8 @@ function bootGPU() {
       return kind === 'text' ? r.text() : r.arrayBuffer();
     }).catch((e) => { console.error('GPU map: ' + path + ' could not be fetched', e); return null; });
     // ★ Created AT the view it opens on (MapLibre zooms are one below Leaflet's).
-    vm = VibeMapGL.createNow(document.getElementById('m'), {
-      style: GL.style, load, base: GL.base, rangeBase: GL.base, detail: GL.detail, profile: 'spots',
+    vm = VibeMapGL.createNow(holder, {
+      style: GL.style, load, base: GL.base, rangeBase: GL.base, detail: GL.detail, profile: 'spots', scale: false,   // ★ b97 the SCALE chip draws ours
       center: me ? [me.lon, me.lat] : [5, 25], zoom: (me ? 4 : 3) - 1,
     });
     if (!vm) return false;                         // no WebGL 2 after all
@@ -20569,9 +20608,10 @@ function bootGPU() {
 }
 
 /* The Leaflet map — Leaflet from the receiver's own /vs/ (SRI-checked), our vector basemap from /mapdata/v1/. */
-function bootLeaflet() {
+function bootLeaflet(holder, done) {
   if (!LEAFLET) {
-    document.getElementById('empty').textContent = 'The map could not be loaded — the statistics still update.';
+    MC.view.note('The map could not be loaded — the list and the statistics still update.');
+    done(null);
     return;
   }
   const css = document.createElement('link');
@@ -20582,20 +20622,22 @@ function bootLeaflet() {
   js.onload = () => {
     L = window.L;
     ensureVibeMap();
-    setupMap();
-    window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'spots' });
+    setupMap(holder);
+    window.VibeMap.attach(map, { dataBase: GL_DATA_BASE, profile: 'spots', scale: false });
+    done(hostOf());
     render();
   };
   js.onerror = () => {
     console.error('Spots map: Leaflet could not be loaded from this server, and the GPU map is not available here');
-    document.getElementById('empty').textContent = 'The map could not be loaded — the statistics still update.';
+    MC.view.note('The map could not be loaded — the list and the statistics still update.');
+    done(null);
   };
   document.head.appendChild(js);
 }
 
 var RX_HOUSE = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
-function setupMap() {
-  map = L.map('m', { worldCopyJump: true, preferCanvas: true });
+function setupMap(holder) {
+  map = L.map(holder, { worldCopyJump: true, preferCanvas: true });
   if (!vm) map.setView(me ? [me.lat, me.lon] : [25, 5], me ? 4 : 3);
   spotLayer = L.layerGroup().addTo(map);
   // ★ beta90 the other layers, each its own group so a toggle or a redraw touches only it
@@ -20703,18 +20745,23 @@ function aprsLabels() { try { document.body.classList.toggle('aprsLb', map.getZo
 ${DIGI_FIT_JS}
 /* ★★★ beta92 …and AUTO, as the ADS-B map's (src/utils/mapAutoFit.ts, the app's same code): it glides to every station
  *  shown AND the receiver (Stuart 11-23: "include the receiver"), keeps doing so as stations come and go, and pauses when
- *  the map is moved by hand; the FIT key is its AUTO key (on, striped when paused, off). Never past DIGI_FIT_MAX_ZOOM. */
-${MAP_AUTOFIT_JS}
-let digiFit = null, refitWanted = false;
-function digiFitMake() {
-  if (digiFit || !map || !window.VibeAutoFit) return digiFit;
-  try {
-    digiFit = window.VibeAutoFit.attach(map, {
-      points: () => digiShownPoints(show.spots ? spots : [], () => true, aprsIn(), show.aprs)
-        .concat(show.mesh ? meshIn().map((x) => [x.lat, x.lon]) : []).concat(show.beacons ? beaconsIn().map((x) => [x.lat, x.lon]) : []),
-      receiver: () => me, button: document.getElementById('fitBtn'), what: 'station shown', maxZoom: ${DIGI_FIT_MAX_ZOOM} });
-  } catch (e) { console.error('auto fit', e); digiFit = null; }
-  return digiFit;
+ *  the map is moved by hand. ★★★ b97 it is the CARD SYSTEM's now (MAP CONTROLS: AUTO and FIT) — the same auto fit, attached
+ *  by mountMapChrome to this window's map (hostMap) with these points; never past DIGI_FIT_MAX_ZOOM. */
+let refitWanted = false;
+function digiFitPoints() {
+  return digiShownPoints(show.spots ? spots : [], () => true, aprsIn(), show.aprs)
+    .concat(show.mesh ? meshIn().map((x) => [x.lat, x.lon]) : []).concat(show.beacons ? beaconsIn().map((x) => [x.lat, x.lon]) : []);
+}
+/** The map, made in the card system's holder: the GPU map, else Leaflet. What the chrome needs of it (hostMap's MapHost). */
+function hostOf() {
+  const scaleMap = vm ? { getCenter: () => vm.map.getCenter(), getZoom: () => vm.map.getZoom() + 1,
+    on: (evs, f) => { for (const e of String(evs).split(' ')) if (e) vm.map.on(e === 'zoomend' ? 'zoom' : e === 'moveend' ? 'move' : e, f); } } : map;
+  return { map: scaleMap, fitMap: map, gl: vm, points: digiFitPoints, receiver: () => me, maxZoom: ${DIGI_FIT_MAX_ZOOM}, what: 'station shown',
+           destroy: () => { try { if (vm) vm.destroy(); else if (map) map.remove(); } catch (e) { /* tidy */ } } };
+}
+function makeMap(holder) {
+  if (bootGPU(holder)) { setupMap(holder); setTimeout(render, 0); return hostOf(); }
+  return new Promise((done) => bootLeaflet(holder, done));
 }
 /* ★ OPENED ON SOMETHING (an APRS station row, a call): centred on it, once it is there. */
 let focusKey = FOCUS0;
@@ -20727,7 +20774,7 @@ function focusOnce() {
   if (!p) return;
   focusKey = '';
   fitted = true;
-  if (digiFit) digiFit.pause();   // ★ a station chosen is where the person wants the map (ADS-B's focus)
+  MC.fitPause();   // ★ a station chosen is where the person wants the map (ADS-B's focus) — FIT brings AUTO back
   map.setView(s ? [s.plat, s.plon] : [p.lat, p.lon], 9);   // ★ a station: where its marker is drawn
 }
 // ★★★ beta92 NO LONGER "FIT ONCE": re-fitting on every update used to yank the map from under the user every FT8 cycle,
@@ -20736,10 +20783,9 @@ function focusOnce() {
 //     move by hand pauses it until FIT. (fitted only gates the focus now.)
 let fitted = false;
 function fitOnce() {
-  const af = digiFitMake();
   focusOnce();
   // ★ the auto fit does the framing (its first view, then its glides); a layer opened again = FIT
-  if (af) { if (refitWanted) { refitWanted = false; af.fitNow(); } else af.poke(); }
+  if (refitWanted) { refitWanted = false; MC.fitNow(); } else MC.fitPoke();
 }
 
 // ── Stats ────────────────────────────────────────────────────────────────────
@@ -20779,46 +20825,13 @@ function cleanBeacons(list) {
     bands: Array.isArray(x.bands) ? x.bands.slice(0, 5).map((b) => okStr(b, /[^0-9a-z ]/g, 8)) : [], best: Math.max(0, Math.min(4, Math.round(okNum(x.best)))) }));
 }
 mesh = cleanMesh(mesh); beacons = cleanBeacons(beacons);
-/* ★★ THE LIST, IN TABS (SPOTS · APRS · MESH · BEACONS): a tab for each layer with something in the window (and the live
- *  one), the viewer's pick kept, else the live layer's, else the one opened on. Rows capped (300 — the 1 GB phones' rule);
- *  a row centres its station. */
-function amTabsNow() {
-  const n = amCounts();
-  return ['spots', 'aprs', 'mesh', 'beacons'].filter((t) => n[t] > 0 || t === liveLayer || t === openedOn);
-}
-function amList() {
-  const host = document.getElementById('amRows'), th = document.getElementById('amTabs');
-  if (!host || !th) return;
-  const tabs = amTabsNow(), n = amCounts();
-  const tab = tabs.indexOf(tabPick) >= 0 ? tabPick : tabs.indexOf(liveLayer) >= 0 ? liveLayer : tabs.indexOf(openedOn) >= 0 ? openedOn : tabs[0] || 'spots';
-  const LBL = { spots: 'SPOTS', aprs: 'APRS', mesh: 'MESH', beacons: 'BEACONS' };
-  th.innerHTML = tabs.map((t) => '<button type="button" role="tab" data-tab="' + t + '" aria-selected="' + (t === tab) + '">' + LBL[t] + ' ' + n[t] + '</button>').join('');
-  for (const b of th.querySelectorAll('button')) b.onclick = () => { tabPick = b.dataset.tab; amList(); };
-  const nowMs = srvNow ? srvNow * 1000 : Date.now();
-  let rows = '';
-  if (tab === 'spots') rows = spots.slice().sort((a, b) => b.timestamp - a.timestamp).slice(0, 300).map((s) => amRow(s.callsign, s.colour, s.callsign,
-      [s.mode, s.band, s.country, s.stored ? amSrcWords(s.src) : 'Heard by this page\u2019s decoder'].filter(Boolean).join(' \u00b7 '),
-      (s.km != null ? s.km + ' km \u00b7 ' : '') + amAgo((nowMs - s.timestamp) / 1000))).join('');
-  else if (tab === 'aprs') rows = aprsIn().slice(0, 300).map((a) => amRow(a.key, '#88CCEE', a.call, [a.symName || 'APRS', a.comment].filter(Boolean).join(' \u00b7 '),
-      (a.km != null ? a.km + ' km \u00b7 ' : '') + amAgo(a.age))).join('');
-  else if (tab === 'mesh') rows = meshIn().slice(0, 300).map((x) => amRow(x.key, AM_MESH_COL[x.net] || '#67ea94', x.name, [x.net, x.what, x.live ? 'heard now' : 'remembered'].filter(Boolean).join(' \u00b7 '), (x.dist ? x.dist + ' \u00b7 ' : '') + amAgo(x.age))).join('');
-  else rows = beaconsIn().map((x) => amRow(x.key, '#d2a8ff', x.call, x.where + ' \u00b7 ' + x.bands.join(' '), amAgo(x.age))).join('');
-  host.innerHTML = rows || '<div class="amEmpty">' + esc(tab === 'mesh' ? 'No mesh node with a position in this window — ISM mode hears MeshCore and Meshtastic.'
-    : tab === 'beacons' ? 'No NCDXF beacon heard in this window — the NCDXF decoder tracks them.' : tab === 'aprs' ? 'No APRS station with a position in this window.' : 'No station with a locator in this window.') + '</div>';
-  for (const r of host.querySelectorAll('.amRow')) {
-    const go = () => { focusKey = r.dataset.k || ''; if (digiFit) digiFit.pause(); focusOnce(); };
-    r.onclick = go; r.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } };
-  }
-}
 function render() {
 const nc = amCounts();
-for (const b of document.querySelectorAll('#layers [data-layer]')) { const e = b.querySelector('.n'); if (e && e.textContent !== String(nc[b.dataset.layer] || 0)) e.textContent = String(nc[b.dataset.layer] || 0); }   // ★★★ beta96 SHOW counts
 const shown = (show.spots ? nc.spots : 0) + (show.aprs ? nc.aprs : 0) + (show.mesh ? nc.mesh : 0) + (show.beacons ? nc.beacons : 0);
-document.getElementById('count').textContent = String(shown);
-document.getElementById('countWhat').textContent = shown === 1 ? 'station' : 'stations';
-document.getElementById('empty').textContent = shown ? ''
+const emptyWords = shown ? ''
   : show.aprs && !show.spots ? 'No APRS station with a position in ' + (WINDOWS.find((w) => w.id === win) || { words: 'this window' }).words + ' — leave the APRS decoder running.'
   : 'No stations with a locator in ' + (WINDOWS.find((w) => w.id === win) || { words: 'this window' }).words + (srvOk ? '' : ' yet') + ' — leave DIGITAL SPOTS running.';
+if (emptyWords !== render.empty) { render.empty = emptyWords; MC.view.note(emptyWords); }
 drawMarkers();
 fitOnce();
 const st = digiStats(statItems(), me);
@@ -20834,14 +20847,13 @@ const pan = digiStatsHtml(st, {
          unplaced: unplaced, decodesToday: decodesToday, falseToday: falseToday, notKeptToday: notKeptToday, spotsSent: spotsSent,
          radioOnly: !!radioPick },
 });
-document.getElementById('stats').innerHTML = pan.stats;
-document.getElementById('legend').innerHTML = pan.legend;
-document.getElementById('summary').innerHTML = pan.summary;
-amList();   // ★ beta96 stage 7 the tabs
-
+MC.legend(pan.legend);                           // ★★★ b97 the KEY: a fold in MAP CONTROLS
+statsSync(st, aw, ak);                           // ★★★ b97 STATS: the summary, per mode, per band, range, countries, totals
+listSync();                                      // ★★★ b97 the LIST drawer, in tabs
+rateSync();                                      // ★★★ b97 RATE: what THIS radio decodes a minute, the others in its card
 }
+mountChrome();                                   // ★★★ b97 the card system, and the map in its holder (makeMap)
 render();                                        // the statistics at once, map or no map
-if (bootGPU()) { setupMap(); render(); } else bootLeaflet();
 
 // ★★★ LIVE. The opener pushes a fresh point list whenever a spot arrives.
 // ★★★ ONLY FROM THE PAGE THAT OPENED THIS ONE, on its origin — any other window can post here too.
@@ -20892,15 +20904,10 @@ function tick() {
         + (Math.abs(TZ_OFF) % 60 ? ':' + String(Math.abs(TZ_OFF) % 60).padStart(2, '0') : ''));
     right = hhmmss + ' ' + label;
   }
-  document.getElementById('clock').textContent =
-    'UTC ' + d.toISOString().slice(11, 19) + ' · ' + right;
+  const ck = document.getElementById('amClock');
+  if (ck) ck.textContent = 'UTC ' + d.toISOString().slice(11, 19) + ' · ' + right;
 }
 tick(); setInterval(tick, 1000);
-const bind = (id, el) => {
-  document.getElementById(id).onchange = (e) =>
-    document.getElementById(el).classList.toggle('hide', !e.target.checked);
-};
-bind('tStats', 'stats'); bind('tSummary', 'summary'); bind('tLegend', 'legend'); bind('tList', 'amList');   // ★ beta96 stage 7
 ${ES}`;
 }
 

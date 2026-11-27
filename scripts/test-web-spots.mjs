@@ -341,20 +341,20 @@ try {
     const msend = (method, params = {}) => Promise.race([new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); }),
                                                          sleep(10000).then(() => ({}))]);
     const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
-    for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('#legend .lrow[data-mode]').length >= 11`)) break; await sleep(250); }
+    for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('.trkKey .lrow[data-mode]').length >= 11`)) break; await sleep(250); }
     const pts = JSON.parse(await mev(`JSON.stringify(spots.map(s => ({ m: s.mode, c: s.colour, l: s.letter })))`) || '[]');
     ok(pts.length >= 3 && pts.every((p) => styleOf(p.m) && p.c.toUpperCase() === styleOf(p.m).colour && p.l === styleOf(p.m).letter),
        `map #${round}: every marker is its MODE's colour and letter (${pts.map((p) => `${p.m}:${p.c}:${p.l}`).join(' ')})`);
     if (round === 1) {
-      const legend = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('#legend .lrow[data-mode]')].map(r => ({ m: r.dataset.mode, l: r.querySelector('.mk').textContent, bg: getComputedStyle(r.querySelector('.mk')).backgroundColor })))`) || '[]');
+      const legend = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('.trkKey .lrow[data-mode]')].map(r => ({ m: r.dataset.mode, l: r.querySelector('.mk').textContent, bg: getComputedStyle(r.querySelector('.mk')).backgroundColor })))`) || '[]');
       ok(legend.map((x) => x.m).join(' ') === LEGEND && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
-         `the legend lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
-      ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
+         `the KEY (MAP CONTROLS) lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
+      ok(await mev(`[...document.querySelectorAll('.trkCard2[data-card="stats"] .stTab')].map(b => b.textContent).includes('FT8')`), 'STATS: a tab per MODE (b97 the card system)');
       // ★★ beta90 THE DIGI MODES MAP: the server's station store answered (the window keys), one layer = no layer keys,
       //    the scale bar, and the store itself holds the stations this listener's Band run heard (origin live)
-      ok(await mev(`(() => { const w = document.getElementById('wins'); return !!w && !w.hidden && [...w.querySelectorAll('button')].map(b => b.textContent).join(' ') === '1H 24H 7D 30D ALL THIS SESSION'; })()`),
+      ok(await mev(`[...document.querySelectorAll('.trkCard2[data-card="map"] [data-rng]')].map(b => b.textContent).join(' ') === '1H 24H 7D 30D ALL THIS SESSION'`),
          'beta90: the time window keys (1H 24H 7D 30D ALL) — the server keeps stations — and beta96 THIS SESSION (a map on a radio)');
-      ok(await mev(`document.getElementById('layers').hidden === true`), 'beta90: one layer (no APRS here) draws no layer keys');
+      ok(await mev(`document.querySelector('.mDock[data-dock="layers"]').hidden === true`), 'beta90: one layer (no APRS here) draws no LAYERS chip');
       ok(/VibeSDR — Amateur Map/.test(await mev(`document.title`) || ''), 'beta90: titled Amateur Map (the DIGI MODES MAP grown, beta96 adcc50806)');
       const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
       ok(/km/.test(sc || ''), `beta90: a scale bar (${sc})`);
