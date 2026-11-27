@@ -1204,7 +1204,7 @@
      *  aircraft at the edge of range, whose positions come and go, waited one more fix to count). A datalink (sparse)
      *  position is never the first of two ADS-B fixes: it clears the pair. */
     function liveRangeFix(s, fix, sparse, posT) {
-      if (sparse) { s.rg = null; return false; }
+      if (sparse) { s.rg = null; return false; }   // ★ b96-2: and an off-site feed's position (raw.offsite) — see update()
       const prev = s.rg;
       s.rg = { lat: fix.lat, lon: fix.lon, t: posT };
       if (!rangeConsistent(prev, s.rg)) return false;
@@ -1964,7 +1964,10 @@
         }
         if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
         // ★ beta95 the outline grows live (b96-rangefeed: the position's own time, not the glide's clamped one)
-        if (liveRangeFix(s, fix, !!raw.sparse, t - Math.max(0, Math.min(3600, num(raw.seen_pos) || 0)) * 1000)) rangeGrew = true;
+        /* ★★ b96-2 "NOT AT THIS SITE" (Stuart 11-27): a position the server marked offsite (an off-site feed's only —
+         *  vibe_aircraft_share.h offsiteOnly) is drawn like any other but says nothing about this receiver's range: never
+         *  offered, and never the first of a pair (as a datalink fix). */
+        if (liveRangeFix(s, fix, !!raw.sparse || raw.offsite === true, t - Math.max(0, Math.min(3600, num(raw.seen_pos) || 0)) * 1000)) rangeGrew = true;
         if (!s.tr) s.tr = [];
         if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
         if (!s.disp) {

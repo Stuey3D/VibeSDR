@@ -106,6 +106,9 @@ export interface AvPlane {
   /** ★★★ beta96 (mapScope.ts) the radios on this server that heard it (aircraft.json "radios"; absent = unknown) and how
    *  long ago ANY of them first did (s, "first") — the maps' OTHER RADIOS switch and THIS SESSION. */
   radios?: string[]; first?: number;
+  /** ★★ b96-2 "NOT AT THIS SITE" (aircraft.json / the delta "offsite":1 — vibe_aircraft_share.h offsiteOnly): its position is
+   *  an off-site feed's only. Drawn like any other; never offered to the map's live RANGE outline. */
+  offsite?: true;
 }
 export interface AvStation { id: number; name: string; lat: number; lon: number; khz: number; age: number }
 /** ★ beta88 the server's ADS-B state (vibe_aircraft_share.h toJson). `live` null = an older server that cannot say. */
@@ -153,6 +156,7 @@ export function sharedSanitise(j: any): SharedAircraft | null {
       src, srcAge, age: Math.max(0, num(a.age) ?? 0), n: Math.max(0, num(a.n) ?? 0),
       info: avInfoOf(a),
       radios: Array.isArray(a.radios) ? radiosOf(a.radios) : undefined, first: num(a.first) != null ? Math.max(0, num(a.first) as number) : undefined,
+      ...(a.offsite === 1 && ok ? { offsite: true as const } : {}),   // ★★ b96-2 only the server's exact mark, only with a position
     });
   }
   const stations: AvStation[] = [];
@@ -208,6 +212,7 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
     if (!hit.from && s.from) { hit.from = s.from; hit.to = s.to; }
     if (s.lat != null && (hit.lat == null || (s.posAge ?? 1e9) < (hit.posAge ?? 1e9))) {
       hit.lat = s.lat; hit.lon = s.lon; hit.alt = s.alt; hit.trk = s.trk; hit.gs = s.gs; hit.ground = s.ground; hit.posSrc = s.posSrc; hit.posAge = s.posAge; hit.posTime = s.posTime;
+      if (s.offsite) hit.offsite = true; else delete hit.offsite;   // ★★ b96-2 the mark goes with the position it describes
     }
     if (s.icao && !hit.key.match(/^[0-9A-F]{6}$/)) hit.key = s.icao;
     hit.age = Math.min(hit.age, s.age);
@@ -329,6 +334,8 @@ export interface AvAdsbShape {
   op?: string; opName?: string; logo?: string; sil?: string; route?: AdsbRoute;
   alt_baro?: number | 'ground'; gs?: number; track?: number; seen_pos?: number; seen?: number;
   sparse?: boolean; rowsExtra?: [string, string][];
+  /** ★★ b96-2 an off-site feed's position only: the layer draws it, its live RANGE outline skips it (adsblayer.js) */
+  offsite?: true;
 }
 function stableHex(key: string): string {
   let h = 0x811c9dc5;
@@ -362,6 +369,7 @@ export function avPlaneAdsb(p: AvPlane): AvAdsbShape | null {
     alt_baro: p.ground ? 'ground' : p.alt, gs: p.gs, track: p.trk,
     // ★ a "last seen" ADS-B fix is old by construction: drawn stale, never as live
     seen_pos: p.lastSeen ? Math.max(AV_FADE_SEC + 1, p.posAge ?? 0) : p.posAge, seen: p.age, sparse, rowsExtra: rows,
+    ...(p.offsite ? { offsite: true as const } : {}),
   };
 }
 export function avPlaneItems(planes: AvPlane[], rx: LatLon | null, wrap: 'web' | 'app' = 'web'): TrackItem[] {
