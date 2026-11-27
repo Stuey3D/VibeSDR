@@ -6,7 +6,8 @@
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
          pillWords, padOrder, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
-import { wfModelChannels } from '../src/utils/mapWfModel';
+import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
+import { ndbSanitise } from '../src/services/ndb';
 import { fitDefault } from '../src/utils/mapCards';
 
 let pass = 0, fail = 0;
@@ -220,6 +221,22 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(fitGroups(items as never, 'sondes', 'ais', fitDefault).use === 'sondes' && fitGroups([{ key: 's:1', lat: 1, lon: 1 }] as never, 'sondes', 'ais', fitDefault).use === 'ships', 'a pick with nothing left → the default (the live mode\u2019s: ships)');
   ok(fitGroups([{ key: 'w:1', lat: 1, lon: 1 }] as never, '', '', fitDefault).use === '', 'only NAVTEX warnings: nothing framed (the map keeps where it is)');
   ok(fitMainOf('datalink') === 'datalink' && fitMainOf('vormap') === 'vor' && fitMainOf('') === '', 'the live mode → its layer');
+}
+
+// ── NDB in the drawer: the app's own report (ndbSanitise) straight into the shared model ──
+{
+  const rep = ndbSanitise({ type: 'ndb', centre: 400000, lo: 255000, hi: 526000, carriers: 2, identified: 1, beacons: [
+    { id: 1, hz: 338000, ident: 'BIA', active: true, lastId: 50, snr: 12 }, { id: 2, hz: 400500, ident: '', active: false, lastId: 0 }], log: [], copy: [] })!;
+  const seen = new Map<string, string>();
+  const m0 = wfModelNdb(rep, seen, true);
+  ok(m0.lo === 255000 && m0.hi === 526000 && m0.key === 'ndb400000', `the band the radio holds is the span (${m0.lo}–${m0.hi})`);
+  ok(m0.marks.length === 2 && m0.marks[0].label === 'BIA 338.0' && m0.marks[1].label === '', 'a marker per beacon; only a decoded ident is labelled');
+  ok(m0.stamps.length === 0, 'opening (primed): what was read before is not stamped');
+  const rep2 = ndbSanitise({ type: 'ndb', centre: 400000, lo: 255000, hi: 526000, carriers: 2, identified: 2, beacons: [
+    { id: 1, hz: 338000, ident: 'BIA', active: true, lastId: 50 }, { id: 2, hz: 400500, ident: 'LA', active: true, lastId: 60 }], log: [], copy: [] })!;
+  const m1 = wfModelNdb(rep2, seen, false);
+  ok(m1.stamps.length === 1 && m1.stamps[0].text === 'LA' && m1.stamps[0].hz === 400500, `a NEW decoded ident is stamped at its frequency (${JSON.stringify(m1.stamps)})`);
+  ok(wfModelNdb(rep2, seen, false).stamps.length === 0, 'the same reading again: not stamped twice');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

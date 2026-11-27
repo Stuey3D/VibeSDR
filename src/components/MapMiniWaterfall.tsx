@@ -55,6 +55,10 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
   const [tick, setTick] = useState(0);
   const modelRef = useRef(model); modelRef.current = model;
   const lastDraw = useRef(0);
+  /* ★ each model's stamps (a NEW decoded reading — mapWfModel only gives one once) queued as the model arrives, drained into
+   *  the history at the next row: never lost to a re-render between two rows, never stamped twice */
+  const pending = useRef<Array<{ key: string; hz: number; text: string }>>([]);
+  useEffect(() => { if (model?.stamps.length) { pending.current.push(...model.stamps.map((x) => ({ key: model.key, hz: x.hz, text: x.text }))); if (pending.current.length > 64) pending.current = pending.current.slice(-64); } }, [model]);
   const dims = mwfDims(width, screenW, screenH);
 
   // ── (re)size the ring: a rotation / maximise keeps the rows it can (columns resampled by restarting the ring) ──
@@ -89,7 +93,8 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
       lastDraw.current = now;
       const row = mwfCrop(f.bins, f.centreHz, f.spanHz, m.lo, m.hi, z.cols);
       pushRow(z, row);
-      for (const sp of m.stamps) { const x = mwfX(sp.hz, m.lo, m.hi); if (x != null) z.stamps.push({ seq: z.seq - 1, x, text: sp.text }); }
+      for (const sp of pending.current) { if (sp.key !== m.key) continue; const x = mwfX(sp.hz, m.lo, m.hi); if (x != null) z.stamps.push({ seq: z.seq - 1, x, text: sp.text }); }
+      pending.current = [];
       if (z.stamps.length > 200) z.stamps = z.stamps.slice(-200);
       setTick((t) => (t + 1) & 0xffff);
     };

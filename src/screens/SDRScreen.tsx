@@ -291,7 +291,7 @@ import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMini
 import type { MapCardsIn } from '../components/MapChrome';
 import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers } from '../utils/mapChrome';
 import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
-import { wfModelChannels, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
+import { wfModelChannels, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
 import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
@@ -16036,7 +16036,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (wfOffered) {
       const band = avOn && avReport ? avCap?.bands.find((b) => b.id === avReport.band) : undefined;
       wfModel = (band ? wfModelChannels(band) : null)
-        ?? (vmOn && vmReport ? wfModelVor(vmReport, mapWfSeen.current, mapWfStore.current.seq === 0) : null)
+        /* ★ prime while the drawer is hidden: an ident read then is not "now" when it opens (mapWfModel's rule) */
+        ?? (vmOn && vmReport ? wfModelVor(vmReport, mapWfSeen.current, !mapWfShown) : null)
+        // ★★★ NDB: the band the radio holds, each beacon whose ident was decoded on air marked and stamped (never a listed one)
+        ?? (ndbOn && ndbReport ? wfModelNdb(ndbReport, mapWfSeen.current, !mapWfShown) : null)
         ?? wfModelVfo({ frequency: status.frequency, mode: String(status.mode), bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh });
     }
     return {
