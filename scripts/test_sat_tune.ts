@@ -4,7 +4,7 @@
 // passband). The model end to end: tune +12.3 kHz into RS-44's passband mid-pass, the Doppler moves −3 kHz, the channel
 // (dial + shift) stays on the signal. The server's half (a mode change keeps the lock) is scripts/test-server-sat.mjs.
 // Silent. Run: npx tsx scripts/test_sat_tune.ts
-import { SAT_STEP_HZ, SatStepKeeper, satClickDialHz, satPassbandOf, parseSpotVia, spotViaText, spotBandCell } from '../src/services/satTune';
+import { SAT_STEP_HZ, SatStepKeeper, satAnchorCentreHz, satAnchorStale, satAnchorX, satClickDialHz, satPassbandOf, parseSpotVia, spotViaText, spotBandCell } from '../src/services/satTune';
 import { satMarkerShiftHz, type SatReadout } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -78,6 +78,18 @@ ok(satPassbandOf({ hz: 437800000 }) === null && satPassbandOf({ hz: 435605000, h
   const ro: SatReadout = { state: 'TRACK', offset: -4600, follow: 400 } as SatReadout;
   ok(satMarkerShiftHz(ro) === -5000, 'with a follow the shift taken off is offset − follow');
   ok(satMarkerShiftHz({ state: 'OFF', offset: -5000 } as SatReadout) === 0, 'no live lock: no shift');
+}
+
+console.log('── the dial beside the satellite box ──');
+{
+  ok(satAnchorX(1440, 560) === 1000, '1440 px with the box to x 560: the line belongs at 1000 (the uncovered middle)');
+  ok(satAnchorX(390, 380) === null, 'a phone: no anchor');
+  ok(satAnchorX(1440, 0) === null && satAnchorX(1440, 1200) === null, 'no box, or a box over most of the view: no anchor');
+  // 100 kHz across 1440 px; line at 145.8615 MHz to sit at x 1000 → centre = line − (1000 − 720) · 100000/1440
+  const c = satAnchorCentreHz(145861500, 100000, 1440, 1000);
+  ok(c === Math.round(145861500 - 280 * 100000 / 1440), `the view centre that puts it there (${c})`);
+  ok(!satAnchorStale(c, c + 400, 100000, 1440), 'a 400 Hz drift (≈6 px) leaves the view alone');
+  ok(satAnchorStale(c, c + 700, 100000, 1440), 'a 700 Hz drift (≈10 px) moves it');
 }
 
 console.log('── spots via a satellite ──');

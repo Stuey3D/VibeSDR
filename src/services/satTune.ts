@@ -63,6 +63,28 @@ export function satClickDialHz(rawRfHz: number, markerShiftHz: number, step: num
   return hz;
 }
 
+/* ★★★ beta97 THE DIAL BESIDE THE SATELLITE BOX, NOT UNDER IT (Stuart, desktop, JO-97 on the XCover: the SATELLITE card
+ *  covers the left ~half of the waterfall and the dial line and the passband sat under or at its edge). On a wide layout,
+ *  while the box is open (not minimised), the view is centred so the channel's line sits in the MIDDLE OF THE UNCOVERED
+ *  AREA to the box's right, and kept there as the Doppler moves the channel (the spectrum scrolls under it). Phone /
+ *  narrow layouts (the box covers differently there) and a minimised box: the ordinary centring. */
+export const SAT_ANCHOR_MIN_VIEW_PX = 900;     ///< narrower than this = a phone / narrow layout: leave the view alone
+export const SAT_ANCHOR_MAX_COVER = 0.7;       ///< a box covering more than this share of the view: nothing sensible to do
+export const SAT_ANCHOR_TOL_PX = 8;            ///< the line may wander this far before the view is moved again
+/** The x (px from the view's left) the line belongs at: the middle of what the box leaves uncovered — null = no anchor. */
+export function satAnchorX(viewW: number, coverRightPx: number): number | null {
+  if (!(viewW >= SAT_ANCHOR_MIN_VIEW_PX) || !(coverRightPx > 0) || coverRightPx > viewW * SAT_ANCHOR_MAX_COVER) return null;
+  return (coverRightPx + viewW) / 2;
+}
+/** The view centre (Hz) that puts `lineHz` at x = `anchorX` in a view `spanHz` wide and `viewW` px across. */
+export function satAnchorCentreHz(lineHz: number, spanHz: number, viewW: number, anchorX: number): number {
+  return Math.round(lineHz - (anchorX - viewW / 2) * (spanHz / viewW));
+}
+/** Whether the view must move: the line is more than SAT_ANCHOR_TOL_PX from where it belongs. */
+export function satAnchorStale(curCentreHz: number, wantCentreHz: number, spanHz: number, viewW: number): boolean {
+  return spanHz > 0 && viewW > 0 && Math.abs(curCentreHz - wantCentreHz) * (viewW / spanHz) > SAT_ANCHOR_TOL_PX;
+}
+
 /* ★★★ beta97 SPOTS VIA A SATELLITE (vibe_decoder_host.h setSatVia): a digital spot decoded on a channel with a live Doppler
  *  lock carries "via" (the bird's catalogue id, "JO-97") and "norad". The band column shows the BIRD instead of the
  *  downlink's band ("2m" would claim a terrestrial reception), and the detail line says "via JO-97". The server holds these

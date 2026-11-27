@@ -81,7 +81,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel, satSchedStored } from './satellites';
-import { SatStepKeeper, satClickDialHz, satPassbandOf, spotBandCell, spotViaText, type SatPassband } from '../../../src/services/satTune';   // ★★★ beta97 tuning inside a pass
+import { SatStepKeeper, satAnchorCentreHz, satAnchorStale, satAnchorX, satClickDialHz, satPassbandOf, spotBandCell, spotViaText, type SatPassband } from '../../../src/services/satTune';   // ★★★ beta97 tuning inside a pass
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
@@ -11305,6 +11305,48 @@ function satStepLeave() {
   setStep(v);   // ★ saved: it is the listener's own step again
   syncStep();
 }
+/* ★★★ beta97 THE DIAL BESIDE THE SATELLITE BOX (Stuart, desktop, JO-97: the box covered the dial line and the passband) —
+ *  src/services/satTune.ts satAnchorX. Once a second while SATELLITE is on: on a wide view with the box open (not
+ *  minimised), the view is centred so the channel's line (dial + the lock's shift) sits in the middle of the area the box
+ *  leaves uncovered, and moved again only when the Doppler has carried the line SAT_ANCHOR_TOL_PX away (the spectrum
+ *  scrolls under it). EXIT, minimising or a narrow window: the ordinary centring on the dial, once. A move of the view
+ *  only (zoomSpan), never a tune. */
+let satAnchored = false, satAnchorAt = 0, satAnchorTimer = 0;
+function satViewAnchor() {
+  if (!spec || !wf) return;
+  const box = document.getElementById('satPanel'), c = document.getElementById('wf');
+  const on = !!satPanel?.active && !!box && !box.hidden && !box.classList.contains('min') && !!c && spec.frequency > 0;
+  const cr = c?.getBoundingClientRect(), br = box?.getBoundingClientRect();
+  const ax = on && cr && br && br.top < cr.bottom && br.bottom > cr.top ? satAnchorX(cr.width, br.right - cr.left) : null;
+  const span = spec.spanHz();
+  if (ax == null || !cr || !(span > 0)) {
+    if (satAnchored) { satAnchored = false; spec.zoomSpan(spec.frequency, span); updateViewOverlays(); }
+    return;
+  }
+  const want = satAnchorCentreHz(spec.frequency + satMarkerOffset(), span, cr.width, ax);
+  if (!satAnchorStale(spec.viewCenterHz(), want, span, cr.width)) { satAnchored = true; return; }
+  const now = performance.now();
+  if (now - satAnchorAt < 900) return;
+  satAnchorAt = now; satAnchored = true;
+  spec.zoomSpan(want, span);
+  updateViewOverlays();
+}
+/** ★ For scripts/test-web-sat.mjs (read-only): where the channel's line is drawn now and where the box leaves room. */
+(window as any).__vibeSatAnchor = () => {
+  const c = document.getElementById('wf'), box = document.getElementById('satPanel');
+  if (!spec || !wf || !c) return null;
+  const cr = c.getBoundingClientRect(), br = box?.getBoundingClientRect();
+  return { lineX: wf.hzToX(spec.frequency + satMarkerOffset(), cr.width), dialX: wf.hzToX(spec.frequency, cr.width), viewW: cr.width,
+           boxRight: br && box && !box.hidden ? br.right - cr.left : 0, min: !!box?.classList.contains('min'), anchored: satAnchored,
+           dial: spec.frequency, shift: satMarkerOffset(), left: cr.left, top: cr.top, h: cr.height };
+};
+function satViewAnchorRun(on: boolean) {
+  if (on && !satAnchorTimer) satAnchorTimer = window.setInterval(satViewAnchor, 1000);
+  if (!on) {
+    if (satAnchorTimer) { clearInterval(satAnchorTimer); satAnchorTimer = 0; }
+    if (satAnchored && spec) { satAnchored = false; spec.zoomSpan(spec.frequency, spec.spanHz()); updateViewOverlays(); }
+  }
+}
 /* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md, satellites.ts): the panel is made on first use. */
 function satMarkerOffset(): number {
   const r = satPanel?.readout();
@@ -11338,8 +11380,8 @@ function satPanelGet(): SatPanel | null {
       },
       zoomView: (hz, span) => { if (spec) { spec.zoomSpan(hz, span); updateViewOverlays(); } },   // ★★ beta93 a new pick opens zoomed in
       pickGone: () => satFollow('', null),                           // ★★★ beta92 the server dropped the pick (tuned away)
-      left: () => { satFollow('', null); satVfoBDecoder(null); satStepLeave(); },
-      entered: () => satStepEnter(),                                 // ★★★ beta97 the satellite view's 500 Hz step
+      left: () => { satFollow('', null); satVfoBDecoder(null); satStepLeave(); satViewAnchorRun(false); },
+      entered: () => { satStepEnter(); satViewAnchorRun(true); },     // ★★★ beta97 the satellite view's 500 Hz step; the dial beside the box
       image: (slot) => satLendImage(slot),
       track: (norad, aos, los) => spec?.satTrack(norad, aos, los),   // ★ 1.7 the pass's path (geo → the dotted orbit)
       rxName: () => serverName,                                      // ★ 1.8 the receiver dot's label

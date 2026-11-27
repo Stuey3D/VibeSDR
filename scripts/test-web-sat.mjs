@@ -120,11 +120,14 @@ try {
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
   }
   await sleep(2500);
+  const stepBefore = await ev(`document.getElementById('mStep')?.textContent.trim() || ''`);
   await ev(`document.getElementById('mMode')?.click()`);
   await sleep(700);
   const opts = await ev(`[...document.querySelectorAll('.mModeOpt')].map(b => b.textContent.trim()).join(',')`);
   ok(/\bSATELLITE\b/.test(opts || '') && !/\bSAT\b/.test(opts || ''), `the mode menu offers SATELLITE: ${opts}`);
   await ev(`(() => { const b = [...document.querySelectorAll('.mModeOpt')].find(x => x.textContent.trim() === 'SATELLITE'); b && b.click(); return !!b; })()`);
+  // ★★★ beta97 the satellite view tunes in 500 Hz (Stuart: the step was still WFM's 100 kHz — every tap overshot)
+  ok(await until(`document.getElementById('mStep')?.textContent.trim() === '500Hz'`, 3000), `★ beta97 SATELLITE: the step is 500 Hz (was ${stepBefore})`);
   ok(await until(`!!document.getElementById('satPanel') && !document.getElementById('satPanel').hidden`, 4000), 'the SATELLITE window opens');
   // ★ THE ORDER (Stuart 11-20): up now with the SHORTEST remaining pass first — not the highest bird. At this fixture's
   //   time ISS and AO-73 are both up and AO-73 has less left, so it leads; the old test assumed ISS on top.
@@ -147,6 +150,39 @@ try {
   ok(/In range for \d+:\d\d/.test(await ev(`document.querySelector('#satPanel .sat-ro').textContent`) || ''), 'the countdown');
   ok(await ev(`document.querySelector('#satPanel button[data-act="doppler"]')?.classList.contains('on')`) === true, 'AUTO DOPPLER is lit');
   await shot('locked');
+  // ★★★ beta97 THE DIAL BESIDE THE BOX (Stuart, desktop JO-97): at 1440×900 the channel's line sits in the middle of the
+  //     area the box leaves uncovered, stays there as the Doppler moves it, and minimising gives the ordinary centring back
+  {
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    const at = async () => JSON.parse(await ev(`JSON.stringify(window.__vibeSatAnchor && window.__vibeSatAnchor())`) || 'null');
+    const near = (a) => a && Math.abs(a.lineX - (a.boxRight + a.viewW) / 2) <= 10;
+    await until(`(() => { const a = window.__vibeSatAnchor && window.__vibeSatAnchor(); return !!a && Math.abs(a.lineX - (a.boxRight + a.viewW) / 2) <= 10; })()`, 8000);
+    const a1 = await at();
+    ok(near(a1), `★ 1440×900: the line in the uncovered area's middle (x ${a1 && a1.lineX.toFixed(1)}, want ${a1 && ((a1.boxRight + a1.viewW) / 2).toFixed(1)}; box right ${a1 && a1.boxRight.toFixed(0)})`);
+    await sleep(6000);   // the Doppler carries the line on
+    const a2 = await at();
+    ok(near(a2), `…and still there after 6 s of Doppler (x ${a2 && a2.lineX.toFixed(1)})`);
+    await ev(`document.querySelector('#satPanel button[data-act="min"]')?.click()`);
+    await until(`(() => { const a = window.__vibeSatAnchor && window.__vibeSatAnchor(); return !!a && Math.abs(a.dialX - a.viewW / 2) <= 10; })()`, 5000);
+    const a3 = await at();
+    ok(a3 && a3.min && Math.abs(a3.dialX - a3.viewW / 2) <= 10, `minimised: the ordinary centring on the dial again (dial x ${a3 && a3.dialX.toFixed(1)} of ${a3 && a3.viewW})`);
+    await ev(`document.querySelector('#satPanel button[data-act="min"]')?.click()`);
+    await until(`(() => { const a = window.__vibeSatAnchor && window.__vibeSatAnchor(); return !!a && Math.abs(a.lineX - (a.boxRight + a.viewW) / 2) <= 10; })()`, 5000);
+    ok(near(await at()), 'opened again: beside the box again');
+    await shot('anchored');
+    // ★★★ beta97 THE CLICK FRAME: a click ON the channel's line (the received frequency = dial + shift) keeps the dial
+    //     where it is (the satellite frame) — it used to set the dial to the received frequency, a whole shift away
+    const b0 = await at();
+    if (b0 && Math.abs(b0.shift) > 600) {
+      const x = b0.left + b0.lineX, y = b0.top + b0.h * 0.85;   // ★ low in the waterfall: clear of the known-signal labels
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+      await sleep(1500);
+      const b1 = await at();
+      ok(b1 && Math.abs(b1.dial - b0.dial) <= 400, `★ a click on the line keeps the dial (${b0.dial} → ${b1 && b1.dial}; the shift ${Math.round(b0.shift)} Hz is not added)`);
+      ok(/TRACK|COAST/.test(await ev(`document.querySelector('#satPanel .sat-ro')?.textContent || ''`) || ''), '…and the lock stays on');
+    } else ok(true, `(click frame not checked: the shift is only ${b0 && Math.round(b0.shift)} Hz now)`);
+  }
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(900);
   const fit = JSON.parse(await ev(`JSON.stringify((() => { const r = document.getElementById('satPanel').getBoundingClientRect(); return { l: r.left, r: r.right, w: innerWidth, sw: document.documentElement.scrollWidth }; })())`));
@@ -156,6 +192,8 @@ try {
   ok(await until(`document.getElementById('mSatDop').hidden`, 4000), 'AUTO DOPPLER off: the badge beside the digits is gone');
   await ev(`document.querySelector('#satPanel button[data-act="exit"]')?.click()`);
   ok(await until(`document.getElementById('satPanel').hidden`, 2000), 'EXIT leaves the mode');
+  ok(await ev(`(() => { const a = window.__vibeSatAnchor && window.__vibeSatAnchor(); return !!a && !a.anchored; })()`) === true, '★ beta97 EXIT: the view no longer held beside the box');
+  ok(await until(`document.getElementById('mStep')?.textContent.trim() === ${JSON.stringify(stepBefore)}`, 3000), `★ beta97 EXIT: the listener's own step back (${await ev(`document.getElementById('mStep')?.textContent.trim()`)}, was ${stepBefore})`);
   ok(await until(`!/437\\.800\\.000/.test(document.getElementById('mFreq')?.textContent || '') || true`, 500), '(dial frozen where the channel was)');
 } catch (e) { ok(false, `driver: ${e}`); }
 finally {
