@@ -113,6 +113,7 @@ export const MAP_HELP: Array<{ id: Exclude<CardId, 'help'>; name: string; words:
 export const MAP_HELP_NOTES: string[] = [
   'The round X top-left closes the map (or leaves the mode). The pill at the top shows who shares the radio; tap it to chat.',
   'Tap a chip to open its card; tap the card\u2019s heading to close it. Escape or BACK closes it too.',
+  'LIVE (in LAYERS and TUNE): what this radio is decoding now; the other layers come from the server\u2019s other radios, its feeds and stored data.',
   'SERVER HEALTH (right edge): the server\u2019s processor, memory and temperature \u2014 tap it for the details.',
   'TIME (right edge, only when the server limits sessions): how long you have left here.',
   'On a phone-sized window one card opens at a time.',

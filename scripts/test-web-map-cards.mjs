@@ -205,6 +205,14 @@ async function sizeChecks(p, tag, w, h, o) {
     }
     if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);
+    if (id === 'layers') {   // ★ Stuart 15:24: no red on anything that is not an error — a live layer wears the LIVE tag
+      const red = await p.ev(`[...${V}.querySelectorAll('.trkCard2[data-card="layers"] [data-tgl]')].filter(b => { const isRed = (c) => { const m = (c || '').match(/\d+/g) || []; const [r, g, bl] = m.map(Number); return r > 200 && g < 120 && bl < 120; }; const cs = getComputedStyle(b), bf = getComputedStyle(b, '::before');
+        return isRed(cs.borderBottomColor) && cs.borderBottomWidth !== '0px' || /#?ff[0-9a-f]{2}[0-9a-f]{2}|rgb\(2[0-5]\d, \d{1,2}, /.test(cs.boxShadow) && /inset/.test(cs.boxShadow) || (bf.content !== 'none' && isRed(bf.backgroundColor)); }).map(b => b.dataset.tgl).join(',')`);
+      ok(!red, `${tag} ${w}: LAYERS rows carry no red mark${red ? ' — ' + red : ''}`);
+      const lv = JSON.parse(await p.ev(`JSON.stringify((() => { const rows = [...${V}.querySelectorAll('.trkCard2[data-card="layers"] [data-tgl]')]; const live = rows.filter(b => b.classList.contains('live')), mixed = live.length > 0 && live.length < rows.length;
+        return { mixed, ok: rows.every(b => !!b.querySelector('.lv') === (mixed && b.classList.contains('live'))), tagged: rows.filter(b => b.querySelector('.lv')).map(b => b.dataset.tgl) }; })())`));
+      ok(lv.ok, `${tag} ${w}: LIVE only on the layers this radio decodes, and only when stored ones sit beside them (${lv.mixed ? lv.tagged.join(',') : 'none needed'})`);
+    }
     if (id === 'layers' || id === 'map') {
       // ★ Stuart 12:00: the ON / OFF tags in one column — every row's count column (just before its tag, a fixed width) ends at one edge
       const edges = JSON.parse(await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="${id}"] [data-tgl] .n, .trkCard2[data-card="${id}"] [data-src] .n')].filter(n => n.getClientRects().length).map(n => Math.round(n.getBoundingClientRect().right)))`));

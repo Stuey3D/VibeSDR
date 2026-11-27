@@ -4289,7 +4289,7 @@ function mapChromeAdopt(on: boolean) {
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
   const col = v?.querySelector('.mChipsR') as HTMLElement | null;
   if (h) {
-    if (on && col) { if (h.parentElement !== col) { healthHome.parent = h.parentNode; healthHome.next = h.nextSibling; col.insertBefore(h, col.querySelector('[data-dock="map"]')); healthTuckOnMap(true); } }
+    if (on && col) { if (h.parentElement !== col) { healthHome.parent = h.parentNode; healthHome.next = h.nextSibling; col.insertBefore(h, col.querySelector('[data-dock="time"]') || col.querySelector('[data-dock="map"]')); healthTuckOnMap(true); } }   // ★ the app's order (SDRScreen rightStackTop: health, then time under it by healthStackShift)
     else if (!on && healthHome.parent && h.parentNode !== healthHome.parent) { h.parentNode && (healthHome.parent as Element).insertBefore(h, healthHome.next && healthHome.next.parentNode === healthHome.parent ? healthHome.next : null); healthTuckOnMap(false); }
   }
   /* ★ Stuart 15:09 took the badge OFF the map again (it read as stray text over the map's labels) — the TIME tab

@@ -432,8 +432,8 @@ const CSS = `
 .tunePop .tpRow svg{flex:none;color:#9fc6e6}
 .tunePop .tpRow .nm{flex:none}
 .tunePop .tpRow .fq{flex:1 1 auto;color:#9fb0c2;font:12px/1.2 ui-monospace,Menlo,monospace;text-align:right}
-.tunePop .tpRow .lv{flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#111;background:#ff6b5a;border-radius:3px;padding:3px 4px}
-.tunePop .tpRow.live{background:rgba(255,107,90,.12)}
+
+.tunePop .tpRow.live{background:rgba(91,227,107,.10)}
 .tunePop .tpRow[aria-disabled="true"]{opacity:.42;cursor:not-allowed}
 .trkTop .tgl .btn.chip{border-radius:999px!important;margin-left:3px!important;display:inline-flex;align-items:center;gap:5px;padding:5px 9px}
 .trkTop .tgl .btn.chip .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
@@ -460,10 +460,7 @@ const CSS = `
 .trkTop .tgl .btn{flex:none}
 .trkTop .tgl .grp{align-self:center;margin:0 4px 0 8px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#7f93a7}
 .trkTop .tgl .grp:first-child{margin-left:0}
-.trkTop .tgl .btn.live{box-shadow:inset 0 -3px 0 #ff5a4d}
-.trkTop .tgl .btn.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff3b2f;margin-right:5px;vertical-align:1px;animation:trkLive 1.6s ease-in-out infinite}
 @keyframes trkLive{50%{opacity:.35}}
-@media (prefers-reduced-motion:reduce){.trkTop .tgl .btn.live::before{animation:none}}
 .trkList .hd .tabs{display:inline-flex;gap:2px;flex-wrap:wrap}
 .trkList .hd .tab{background:none;border:0;border-bottom:2px solid transparent;color:#8fa2b5;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.05em;padding:2px 5px;cursor:pointer}
 .trkList .hd .tab[aria-selected="true"]{color:#e8eef5;border-bottom-color:#ffd34d}
@@ -611,8 +608,9 @@ const CSS = `
 .trkCard2 .btn.chip[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
 .trkCard2 .btn.chip .n{font-size:10px;opacity:.75;font-variant-numeric:tabular-nums}
 .trkCard2 .btn.chip .n:empty{display:none}
-.trkCard2 .btn.chip.live{box-shadow:inset 0 -3px 0 #ff5a4d}
-.trkCard2 .btn.chip.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff3b2f;animation:trkLive 1.6s ease-in-out infinite}
+/* ★ Stuart 15:24 ("what is the red here all about … it looks like an error"): a layer this radio is decoding NOW wears the
+ *  small LIVE tag — the TUNE card's own, in the house green, still. No red on anything that is not an error. */
+.trkCard2 .btn.chip .lv,.tunePop .tpRow .lv{flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#08140b;background:#5BE36B;border-radius:3px;padding:3px 4px;margin-left:6px}
 .trkCard2 .tunePop{position:static;max-height:none;box-shadow:none;border:0;border-radius:0;background:none;padding:4px}
 .trkCard2 .tunePop[hidden]{display:block}
 .trkCard2 .slot-tune:empty{display:none}
@@ -1000,7 +998,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"] .n{color:#7f93a7}
 .trkCard2[data-card="layers"] .tgl .btn.chip::after{content:"ON";flex:none;box-sizing:border-box;width:30px;text-align:center;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787;margin-left:8px}
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"]::after{content:"OFF";background:#2a1d1d;color:#ff8a6b}
-.trkCard2[data-card="layers"] .tgl .btn.chip.live::before{margin-right:-4px}
+
 /* ★ tweak 4: a tucked tab wears its chip's own glyph (the health pill's + is its own) */
 .mDock .hTab{gap:3px}
 .mDock .hTabIco{display:flex;flex-direction:column;align-items:center;gap:1px;color:var(--hc)}
@@ -2118,11 +2116,13 @@ export class TrackView {
     // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, a red LIVE dot on the live
     //   layer's (what the receiver is doing now). ★★★ SHOW (Stuart 11-26): THIS viewer's own filter, labelled, the community
     //   map's chips — a colour dot, the name, its count; nothing here is ever sent to the server.
+    // ★ Stuart 15:27: LIVE tells the live layers from the stored / other radios' ones — only when the card shows both
+    const liveMixed = toggles.some((x) => x.live) && toggles.some((x) => !x.live);
     host.innerHTML = (toggles.length ? '<span class="lbl" title="What this map shows you — your own view, nothing changes on the radio">SHOW</span>' : '')
       + toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
       + `<button class="btn chip${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">`
       + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
-      + `${esc(x.label)}<span class="n"></span></button>`).join('');
+      + `${esc(x.label)}${x.live && liveMixed ? '<span class="lv" title="This radio is decoding it now">LIVE</span>' : ''}<span class="n"></span></button>`).join('');
     counts();
     if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` })));
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
