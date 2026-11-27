@@ -201,7 +201,10 @@ async function sizeChecks(p, tag, w, h, o) {
       ok(g1 && g1.on !== g0.on && g1.slider === !g1.on && g1.rows === 1, `${tag} ${w}: its AGC button swaps the row (${JSON.stringify(g1)})`);
       await p.ev(`${V}.querySelector('.mapGainHost .gAgc').click(); 1`); await sleep(500);
       const hasExtra = await p.ev(`!!${V}.querySelector('.mapGainHost .gMore') && [...${V}.querySelector('.mapGainHost .gMore').children].some(c => !c.hidden)`);
-      ok(g1.more === hasExtra, `${tag} ${w}: ⌄ only when the radio has more controls (${hasExtra})`);
+      ok(g1.more === hasExtra && hasExtra, `${tag} ${w}: an RTL has more controls (tuner bandwidth, PPM, bias-T …) behind ⌄ (${hasExtra})`);
+      if (g1.more) { await p.ev(`${V}.querySelector('.mapGainHost .gMoreB').click(); 1`); await sleep(400);
+        ok(await p.ev(`!${V}.querySelector('.mapGainHost .gMore').hidden && !!${V}.querySelector('.mapGainHost .gMore #tunerBw, .mapGainHost .gMore #ppm')`), `${tag} ${w}: ⌄ opens them`);
+        await p.ev(`${V}.querySelector('.mapGainHost .gMoreB').click(); 1`); await sleep(300); }
     }
     if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);

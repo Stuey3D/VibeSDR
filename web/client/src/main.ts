@@ -4199,8 +4199,10 @@ function gainDriver(): GainDrv | null {
     val: () => `ATT ${(document.getElementById('ahfAttVal')?.textContent || '').trim()}` };
   return null;
 }
-const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw'], sdrplay: ['rspCtls'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
-const gainHome = new Map<string, { parent: Node; next: Node | null }>();
+/* ★ Stuart 15:35 ("no more gain options button yet"): the RTL's MORE is every hardware row the page has for it — the tuner
+ *  bandwidth, PPM, bias-T, the RTL2832's digital AGC, direct sampling — each lent as its whole row (the element's .mrow) */
+const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw', 'ppm', 'biasT', 'agc', 'dsSeg'], sdrplay: ['rspCtls'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
+const gainHome = new Map<HTMLElement, { parent: Node; next: Node | null }>();
 let gainMoreOpen = false, gainPwOpen = false;
 function mapGainLend(on: boolean) {
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
@@ -4214,13 +4216,15 @@ function mapGainLend(on: boolean) {
     }
     const more = host.querySelector('.gMore') as HTMLElement;
     for (const id of MORE_IDS[radioCaps?.driver || ''] ?? []) {
-      const el = document.getElementById(id); if (!el || el.parentElement === more) continue;
-      if (!gainHome.has(id) && el.parentNode) gainHome.set(id, { parent: el.parentNode, next: el.nextSibling });
+      const e0 = document.getElementById(id); if (!e0) continue;
+      const el = (e0.id.startsWith('row') || e0.id.endsWith('Ctls') ? e0 : (e0.closest('.mrow') as HTMLElement | null) ?? e0);
+      if (el.parentElement === more) continue;
+      if (!gainHome.has(el) && el.parentNode) gainHome.set(el, { parent: el.parentNode, next: el.nextSibling });
       more.appendChild(el);
     }
     mapGainRender();
   } else {
-    for (const [id, h] of gainHome) { const el = document.getElementById(id); if (el) h.parent.insertBefore(el, h.next && h.next.parentNode === h.parent ? h.next : null); }
+    for (const [el, h] of [...gainHome].reverse()) h.parent.insertBefore(el, h.next && h.next.parentNode === h.parent ? h.next : null);
     gainHome.clear(); gainMoreOpen = false; gainPwOpen = false;
   }
 }
@@ -4238,7 +4242,8 @@ function mapGainRender() {
   const sig = JSON.stringify([!!g, g?.name, agcOn, locked, adminUnlocked, hasMore, gainMoreOpen, sl?.min, sl?.max, sl?.step]);
   if (row.dataset.sig !== sig) {
     row.dataset.sig = sig;
-    const agc = g && agcBtn ? `<button type="button" class="gAgc${agcOn ? ' on' : ''}" aria-pressed="${agcOn}" title="${escapeHtml(agcBtn.title || g.name)}">${escapeHtml(g.name)}</button>` : '';
+    // ★ Stuart 15:35: a short title, not the page's paragraph (it covered the mode list); HELP explains the AGC
+    const agc = g && agcBtn ? `<button type="button" class="gAgc${agcOn ? ' on' : ''}" aria-pressed="${agcOn}" title="${escapeHtml(g.name)} \u2014 ${agcOn ? 'on; press for manual gain' : 'off; press to let it set the gain'}">${escapeHtml(g.name)}</button>` : '';
     const val = '<span class="gVal" aria-live="off"></span>';
     const lock = locked ? `<button type="button" class="gLock" aria-label="Gain locked by the owner — enter the admin password" title="Locked by the owner — enter the admin password">\u{1F512}</button>`
       : adminUnlocked && hwGainLocked ? '<span class="gLock open" title="Unlocked with the admin password">\u{1F513}</span>' : '';
