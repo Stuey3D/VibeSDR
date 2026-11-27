@@ -35555,7 +35555,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 vibe::gallery::Meta m;
                 m.kind = vibe::bg::galleryKindFor(ext, msg);
                 if (m.kind.empty()) return nullptr;
-                m.origin = "live";
+                /* ★★ beta97: "live" only when a LISTENER started it — an unattended satellite pass's decoder starts on this
+                 *  same host (satPassStartLocked holds an UnattendedStart): BACKGROUND, as background decoding's items. */
+                vibe::gallery::stampStartOrigin(m);
                 m.decoder = ext == "fsk" ? (msg.find("\"auto\":true") != std::string::npos ? "rtty-auto" : "rtty") : ext;
                 m.freqHz = dial ? dial() : 0.0;
                 m.mode = modeOf();
@@ -40329,7 +40331,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★ beta94 our own attach is not an arrival: satAttach wakes the capture (resumeCaptureIdle), which would read as a
              *  listener and give the session up before the pass had begun (beta90's check looked at satPass_, not yet set) */
             satPassInternal() = true;
-            const std::string w = satAttach(nullptr, false, "", r.decoder, params, r.decoderKey);
+            std::string w;
+            {   // ★★ beta97: nobody asked for this decoder — its gallery items are BACKGROUND, never LISTENER (vibe_gallery.h)
+                vibe::gallery::UnattendedStart unattended("Satellite pass");
+                w = satAttach(nullptr, false, "", r.decoder, params, r.decoderKey);
+            }
             satPassInternal() = false;
             if (!w.empty()) { LOGI("[sat] unattended pass: the %s decoder did not start \xe2\x80\x94 %s", r.decoder.c_str(), w.c_str()); r.decoder.clear(); }
         }

@@ -195,8 +195,79 @@ static void testReach() {
     CHECK(!vibecaps::compute(f).has("lrpt"), "a radio above 137 MHz does not");
 }
 
+/* ★★ beta97 (Stuart, Sony beta96): an unattended satellite pass's pictures read LISTENER. The shim's Env::tap now stamps
+ * the origin with gallery::stampStartOrigin — "background" (+ the profile) while the server's own start holds an
+ * UnattendedStart, "live" otherwise. This builds the tap exactly as the shim does and runs a real pass through each. */
+static std::string originRun(bool unattended, uint32_t seed) {
+    char tmpl[] = "/tmp/vibe-lrpt-who-XXXXXX";
+    const char* dir = mkdtemp(tmpl);
+    CHECK(dir != nullptr, "temp dir");
+    if (!dir) return "";
+    gallery::Store store; store.setDir(dir); store.setLimitBytes(64ull << 20);
+    DecoderHost::Env env;
+    env.dialHz = [] { return 137.9e6; };
+    env.tap = [&](const std::string& ext, const std::string& msg) -> DecoderTapPtr {
+        gallery::Meta m; m.kind = bg::galleryKindFor(ext, msg); if (m.kind.empty()) return nullptr;
+        gallery::stampStartOrigin(m);
+        m.decoder = ext; m.freqHz = 137.9e6; m.mode = "lrpt";
+        return bg::makeGalleryTap(store, m);
+    };
+    std::string list;
+    {
+        DecoderHost h(env, unattended ? "pass" : "listener");
+        DecoderHost::Start r;
+        if (unattended) { gallery::UnattendedStart u("Satellite pass"); r = h.start("lrpt", kAttach); }
+        else r = h.start("lrpt", kAttach);
+        CHECK(r == DecoderHost::Start::Ok, "start");
+        CHECK(gallery::unattendedStartWho() == nullptr, "the scope ends with its start");
+        const double rate = 150000;
+        feed(h, lrptIq(rate, 8, 14, seed), rate);
+        h.stop();   // ★ the pictures so far are filed as the decoder stops (as satPassEndLocked does at LOS)
+        list = store.listJson("lrpt", 50);
+    }
+    std::string cmd = std::string("rm -rf '") + dir + "'"; (void)std::system(cmd.c_str());
+    return list;
+}
+static int countOf(const std::string& s, const std::string& what) {
+    int n = 0; for (size_t p = s.find(what); p != std::string::npos; p = s.find(what, p + 1)) n++;
+    return n;
+}
+static void testWhoStarted() {
+    std::printf("who started it: an unattended pass's pictures are BACKGROUND, a listener's LISTENER\n");
+    {   // the stamp itself, its scope, nesting and its thread
+        gallery::Meta m; gallery::stampStartOrigin(m);
+        CHECK(m.origin == "live" && m.profile.empty(), "no scope: live (%s)", m.origin.c_str());
+        {
+            gallery::UnattendedStart u("Satellite pass");
+            gallery::Meta a; gallery::stampStartOrigin(a);
+            CHECK(a.origin == "background" && a.profile == "Satellite pass", "in scope: %s / %s", a.origin.c_str(), a.profile.c_str());
+            std::string other;
+            std::thread([&other] { gallery::Meta b; gallery::stampStartOrigin(b); other = b.origin; }).join();
+            CHECK(other == "live", "another thread (a listener's socket) is not the pass's: %s", other.c_str());
+            { gallery::UnattendedStart v("Inner"); gallery::Meta c; gallery::stampStartOrigin(c); CHECK(c.profile == "Inner", "nested"); }
+            gallery::Meta d; gallery::stampStartOrigin(d);
+            CHECK(d.profile == "Satellite pass", "the outer scope comes back: %s", d.profile.c_str());
+        }
+        gallery::Meta e; gallery::stampStartOrigin(e);
+        CHECK(e.origin == "live", "after the scope: live again");
+    }
+    const std::string bgList = originRun(true, 7);
+    const int bgItems = countOf(bgList, "\"k\":\"lrpt\"");
+    CHECK(bgItems >= 1, "the pass filed pictures (%d)", bgItems);
+    CHECK(countOf(bgList, "\"o\":\"background\"") == bgItems && bgList.find("\"o\":\"live\"") == std::string::npos,
+          "every unattended pass picture is background: %s", bgList.substr(0, 300).c_str());
+    CHECK(countOf(bgList, "\"p\":\"Satellite pass\"") == bgItems, "…and names the work");
+    const std::string liveList = originRun(false, 8);
+    const int liveItems = countOf(liveList, "\"k\":\"lrpt\"");
+    CHECK(liveItems >= 1, "the listener's run filed pictures (%d)", liveItems);
+    CHECK(countOf(liveList, "\"o\":\"live\"") == liveItems && liveList.find("\"o\":\"background\"") == std::string::npos,
+          "a listener's pictures stay LISTENER: %s", liveList.substr(0, 300).c_str());
+    std::printf("  pass: %d background item(s); listener: %d live item(s)\n", bgItems, liveItems);
+}
+
 int main() {
     testReach();
+    testWhoStarted();
     testHost();
     testPassEndAndGallery();
     testNoise();

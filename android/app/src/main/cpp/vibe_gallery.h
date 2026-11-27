@@ -179,6 +179,33 @@ struct Meta {
      *  nothing for what is not there. */
     std::string qualJson;
 };
+
+// ── Who started a decoder: a listener, or the server on its own ────────────────────────────────────────────────
+/* ★★ beta97 (Stuart, Sony beta96, METEOR filter): EVERY Meteor picture read LISTENER — the 02:44 UTC pass too, caught by
+ *  the unattended satellite-pass scheduler with nobody connected. The pass starts its decoder through the very attach a
+ *  listener's SATELLITE pick uses (satAttach → the shared DecoderHost), and that host's gallery tap is made when the
+ *  decoder starts, from the host's Env — which only knew listeners, so it wrote "live" whoever had asked.
+ *  The tap is made ON THE THREAD THAT STARTS THE DECODER (DecoderHost::start → Env::tap, synchronously), so the server's
+ *  own start says so for exactly that call: an UnattendedStart in scope → the tap's Meta reads "background" (the gallery's
+ *  BACKGROUND, as background decoding's items) and names the work in its profile. Nothing else changes: a listener who
+ *  joins the pass's decoder later joins the pass's item; a listener's own pick is still LISTENER. */
+inline const char*& unattendedStartWho() { static thread_local const char* who = nullptr; return who; }
+/** In scope while the SERVER (not a listener) starts a decoder: `who` is the profile its items carry ("Satellite pass"). */
+struct UnattendedStart {
+    explicit UnattendedStart(const char* who) : prev_(unattendedStartWho()) { unattendedStartWho() = who ? who : ""; }
+    ~UnattendedStart() { unattendedStartWho() = prev_; }
+    UnattendedStart(const UnattendedStart&) = delete;
+    UnattendedStart& operator=(const UnattendedStart&) = delete;
+private:
+    const char* prev_;
+};
+/** A decoder tap's origin for a start on THIS thread: "background" inside an UnattendedStart (its profile filled in),
+ *  else "live" — a listener's. */
+inline void stampStartOrigin(Meta& m) {
+    if (const char* who = unattendedStartWho()) { m.origin = "background"; m.profile = who; }
+    else m.origin = "live";
+}
+
 /** What a download name may hold (Meta::dlName). Anything else is dropped. */
 inline std::string downloadSafe(const std::string& s) {
     std::string o;
