@@ -83,7 +83,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
 import { SatPanel, satSchedStored } from './satellites';
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
-import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
+import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
@@ -9631,7 +9631,11 @@ function adsbUiOff() {
  *  pop-over over the map. Idempotent (every render). Parked back in #adsbChrome (hidden) when ADS-B ends. */
 function adsbChromeMount(v: TrackView, tab: string) {
   const top = v.slot('top'), head = v.slot('head'), over = v.slot('over');
-  for (const id of ['adsbCapture', 'adsbGain', 'adsbChat']) { const el = $(id); if (el.parentElement !== top) top.appendChild(el); }
+  // ★★★ beta96 map cards: GAIN and the capture warning are the TUNE card's (they set the radio); CHAT stays in the bar
+  const tune = v.slot('tune');
+  for (const id of ['adsbCapture', 'adsbGain']) { const el = $(id); if (el.parentElement !== tune) tune.appendChild(el); }
+  { const el = $('adsbChat'); if (el.parentElement !== top) top.appendChild(el); }
+  v.tuneSync();
   const chips = $('adsbChips'); if (chips.parentElement !== head) head.appendChild(chips);
   chips.hidden = tab !== 'aircraft';
   for (const id of ['adsbFeedWarn', 'adsbGainPop']) { const el = $(id); if (el.parentElement !== over) over.appendChild(el); }
@@ -10260,6 +10264,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
   const present = over?.present ?? shipLayersPresent(shipHave(now, src), focus);
   const on = over?.on ?? ((id: ShipLayerId) => shipOn(id, present, shipLayersNow()));
   const items: any[] = [], status: string[] = [];
+  let warnWords = '';   // ★ beta96 map cards: the warnings in force, for the VIEW card
   const rowsBy: Partial<Record<ShipLayerId, string[]>> = {};
   let out: string[] = [];
   const many = over?.many ?? present.length > 1;
@@ -10271,7 +10276,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
       const live = src.ais as any;
       const all = shipShips(live, src.ships);
       const extra = liveView ? all.filter((v) => !live || !live.vessels.some((x: any) => x.mmsi === v.mmsi)) : all;
-      items.push(...shipItems(extra, rx));
+      items.push(...fgTag('ships', shipItems(extra, rx)));
       if (liveView) {
         if (extra.length) { out.push(sec('SHIPS — FROM THE SHIP STORE')); out.push(...shipRows(extra, rx).map(trkRowHtml)); }
       } else {
@@ -10281,12 +10286,12 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
       }
     } else if (id === 'dsc') {
       const pins = shipDscPins(now, src);
-      items.push(...dscPinItems(pins, rx, now, 'web'));
+      items.push(...fgTag('dsc', dscPinItems(pins, rx, now, 'web')));
       out.push(sec('DSC'));
       out.push(pins.length ? dscPinRows(pins, rx, now).map(trkRowHtml).join('') : `<div class="trkEmpty">${escapeHtml(DSC_SHIP_EMPTY)}</div>`);
       const s = dscStatus(pins); if (s) status.push(s);
     } else if (id === 'stations' && r) {
-      items.push(...navItems(r, 'web'));
+      items.push(...fgTag('navst', navItems(r, 'web')));
       out.push(sec('NAVTEX STATIONS'));
       if (!r.stations.length) out.push(`<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`);
       for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
@@ -10294,7 +10299,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
         + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
       status.push(navStatus(r));
     } else if (id === 'weather' && m) {
-      items.push(...navMetItems(seaPlaceMet(navMetVisible(m, navRange)), now, 'web'));   // ★ the arrow inside its area's outline
+      items.push(...fgTag('weather', navMetItems(seaPlaceMet(navMetVisible(m, navRange)), now, 'web')));   // ★ the arrow inside its area's outline
       // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
       const areas = navMetListed(m).slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
       if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
@@ -10307,22 +10312,24 @@ function shipCompose(focus: ShipFocus, liveView: boolean, over?: { present: Ship
       //   while it is drawn. No rows in the RECEIVED list — the areas are the chart, not something heard.
       items.push(...seaCompose(rx, m ?? null, on('weather'), 'web').items);
     } else if (id === 'warnings' && w) {
-      items.push(...navWarnItems(navWarnVisible(w, navRange), now, 'web'));
+      items.push(...fgTag('warnings', navWarnItems(navWarnVisible(w, navRange), now, 'web')));
       const list = navWarnVisible(w, navRange).slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300);
       if (list.length) out.push(sec('WARNINGS'));
       for (const x of list) out.push(`<div class="trkRow${navWarnTag(x) ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
         + `<span class="id"><b><i class="sw" style="background:${navWarnTag(x) ? '#9aa6b2' : NAV_HAZARD_COLOURS[x.cls === 'navaid' ? 'light' : (x.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6'}"></i>${escapeHtml(x.id)} · ${escapeHtml(navWarnSummary({ ...x, hit: '', lang: '' }))}</b>`
         + `<small>${escapeHtml([x.st ? navName(x.st, x.sc) : '', navWarnTag(x)].filter(Boolean).join(' · '))}</small></span>`
         + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, w.now - x.last)))}</span></div>`);
-      status.push(navWarnStatus(w, navRange));
+      status.push(navWarnStatus(w, navRange)); warnWords = navWarnStatus(w, navRange);
     }
   }
   const building = navBuilding(w);
   if (building) status.push(building);
   const by = (ids: ShipLayerId[]) => ids.map((id) => (rowsBy[id] ?? []).join('')).join('');
   return { items, rows: by(present), rowsBy: Object.fromEntries(Object.entries(rowsBy).map(([k, v]) => [k, (v ?? []).join('')])) as Partial<Record<ShipLayerId, string>>,
-           status: status.filter(Boolean).join(' · '), present, rx, building, by };
+           status: status.filter(Boolean).join(' · '), present, rx, building, by, warnWords };
 }
+/** ★★★ beta96 FIT TO (map cards): each item says which layer it is, so FIT and AUTO can frame one layer (TrackView _fg). */
+function fgTag<T extends object>(g: string, a: T[]): T[] { for (const it of a) (it as any)._fg = g; return a; }
 /** ★ beta96 the shipping layers changed (a poll, the DSC box): the AIR & SEA map redraws (it holds them now). */
 function navDraw() { asRender(); }
 /** ★ The view options both shipping views share: items carry their own icon, label and card (_ic, _lb, _cd); AIS mode's
@@ -11029,10 +11036,10 @@ function asRender() {
     const hex = cleanHex(a.hex); if (!hex) continue;
     liveHex.add(hex);
     const lat = Number(a.lat), lon = Number(a.lon);
-    if (a.lat != null && a.lon != null && Number.isFinite(lat) && Number.isFinite(lon)) adsbItems.push({ key: `adsb:${hex}`, lat, lon, _adsb: { ...a, hex }, _rk: 1e12 });
+    if (a.lat != null && a.lon != null && Number.isFinite(lat) && Number.isFinite(lon)) adsbItems.push({ key: `adsb:${hex}`, lat, lon, _adsb: { ...a, hex }, _rk: 1e12, _fg: 'adsb' });
   }
   const isLiveAc = (hex: unknown) => liveHex.size > 0 && typeof hex === 'string' && liveHex.has(cleanHex(hex));
-  const liveShips: any[] = aisOn && aisR && shipOnF('ships') ? aisR.vessels.filter((x) => x.lat != null && x.lon != null).map((x) => ({ ...x, key: String(x.mmsi), _rk: 1e12 })) : [];
+  const liveShips: any[] = aisOn && aisR && shipOnF('ships') ? aisR.vessels.filter((x) => x.lat != null && x.lon != null).map((x) => ({ ...x, key: String(x.mmsi), _rk: 1e12, _fg: 'ships' })) : [];
   // ★ the live layer's names win the declutter
   const liveAv = live.layers.some((l) => AV_ID_SET.has(l));
   const avItems = (liveAv ? avc.items.map((it: any) => ({ ...it, _rk: (it._rk ?? 0) + 1e12 })) : avc.items).filter((it: any) => !isLiveAc(it?._adsb?.hex));
@@ -11044,6 +11051,7 @@ function asRender() {
   const nowStored = Math.floor(Date.now() / 1000);
   if (!vmOn && on('vor')) vorItems.push(...storedVorItems(vmSt, nowStored));
   if (!sdOn && on('sondes')) sondeIts.push(...storedSondeItems(sdSt, nowStored));
+  fgTag('vor', vorItems); fgTag('sondes', sondeIts);
   const items = [...adsbItems, ...vorItems, ...sondeIts, ...avItems, ...liveShips, ...shc.items];
   const otherPlanes = liveHex.size ? avc.planes.filter((p) => !isLiveAc(p.icao)) : avc.planes;
   // ── the MESSAGES feed (every aircraft's last message as it changes; the owner's text where the server sent it) ──
@@ -11118,9 +11126,101 @@ function asRender() {
                   aviationAny ? avc.status : '', shc.status].filter(Boolean).join(' · ');
   v.update(items, rows, status, aircraftN + shipsN + vorItems.length + sondeIts.length + (ndbOn ? ndbView?.count() ?? 0 : 0), rx, aisOn && aisReport ? aisSafetyHtml(aisReport) : '');
   v.setScopeNote(asScopeWords(sc, othersOffered));
+  asCardsSync(v, { items, rx, mode, otherPlanes, shc, adsbR, aisR, avh, sh, on, present });
   v.note(shc.building);
   syncOnlyMode();
   mapSharedSync();   // ★★★ beta96 the SHARED TUNER line + CHAT, and the dial lock on EXIT / the band keys (after setRanges redrew them)
+}
+/* ★★★ beta96 THE MAP CONTROL CARDS (Stuart 11-27, docs/v12/MAP-CONTROL-CARDS.md) — the old status paragraph is gone; its
+ *  facts go where they belong: counts on the VIEW chips and the LIST tabs (already), "not placed" in LIST, the warnings
+ *  in force in VIEW, the furthest aircraft in MAP, gain / frequency in TUNE, and top right ONLY the live message rate. */
+const FIT_LABEL: Record<string, string> = { adsb: 'ADS-B', datalink: 'DATALINK', ships: 'SHIPS', dsc: 'DSC', navst: 'NAVTEX STATIONS', warnings: 'WARNINGS',
+  weather: 'WEATHER', vor: 'VOR', sondes: 'SONDES', other: 'OTHER' };
+const FIT_ORDER = ['adsb', 'datalink', 'ships', 'dsc', 'navst', 'warnings', 'weather', 'vor', 'sondes', 'other'];
+function fmtRate(n: number): string { return n >= 100 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(n < 10 ? 1 : 0); }
+/** The live mode's messages per minute (per second for ADS-B), top right — '' = nothing live. */
+function asRateText(): { text: string; title: string } {
+  if (adsbOn && adsbReport && typeof adsbReport.msgRate === 'number' && isFinite(adsbReport.msgRate))
+    return { text: `ADS-B ${fmtRate(adsbReport.msgRate)}/s`, title: 'ADS-B messages decoded per second on this radio' };
+  if (avOn && avReport && typeof avReport.msgRate === 'number' && isFinite(avReport.msgRate))
+    return { text: `${avReport.bandName || 'DATALINK'} ${fmtRate(avReport.msgRate)} msg/min`, title: 'Datalink messages per minute on this radio' };
+  if (aisOn && aisReport) return { text: `AIS ${fmtRate(aisReport.msgRate)} msg/min`, title: 'AIS messages per minute on this radio' };
+  return { text: '', title: '' };
+}
+/** The radios on this server (id → its label), read once per opening of the map (GET /vibeserver/radios). */
+let asRadioNames: Map<string, string> | null = null;
+let asRadioNamesAt = 0;
+function asRadioNamesLoad() {
+  if (Date.now() - asRadioNamesAt < 60_000) return;
+  asRadioNamesAt = Date.now();
+  void fetch(P('/vibeserver/radios'), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
+    const m = new Map<string, string>();
+    for (const x of Array.isArray(j?.radios) ? j.radios.slice(0, 32) : []) if (typeof x?.id === 'string') m.set(x.id, typeof x.label === 'string' && x.label ? x.label.slice(0, 40) : x.id);
+    asRadioNames = m;
+    if (asView?.open) asRender();
+  }).catch(() => { /* an older server: the ids stand */ });
+}
+function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: number } | null; mode: string; otherPlanes: any[]; shc: { warnWords: string };
+                                        adsbR: AdsbReport | null; aisR: AisReport | null; avh: any; sh: any; on: (id: LiveLayerId) => boolean; present: LiveLayerId[] }) {
+  const rate = asRateText();
+  v.setRate(rate.text, rate.title);
+  // ── TUNE: the live mode's own line (its frequency, gain, capture) ──
+  const tune = [adsbOn ? adsbStatus(adsbReport) : '', avOn ? avStatus(avReport) : '', aisOn ? aisStatus(aisReport) : '', vmOn ? vorMapStatus(vmReport) : '',
+                sdOn ? sondeStatus(sdReport) : '', ndbOn && ndbView ? ndbView.status() : ''].filter(Boolean).join(' · ');
+  // ── LIST: what is heard but not placed ──
+  const acNoPos = x.otherPlanes.filter((p: any) => p.lat == null || p.lon == null).length + (adsbOn && x.adsbR ? x.adsbR.aircraft.filter((a) => a.lat == null || a.lon == null).length : 0);
+  const shipNoPos = aisOn && x.aisR ? x.aisR.vessels.filter((s) => s.lat == null || s.lon == null).length : 0;
+  const notPlaced = [acNoPos ? `${acNoPos} aircraft` : '', shipNoPos ? `${shipNoPos} ship${shipNoPos === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+  const clock = asStandalone && asViewer ? asViewer.status().clock : '';
+  v.setFacts({
+    tune,
+    list: [clock, notPlaced ? `${notPlaced} heard but not on the map yet (no position)` : ''].filter(Boolean).join(' · '),
+    view: x.shc.warnWords,
+  });
+  // ── MAP: the furthest aircraft ──
+  let far: { nm: number; name: string; brg: number } | null = null;
+  if (x.rx) for (const it of x.items) {
+    const a = it?._adsb; if (!a || !Number.isFinite(it.lat) || !Number.isFinite(it.lon)) continue;
+    const rb = adsbRangeBearing(x.rx, it.lat, it.lon);
+    if (!far || rb.nm > far.nm) far = { nm: rb.nm, brg: rb.brg, name: String(a.flight || a.r || a.hex || '').trim() };
+  }
+  v.setFarNote(far ? `Furthest: ${far.name} ${Math.round(far.nm)} NM ${adsbCompass(far.brg)}` : '');
+  // ── FIT TO: the layers drawn now, with how many placed items each has ──
+  const n = new Map<string, number>();
+  for (const it of x.items) {
+    if (!Number.isFinite(Number(it?.lat)) || !Number.isFinite(Number(it?.lon)) || it?._nofit) continue;
+    const g = typeof it._fg === 'string' ? it._fg : it._adsb ? (it._adsb.sparse ? 'datalink' : 'adsb') : 'other';
+    n.set(g, (n.get(g) ?? 0) + 1);
+  }
+  if (ndbOn && ndbView) n.set('other', (n.get('other') ?? 0) + (ndbView.count() || 0));
+  const groups = FIT_ORDER.filter((g) => (n.get(g) ?? 0) > 0 && g !== 'other').map((g) => ({ id: g, label: FIT_LABEL[g], n: n.get(g) ?? 0 }));
+  const main = x.mode === 'datalink' || x.mode === 'hfdl' ? 'datalink' : x.mode === 'ais' ? 'ships' : x.mode === 'sondes' ? 'sondes' : x.mode === 'vormap' ? 'vor'
+    : x.mode === 'navtex' ? 'navst' : x.mode === 'dsc' ? 'dsc' : '';
+  const def = (n.get('adsb') ?? 0) > 0 ? 'adsb' : main && (n.get(main) ?? 0) > 0 ? main : groups.slice().sort((a, b) => b.n - a.n)[0]?.id ?? '';
+  v.setFitGroups(groups, def);
+  // ── SOURCES: each radio and each feed, only where there is more than one ──
+  asRadioNamesLoad();
+  const per = new Map<string, { ac: number; ships: number }>();
+  const bump = (ids: string[] | undefined, k: 'ac' | 'ships') => { for (const id of ids ?? []) { const e = per.get(id) ?? { ac: 0, ships: 0 }; e[k]++; per.set(id, e); } };
+  for (const a of avShared?.aircraft ?? []) bump((a as any).radios, 'ac');
+  for (const sv of navLast.ships?.vessels ?? []) bump((sv as any).radios, 'ships');
+  const rows: Array<{ name: string; what: string; value: string; down?: boolean }> = [];
+  for (const [id, e] of per) {
+    if (id === 'feed') continue;   // ★ the feeds are listed by name below
+    const mine = id === mapMine && asOnRadio();
+    const live = mine ? asRateText().text : '';
+    rows.push({ name: asRadioNames?.get(id) ?? `Radio ${id}`, what: (mine ? 'this radio' : 'a radio on this server') + (live ? ` · live: ${live}` : ''),
+                value: [e.ac ? `${e.ac} aircraft` : '', e.ships ? `${e.ships} ships` : ''].filter(Boolean).join(' · ') || '—' });
+  }
+  if (asOnRadio() && mapMine && !per.has(mapMine) && airSeaOn()) {
+    const live = asRateText().text;
+    rows.push({ name: asRadioNames?.get(mapMine) ?? 'This radio', what: `this radio${live ? ` · live: ${live}` : ''}`, value: avOn && avReport ? `${avReport.aircraft.length} aircraft` : adsbOn && adsbReport ? `${adsbReport.aircraft.length} aircraft` : aisOn && aisReport ? `${aisReport.vessels.length} ships` : '—' });
+  }
+  for (const f of avShared?.feeds ?? []) {
+    const up = /connected|listening|live|ok/i.test(f.state);
+    rows.push({ name: f.title, what: `${(f.label || 'adsb').toUpperCase()} feed · ${f.state || 'unknown'}`, value: `${f.aircraft} aircraft`, down: !up });
+  }
+  v.setSources(rows.length > 1 ? rows : null);
 }
 /** ★ beta96 stage 8 the KEY's NDB rows (the beacon marker: dot + 3-bar meter, ndblayer.js's colours). */
 const NDB_LEGEND = '<div><b>NDB beacons</b></div><div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ffb000;margin-right:6px"></i>Beacon heard, at its published position — bars: signal (1 red · 2 amber · 3 green)</div>'

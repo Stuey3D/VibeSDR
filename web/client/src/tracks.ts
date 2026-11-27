@@ -526,6 +526,101 @@ const CSS = `
   .trkRow .ag{display:none}
   .vtl-card{top:6px !important;right:6px !important;left:52px;max-width:none !important;max-height:30% !important;font-size:11px !important}
 }
+/* ★★★ beta96 THE MAP CONTROL CARDS (Stuart 11-27, docs/v12/MAP-CONTROL-CARDS.md): the map takes centre stage. ONE bar with
+ *  only what must always be there — the way out, the shared tuner line + CHAT, the row of small card buttons, and the live
+ *  message rate top right; everything else in CARDS that pop out of those buttons and shrink back (the health chips'
+ *  and the app's SERVERS button's shape). How many may be open follows the WINDOW (cardLimit). */
+.trkTop{flex-wrap:nowrap;gap:6px;min-height:40px;box-sizing:border-box}
+.trkTop .st{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;flex:none}
+.trkTop .scopeNote{display:none}
+.trkTop .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
+.trkTop .cardBtns{display:inline-flex;gap:4px;flex:none;align-items:center}
+.trkTop .cbtn{display:inline-flex;align-items:center;gap:5px;background:rgba(30,42,54,.9);color:#cfd9e3;border:1px solid #33475a;border-radius:999px;
+  padding:5px 10px;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;cursor:pointer;white-space:nowrap}
+.trkTop .cbtn:hover,.trkTop .cbtn:focus-visible{background:#2a3a4a;outline:none;border-color:#7fc8ff}
+.trkTop .cbtn[aria-expanded="true"]{background:#e8eef5;color:#0b1014;border-color:#e8eef5}
+.trkTop .cbtn[hidden]{display:none}
+.trkTop .cbtn .cn{font-weight:600;opacity:.75;font-variant-numeric:tabular-nums}
+.trkTop .cbtn .cn:empty{display:none}
+.trkTop .cbtn .lv{width:6px;height:6px;border-radius:50%;background:#ff3b2f;animation:trkLive 1.6s ease-in-out infinite}
+.trkTop .spacer{flex:1 1 auto;min-width:0}
+.trkTop .rate{flex:none;font:700 11.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;color:#ffd34d;white-space:nowrap;font-variant-numeric:tabular-nums}
+.trkTop .rate:empty{display:none}
+.trkTop .slot-top{display:inline-flex;align-items:center;gap:6px;flex:none}
+.trkTop .slot-top:empty{display:none}
+.trkCards{position:absolute;left:8px;top:8px;bottom:8px;z-index:760;display:flex;gap:8px;align-items:flex-start;pointer-events:none;max-width:calc(100% - 16px)}
+.trkCards .col{display:flex;flex-direction:column;gap:8px;max-height:100%;min-height:0;width:var(--trk-card-w,340px)}
+.trkCard2{pointer-events:auto;display:flex;flex-direction:column;min-height:0;flex:0 1 auto;background:rgba(10,14,20,.94);border:1px solid #2c3a4a;
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.45);overflow:hidden;transform-origin:top left;animation:trkCardIn .16s ease-out}
+@keyframes trkCardIn{from{opacity:0;transform:scale(.92) translateY(-6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.trkCard2{animation:none}.trkTop .cbtn .lv{animation:none}}
+.trkCard2[hidden]{display:none}
+.trkCard2>.ch{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;border-bottom:1px solid #22303d;flex:none;
+  font:800 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#9fb0c2}
+.trkCard2>.ch .x{margin-left:auto;background:none;border:1px solid transparent;border-radius:6px;color:#9fb0c2;font:600 15px/1 system-ui,sans-serif;padding:3px 7px;cursor:pointer}
+.trkCard2>.ch .x:hover,.trkCard2>.ch .x:focus-visible{border-color:#7fc8ff;color:#fff;outline:none}
+.trkCard2>.cb{overflow:auto;min-height:0;flex:1 1 auto;overscroll-behavior:contain}
+.trkCard2 .facts{padding:6px 10px;color:#9fb0c2;font-size:12px;border-bottom:1px solid #151f29}
+.trkCard2 .facts:empty{display:none}
+.trkCard2 .sect{padding:8px 10px;border-bottom:1px solid #151f29}
+.trkCard2 .sect:last-child{border-bottom:0}
+.trkCard2 .sect[hidden]{display:none}
+.trkCard2 .sh{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#7f93a7;margin:0 0 6px}
+.trkCard2 .row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.trkCard2 .btn{background:#1e2a36;color:#e8eef5;border:1px solid #33475a;border-radius:6px;padding:6px 10px;font:600 12px/1 system-ui,sans-serif;cursor:pointer}
+.trkCard2 .btn:hover,.trkCard2 .btn:focus-visible{background:#2a3a4a;outline:none;border-color:#7fc8ff}
+.trkCard2 .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkCard2 .btn.on{background:#7fc8ff;color:#0b1014;border-color:#7fc8ff}
+.trkCard2 .btn.dialLocked{opacity:.4;filter:grayscale(.7);cursor:not-allowed}
+.trkCard2 .rng{display:inline-flex;flex-wrap:wrap;gap:0}
+.trkCard2 .rng[hidden],.trkCard2 .tgl[hidden],.trkCard2 .scope[hidden]{display:none}
+.trkCard2 .rng:not(.tgl):not(.scope) .btn{border-radius:0;margin-left:-1px;padding:6px 8px}
+.trkCard2 .rng:not(.tgl):not(.scope) .btn:first-child{border-radius:6px 0 0 6px;margin-left:0}
+.trkCard2 .rng:not(.tgl):not(.scope) .btn:last-child{border-radius:0 6px 6px 0}
+.trkCard2 .tgl,.trkCard2 .scope{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.trkCard2 .tgl .lbl{display:none}
+.trkCard2 .tgl .grp{flex:1 0 100%;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#7f93a7;margin:4px 0 0}
+.trkCard2 .tgl .grp:first-child{margin-top:0}
+.trkCard2 .btn.chip{border-radius:999px;display:inline-flex;align-items:center;gap:5px;padding:5px 9px}
+.trkCard2 .btn.chip .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.trkCard2 .btn.chip[aria-pressed="true"]{background:#1e2a36;color:#e8eef5;border-color:#7fc8ff}
+.trkCard2 .btn.chip[aria-pressed="false"]{opacity:.45}
+.trkCard2 .btn.chip[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
+.trkCard2 .btn.chip .n{font-size:10px;opacity:.75;font-variant-numeric:tabular-nums}
+.trkCard2 .btn.chip .n:empty{display:none}
+.trkCard2 .btn.chip.live{box-shadow:inset 0 -3px 0 #ff5a4d}
+.trkCard2 .btn.chip.live::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff3b2f;animation:trkLive 1.6s ease-in-out infinite}
+.trkCard2 .tunePop{position:static;max-height:none;box-shadow:none;border:0;border-radius:0;background:none;padding:4px}
+.trkCard2 .tunePop[hidden]{display:block}
+.trkCard2 .slot-tune:empty{display:none}
+.trkCard2 .slot-tune{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid #151f29}
+.trkCard2 .slot-ctl .vsadsb-ctl{position:static!important;display:flex!important;flex-wrap:wrap;gap:5px;margin:0!important;box-shadow:none!important;background:none!important;border:0!important;padding:0!important;inset:auto!important;transform:none!important}
+.trkCard2 .slot-ctl .vsadsb-ctl button{background:#1e2a36!important;color:#e8eef5!important;border:1px solid #33475a!important;border-radius:6px!important;padding:6px 10px!important;font:600 12px/1 system-ui,sans-serif!important;margin:0!important;cursor:pointer;min-width:0!important;height:auto!important}
+.trkCard2 .slot-ctl .vsadsb-ctl button.on{background:#7fc8ff!important;color:#0b1014!important;border-color:#7fc8ff!important}
+.trkCard2 .slot-ctl .vsadsb-ctl button:focus-visible{outline:2px solid #ffd34d!important}
+.trkCard2 .slot-ctl .vsadsb-ctl button[data-k="auto"],.trkCard2 .slot-ctl .vsadsb-ctl button[data-k="fit"]{display:none!important}
+.trkCard2 .slot-ctl:empty{display:none}
+.trkCard2 .fitSel{display:flex;flex-wrap:wrap;gap:5px}
+.trkCard2 .note{color:#8596a7;font-size:11px;margin-top:6px}
+.trkCard2 .note:empty{display:none}
+.trkCard2 .kb{padding:8px 10px;color:#d7dee6;font-size:12px;line-height:1.35}
+.trkCard2 .kb .kr{display:flex;align-items:center;gap:8px;padding:2px 0}
+.trkCard2 .srcRow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:6px 10px;border-bottom:1px solid #151f29;font-size:12px}
+.trkCard2 .srcRow b{font-weight:600;color:#e8eef5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trkCard2 .srcRow small{grid-column:1/-1;color:#93a3b4;font-size:11px}
+.trkCard2 .srcRow .sv{font:12px/1.2 ui-monospace,Menlo,monospace;color:#ffd34d;white-space:nowrap}
+.trkCard2 .srcRow.down .sv{color:#ff8a6b}
+.trkCard2[data-card="list"] .trkList{position:static;width:auto;max-height:none;border:0;border-radius:0;background:none;flex:1 1 auto;min-height:0}
+.trkCard2[data-card="list"]{flex:1 1 auto}
+.trkCard2[data-card="list"] .trkList .hd{cursor:default}
+.trkCard2[data-card="list"] .trkList .hd .mn{display:none}
+.trkView[data-narrow] .trkTop{flex-wrap:wrap;row-gap:6px}
+.trkView[data-narrow] .trkTop .ttl{display:none}
+.trkView[data-narrow] .trkTop .cardBtns{order:10;flex:1 0 100%;overflow-x:auto;scrollbar-width:none}
+.trkView[data-narrow] .trkTop .cardBtns::-webkit-scrollbar{display:none}
+.trkView[data-narrow] .trkCards{left:6px;right:6px;top:6px;bottom:6px;max-width:none}
+.trkView[data-narrow] .trkCards .col{width:100%}
+.trkView[data-narrow] .trkCard2{max-height:58%}
 `;
 function addCss() {
   if (document.getElementById('trk-style')) return;
@@ -533,6 +628,25 @@ function addCss() {
 }
 function runSource(src: string) { const el = document.createElement('script'); el.textContent = src; document.head.appendChild(el); }
 const MIN_KEY = 'vibesdr.trkListMin';
+/** ★★★ beta96 the map control cards (docs/v12/MAP-CONTROL-CARDS.md): their order in the bar, their buttons' words. */
+export const CARD_IDS = ['list', 'tune', 'view', 'map', 'key', 'sources'] as const;
+export type CardId = typeof CARD_IDS[number];
+const CARD_LABEL: Record<CardId, string> = { list: 'LIST', tune: 'TUNE', view: 'VIEW', map: 'MAP', key: 'KEY', sources: 'SOURCES' };
+/** A window narrower than this is a phone's: ONE card at a time, the buttons on a row of their own. */
+export const CARD_NARROW_W = 600;
+const CARD_W = 340;
+const CARDS_KEY = 'vibesdr.mapCards';
+const FIT_KEY = 'vibesdr.mapFitTo';
+/** ★★★ beta96 FIT's outlier rule: with 8 or more points, the furthest 5 % (at least one) are left out — measured from the
+ *  receiver where it is known, else from the median point. Fewer than 8: all of them (nothing is an outlier among few). */
+export function trimOutliers<T extends { lat: number; lon: number }>(pts: T[], rx: LatLon | null): T[] {
+  if (pts.length < 8) return pts;
+  const med = (a: number[]) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
+  const c = rx ?? { lat: med(pts.map((p) => p.lat)), lon: med(pts.map((p) => p.lon)) };
+  const d = pts.map((p) => ({ p, km: rangeBearing(c, p.lat, p.lon).km })).sort((a, b) => a.km - b.km);
+  const drop = Math.max(1, Math.ceil(pts.length * 0.05));
+  return d.slice(0, d.length - drop).map((x) => x.p);
+}
 
 export interface TrackViewOpts {
   /** ★★ AUTO FIT (Stuart 2026-11-21, ISM: "the map needs the auto fit"; 2026-11-23, every map: "an auto fit that gently
@@ -638,18 +752,32 @@ export class TrackView {
     // ★ beta96 everything but EXIT and the status line sits in .scr: in the row as before on a wide window, ONE row that
     //   scrolls sideways on a phone (ADS-B's own bar did, Stuart 2026-10-25: "the only thing that must stay anchored is the
     //   Exit ADS-B button") — the AIR & SEA map's chips, ranges, GAIN and CHAT no longer stack four rows deep
-    r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="scr"><span class="ttl">${esc(o.title)}</span>`
-      + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
-         + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
-      // ★ V12 2026-11-02 the SHIPPING MAP: the layer row is always in the page (hidden when empty) — setToggles() redraws it
-      //   as layers gain or lose data on this server (a layer with nothing is absent, never an empty toggle)
-      + `<span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span>`
-      + `<button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></span><span class="st"></span></div>`
-      + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
-      + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
-      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
-      + `<details class="trkKey"${o.legend ? '' : ' hidden'}><summary>KEY</summary><div class="kb">${o.legend || ''}</div></details>`
-      + `</div>`;
+    /* ★★★ beta96 THE MAP CONTROL CARDS (Stuart 11-27, docs/v12/MAP-CONTROL-CARDS.md): the bar holds only the way out, the
+     *  title (wide windows), the SHARED TUNER line + CHAT ('share' slot), the card buttons and the live rate (top right).
+     *  Everything else is in a card — LIST · TUNE · VIEW · MAP · KEY · SOURCES — that pops out of its button. */
+    const card = (id: string, title: string, body: string) => `<section class="trkCard2" data-card="${id}" role="region" aria-label="${esc(title)}" hidden>`
+      + `<div class="ch"><span class="ct">${esc(title)}</span><button class="x" type="button" aria-label="Close ${esc(title.toLowerCase())}">×</button></div><div class="cb">${body}</div></section>`;
+    r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
+      + `<span class="cardBtns" role="toolbar" aria-label="Map controls">`
+      + CARD_IDS.map((id) => `<button class="cbtn" type="button" data-cbtn="${id}" aria-expanded="false" hidden>${CARD_LABEL[id]}<span class="cn"></span></button>`).join('')
+      + `</span><span class="spacer"></span><span class="rate" role="status" aria-live="off"></span><span class="st" aria-live="polite"></span></div>`
+      + `<div class="trkMapHost"><div class="trkCards"></div><div class="trkPark" hidden>`
+      + card('list', o.listTitle, `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
+        + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
+        + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`)
+      + card('tune', 'TUNE', `<div class="facts"></div><div class="trkSlot slot-tune"></div><div class="tunePop" role="menu" aria-label="Tune the radio"></div>`)
+      + card('view', 'VIEW', `<div class="facts"></div><div class="sect"><div class="sh">SHOW — YOUR VIEW ONLY</div><span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span></div>`
+        + `<div class="sect scopeSect" hidden><div class="sh">SOURCES SHOWN</div><span class="rng scope" role="group" aria-label="Sources"></span><div class="note scopeNote2"></div></div>`)
+      + card('map', 'MAP', `<div class="sect fitSect"><div class="sh">FIT</div><div class="row"><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">AUTO</button>`
+        + `<button class="btn fitOnce" type="button">FIT</button></div><div class="sh fitToH" style="margin-top:8px" hidden>FIT TO</div><div class="fitSel" role="radiogroup" aria-label="Fit to" hidden></div><div class="note fitNote"></div></div>`
+        + `<div class="sect ctlSect" hidden><div class="sh">AIRCRAFT</div><div class="trkSlot slot-ctl"></div><div class="note farNote"></div></div>`
+        + `<div class="sect rngSect"${o.ranges?.length ? '' : ' hidden'}><div class="sh">TIME</div>`
+        + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
+           + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
+        + `</div>`)
+      + card('key', 'KEY', `<div class="trkKey kb">${o.legend || ''}</div>`)
+      + card('sources', 'SOURCES', `<div class="srcBody"></div>`)
+      + `</div></div>`;
     this.root = r;
     this.mapHost = r.querySelector('.trkMapHost') as HTMLElement;
     this.list = r.querySelector('.trkList') as HTMLElement;
@@ -670,10 +798,22 @@ export class TrackView {
       };
     }
     this.setToggles(o.toggles ?? [], o.toggled ?? {});
-    const hd = r.querySelector('.hd') as HTMLElement;
-    const toggle = () => this.setMin(!this.list.classList.contains('min'));
-    hd.onclick = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; toggle(); };
-    hd.onkeydown = (e) => { if ((e.target as HTMLElement).closest('.tabs,.srt')) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } };
+    // ★★★ beta96 THE CARDS: each button opens / shuts its card; × shuts it; FIT (once) fits the chosen layer
+    this.cardsEl = r.querySelector('.trkCards') as HTMLElement;
+    this.parkEl = r.querySelector('.trkPark') as HTMLElement;
+    for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
+    for (const x of Array.from(r.querySelectorAll('.trkCard2 > .ch .x')) as HTMLButtonElement[]) {
+      x.onclick = () => { const id = (x.closest('.trkCard2') as HTMLElement).dataset.card as CardId; this.cardOpen(id, false, true); (r.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null)?.focus(); };
+    }
+    for (const c of Array.from(r.querySelectorAll('.trkCard2')) as HTMLElement[])
+      for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) c.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
+    (r.querySelector('.fitOnce') as HTMLButtonElement).onclick = () => this.fitOnce();
+    this.cardsLoad();
+    for (const id of CARD_IDS) this.cardsAvail(id, this.cardAvail.has(id) || (id === 'key' && !!o.legend));
+    this.viewSync();
+    this.cardsLayout();
+    if (typeof ResizeObserver !== 'undefined') { this.cardRo = new ResizeObserver(() => this.cardsLayout()); this.cardRo.observe(r); }
+    else window.addEventListener('resize', () => this.cardsLayout());
     this.rowsEl.addEventListener('pointerdown', (e) => {
       const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
       this.down = { key: row?.dataset.key || '', at: performance.now(), x: e.clientX, y: e.clientY };
@@ -686,21 +826,201 @@ export class TrackView {
       this.rowPick(e);
     });
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
-    r.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); if (this.sel) this.select(''); else if (this.dialExit) this.onDialLocked?.(this.dialWhy); else o.onExit(); } });
+    // ★★★ beta96 Escape shuts the TOP card first (the last opened), then the selection, then the map
+    r.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      const top = this.cardOrder[this.cardOrder.length - 1];
+      if (top) { const inCard = (e.target as HTMLElement)?.closest?.('.trkCard2'); this.cardOpen(top, false, true); if (inCard) (r.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus(); }
+      else if (this.sel) this.select('');
+      else if (this.dialExit) this.onDialLocked?.(this.dialWhy);
+      else o.onExit();
+    });
     // ★★★ beta96 the dial lock (setDialLock): captured before EXIT's / a band key's own handler sees the press
     for (const ev of ['click', 'keydown'] as const) r.addEventListener(ev, (e) => {
       if (ev === 'keydown' && (e as KeyboardEvent).key !== 'Enter' && (e as KeyboardEvent).key !== ' ') return;
       if (this.dialRefuses(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
     }, { capture: true });
     document.body.appendChild(r);
-    let min = false; try { min = localStorage.getItem(MIN_KEY) === '1'; } catch { /* private window */ }
-    this.setMin(min, false);
+  }
+  /* ── ★★★ beta96 THE CARDS (Stuart 11-27) ─────────────────────────────────────────────────────────────────────────────
+   *  ONE card on a phone-width window (opening another shuts the first); wider windows take more, side by side in columns
+   *  (two stacked per column where the window is tall), never more than covers ~70 % of the map's width. Which cards are
+   *  open is remembered per viewer, separately for a narrow and a wide window: nothing on a phone, LIST on a wide one. */
+  private cardsEl: HTMLElement;
+  private parkEl: HTMLElement;
+  private cardRo: ResizeObserver | null = null;
+  private cardOrder: CardId[] = [];
+  private cardAvail = new Set<CardId>(['list', 'map']);
+  private narrow(): boolean { const w = this.root.clientWidth || window.innerWidth; return w < CARD_NARROW_W; }
+  /** How many cards this window takes at once (the window's size, never the device). */
+  cardLimit(): number {
+    const w = this.root.clientWidth || window.innerWidth, h = this.root.clientHeight || window.innerHeight;
+    if (w < CARD_NARROW_W) return 1;
+    const cols = Math.max(1, Math.min(3, Math.floor((w * 0.72) / (CARD_W + 8))));
+    const rows = h >= 700 ? 2 : 1;
+    return Math.min(CARD_IDS.length, cols * rows);
+  }
+  isCardOpen(id: CardId): boolean { return this.cardOrder.includes(id); }
+  get openCards(): CardId[] { return this.cardOrder.slice(); }
+  private cardsKey(): string { return this.narrow() ? CARDS_KEY + '.narrow' : CARDS_KEY + '.wide'; }
+  private cardsNarrowWas: boolean | null = null;
+  private cardsLoad() {
+    let ids: CardId[] | null = null;
+    try { const j = JSON.parse(localStorage.getItem(this.cardsKey()) || 'null'); if (Array.isArray(j)) ids = j.filter((x) => (CARD_IDS as readonly string[]).includes(x)); } catch { /* private window */ }
+    this.cardOrder = ids ?? (this.narrow() ? [] : ['list']);
+    this.cardsNarrowWas = this.narrow();
+  }
+  private cardsSave() { try { localStorage.setItem(this.cardsKey(), JSON.stringify(this.cardOrder)); } catch { /* private window */ } }
+  /** Open / shut a card. `save` = a person's press (remembered); the host's own opening (TUNE's list from elsewhere) too. */
+  cardOpen(id: CardId, on: boolean, save = false) {
+    const i = this.cardOrder.indexOf(id);
+    if (on && !this.cardAvail.has(id)) return;
+    if (on && i < 0) this.cardOrder.push(id);
+    else if (!on && i >= 0) this.cardOrder.splice(i, 1);
+    else if (on && i >= 0) { this.cardOrder.splice(i, 1); this.cardOrder.push(id); }
+    const lim = this.cardLimit();
+    while (this.cardOrder.length > lim) this.cardOrder.shift();   // ★ the oldest gives way
+    if (save) this.cardsSave();
+    this.cardsLayout();
+    if (on && save) {
+      // ★ the pad / keyboard: into the card (its first control), so Escape / BACK come straight back out
+      const el = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement | null;
+      (el?.querySelector('.cb button:not([disabled]):not([hidden]), .cb [tabindex="0"]') as HTMLElement | null)?.focus({ preventScroll: true });
+    }
+  }
+  /** Which cards may be offered (a card with nothing in it has no button — AGENTS.md: never a dead control). */
+  private cardsAvail(id: CardId, on: boolean) {
+    if (on) this.cardAvail.add(id); else this.cardAvail.delete(id);
+    const b = this.root.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null;
+    if (b) b.hidden = !on;
+  }
+  private layoutSig = '';
+  /** Put the open cards in their columns (and the rest in the park), the buttons pressed, the obstacle told. */
+  cardsLayout() {
+    if (this.cardsNarrowWas !== null && this.cardsNarrowWas !== this.narrow()) { this.cardsLoad(); }
+    this.root.toggleAttribute('data-narrow', this.narrow());
+    const lim = this.cardLimit();
+    const open = this.cardOrder.filter((id) => this.cardAvail.has(id)).slice(-lim);
+    const h = this.root.clientHeight || window.innerHeight;
+    const perCol = this.narrow() ? 1 : h >= 700 ? 2 : 1;
+    const sig = JSON.stringify([open, perCol, this.narrow()]);
+    for (const b of Array.from(this.root.querySelectorAll('[data-cbtn]')) as HTMLElement[]) b.setAttribute('aria-expanded', String(open.includes(b.dataset.cbtn as CardId)));
+    if (sig === this.layoutSig) return;
+    this.layoutSig = sig;
+    // ★ LIST first in its own column (it is the tall one); the others fill columns in the order they were opened
+    const ordered = [...open.filter((x) => x === 'list'), ...open.filter((x) => x !== 'list')];
+    const cols: CardId[][] = [];
+    for (const id of ordered) {
+      const last = cols[cols.length - 1];
+      if (!last || last.length >= perCol || (last[0] === 'list' && !this.narrow())) cols.push([id]); else last.push(id);
+    }
+    for (const c of Array.from(this.root.querySelectorAll('.trkCard2')) as HTMLElement[]) {
+      const on = open.includes(c.dataset.card as CardId);
+      if (!on) { c.hidden = true; if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c); }
+    }
+    this.cardsEl.innerHTML = '';
+    for (const col of cols) {
+      const d = document.createElement('div'); d.className = 'col';
+      for (const id of col) { const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement; c.hidden = false; d.appendChild(c); }
+      this.cardsEl.appendChild(d);
+    }
+    setTimeout(() => { this.placeAcObstacle(); try { this.af?.poke?.(); } catch { /* none */ } }, 0);
+  }
+  /** The live rate, top right ("ADS-B 1,425 msg/s" · "VDL2 153 msg/min") — '' = none (a viewer, nothing live). */
+  setRate(text: string, title = '') {
+    const el = this.root.querySelector('.trkTop .rate') as HTMLElement;
+    if (el.textContent !== text) el.textContent = text;
+    el.title = title;
+  }
+  /** The facts the old status paragraph carried, each in the card it belongs to ('' = none). */
+  setFacts(f: Partial<Record<'list' | 'tune' | 'view', string>>) {
+    this.hostFacts = true;
+    for (const k of ['list', 'tune', 'view'] as const) {
+      const el = this.root.querySelector(`.trkCard2[data-card="${k}"] .facts`) as HTMLElement | null;
+      const t = f[k] ?? '';
+      if (el && el.textContent !== t) el.textContent = t;
+    }
+  }
+  private hostFacts = false;
+  /** The MAP card's aircraft note ("Furthest: RYR12K 213 NM SE") — '' = none. */
+  setFarNote(t: string) { const el = this.root.querySelector('.farNote') as HTMLElement; if (el.textContent !== t) el.textContent = t; }
+  private srcSig = '';
+  /** ★ SOURCES: what each radio and feed on this server is sending — null = no card (one source). */
+  setSources(rows: Array<{ name: string; what: string; value: string; down?: boolean }> | null) {
+    this.cardsAvail('sources', !!rows && rows.length > 1);
+    const sig = JSON.stringify(rows);
+    if (sig === this.srcSig) return;
+    this.srcSig = sig;
+    (this.root.querySelector('.srcBody') as HTMLElement).innerHTML = (rows ?? []).map((x) => `<div class="srcRow${x.down ? ' down' : ''}"><b>${esc(x.name)}</b><span class="sv">${esc(x.value)}</span><small>${esc(x.what)}</small></div>`).join('');
+    if (!rows || rows.length < 2) this.cardsLayout();
+  }
+  /* ── ★★★ beta96 FIT TO ONE LAYER (Stuart 11-27: "with this much data the fit button doesnt work, maybe the fit button
+   *  fits to the adsb layer or user chosen layer") — the shared auto fit and FIT frame ONE layer (ADS-B by default where
+   *  there is ADS-B, else the map's main layer; the viewer's choice remembered), and drop the furthest few per cent (one
+   *  aircraft at Tallinn must not zoom the whole UK view out). Never greyed while the layer has anything. ── */
+  private fitGroups: Array<{ id: string; label: string; n: number }> = [];
+  private fitPick = '';
+  private fitDefault = '';
+  private fitSig = '';
+  setFitGroups(groups: Array<{ id: string; label: string; n: number }>, def: string) {
+    this.fitGroups = groups; this.fitDefault = def;
+    if (!this.fitPick) { try { this.fitPick = localStorage.getItem(FIT_KEY) || ''; } catch { /* private */ } }
+    const host = this.root.querySelector('.fitSel') as HTMLElement, hd = this.root.querySelector('.fitToH') as HTMLElement;
+    host.hidden = hd.hidden = groups.length < 2;
+    const cur = this.fitChoice();
+    const sig = JSON.stringify([groups.map((g) => g.id), cur]);
+    if (sig !== this.fitSig) {
+      this.fitSig = sig;
+      host.innerHTML = groups.map((g) => `<button class="btn chip" type="button" role="radio" data-fit="${esc(g.id)}" aria-checked="${g.id === cur}" aria-pressed="${g.id === cur}">${esc(g.label)}<span class="n"></span></button>`).join('');
+      for (const b of Array.from(host.querySelectorAll('[data-fit]')) as HTMLButtonElement[]) b.onclick = () => {
+        this.fitPick = b.dataset.fit || '';
+        try { localStorage.setItem(FIT_KEY, this.fitPick); } catch { /* private */ }
+        this.fitSig = ''; this.setFitGroups(this.fitGroups, this.fitDefault);
+        this.fitOnce();
+      };
+    }
+    for (const b of Array.from(host.querySelectorAll('[data-fit]')) as HTMLElement[]) {
+      const n = b.querySelector('.n') as HTMLElement, g = groups.find((x) => x.id === b.dataset.fit);
+      const t = g ? String(g.n) : ''; if (n.textContent !== t) n.textContent = t;
+    }
+    this.fitTitles();
+  }
+  /** The layer FIT and AUTO frame now: the viewer's pick while that layer is on the map, else the default, else the first. */
+  fitChoice(): string {
+    const ids = this.fitGroups.map((g) => g.id);
+    return ids.includes(this.fitPick) ? this.fitPick : ids.includes(this.fitDefault) ? this.fitDefault : ids[0] || '';
+  }
+  private fitTitles() {
+    const g = this.fitGroups.find((x) => x.id === this.fitChoice());
+    const b = this.root.querySelector('.fitOnce') as HTMLButtonElement;
+    const what = g ? g.label : this.o.listTitle.toLowerCase();
+    b.title = g && g.n === 0 ? `Nothing on the map from ${what} yet — FIT will frame it once there is` : `Fit the map to ${what} (the furthest few per cent are left out, so one far outlier does not zoom the whole view out)`;
+    const note = this.root.querySelector('.fitNote') as HTMLElement;
+    const t = this.fitGroups.length ? `AUTO and FIT frame ${what}, leaving out far outliers.` : '';
+    if (note.textContent !== t) note.textContent = t;
+  }
+  /** The chosen layer's points, the furthest few per cent dropped (from the receiver, else from the middle of them). */
+  private fitPoints(all: Array<{ lat: number; lon: number; g: string }>): [number, number][] {
+    const ch = this.fitChoice();
+    const pts = this.fitGroups.length ? all.filter((p) => p.g === ch) : all;
+    return trimOutliers(pts, this.rx).map((p) => [p.lat, p.lon] as [number, number]);
+  }
+  private fitAll: Array<{ lat: number; lon: number; g: string }> = [];
+  /** FIT pressed: the auto fit frames the chosen layer now (and AUTO, if it was paused, resumes on it). */
+  fitOnce() {
+    this.refit = false;
+    try {
+      if (this.af) { this.af.fitNow(); return; }   // ★ frames it now; AUTO (on, or paused by a touch) carries on from there
+      this.layer?.fit?.();
+    } catch (e) { console.error('[tracks] fit', e); }
   }
   get open() { return !this.root.hidden; }
   /** ★★ beta96 a host's own chrome in this view (ADS-B mode's GAIN, CHAT, capture warning; its list chips; its feed
    *  warning and gain pop-over): 'top' = in the top bar before the status line, 'head' = under the list's header, 'over' =
    *  over the map. Made on first use; the host moves its elements in and hides them when they do not apply. */
-  slot(where: 'top' | 'head' | 'over' | 'share'): HTMLElement {
+  slot(where: 'top' | 'head' | 'over' | 'share' | 'tune' | 'ctl'): HTMLElement {
+    if (where === 'tune' || where === 'ctl') return this.root.querySelector(`.slot-${where}`) as HTMLElement;   // ★ beta96 in the TUNE / MAP cards
     const cls = `slot-${where}`;
     let el = this.root.querySelector(`.${cls}`) as HTMLElement | null;
     if (el) return el;
@@ -709,7 +1029,7 @@ export class TrackView {
     // ★★★ beta96 'share' = the SHARED TUNER line + CHAT, right after the title: first in the sideways row, so a phone
     //   shows it without scrolling (main.ts mapSharedSync)
     if (where === 'share') (this.root.querySelector('.ttl') as HTMLElement).after(el);
-    else if (where === 'top') this.fitBtn.before(el);
+    else if (where === 'top') (this.root.querySelector('.trkTop .cardBtns') as HTMLElement).before(el);
     else if (where === 'head') this.rowsEl.before(el);
     else this.mapHost.appendChild(el);
     return el;
@@ -732,6 +1052,7 @@ export class TrackView {
     if (sig === this.tglSig) { counts(); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
+    this.viewSync();
     // ★★ beta96 THE LIVE MAPS (liveMaps.ts liveChips): a group's name before its first chip, a red LIVE dot on the live
     //   layer's (what the receiver is doing now). ★★★ SHOW (Stuart 11-26): THIS viewer's own filter, labelled, the community
     //   map's chips — a colour dot, the name, its count; nothing here is ever sent to the server.
@@ -753,14 +1074,10 @@ export class TrackView {
   /** ★★★ beta96 OTHER RADIOS ON THIS SERVER (mapScope.ts): a SHOW chip of its own after the layer chips — this viewer's view,
    *  never sent, never dial-locked. null = none (one source, the viewer). */
   setScope(chip: { label: string; words: string; on: boolean } | null, onToggle: (on: boolean) => void) {
-    let host = this.root.querySelector('.trkTop .scope') as HTMLElement | null;
-    if (!host) {
-      host = document.createElement('span');
-      host.className = 'rng scope';
-      host.setAttribute('role', 'group'); host.setAttribute('aria-label', 'Sources');
-      (this.root.querySelector('.trkTop .tgl') as HTMLElement).after(host);
-    }
+    const host = this.root.querySelector('.trkCard2 .scope') as HTMLElement;
     host.hidden = !chip;
+    (this.root.querySelector('.scopeSect') as HTMLElement).hidden = !chip;
+    this.viewSync();
     const sig = chip ? JSON.stringify(chip) : '';
     if (sig !== this.scopeSig) {
       this.scopeSig = sig;
@@ -771,10 +1088,10 @@ export class TrackView {
   }
   /** ★★★ beta96 what the scope hides, under the status line ('' = nothing hidden). */
   setScopeNote(words: string) {
-    let el = this.root.querySelector('.trkTop .scopeNote') as HTMLElement | null;
-    if (!el) { el = document.createElement('span'); el.className = 'scopeNote'; (this.root.querySelector('.trkTop .st') as HTMLElement).after(el); }
-    el.hidden = !words;
+    const el = this.root.querySelector('.scopeNote2') as HTMLElement;
     if (el.textContent !== words) el.textContent = words;
+    // ★ the VIEW button says a filter is on (its words are in the card)
+    (this.root.querySelector('[data-cbtn="view"]') as HTMLElement).classList.toggle('filtered', !!words);
   }
   private tuneSig = '';
   private tuneRows: Array<{ id: string; name: string; freq: string; icon: string; group: string; live: boolean; why: string }> = [];
@@ -785,33 +1102,22 @@ export class TrackView {
    *  dial lock (setDialLock) greys it and every row with its reason. [] = no chip (no radio behind the map). Touch, mouse,
    *  keyboard and the pad: the chip and every row are buttons; ↑ ↓ move between rows, Escape shuts the list. */
   setTune(rows: Array<{ id: string; name: string; freq: string; icon: string; group: string; live: boolean; why: string }>, chip: string, onTune: (id: string) => void) {
-    let host = this.root.querySelector('.trkTop .tune') as HTMLElement | null;
-    if (!host) {
-      host = document.createElement('span');
-      host.className = 'tune';
-      host.innerHTML = '<button type="button" class="btn tuneChip" data-dial="1" aria-haspopup="true" aria-expanded="false"></button>';
-      (this.root.querySelector('.trkTop .tgl') as HTMLElement).before(host);
-      const pop = document.createElement('div');
-      pop.className = 'tunePop'; pop.hidden = true; pop.setAttribute('role', 'menu'); pop.setAttribute('aria-label', 'Tune the radio');
-      this.root.appendChild(pop);
-      const btn = host.querySelector('.tuneChip') as HTMLButtonElement;
-      btn.onclick = () => this.tuneOpen(pop.hidden === true);
+    /* ★★★ beta96 (map cards, Stuart 11-27) the TUNE list is the TUNE CARD's body now: its button in the bar, the rows in
+     *  the card (the same rows, the same lock and refusal rules); `chip` is the live mode's words, the button's title.
+     *  Opening the card moves nothing — the ROWS carry data-dial. */
+    const pop = this.root.querySelector('.tunePop') as HTMLElement;
+    if (!pop.dataset.wired) {
+      pop.dataset.wired = '1';
       pop.addEventListener('keydown', (e) => {
         const items = Array.from(pop.querySelectorAll('[data-tune]')) as HTMLElement[];
         const i = items.indexOf(document.activeElement as HTMLElement);
-        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.tuneOpen(false); btn.focus(); }
-        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus(); }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus(); }
       });
-      document.addEventListener('pointerdown', (e) => { if (!pop.hidden && !(e.target as HTMLElement).closest?.('.tunePop,.tuneChip')) this.tuneOpen(false); }, true);
     }
     this.onTune = onTune;
     this.tuneRows = rows;
-    const btn = host.querySelector('.tuneChip') as HTMLButtonElement;
-    host.hidden = !rows.length;
-    const label = `${chip} \u25be`;
-    if (btn.textContent !== label) btn.textContent = label;
-    btn.title = btn.classList.contains('dialLocked') ? btn.title : 'Tune the radio — the modes this radio can run (for everybody listening on a shared dial)';
-    const pop = this.root.querySelector('.tunePop') as HTMLElement;
+    const btn = this.root.querySelector('[data-cbtn="tune"]') as HTMLButtonElement;
+    btn.title = chip ? `${chip} — tune the radio (for everybody listening on a shared dial)` : 'Tune the radio';
     const sig = JSON.stringify(rows);
     if (sig !== this.tuneSig) {
       this.tuneSig = sig;
@@ -827,27 +1133,32 @@ export class TrackView {
       for (const b of Array.from(pop.querySelectorAll('[data-tune]')) as HTMLButtonElement[]) {
         b.onclick = () => {
           if (b.dataset.why) { this.o.onTuneRefused?.(b.dataset.why); return; }
-          this.tuneOpen(false);
           if (b.getAttribute('aria-checked') !== 'true') this.onTune?.(b.dataset.tune || '');
         };
       }
       if (this.dialWhy) this.setDialLock(this.dialWhy, this.dialExit);   // ★ new rows: the lock goes back on them
     }
-    if (!rows.length) this.tuneOpen(false);
+    pop.hidden = !rows.length;
+    this.tuneSync();
   }
-  /** Open / shut the TUNE list (under the chip; focus on the live row, else the first). */
+  /** TUNE is offered when it has rows or the host put a control in it (ADS-B's GAIN) — never an empty card. */
+  tuneSync() {
+    const slot = this.root.querySelector('.slot-tune') as HTMLElement;
+    const any = this.tuneRows.length > 0 || Array.from(slot.children).some((c) => !(c as HTMLElement).hidden);
+    if (any !== this.cardAvail.has('tune')) { this.cardsAvail('tune', any); this.cardsLayout(); }
+  }
+  /** VIEW is offered while it has a SHOW chip or the scope chip. */
+  private viewSync() {
+    const t = this.root.querySelector('.trkCard2 .tgl') as HTMLElement | null, sc = this.root.querySelector('.trkCard2 .scope') as HTMLElement | null;
+    if (!t || !sc) return;
+    const any = !t.hidden || !sc.hidden;
+    if (any !== this.cardAvail.has('view')) { this.cardsAvail('view', any); this.cardsLayout(); }
+  }
+  /** Open / shut the TUNE card (the old chip's list) — kept for the host and the drivers. */
   tuneOpen(on: boolean) {
-    const pop = this.root.querySelector('.tunePop') as HTMLElement | null, btn = this.root.querySelector('.tuneChip') as HTMLElement | null;
-    if (!pop || !btn) return;
     if (on && !this.tuneRows.length) on = false;
-    pop.hidden = !on; btn.setAttribute('aria-expanded', String(on));
-    if (on) {
-      const r = btn.getBoundingClientRect(), w = Math.min(340, window.innerWidth - 16);
-      pop.style.top = `${Math.round(r.bottom + 4)}px`;
-      pop.style.left = `${Math.round(Math.max(8, Math.min(r.left, window.innerWidth - w - 8)))}px`;
-      pop.style.width = `${w}px`;
-      ((pop.querySelector('.tpRow.live') || pop.querySelector('.tpRow')) as HTMLElement | null)?.focus();
-    }
+    this.cardOpen('tune', on, false);
+    if (on) ((this.root.querySelector('.tunePop .tpRow.live') || this.root.querySelector('.tunePop .tpRow')) as HTMLElement | null)?.focus();
   }
   get tuneList(): Array<{ id: string; name: string; freq: string; group: string; live: boolean; why: string; locked: boolean }> {
     return (Array.from(this.root.querySelectorAll('.tunePop [data-tune]')) as HTMLElement[]).map((b) => {
@@ -935,8 +1246,9 @@ export class TrackView {
     let host = this.root.querySelector('.rng:not(.tgl):not(.scope)') as HTMLElement | null;
     if (sig !== this.rngSig) {
       this.rngSig = sig;
-      if (!host) { host = document.createElement('span'); host.className = 'rng'; host.setAttribute('role', 'group'); this.root.querySelector('.ttl')!.after(host); }
+      if (!host) { host = document.createElement('span'); host.className = 'rng'; host.setAttribute('role', 'group'); (this.root.querySelector('.rngSect') as HTMLElement).appendChild(host); }
       host.hidden = !ranges.length;
+      (this.root.querySelector('.rngSect') as HTMLElement).hidden = !ranges.length;
       host.setAttribute('aria-label', label || 'Show what was heard in the last…'); host.title = hint;
       host.innerHTML = ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('');
       for (const b of Array.from(host.querySelectorAll('[data-rng]')) as HTMLButtonElement[]) {
@@ -960,7 +1272,7 @@ export class TrackView {
     this.tabSig = sig;
     if (tabs.length === 1) lt.textContent = tabs[0].label;
     host.innerHTML = tabs.map((t) => `<button class="tab" type="button" role="tab" data-tab="${esc(t.id)}" aria-selected="${t.id === current}">${esc(t.label)}<span class="tn">${t.n}</span></button>`).join('');
-    for (const b of Array.from(host.querySelectorAll('[data-tab]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); if (this.list.classList.contains('min')) this.setMin(false); onTab(b.dataset.tab || ''); };
+    for (const b of Array.from(host.querySelectorAll('[data-tab]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onTab(b.dataset.tab || ''); };
   }
   get tab(): string { return (this.root.querySelector('.hd .tab[aria-selected="true"]') as HTMLElement | null)?.dataset.tab || ''; }
   private srtSig = '';
@@ -997,7 +1309,9 @@ export class TrackView {
   }
   private applyCamera() {
     if (!this.acLayer) { this.fitBtn.hidden = false; return; }
-    const track = this.camOwner === 'track';
+    // ★★★ beta96 FIT TO ONE LAYER (Stuart 11-27): on the AIR & SEA map the shared auto fit always owns the camera, over the
+    //     layer chosen in the MAP card (ADS-B by default) — the ADS-B layer's own AUTO / FIT keys are hidden there
+    const track = this.o.mixed ? true : this.camOwner === 'track';
     this.fitBtn.hidden = !track;
     try {
       if (track) { if (this.acAuto == null) this.acAuto = !!this.acLayer.prefs?.().autoZoom; this.acLayer.setPrefs?.({ autoZoom: false }); this.af?.resume?.(); this.af?.fitNow?.(); }
@@ -1029,8 +1343,9 @@ export class TrackView {
     this.keySig = html;
     const d = this.root.querySelector('.trkKey') as HTMLElement | null;
     if (!d) return;
-    d.hidden = !html;
-    (d.querySelector('.kb') as HTMLElement).innerHTML = html;
+    d.innerHTML = html;
+    this.cardsAvail('key', !!html);   // ★ beta96 the KEY card, only with something to explain
+    this.cardsLayout();
   }
   private setMin(min: boolean, save = true) {
     this.list.classList.toggle('min', min);
@@ -1186,7 +1501,7 @@ export class TrackView {
     if (!this.open) return;
     this.tuneOpen(false);
     this.root.hidden = true;
-    this.attribObs?.disconnect(); this.attribObs = null; this.list.style.bottom = '';
+    this.attribObs?.disconnect(); this.attribObs = null; this.cardsEl.style.bottom = '';
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
     for (const id of this.o.liveIds ?? []) { const el = document.getElementById(id); if (el) el.style.zIndex = ''; }
@@ -1196,6 +1511,8 @@ export class TrackView {
     this.af = null;
     try { this.acLayer?.destroy(); } catch (e) { console.error('[tracks] aircraft layer destroy', e); }
     this.acLayer = null; this.acMap = null; this.acAuto = null; this.acKeys.clear(); this.acHex.clear();
+    (this.root.querySelector('.ctlSect') as HTMLElement).hidden = true;
+    (this.root.querySelector('.slot-ctl') as HTMLElement).innerHTML = '';
     this.showRoute(null); this.rtMap = null; this.rtL = null; this.rtKey = '';   // ★★ beta96 a route drawn goes with its map
     try { this.layer?.destroy(); } catch (e) { console.error('[tracks] layer.destroy', e); }
     this.layer = null;
@@ -1205,7 +1522,8 @@ export class TrackView {
     this.lmap = null; this.vmL = null;
     // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
     //   again had no KEY (and setLegend found nothing to fill)
-    for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey') && !el.classList.contains('trkSlot')) el.remove();
+    // ★ beta96 the cards (open ones and the park) are the view's, not the map's — they stay
+    for (const el of Array.from(this.mapHost.children)) if (!el.classList.contains('trkCards') && !el.classList.contains('trkPark') && !el.classList.contains('trkSlot')) el.remove();
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null; this.selPaused = false;
   }
@@ -1224,7 +1542,7 @@ export class TrackView {
     }
     const holder = document.createElement('div');
     holder.style.cssText = 'position:absolute;inset:0';
-    this.mapHost.insertBefore(holder, this.list);
+    this.mapHost.insertBefore(holder, this.mapHost.firstChild);
     const rx = this.rx;
     const kit = await probeMapGL();
     if (my !== this.gen) return;
@@ -1300,12 +1618,13 @@ export class TrackView {
       const layer = this.layer;
       try {
         this.af = w.VibeAutoFit.attach(map, {
-          points: () => { const p = layer.points(); const m = this.morePoints?.(); return m?.length ? [...p, ...m] : p; }, receiver: () => layer.receiver(), button: this.fitBtn,
-          what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
-          obstacle: () => {
-            const r = this.list.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
-            return r.width > 0 && r.height > 0 ? { corner: r.left - m.left < m.width / 2 ? 'bottom-left' : 'bottom-right', w: r.width + 8, h: r.height + 8 } : null;
+          points: () => {
+            if (this.fitGroups.length) return this.fitPoints(this.fitAll);   // ★★★ beta96 the chosen layer, outliers out
+            const p = layer.points(); const m = this.morePoints?.(); return m?.length ? [...p, ...m] : p;
           },
+          receiver: () => layer.receiver(), button: this.fitBtn,
+          what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
+          obstacle: () => this.cardsObstacle(),
         });
       } catch (e) { console.error('[tracks] auto fit', e); this.af = null; }
     }
@@ -1331,11 +1650,13 @@ export class TrackView {
       this.acLayer = w.VibeAdsbLayer.create(map, {
         receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
         imageBase: this.o.imageBase ?? null,
+        ctlHost: this.slot('ctl'),   // ★★★ beta96 its keys in the MAP card (map cards), not floating over the map
         onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
         // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
         onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
       });
       this.placeAcObstacle();
+      (this.root.querySelector('.ctlSect') as HTMLElement).hidden = false;
       w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
     } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
     if (this.o.mixed) this.applyCamera();
@@ -1351,7 +1672,8 @@ export class TrackView {
       const h = at.getBoundingClientRect().height;
       const wide = this.mapHost.clientWidth > 520;
       // ★ on a wide map the attribution is to the right of the list; only where they share the width does it push up
-      this.list.style.bottom = !wide && h > 0 ? `calc(${Math.round(h) + 6}px + env(safe-area-inset-bottom))` : '';
+      // ★ beta96 the cards stop above the attribution where they share the width (a phone)
+      this.cardsEl.style.bottom = !wide && h > 0 ? `calc(${Math.round(h) + 6}px + env(safe-area-inset-bottom))` : '';
     };
     this.attribObs = new ResizeObserver(sync);
     this.attribObs.observe(at); this.attribObs.observe(this.mapHost);
@@ -1361,6 +1683,14 @@ export class TrackView {
   /** Every report: the whole list (items with key/lat/lon), the rows' HTML, the status line, the count. */
   /** ★ beta90 the items to their layers: aircraft (`_adsb`) to the ADS-B layer, the rest to the track layer. */
   private feed(items: any[]) {
+    // ★★★ beta96 FIT TO: every placed item's group (the host's _fg; aircraft default to 'adsb' / 'datalink' by their data)
+    this.fitAll = [];
+    for (const it of items) {
+      const lat = Number(it?.lat), lon = Number(it?.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || it?._nofit) continue;
+      const g = typeof it._fg === 'string' ? it._fg : it._adsb ? (it._adsb.sparse ? 'datalink' : 'adsb') : 'other';
+      this.fitAll.push({ lat, lon, g });
+    }
     if (!this.acLayer && this.o.mixed && this.acMap && items.some((it) => it && it._adsb)) this.makeAcLayer();
     if (!this.acLayer) { this.layer.update(items); return; }
     const rest: any[] = [], ac: any[] = [];
@@ -1373,11 +1703,21 @@ export class TrackView {
     this.layer.update(rest);
     try { this.acLayer.update(ac); } catch (e) { console.error('[tracks] aircraft update', e); }
   }
+  /** ★ beta96 the open cards' corner of the map (top-left; a phone's card spans the width) — the fits keep clear of it. */
+  private cardsObstacle(): { corner: string; w: number; h: number } | null {
+    const r = this.cardsEl.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
+    let w = 0, h = 0;
+    for (const c of Array.from(this.cardsEl.querySelectorAll('.trkCard2')) as HTMLElement[]) {
+      const b = c.getBoundingClientRect(); w = Math.max(w, b.right - r.left); h = Math.max(h, b.bottom - m.top);
+    }
+    if (w <= 0 || h <= 0) return null;
+    // ★ cards taller than half the map: the fit keeps clear of their width (a column down the left), not their height
+    return { corner: 'top-left', w: w + 8 + (r.left - m.left), h: Math.min(h + 8, m.height) };
+  }
   /** The list's corner of the map — the ADS-B layer keeps aircraft (and its fit) clear of it. */
   private placeAcObstacle() {
     if (!this.acLayer?.setObstacle) return;
-    const r = this.list.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
-    try { this.acLayer.setObstacle(r.width > 0 && r.height > 0 ? { corner: r.left - m.left < m.width / 2 ? 'bottom-left' : 'bottom-right', w: r.width + 8, h: r.height + 8 } : null); }
+    try { this.acLayer.setObstacle(this.cardsObstacle()); }
     catch (e) { console.error('[tracks] obstacle', e); }
   }
   update(items: any[], rowsHtml: string, status: string, count: number, rx: LatLon | null, safety = '') {
@@ -1412,6 +1752,8 @@ export class TrackView {
       if (focusKey) byKey(focusKey)?.focus({ preventScroll: true });
     }
     if (this.statEl.textContent !== status) this.statEl.textContent = status;
+    // ★ beta96 a map whose host does not place its facts (the ISM maps): the status line heads the LIST card
+    if (!this.hostFacts) { const f = this.root.querySelector('.trkCard2[data-card="list"] .facts') as HTMLElement; if (f.textContent !== status) f.textContent = status; }
     this.countEl.textContent = String(count);
     this.safetyEl.hidden = !safety;
     if (safety && this.safetyEl.innerHTML !== safety) this.safetyEl.innerHTML = safety;

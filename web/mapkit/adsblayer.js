@@ -1090,7 +1090,8 @@
     /* ── the control: AUTO · FIT · RINGS · ⌖, inside the map ──────────────────────────────────── */
     const ctl = doc.createElement('div');
     ctl.className = 'vsadsb-ctl vsadsb-' + th;
-    const mk = (txt, title) => { const b = doc.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; ctl.appendChild(b); return b; };
+    // ★ beta96 data-k names each key for a host that hosts the control (ctlHost) and hides some of them (the map cards)
+    const mk = (txt, title) => { const b = doc.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; b.dataset.k = txt.length === 1 ? 'centre' : txt.toLowerCase(); ctl.appendChild(b); return b; };
     const bAuto = mk('AUTO', 'Auto-zoom: keep every aircraft in view');
     const bFit = mk('FIT', 'Fit to aircraft: the receiver need not be in the middle');
     const bRings = mk('RINGS', 'Range rings in nautical miles around the receiver');
@@ -1105,7 +1106,9 @@
     bCentre.setAttribute('aria-label', 'Recentre');
     // ★ The map must not take the control's taps as map gestures (a drag that starts on a button).
     for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'dblclick', 'wheel']) ctl.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
-    container.appendChild(ctl);
+    /* ★★ beta96 opts.ctlHost — an element of the HOST's to draw these keys in (the web map's MAP card, Stuart 11-27:
+     *  "the controls need work"); absent = inside the map, as always. The keys behave exactly the same either way. */
+    (opts.ctlHost && opts.ctlHost.appendChild ? opts.ctlHost : container).appendChild(ctl);
 
     /* ── ★★ THE LEGEND (Stuart, 2026-10-24: "a little (i) button above the aircraft list which pops out a legend") —
      *  what the aircraft colours and the altitude ARROW colours mean, drawn by the layer itself so the key can never
