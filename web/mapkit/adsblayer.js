@@ -1898,21 +1898,24 @@
      *  by the least that clears every rectangle it would sit on, at most twice. */
     function cardClear(p) {
       if (!gl || !popup || popup !== p || typeof opts.obstacles !== 'function') return;
-      for (let pass = 0; pass < 2; pass++) {
-        const el = p.getElement && p.getElement(), w = el && el.querySelector('.maplibregl-popup-content');
-        if (!w) return;
-        const a = w.getBoundingClientRect(), m = gl.getContainer().getBoundingClientRect();
-        let best = null;
-        for (const o of opts.obstacles() || []) {
-          if (!(a.left < o.r && a.right > o.l && a.top < o.b && a.bottom > o.t)) continue;
-          // the four ways out, the shortest wins (in screen px: + moves the card right / down)
-          const ways = [[o.r - a.left + 6, 0], [o.l - a.right - 6, 0], [0, o.b - a.top + 6], [0, o.t - a.bottom - 6]]
-            .filter(([dx, dy]) => a.left + dx >= m.left && a.right + dx <= m.right && a.top + dy >= m.top && a.bottom + dy <= m.bottom);
-          for (const wv of ways) if (!best || Math.hypot(wv[0], wv[1]) < Math.hypot(best[0], best[1])) best = wv;
-        }
-        if (!best) return;
-        gl.panBy([-best[0], -best[1]], { duration: 0 });
+      const el = p.getElement && p.getElement(), w = el && el.querySelector('.maplibregl-popup-content');
+      if (!w) return;
+      const a = w.getBoundingClientRect(), m = gl.getContainer().getBoundingClientRect();
+      const obs = (opts.obstacles() || []).filter(function (o) { return o && o.r > o.l && o.b > o.t; });
+      const hits = function (dx, dy) { return obs.some(function (o) { return a.left + dx < o.r && a.right + dx > o.l && a.top + dy < o.b && a.bottom + dy > o.t; }); };
+      if (!hits(0, 0)) return;
+      /* ★ every obstacle at once (the avmap e2e at 390 px: one escape at a time slid the card from the zoom keys onto the
+       *  left chips and back): the candidate moves are each obstacle's four edges, alone and combined; the shortest move
+       *  that clears them ALL and keeps the card inside the map wins; none at all = the card stays where it is */
+      const xs = [0], ys = [0];
+      for (const o of obs) { xs.push(o.r - a.left + 6, o.l - a.right - 6); ys.push(o.b - a.top + 6, o.t - a.bottom - 6); }
+      let best = null;
+      for (const dx of xs) for (const dy of ys) {
+        if (a.left + dx < m.left || a.right + dx > m.right || a.top + dy < m.top || a.bottom + dy > m.bottom) continue;
+        if (hits(dx, dy)) continue;
+        if (!best || Math.hypot(dx, dy) < Math.hypot(best[0], best[1])) best = [dx, dy];
       }
+      if (best) gl.panBy([-best[0], -best[1]], { duration: 0 });
     }
     function llClamp() {
       if (gl || !popup || !lm) return;

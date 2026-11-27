@@ -1158,7 +1158,10 @@ let askNudgeTimer: ReturnType<typeof setTimeout> | null = null;
 /** ★ A reach for a locked control: flash "ASK IN CHAT BEFORE TUNING" on the banner and the CHAT key. Once per
  *  2.5 s — a drum flick or a held key is one reach, not forty. */
 function nudgeAsk() {
-  if (trackViewUp()) { mapNudge = { words: 'ASK IN CHAT BEFORE TUNING', until: Date.now() + 2600 }; mapAskPulse(); setTimeout(() => mapSharedSync(), 2700); }   // ★ on a map: the bar and CHAT show where to ask
+  /* ★ on a map: the bar and CHAT show where to ask, for 2.6 s — and ONLY that. The page's banner flash below kept its words
+   *  as the bar's `said` text for 8 s, so the map's bar read "ASK IN CHAT BEFORE TUNING" long after the nudge (and for
+   *  ever under repeated presses); the page banner is under the map anyway (map-cards e2e, Stuart 11-27). */
+  if (trackViewUp()) { mapNudge = { words: 'ASK IN CHAT BEFORE TUNING', until: Date.now() + 2600 }; mapAskPulse(); setTimeout(() => mapSharedSync(), 2700); return; }
   const now = Date.now();
   if (now - askNudgeAt < 2500) return;
   askNudgeAt = now;
@@ -4169,6 +4172,7 @@ function specUnderMap(covered: boolean) {
   if (covered !== specOffSent) {
     specOffSent = covered;
     try { spec?.send({ type: 'spec', on: covered ? 0 : 1 }); } catch { /* not open: the next connect starts it on */ }
+    if (!covered && fpsDeferred) { fpsDeferred = false; try { spec?.setFftRate(wantedFps()); } catch { /* not open */ } }
   }
   if (!covered && loopParked && !trackViewUp()) { loopParked = false; requestAnimationFrame(loop); }
 }
@@ -9897,8 +9901,10 @@ function adsbChromeMount(v: TrackView, tab: string) {
   for (const id of ['adsbCapture', 'adsbGain']) { const el = $(id); if (el.parentElement !== tune) tune.appendChild(el); }
   { const el = $('adsbChat'); if (el.parentElement !== top) top.appendChild(el); }
   v.tuneSync();
-  const chips = $('adsbChips'); if (chips.parentElement !== head) head.appendChild(chips);
-  chips.hidden = tab !== 'aircraft';
+  /* ★★ Stuart 16:53 ("broke it" — the old panel leaking into the LIST): the FURTHEST / LONGEST chips are the STATS card's
+   *  now (asStatsSync, every source merged — the chips only knew this radio's own ADS-B), so they stay parked */
+  void head; void tab;
+  const chips = $('adsbChips'); const park = document.getElementById('adsbChrome'); if (park && chips.parentElement !== park) park.appendChild(chips);
   for (const id of ['adsbFeedWarn', 'adsbGainPop']) { const el = $(id); if (el.parentElement !== over) over.appendChild(el); }
 }
 function adsbChromePark() {
@@ -11395,6 +11401,7 @@ function asRender() {
   // ── aviation (aviationMap.ts avCompose, unchanged: our toggles in its terms) ──
   const avFocus: AvFocus = mode === 'datalink' ? 'datalink' : mode === 'hfdl' ? 'hfdl' : 'adsb';
   const avc = avCompose(avOn ? avR : null, avSh, avFocus, avLayersFrom(tog, present, live) as AvLayers, rx, 'web');
+  v.setCredit(avc.credit || (adsbOn && adsbR) ? avCreditHtml() : '');   // ★ the aircraft data's licence words: HELP, beside the map's own credits
   // ── maritime (shipCompose, our presence and toggles) ──
   const shipPresent = present.map((id) => shipLayerOf(id)).filter((x): x is ShipLayerId => !!x);
   const shipOnF = (id: ShipLayerId) => on(SHIP_ID[id]);
@@ -11442,11 +11449,11 @@ function asRender() {
   const tabs = liveTabs('airsea', tabHave, live, asOpenedTab);
   const tab = liveTabPick(tabs, asPicked, live, asOpenedTab) ?? 'aircraft';
   v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
-  // ★ ADS-B live: its list keeps its own order (emergencies, military, then the nearest) — no sort chip
+  // ★★ ADS-B live: one list like every other (Stuart 16:53) — nearest / latest
   if (adsbOn) { adsbChromeMount(v, tab); adsbRender(); }
   // ★★ beta96 stage 8 NDB live: its pieces in the map's slots (the list under NAVAIDS), its layer on the map
   if (ndbOn && ndbView) { ndbView.mount(v); ndbView.setTab(tab === 'navaids'); ndbView.setShown(on('ndb')); }
-  v.setSort(tab === 'aircraft' && !adsbOn ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
+  v.setSort(tab === 'aircraft' ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
   const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
   // ── the ranges: the DATALINK's bands while it is on, else the time filter where a maritime layer is drawn ──
@@ -11459,15 +11466,15 @@ function asRender() {
   let rows = '';
   if (tab === 'aircraft') {
     const byKey = new Map(avc.rows.map((r) => [r.key, r]));
-    // ★ ADS-B live: its own list first (squawk, climb, bars, tracked NM — adsb.ts adsbListHtml, keyed as the map's items)
-    const liveList = adsbOn && on('adsb') ? `<div id="adsbList">${adsbListHtml(adsbR, rx, adsbImageBase(), 'adsb:')}</div>` : '';
-    const sorted = aircraftOrder(otherPlanes.map((p) => {
+    /* ★★ Stuart 16:53: ONE list in ADS-B live too — the old ADS-B table (#adsbList) is gone from the card; every aircraft,
+     *  this radio's own and the feeds', is a row of the same kind, nearest or latest. This radio's live ones keep the map
+     *  item's key (adsb:<hex>), so a tap still finds the plane on the map. The licence credit is HELP's (setCredit). */
+    void adsbListHtml; void otherPlanes;
+    const sorted = aircraftOrder(avc.planes.map((p) => {
       const nm = rx && p.lat != null && p.lon != null ? adsbRangeBearing(rx, p.lat, p.lon).nm : null;
-      return { key: `a:${p.key}`, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
+      return { key: `a:${p.key}`, icao: p.icao, mil: !!p.info?.mil, em: false, nm, age: Math.min(p.age, ...Object.values(p.srcAge)) };
     }), asSort).slice(0, LIVE_ROW_CAP);
-    rows = sorted.map((x) => byKey.get(x.key)).filter(Boolean).map((r) => trkRowHtml(r!)).join('');
-    if (rows && avc.credit && !liveList.includes('adsbCredit')) rows += `<div class="avCredit">${avCreditHtml()}</div>`;
-    rows = liveList + rows;
+    rows = sorted.map((x) => { const r = byKey.get(x.key); if (!r) return ''; return trkRowHtml(isLiveAc(x.icao) ? { ...r, key: `adsb:${cleanHex(x.icao)}` } : r); }).join('');
     if (!rows) rows = `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : avOn && !avReport ? 'Taking the receiver to the aircraft datalink…' : AV_EMPTY)}</div>`;
   } else if (tab === 'messages') {
     const list = msgFilter(asMsgs, asMsgKey).slice(0, LIVE_ROW_CAP);
@@ -13809,10 +13816,13 @@ function markActive() {
   lastInteraction = Date.now();
   if (throttled) {
     throttled = false;
-    spec?.setFftRate(wantedFps());
+    // ★ under a map with the spectrum paused there is nothing to speed up — a press on the map moved no frame rate (map-shared
+    //   e2e: "a SHOW chip toggled sends nothing"); the rate goes with the spectrum's return (specUnderMap)
+    if (specOffSent) fpsDeferred = true; else spec?.setFftRate(wantedFps());
     updateStatus();
   }
 }
+let fpsDeferred = false;
 
 /** Hidden tab: nothing is being drawn, so ask the server to stop producing it. */
 function throttleHidden() {
@@ -15030,6 +15040,7 @@ let softLimitTold = false;
  *  server too. The clock reads like a soft one's at zero; the server said so on hwinfo (`borrowed`). */
 let borrowedTime = false;
 
+(window as any).__vibeSessionLeft = (secs: number) => { setTimeLeft(secs); };   // ★ for the drivers: a session limit's countdown, as the server's would start it
 function setTimeLeft(secs: number) {
   sessionDeadline = Date.now() + secs * 1000;
   if (!sessionTicker) sessionTicker = setInterval(paintTimeLeft, 1000);

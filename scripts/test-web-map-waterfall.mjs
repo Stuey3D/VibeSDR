@@ -111,11 +111,11 @@ async function radioDatalink(p, url) {
     }
     { // ★★ Stuart 16:17 / 16:19 ("very dark"): the waterfall area is lit — the floor visible, the bursts brighter — and it moves,
       //    in the small drawer and maximised
-      const LUM = `(() => { const c = ${V}.querySelector('.mapWf canvas'); const sh = Math.min(90, Math.round(c.height * 0.28)); const y0 = sh + 2, n = Math.min(30, c.height - y0 - 1); const d = c.getContext('2d').getImageData(0, y0, c.width, n).data; let sum = 0; const px = []; for (let i = 0; i < d.length; i += 4) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += l; px.push(l); } px.sort((a, b) => a - b); return JSON.stringify({ mean: sum / (d.length / 4), med: px[Math.floor(px.length / 2)], top: px[Math.floor(px.length * 0.995)], sig: [...d.slice(0, 400)].join(',').length + ':' + d[1000] + d[3000] + d[5000] }); })()`;
+      const LUM = `(() => { const c = ${V}.querySelector('.mapWf canvas'); const sh = Math.min(90, Math.round(c.height * 0.28)); const y0 = sh + 2, n = Math.min(30, c.height - y0 - 1); const d = c.getContext('2d').getImageData(0, y0, c.width, n).data; let sum = 0; const px = []; for (let i = 0; i < d.length; i += 4) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += l; px.push(l); } px.sort((a, b) => a - b); return JSON.stringify({ mean: sum / (d.length / 4), med: px[Math.floor(px.length / 2)], top: px[Math.floor(px.length * 0.995)], sig: (() => { let h = 0; for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] + 7 * d[i + 1] + 13 * d[i + 2]) % 1000000007; return h; })() }); })()`;
       for (const max of [false, true]) {
         if (max) { await p.ev(`${V}.querySelector('.lMax').click(); 1`); await sleep(1500); }
         await sleep(3000);
-        const a = JSON.parse(await p.ev(LUM)); await sleep(1500); const b = JSON.parse(await p.ev(LUM));
+        const a = JSON.parse(await p.ev(LUM)); await sleep(2500); const b = JSON.parse(await p.ev(LUM));
         ok(a.mean > 18 && a.mean < 200, `${max ? 'maximised' : 'the drawer'}: the waterfall is lit, not near-black (mean ${a.mean.toFixed(0)})`);
         ok(a.top > a.med + 25, `${max ? 'maximised' : 'the drawer'}: the bursts stand out from the floor (the brightest 0.5 % ${a.top.toFixed(0)} vs median ${a.med.toFixed(0)})`);
         ok(a.sig !== b.sig, `${max ? 'maximised' : 'the drawer'}: …and it moves`);

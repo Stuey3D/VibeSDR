@@ -26,7 +26,7 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 const kids = [];
 const dirs = [];
 process.on('exit', () => { for (const k of kids) { try { k.kill('SIGKILL'); } catch {} } for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
-const watchdog = setTimeout(() => { console.log('   FAIL watchdog: 1200 s'); process.exit(1); }, 1_200_000);   // ★ the suite grew with the map work (widths, rows, stacks, pulses)
+const watchdog = setTimeout(() => { console.log('   FAIL watchdog: 1800 s'); process.exit(1); }, 1_800_000);   // ★ the suite grew with the map work (widths, rows, stacks, pulses)
 const SIZES = [[390, 844, true], [820, 1180, true], [1440, 900, false]];
 
 // ── a synthetic dump1090 (Beast): the Riddle's worked examples, re-sent with a rising counter (as test-server-aircraft-feeds) ──
@@ -135,7 +135,9 @@ async function sizeChecks(p, tag, w, h, o) {
     { await p.ev(`window.__vibeMapNudge('Ask in the chat before leaving'); 1`); await sleep(400);
       const nz = JSON.parse(await p.ev(`JSON.stringify((() => { const r = (e) => { const b = e?.getBoundingClientRect(); return b && b.width ? b : null; }; const bar = r(document.getElementById('mapShLine')), x = r(${V}.querySelector('.trkTop .exit')), rt = r(${V}.querySelector('.mDock[data-dock="rate"]:not([hidden]) .hCard'));
         const hit = (a, c) => a && c && a.left < c.right - 1 && a.right > c.left + 1 && a.top < c.bottom - 1 && a.bottom > c.top + 1; const e = document.getElementById('mapShLine');
-        return { text: e.textContent, clear: !hit(bar, x) && !hit(bar, rt), oneLine: e.scrollWidth <= e.clientWidth + 1 }; })())`));
+        const rg = document.createRange(); rg.selectNodeContents(e); const tb = rg.getBoundingClientRect(), cs = getComputedStyle(e), inner = e.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+        // ★ the words' own box against the line's content box (scrollWidth over-reports this padded, letter-spaced pill by ~24 px)
+        return { text: e.textContent, clear: !hit(bar, x) && !hit(bar, rt), oneLine: tb.width <= inner + 1 && tb.height < 30 }; })())`));
       ok(/^ASK IN CHAT( BEFORE LEAVING)?$/.test(nz.text) && nz.clear && nz.oneLine, `${tag} ${w}: the locked ✕'s nudge fits the bar ("${nz.text}", clear of the ✕ and RATE)`);
       await sleep(2800); }
     // ★ a press on a locked control points at where to ask: the bar and CHAT pulse for ~2.5 s, then nothing runs (Stuart 14:46)
@@ -578,14 +580,18 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     { await rowsAt(390, 844, true);
       await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 3 * (r.querySelector('.trkRow')?.offsetHeight || 45); r.dispatchEvent(new Event('scroll')); return 1; })()`); await sleep(300);
       const keys0 = await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].map(r => r.dataset.key))`);
-      // two new, nearer aircraft: the next draw's rows with two extra at the top
-      await p.ev(`(() => { const v = window.__vibeTrkView; const html = v.rowsPending || v.lastRows; const extra = ['__t1', '__t2'].map(k => '<div class="trkRow kvRow" data-key="' + k + '"><span class="id"><b><span class="nmT">' + k + '</span></b><small></small></span><span class="rg"></span><span class="ag">now</span></div>').join('');
-        v.lastRows = ''; v.update ? 0 : 0; v.frozenTest = true; v['frozenApply'](extra + html); v.rowsPending = extra + html; return 1; })()`); await sleep(200);
-      const keys1 = await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].map(r => r.dataset.key))`);
-      const pz = JSON.parse(await p.ev(`JSON.stringify((() => { const b = ${V}.querySelector('.trkList .hd .lPause'); return { shown: !b.hidden && b.getBoundingClientRect().width > 0, text: b.textContent.trim() }; })())`));
+      // two new, nearer aircraft: the next draw's rows with two extra at the top. ★ All in ONE evaluation — the live list is
+      //   redrawn every second, and a real update landing between the steps replaced the injected rows (a flaky test, 11-27)
+      const one = JSON.parse(await p.ev(`JSON.stringify((() => { const v = window.__vibeTrkView; const html = v.rowsPending || v.lastRows; const extra = ['__t1', '__t2'].map(k => '<div class="trkRow kvRow" data-key="' + k + '"><span class="id"><b><span class="nmT">' + k + '</span></b><small></small></span><span class="rg"></span><span class="ag">now</span></div>').join('');
+        v.lastRows = ''; v['frozenApply'](extra + html); v.rowsPending = extra + html;
+        const keys1 = JSON.stringify([...v.root.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].map(r => r.dataset.key));
+        const b = v.root.querySelector('.trkList .hd .lPause'); const pz = { shown: !b.hidden && b.getBoundingClientRect().width > 0, text: b.textContent.trim() };
+        b.click();
+        const after = { hid: b.hidden, n: v.root.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="__t"]').length };
+        return { keys1, pz, after }; })())`));
+      const keys1 = one.keys1, pz = one.pz;
       ok(keys0 === keys1 && pz.shown && /\+2$/.test(pz.text), `scrolled: the rows hold their order, "‖ +2" shows (${pz.text})`);
-      const after0 = await p.ev(`(() => { ${V}.querySelector('.trkList .hd .lPause').click(); return JSON.stringify({ hid: ${V}.querySelector('.trkList .hd .lPause').hidden, n: ${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="__t"]').length }); })()`);
-      const after = JSON.parse(after0);
+      const after = one.after;
       ok(after.hid && after.n === 2, `…pressed: the new rows are in, the key gone (${JSON.stringify(after)})`);
       await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 200; r.dispatchEvent(new Event('scroll')); return 1; })()`); await sleep(300);
       const fz = await p.ev(`!${V}.querySelector('.trkList .hd .lPause').hidden`);
@@ -626,7 +632,9 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       ok(!buried, `${ww}×${hh}: every chip is on top where it is drawn${buried ? ' — ' + buried : ''}`);
     }
     // ── one side or flanking, by the map's own height (Stuart's phones) ──
-    for (const [ww, hh, want] of [[375, 667, 'R'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {
+    // ★ the agreed rule (mapCards oneSide): flank only when the left stack does NOT fit the map's height — at 375×667 it fits
+    //   (the ✕, five chips and the LIST); 932×430 and 956×400 are SHORT landscape (the family is a bottom row, never the left edge)
+    for (const [ww, hh, want] of [[375, 667, 'L'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {
       await p.size(ww, hh, true); await sleep(700);
       const side = await p.ev(`(() => { const b = ${V}.querySelector('.mDock[data-dock="map"] .hCard').getBoundingClientRect(); return b.left <= 1 ? 'L' : 'R'; })()`);
       ok(side === want, `${ww}×${hh}: MAP CONTROLS ${want === 'L' ? 'down the left with the others' : 'top-right (flanking)'} — map ${await p.ev(`${V}.querySelector('.trkMapHost').clientHeight`)} px tall`);
@@ -650,7 +658,8 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
 {
   const dir = mkdir('one');
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Map cards single', locator: 'IO92nh', adminPass: 'map-cards-admin', gainLock: true,
-    radios: [{ serial: 'mc-one', label: 'Only radio', enabled: true, configured: true, users: 1, gainLock: true }] }));   // ★ the owner's gain lock: the 🔒 flow below
+    radios: [{ serial: 'mc-one', label: 'Only radio', enabled: true, configured: true, users: 1, gainLock: true, gainLimits: '130M-140M:300' }] }));   // ★ the owner's gain lock: the 🔒 flow below
+  // ★ the lock BITES only on a band with a ceiling (hwinfo gainLocked = cap here && lock) — the DATALINK band gets one
   const rtlPort = await freePort(), port = await freePort();
   kids.push(spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000', '--hf', CLIP, '--hf-centre', '136850000'], { stdio: 'ignore' }));
   await sleep(400);

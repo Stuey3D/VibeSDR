@@ -660,7 +660,7 @@ const CSS = `
 .trkCard2[data-card="list"] .trkList .hd .mn{display:none}
 .trkTop .slot-share{min-width:0;flex:0 1 auto}
 .trkTop .slot-share .mapShLine{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;text-transform:none;letter-spacing:.02em}
-.trkTop .slot-share>span{min-width:0;max-width:100%}
+.trkTop .slot-share>span{min-width:0}
 .trkTop .rate{order:0}
 /* ★ a phone: the bar may WRAP the shared line (never reorder it) — EXIT, the line, CHAT, the rate */
 .trkView[data-narrow] .trkTop{flex-wrap:wrap;row-gap:6px}
@@ -751,7 +751,13 @@ const CSS = `
 .trkCard2[data-card="tune"] .mapGainHost .mrow{margin:0}
 .mapGainHost .gRow{display:flex;align-items:center;gap:8px;min-height:34px}
 .mapGainHost .gRow[hidden]{display:none}
-.mapGainHost .gSl{flex:1 1 auto;min-width:80px;accent-color:#ffd34d}
+.mapGainHost .gSl{flex:1 1 auto;min-width:80px;accent-color:#ffd34d;-webkit-appearance:none;appearance:none;background:transparent;height:24px;margin:0;cursor:pointer}
+/* ★ the house slider, never the browser's grey ("the sources look like windows 95", Stuart 11:59): a dark rail, the gold thumb */
+.mapGainHost .gSl::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:#33475a}
+.mapGainHost .gSl::-moz-range-track{height:4px;border-radius:2px;background:#33475a}
+.mapGainHost .gSl::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:#ffd34d;border:2px solid #0b110d;box-shadow:0 0 0 1px #ffd34d}
+.mapGainHost .gSl::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#ffd34d;border:2px solid #0b110d}
+.mapGainHost .gSl:focus-visible{outline:2px solid #ffd34d;outline-offset:2px}
 .mapGainHost .gVal{font:700 13px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#e8eef5;font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
 .mapGainHost .gAgc{all:unset;cursor:pointer;flex:none;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;padding:6px 9px;border-radius:7px;border:1px solid #33475a;color:#9fb0c2;background:#141c24}
 .mapGainHost .gAgc.on{background:#ffd34d;border-color:#ffd34d;color:#111}
@@ -840,7 +846,8 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mDock[data-dock="rate"] .hCard{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;padding-right:var(--sai-r)}
 .trkView.rateOpen .trkCards .sideR{right:0!important;left:auto!important;top:var(--trk-rate-bottom,40px)!important}
 .trkView.rateOpen .trkCards .sideR>.trkCard2[data-card="rate"]{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;width:max(var(--trk-rate-w,160px),240px);transform-origin:top right}
-.trkView .trkTop .slot-share{max-width:100%}
+/* ★ no percentage max-width on the pill's boxes: in this shrink-to-fit row it resolved against the pill's own width and held
+ *  it at the width of an EARLIER text — "ASK IN CHAT" overflowed a box with room to spare (map-cards e2e) */
 /* ★★★ Stuart 14:42: the shared-tuner message MIRRORS THE CONTROL DECK — attached to the top edge, centred, the deck
  *  upside down (square top, rounded bottom), the deck's own material (--ctl-card-bg / --bar-border, so every skin and
  *  the transparency setting follow) and its font; one line, shortened (main.ts) before it could reach the ✕ or RATE */
@@ -848,7 +855,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView .trkTop .slot-share .mapShLine{margin-top:0;border-radius:0 0 12px 12px!important;border:1px solid var(--bar-border,rgba(255,255,255,.18))!important;border-top:0!important;
   padding:calc(var(--sai-t) + 7px) 14px 7px!important;box-shadow:0 8px 28px rgba(0,0,0,.6)!important;background:var(--ctl-card-bg,rgba(10,10,10,.92))!important;
   font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace!important;font-size:12px!important;letter-spacing:.12em!important;color:#ffcc88!important;
-  white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;text-align:center;line-height:1.2;max-width:100%}
+  white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;text-align:center;line-height:1.2}
 .trkView .trkTop .slot-share .mapShLine.alone{color:#7bd88f!important}
 .trkView .trkTop .slot-share .mapShLine.locked{color:#ff9d8a!important}
 .trkView[data-narrow] .trkTop .slot-share .mapShLine{white-space:nowrap!important;font-size:11px!important;letter-spacing:.06em!important}
@@ -898,7 +905,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★★★ Stuart 13:20 ("the row at the top … moves next to the collapse button at the bottom, no covering of the lines at
  *  all"): ONE slim bar at the drawer's foot — the chip (in the corner, as ever), the tab scroller, ‖ +N, the sort — and
  *  the rows above it from the drawer's top edge; nothing ever covers a row */
-.trkCard2[data-card="list"] .trkList .hd{order:9;min-height:var(--trk-lchip-h,31px);box-sizing:border-box;padding:0 8px 0 calc(var(--trk-lchip-w,76px) + 4px)!important;border-top:1px solid #1b2733;border-bottom:0!important;flex:none}
+.trkCard2[data-card="list"] .trkList .hd{order:9;min-height:var(--trk-lchip-h,31px);box-sizing:border-box;padding:0 8px 0 calc(var(--trk-lchip-w,76px) + 4px - var(--sai-l,0px))!important;border-top:1px solid #1b2733;border-bottom:0!important;flex:none}
 .trkCard2[data-card="list"] .trkList .rows{order:1}
 .trkCard2[data-card="list"] .trkList .safety,.trkCard2[data-card="list"] .trkList .filt{order:2}
 .trkView .mChipsBL{z-index:800}
@@ -950,6 +957,8 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="list"][data-pane="wf"] .cb>.facts{display:none}
 .trkList .hd .wfInfo{display:none}
 .trkList[data-pane="wf"] .hd .wfInfo{display:block;color:#cfd9e3;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.trkCard2[data-card="help"] .hCredit{margin-top:8px;padding-top:6px;border-top:1px solid #22303d;font:10px/1.4 ui-monospace,Menlo,monospace;color:#8fa2b5}
+.trkCard2[data-card="help"] .hCredit a{color:#cfd9e3}
 .mapWf{position:relative;flex:1 1 auto;min-height:0;height:0;background:#000;overflow:hidden;contain:size layout paint;pointer-events:none}
 .mapWf canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .mapWf .mwMarks{position:absolute;inset:0}
@@ -979,7 +988,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .trkCard2[data-card="list"] .lSwap::before,.trkView[data-short] .trkCard2[data-card="list"] .lSwap::after{display:none}
 .trkView[data-short] .trkCard2[data-card="list"] .lMax svg{transform:rotate(90deg)}
 .trkView[data-short] .trkCard2[data-card="list"] .lMax[aria-pressed="true"] svg{transform:rotate(-90deg)}
-.trkView[data-short] .mChipsL{top:auto!important;bottom:var(--sai-b)!important;left:var(--trk-row-l,96px)!important;flex-direction:row!important;align-items:flex-end!important;gap:6px!important}
+.trkView[data-short] .mChipsL{top:auto!important;bottom:0!important;left:var(--trk-row-l,96px)!important;flex-direction:row!important;align-items:flex-end!important;gap:8px!important}
 .trkView[data-short] .mChipsL .mDock .hCard{border-left-width:1px!important;border-bottom-width:0!important;border-radius:12px 12px 0 0!important}
 .trkView[data-short] .mChipsL .mDock .mchip{flex-direction:column!important;align-items:center;min-height:40px!important}
 .trkView[data-short] .mChipsL .mDock .mchip .cap{display:none}
@@ -989,14 +998,43 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .trkCards .sideL>.trkCard2{border-left-width:1.5px!important;border-bottom-width:0!important;border-radius:12px 12px 0 0!important;transform-origin:bottom left!important;max-height:100%}
 /* ★★★ V12 SAFE AREAS: each edge control stands IN from its edge by that edge's inset (the drawer's and cards' plates may run
  *  under it — their content is padded); the ✕ off the notch side, the chips, the ? / scale stack, zoom and credits */
-.trkView .trkTop .exit{left:var(--sai-l)!important;width:52px!important;padding:0!important}
+.trkView .trkTop .exit{left:0!important;width:calc(52px + var(--sai-l))!important;padding:0 0 0 var(--sai-l)!important}
 /* ★ Stuart 16:0x ("health and time tabs appear twice, one off the edge"): a TUCKED card's own › sat past the edge beside its
  *  tab — only the tab shows while tucked */
 .trkView .edgeDock.tucked .hTuck,.trkView #srvHealth.tucked .hTuck{visibility:hidden}
-.trkView .mChipsL{left:var(--sai-l)}
-.trkView .mChipsBL{left:var(--sai-l);bottom:calc(var(--trk-list-bottom,0px) + var(--sai-b))}
-.trkView .mChipsR{right:var(--sai-r)}
-.trkView .mDock[data-dock="rate"] .hCard{padding-right:0}
+/* ★★ Stuart 17:0x (iPhone, island left: "health and time appear TWICE, one set past the edge"): a tucked card slides out by
+ *  its own width and an untucked tab hides the same way — with the chips stood IN from the edge by the safe area, the slid
+ *  piece landed in the inset, on screen. Each half is invisible while it is away, so only one of card / tab ever shows. */
+.trkView .edgeDock.tucked .hCard{visibility:hidden;transition:transform .2s ease,visibility 0s linear .2s}
+.trkView .edgeDock:not(.tucked) .hTab{visibility:hidden;transition:transform .2s ease,visibility 0s linear .2s}
+.trkView .edgeDock.tucked .hTab,.trkView .edgeDock:not(.tucked) .hCard{transition:transform .2s ease,visibility 0s}
+/* ★ short landscape (Stuart: "zoom can sit horizontal on the bottom too"): − + as a pair on the bottom edge, left of the ?,
+ *  so the right column holds only RATE, CHAT, health and time */
+.trkView[data-short] .trkMapHost .maplibregl-ctrl-top-left .maplibregl-ctrl-group,.trkView[data-short] .trkMapHost .leaflet-top.leaflet-left .leaflet-bar{display:flex!important;flex-direction:row-reverse;margin:0 0 6px 0!important}
+.trkView[data-short] .trkMapHost .maplibregl-ctrl-top-left .maplibregl-ctrl-group button+button{border-top:0!important;border-right:1px solid #ddd}
+/* ★★★ Stuart 17:1x ("chips don't go to the edge"): an EDGE piece sits on the PHYSICAL edge and pads its CONTENT in by that
+ *  edge's inset — the app's EdgeChip rule (src/components/EdgeChip.tsx, edgeChipGeometry.ts): the ✕ corner piece, RATE's
+ *  corner, the chips and their tabs, the LIST drawer. Free-standing controls (the ? and scale, zoom, credits) stand IN. */
+.trkView .mChipsR .mDock .hCard{padding-right:calc(4px + var(--sai-r))!important}
+.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard{padding-right:calc(8px + var(--sai-r))!important}
+.trkView .mDock[data-dock="rate"] .hCard{padding-right:var(--sai-r)!important}
+.trkView .mChipsL .mDock .hCard{padding-left:calc(4px + var(--sai-l))!important}
+.trkView .mChipsBL .mDock .hCard{padding-left:calc(6px + var(--sai-l))!important}
+.trkView .edgeDock .hTab{width:calc(26px + var(--sai-r));padding-right:var(--sai-r)}
+/* ★★ Stuart 17:3x ("the right side ones are huge when collapsed"): the drawn body stays PORTRAIT size; the inset is only a flush
+ *  strip of frame reaching the physical edge — painted faint, not as more of the chip */
+.trkView .mChipsR .mDock .hCard,.trkView .mChipsR #srvHealth .hCard,.trkView .mChipsR .mTime .hCard,.trkView .mChipsR .edgeDock .hTab{
+  background-image:linear-gradient(to left,rgba(0,0,0,.55) 0 var(--sai-r),transparent var(--sai-r))!important}
+.trkView[data-short] .mChipsL .mDock .hCard{background-image:linear-gradient(to top,rgba(0,0,0,.55) 0 var(--sai-b),transparent var(--sai-b))!important}
+.trkView .edgeDock.left .hTab{width:calc(26px + var(--sai-l));padding-left:var(--sai-l);padding-right:0}
+.trkView[data-short] .mChipsL .mDock .hCard{padding-left:4px!important;padding-bottom:calc(4px + var(--sai-b))!important}
+/* ★ Stuart 17:07 (the bar "wrapped" — ☰ 129 ⌄ dropped below the tabs): the drawer's content stands above the home bar
+ *  (its padding-bottom is the inset) but the chip sat on the physical edge — a row lower. Shut, the chip is the edge piece
+ *  (its content padded up by the inset); open, it rides up onto the drawer's bar, level with the tabs. */
+/* ★ every layout: the collapsed LIST chip is an edge piece — its frame on the physical bottom, its content above the inset
+ *  (Stuart's portrait check: ☰ n ⌃ sat in the 34 px gesture inset) */
+.trkView .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{padding-bottom:var(--sai-b)!important}
+.trkView[data-short] .mChipsBL .mDock[data-dock="list"].open{transform:translateY(calc(-1 * var(--sai-b)))}
 .trkView .mChipsScale{right:var(--sai-r);margin-bottom:var(--sai-b)}
 .trkView .mHelp{right:calc(10px + var(--sai-r));margin-bottom:var(--sai-b)}
 .trkMapHost .maplibregl-ctrl-top-left,.trkMapHost .leaflet-top.leaflet-left{right:var(--sai-r)!important}
@@ -1030,6 +1068,14 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mScale .hCard{cursor:default!important;padding:6px 5px!important;min-width:0!important}
 .mScale[hidden]{display:none}
 .mScaleBody{display:flex;align-items:flex-start;gap:4px}
+.saiProbe{position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;pointer-events:none;padding:var(--sai-t) var(--sai-r) var(--sai-b) var(--sai-l)}
+/* ★ short landscape: the scale lies down in the bottom-right group (shortGeom) — the line across, its words beside it */
+.trkView.scaleH .mScaleBody{flex-direction:row;align-items:center}
+.trkView.scaleH .mScaleBody .vsLine{height:6px;border-width:0 2px 2px 2px}
+.trkView.scaleH .mScaleBody .vsLbl{flex-direction:row}
+.trkView.scaleH .mChipsScale .hCard{padding:4px 6px!important}
+.trkView[data-short] .trkMapHost .maplibregl-ctrl-bottom-right .maplibregl-ctrl,.trkView[data-short] .trkMapHost .leaflet-bottom.leaflet-right .leaflet-control{margin:0!important}
+.trkView[data-short] .trkMapHost .maplibregl-ctrl-top-left .maplibregl-ctrl-group{margin:0!important}
 .mScaleBody .vsLine{display:block;width:6px;box-sizing:border-box;border:solid #e8eef5;border-width:2px 0 2px 2px}
 .mScaleBody .vsLbl{display:flex;flex-direction:column;align-items:center;font:700 10px/1.05 ui-monospace,Menlo,monospace;color:#e8eef5}
 .mDock .zst{position:relative;display:block;width:18px;height:18px;color:#7ee787}
@@ -1555,7 +1601,9 @@ export class TrackView {
     if (on && save) {
       // ★ the pad / keyboard: into the card (its first control), so Escape / BACK come straight back out
       const el = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement | null;
-      (el?.querySelector('.cb button:not([disabled]):not([hidden]), .cb [tabindex="0"]') as HTMLElement | null)?.focus({ preventScroll: true });
+      // ★ TUNE: onto the modes (the live one), not the gain row lent above them (map-shared e2e: keyboard / pad)
+      const first = (id === 'tune' ? el?.querySelector('.cb .tpRow[aria-checked="true"], .cb .tpRow') : null) ?? el?.querySelector('.cb button:not([disabled]):not([hidden]), .cb [tabindex="0"]');
+      (first as HTMLElement | null)?.focus({ preventScroll: true });
     }
   }
   /** Which cards may be offered (a card with nothing in it has no button — AGENTS.md: never a dead control). */
@@ -1604,6 +1652,15 @@ export class TrackView {
       const stackH = docks.reduce((t, d) => t + Math.max(40, (d.querySelector('.hCard') as HTMLElement).offsetHeight) + 8, 16 + xH);
       // ★★★ V12 short landscape: the family is a row along the bottom — all of it on the left family's side (MAP too)
       const short = shortMap(this.mapHost.clientWidth || 0, this.mapHost.clientHeight || 0);
+      /* ★★ the layout's decision, readable (Stuart's iPhone saw no change where the harness did — window.__mapGeom, and on
+       *  the ?perf=1 overlay): the window, the visual viewport, the map box, the insets, the island rule, short or not */
+      try {
+        const vv = window.visualViewport, ins = this.insetPx();
+        (window as any).__mapGeom = { iw: innerWidth, ih: innerHeight, vvw: vv ? Math.round(vv.width) : null, vvh: vv ? Math.round(vv.height) : null,
+          mapW: this.mapHost.clientWidth, mapH: this.mapHost.clientHeight, ins, island: document.documentElement.dataset.island || '', short,
+          cover: /viewport-fit=cover/.test((document.querySelector('meta[name="viewport"]') as HTMLMetaElement | null)?.content || ''),
+          geomErr: this.geomErr, ua: navigator.userAgent.slice(0, 120) };
+      } catch { /* diagnostics only */ }
       if (short !== this.shortNow) { this.shortNow = short; this.root.toggleAttribute('data-short', short); this.layoutSig = ''; }
       const one = short || oneSide(this.mapHost.clientHeight || 0, stackH);
       this.oneSideNow = one;
@@ -1793,6 +1850,8 @@ export class TrackView {
     { const ch = this.root.querySelector('.mDock[data-dock="list"] .hCard') as HTMLElement | null;   // the drawer's chip strip
       const v = `${ch && ch.offsetHeight ? ch.offsetHeight : 40}px`; if (this.root.style.getPropertyValue('--trk-lchip-h') !== v) this.root.style.setProperty('--trk-lchip-h', v);
       const w = `${ch && ch.offsetWidth ? ch.offsetWidth : 76}px`; if (this.root.style.getPropertyValue('--trk-lchip-w') !== w) this.root.style.setProperty('--trk-lchip-w', w); }
+    if (this.shortNow) { this.shortGeom(m); return; }   // ★ short landscape: one geometry pass owns the bottom-right
+    if (this.geomOn) this.shortGeomClear();
     const list = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
     const open = !!list && !list.hidden && !this.listAside && !!list.parentElement?.classList.contains('sideB') && list.offsetHeight > 0;
     let L: { l: number; t: number; r: number; b: number } | null = null;
@@ -1813,14 +1872,17 @@ export class TrackView {
     { /* ★ Stuart 12:58 ("move the scale up slightly, then it can tuck in"): lifted, the scale must not reach the right
        *  column (RATE, CHAT, MAP) or the zoom — it shortens (a smaller round distance) before anything overlaps */
       const sc = stack.find((x) => x.el.classList.contains('mChipsScale'));
-      const obs = Array.from(this.root.querySelectorAll('.mChipsR, .trkMapHost .maplibregl-ctrl-top-left, .trkMapHost .leaflet-top.leaflet-left')) as HTMLElement[];
+      // ★ short landscape: the zoom is on the bottom edge, not above the scale (Stuart 17:0x)
+      const obs = Array.from(this.root.querySelectorAll(this.shortNow ? '.mChipsR' : '.mChipsR, .trkMapHost .maplibregl-ctrl-top-left, .trkMapHost .leaflet-top.leaflet-left')) as HTMLElement[];
       const floor = Math.max(0, ...obs.map((e) => { const r = e.getBoundingClientRect(); return r.height ? r.bottom : 0; }));
       let want = 96;
       let noRoom = false;
       if (sc && (sc.b.width || this.root.classList.contains('scaleAway')) && (L || this.shortNow)) {
         const over = floor + 8 - (sc.base.t - lift), room = Math.round(this.scaleMaxPx - over);
         want = Math.max(24, Math.min(96, room));
-        noRoom = room < 24;   // ★ short landscape (Stuart 15:51 "zoom overlapped by the scale"): no room under the zoom → no scale
+        // ★ no room under the zoom → no scale; but in SHORT landscape the zoom is on the bottom edge and the scale always stays
+        //   (Stuart 17:07: "the scale strip is still missing") — at its shortest if it must
+        noRoom = room < 24 && !this.shortNow;
       }
       this.root.classList.toggle('scaleAway', noRoom);
       if (want !== this.scaleMaxPx) { this.scaleMaxPx = want; this.scaleDraw(); }
@@ -1841,6 +1903,76 @@ export class TrackView {
     const at = this.mapHost.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution') as HTMLElement | null, ab = at?.getBoundingClientRect();
     const under = !!(L && ab && ab.width && ab.left < L.r && ab.right > L.l && ab.bottom > L.t && ab.top < L.b);
     this.root.classList.toggle('listOverAttrib', under);
+  }
+  /* ★★★ SHORT LANDSCAPE — ONE GEOMETRY PASS (Stuart 17:09: "each preview change fixes one thing and breaks another"). Like the
+   *  app's edgeChipGeometry: every bottom-right piece placed here, from the box, the insets and what is already on the edges.
+   *   · the RIGHT column (RATE, CHAT, health, time) is the flex column at the physical edge — its pieces pad their content in;
+   *   · the BOTTOM-RIGHT group, right to left: the credits (i), the ?, the zoom pair, the scale (HORIZONTAL in this layout) —
+   *     on the bottom edge above the inset, left of nothing the right column reaches; whatever would run into the family row
+   *     goes up a row, still clear of the right column; the scale is the only piece that may stand down (no room at all).
+   *  Inline px, applied together; cleared as the layout leaves short landscape. */
+  private geomOn = false;
+  private insetPx(): { l: number; r: number; b: number; t: number } {
+    let pr = this.root.querySelector('.saiProbe') as HTMLElement | null;
+    if (!pr) { pr = document.createElement('div'); pr.className = 'saiProbe'; pr.setAttribute('aria-hidden', 'true'); this.root.appendChild(pr); }
+    const cs = getComputedStyle(pr);
+    return { l: parseFloat(cs.paddingLeft) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, t: parseFloat(cs.paddingTop) || 0 };
+  }
+  private geomErr = '';
+  private shortGeom(m: DOMRect) {
+    try { this.shortGeomRun(m); this.geomErr = ''; } catch (e) { this.geomErr = String((e as Error)?.message || e).slice(0, 120); }
+  }
+  private shortGeomRun(m: DOMRect) {
+    this.geomOn = true;
+    this.root.classList.add('scaleH');
+    this.root.classList.remove('stackAway', 'scaleAway', 'listOverAttrib');
+    const ins = this.insetPx(), GAP = 8;
+    const W = m.width, H = m.height;
+    const put = (el: HTMLElement | null, right: number, bottom: number) => {
+      if (!el) return;
+      const host = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect() ?? m;
+      el.style.setProperty('right', `${Math.round(right + (host.right - m.right))}px`, 'important');
+      el.style.setProperty('bottom', `${Math.round(bottom + (host.bottom - m.bottom))}px`, 'important');
+      el.style.setProperty('top', 'auto', 'important'); el.style.setProperty('left', 'auto', 'important');
+      el.style.setProperty('margin-bottom', '0', 'important');
+      el.style.transform = ''; el.dataset.lift = '0';
+    };
+    const help = this.root.querySelector('.mHelp') as HTMLElement | null;
+    const attrib = this.mapHost.querySelector('.maplibregl-ctrl-bottom-right, .leaflet-bottom.leaflet-right') as HTMLElement | null;
+    const zoom = this.mapHost.querySelector('.maplibregl-ctrl-top-left, .leaflet-top.leaflet-left') as HTMLElement | null;
+    const scale = this.root.querySelector('.mChipsScale') as HTMLElement | null;
+    if (this.scaleMaxPx !== 80) { this.scaleMaxPx = 80; this.scaleDraw(); }
+    const size = (el: HTMLElement | null) => { if (!el) return { w: 0, h: 0 }; const kid = (el.firstElementChild as HTMLElement | null) ?? el; const b = (el === attrib || el === zoom ? kid : el).getBoundingClientRect(); return { w: Math.ceil(b.width), h: Math.ceil(b.height) }; };
+    // the family row's right end (the row's left is right of the panel / chip) and the right column's foot
+    const famR = Math.max(0, ...(Array.from(this.root.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard')) as HTMLElement[]).map((e) => { const b = e.getBoundingClientRect(); return b.width ? b.right - m.left : 0; }));
+    const col = this.root.querySelector('.mChipsR') as HTMLElement | null, cb = col?.getBoundingClientRect();
+    const colFoot = cb && cb.height ? cb.bottom - m.top : 0, colLeft = cb && cb.width ? cb.left - m.left : W;
+    const pieces: Array<{ el: HTMLElement | null; w: number; h: number; optional?: boolean }> = [
+      { el: attrib, ...size(attrib) }, { el: help, ...size(help) }, { el: zoom, ...size(zoom) }, { el: scale, ...size(scale), optional: true },
+    ].filter((p) => p.el && p.w > 0);
+    let row = 0, x = W - ins.r - GAP, rowBottom = ins.b + 6, rowH = 0;
+    for (const p of pieces) {
+      let left = x - p.w;
+      if (left < famR + GAP && row === 0) {   // ★ would run into the family row: up a row, from the right again
+        row = 1; rowBottom += rowH + GAP; rowH = 0; x = W - ins.r - GAP; left = x - p.w;
+      }
+      const top = H - rowBottom - p.h;
+      const clearsCol = top >= colFoot + GAP || left + p.w <= colLeft - GAP;
+      if (!clearsCol) {
+        if (p.optional) { p.el!.style.setProperty('visibility', 'hidden'); continue; }
+      }
+      if (p.optional) p.el!.style.removeProperty('visibility');
+      put(p.el, W - (left + p.w), rowBottom);
+      x = left - GAP; rowH = Math.max(rowH, p.h);
+    }
+  }
+  private shortGeomClear() {
+    this.geomOn = false;
+    this.root.classList.remove('scaleH');
+    for (const el of Array.from(this.root.querySelectorAll('.mHelp, .mChipsScale, .trkMapHost .maplibregl-ctrl-bottom-right, .trkMapHost .maplibregl-ctrl-top-left, .trkMapHost .leaflet-bottom.leaflet-right, .trkMapHost .leaflet-top.leaflet-left')) as HTMLElement[]) {
+      for (const k of ['right', 'bottom', 'top', 'left', 'visibility', 'margin-bottom']) el.style.removeProperty(k);
+    }
+    this.scaleMaxPx = 96; this.scaleDraw();
   }
   /* ★★★ the LIST maximised (Stuart 12:46): it fills the map under the chips' column; AUTO pauses (there is no map to fit);
    *  remembered per viewer; Escape un-maximises before it folds. One layout at the toggle, then a transform slide. */
@@ -1946,6 +2078,16 @@ export class TrackView {
     if (this.listAside) this.closeTransients();
     this.setPane('wf', false);
     if (!this.isCardOpen('list')) this.cardOpen('list', true, true); else { this.layoutSig = ''; this.cardsLayout(); }
+  }
+  /** ★★ The data credits a licence asks for (the aircraft database's) — in HELP, under the chips' words, beside the map's own
+   *  attribution; never in the LIST (Stuart 16:53). '' = none. The html is the host's own fixed markup. */
+  setCredit(html: string) {
+    const b = this.root.querySelector('.trkCard2[data-card="help"] .helpBody') as HTMLElement | null;
+    if (!b) return;
+    let c = b.querySelector('.hCredit') as HTMLElement | null;
+    if (!html) { c?.remove(); return; }
+    if (!c) { c = document.createElement('div'); c.className = 'hCredit'; b.appendChild(c); }
+    if (c.innerHTML !== html) c.innerHTML = html;
   }
   /** The drawer's bottom bar in the waterfall view: what the waterfall needs (the dial frequency). */
   setWaterfallInfo(html: string) {
@@ -2142,11 +2284,15 @@ export class TrackView {
     if (n.textContent !== num) n.textContent = num;
     n.classList.toggle('soft', soft && leftS <= 0);
     d.dataset.stage = String(stage);
+    /* ★★ Stuart 17:1x ("the time chip doesn't collapse anymore"): the listener's flick ALWAYS wins until the NEXT stage —
+     *  the app's SDRScreen timeOut rule: a new, more urgent stage brings the card out once; a › then tucks it for good */
+    if (stage !== this.timeStage) { if (this.timeStage >= 0 && stage > this.timeStage) this.timeUser = null; this.timeStage = stage; }
     // shown as the app decides: urgency brings it out; otherwise it waits as its tab — the listener's own flick wins
     const out = this.timeUser ? this.timeUser === 'shown' : stage >= 1;
     edgeDockSetT(d, out);
   }
   private timeLast: { left: number | null; soft: boolean } = { left: null, soft: false };
+  private timeStage = -1;
   /** The right column, where the page's own chips (SERVER HEALTH) are lent while the map is up. */
   rightColumn(): HTMLElement { return this.root.querySelector('.mChipsR') as HTMLElement; }
   /** ★★ THE LAYOUT REGISTRY (Stuart 15:04): every piece of chrome over the map — the corner pieces, the edge chips, the
@@ -3094,7 +3240,8 @@ export class TrackView {
     const px = Math.max(12, Math.round((nice * unit) / mpp));
     const label = `${nice >= 1 ? Math.round(nice) : nice}${word}`;
     const line = chip.querySelector('.vsLine') as HTMLElement, lbl = chip.querySelector('.vsLbl') as HTMLElement;
-    line.style.height = `${px}px`;
+    if (this.root.classList.contains('scaleH')) { line.style.width = `${px}px`; line.style.height = ''; }
+    else { line.style.height = `${px}px`; line.style.width = ''; }
     if (lbl.dataset.t !== label) { lbl.dataset.t = label; lbl.innerHTML = [...label].map((ch) => `<span>${esc(ch)}</span>`).join(''); }
     chip.setAttribute('aria-label', `Map scale: the line is ${nice} ${nm ? 'nautical miles' : 'kilometres'}`);
     chip.hidden = false;
@@ -3287,7 +3434,9 @@ function perfOverlay() {
     const gpuWords = !gs ? 'GPU layer: none' : gs.ok ? `GPU layer: OK (${gs.n}) · ambient ${gs.fps} fps for ${gs.pxs} px/s${why ? ` · easing: ${why}` : ''}` : `GPU layer: failed — ${gs.err || 'not started'}`;
     const anims = (document as any).getAnimations ? (document as any).getAnimations().filter((a: any) => a.playState === 'running').length : -1;
     const modeW = mode.startsWith('max') ? mode : gs && gs.ok ? `ambient ${gs.fps} fps` : 'ambient';
-    box.textContent = `${modeW} · page rAF ${c.raf}/s · map renders ${c.render}/s · setData ${c.setData}/s · CSS animations ${anims} · worst stall ${Math.round(c.lag)} ms\n${gpuWords}`;
+    const mg = (window as any).__mapGeom;
+    const geomWords = mg ? `layout: ${mg.short ? 'SHORT' : 'normal'} · window ${mg.iw}×${mg.ih} · visual ${mg.vvw}×${mg.vvh} · map ${mg.mapW}×${mg.mapH} · insets L${Math.round(mg.ins.l)} R${Math.round(mg.ins.r)} T${Math.round(mg.ins.t)} B${Math.round(mg.ins.b)} · island ${mg.island || '-'} · cover ${mg.cover ? 'on' : 'off'}${mg.geomErr ? ' · ERROR ' + mg.geomErr : ''}` : 'layout: -';
+    box.textContent = `${modeW} · page rAF ${c.raf}/s · map renders ${c.render}/s · setData ${c.setData}/s · CSS animations ${anims} · worst stall ${Math.round(c.lag)} ms\n${gpuWords}\n${geomWords}`;
     c.raf = 0; c.render = 0; c.setData = 0; c.lag = 0;
   }, 1000);
 }

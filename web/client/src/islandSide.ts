@@ -34,9 +34,11 @@ let wired = false;
 export function applyIslandSide() {
   const side = islandSideWeb();
   const st = document.documentElement.style;
-  const other = `min(env(safe-area-inset-%s,0px),${CORNER_ALLOWANCE_PX}px)`;
-  if (side === 'left') { st.removeProperty('--isl-l'); st.setProperty('--isl-r', other.replace('%s', 'right')); }
-  else if (side === 'right') { st.setProperty('--isl-l', other.replace('%s', 'left')); st.removeProperty('--isl-r'); }
+  /* ★★ Stuart 17:0x (a real iPhone, island left): the 20 px corner allowance on the other side let the right column run off
+   *  the glass. Both sides now take iOS's own env() inset (it reports both) — the side is still known (data-island) for
+   *  anything that wants to lean on it; the allowance stays the floor where env() says less. */
+  const floor = (k: string) => `max(env(safe-area-inset-${k},0px),${side === 'left' || side === 'right' ? CORNER_ALLOWANCE_PX : 0}px)`;
+  if (side === 'left' || side === 'right') { st.setProperty('--isl-l', floor('left')); st.setProperty('--isl-r', floor('right')); }
   else { st.removeProperty('--isl-l'); st.removeProperty('--isl-r'); }
   document.documentElement.dataset.island = side ?? '';
 }

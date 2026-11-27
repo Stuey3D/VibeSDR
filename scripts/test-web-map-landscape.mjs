@@ -87,7 +87,7 @@ async function radioDatalink(p, url) {
   const RECTS = `JSON.stringify((() => { const V = ${V}; const out = {}; const r = (e) => { if (!e || !e.getClientRects().length || e.closest('[hidden]') || getComputedStyle(e).visibility === 'hidden') return null; const b = e.getBoundingClientRect(); if (!b.width || !b.height) return null; const cx = Math.min(innerWidth - 1, Math.max(0, b.left + b.width / 2)), cy = Math.min(innerHeight - 1, Math.max(0, b.top + b.height / 2)); const at = document.elementFromPoint(cx, cy); return { l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom), top: !!at && (e === at || e.contains(at) || at.contains(e)) }; };
     out.x = r(V.querySelector('.trkTop .exit')); out.pill = r(document.getElementById('mapShLine'));
     for (const d of V.querySelectorAll('.mChipsL .mDock')) out['L:' + d.dataset.dock] = r(d.querySelector('.hCard'));
-    for (const d of V.querySelectorAll('.mChipsR > .mDock, .mChipsR > .edgeDock')) out['R:' + (d.dataset.dock || d.id)] = r(d.classList.contains('tucked') ? d.querySelector('.hTab') : d.querySelector('.hCard'));
+    for (const d of V.querySelectorAll('.mChipsR > .mDock, .mChipsR > .edgeDock:not(#srvHealth)')) out['R:' + (d.dataset.dock || d.id)] = r(d.classList.contains('tucked') ? d.querySelector('.hTab') : d.querySelector('.hCard'));
     const hs = document.getElementById('srvHealth'); if (hs) out['R:health'] = r(hs.classList.contains('tucked') ? hs.querySelector('.hTab') : hs.querySelector('.hCard'));
     out.nTime = V.querySelectorAll('[data-dock="time"]').length; out.nHealth = document.querySelectorAll('#srvHealth').length;
     out.nHTabs = [...document.querySelectorAll('.hTab')].filter((e) => e.getClientRects().length && !e.closest('[hidden]')).length;
@@ -172,18 +172,101 @@ async function radioDatalink(p, url) {
       ok(!C.panel && C.listChip && C.listChip.l <= 1 && fam.every((k) => C[k] && C[k].l >= C.listChip.r - 1), `${tag}: collapsed, the ☰ chip at the left edge and the family right of it`);
       await p.ev(`${V}.querySelector('[data-cbtn="list"]').click(); 1`); await sleep(700);
     }
+    // ── ★★ a real iPhone 17 Pro Max on its side in Safari (Stuart 17:0x): 932×370, iOS reporting the inset on BOTH sides ──
+    for (const island of ['left', 'right']) { await p.size(932, 370, true); await sleep(1200);
+      await p.ev(`document.documentElement.dataset.island = '${island}'; 1`);
+      await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-l', '59px'); v.style.setProperty('--sai-r', '59px'); v.style.setProperty('--sai-b', '21px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1800);
+      await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); if (${V}.querySelector('.trkList').dataset.pane === 'wf') ${V}.querySelector('.lSwap').click(); return 1; })()`); await sleep(1200);
+      const D = JSON.parse(await p.ev(RECTS));
+      await shot(`landscape-932x370-device-island-${island}.png`);
+      const vw = await p.ev(`Math.round(window.visualViewport ? visualViewport.width : innerWidth)`);
+      // ★ Stuart 17:1x: the EDGE pieces sit on the physical edge, their content in by the inset (the app's EdgeChip)
+      const edge = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mChipsR > .edgeDock:not([hidden]), .trkView:not([hidden]) .mChipsR > #srvHealth')].map((d) => { const show = [...d.querySelectorAll(':scope > .hCard, :scope > .hTab')].find((e) => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0); if (!show) return null; const b = show.getBoundingClientRect(); const kids = [...show.querySelectorAll('*')].filter((k) => k.getClientRects().length && !k.children.length && getComputedStyle(k).visibility !== 'hidden'); const cr = Math.max(...kids.map((k) => k.getBoundingClientRect().right), 0); return { id: d.dataset.dock || d.id, r: Math.round(b.right), cr: Math.round(cr) }; }).filter(Boolean))`));
+      ok(edge.length >= 2 && edge.every((e) => e.r >= vw - 1 && e.cr <= vw - 59 + 1), `device 932×370 (island ${island}): every right-edge chip on the physical edge, its content in by the inset (${JSON.stringify(edge)})`);
+      const stray = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .mHelp, .trkView:not([hidden]) .mChipsScale .hCard, .trkView:not([hidden]) .maplibregl-ctrl-group, .trkView:not([hidden]) .maplibregl-ctrl-attrib-button')].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map((e) => { const b = e.getBoundingClientRect(); return { c: String(e.className || e.tagName).slice(0, 30), l: Math.round(b.left), r: Math.round(b.right) }; }).filter((b) => b.r - b.l > 2 && (b.l < 58 || b.r > ${vw} - 58)))`));
+      ok(!stray.length, `device 932×370 (island ${island}): no free-standing control (?, scale, zoom, credits) in an inset (${JSON.stringify(stray).slice(0, 400)})`);
+      const tabs = JSON.parse(await p.ev(`JSON.stringify(['#srvHealth', '.trkView:not([hidden]) [data-dock="time"]'].map((q) => { const d = document.querySelector(q); if (!d || d.hidden || !d.getClientRects().length) return 0; return [...d.querySelectorAll(':scope > .hCard, :scope > .hTab')].filter((e) => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0).length; }))`));
+      ok(tabs.every((n) => n <= 1), `device 932×370 (island ${island}): health and time each show once — card or tab, never both (${tabs.join(' / ')})`);
+      { const bar = JSON.parse(await p.ev(`JSON.stringify((() => { const hd = ${V}.querySelector('.trkCard2[data-card="list"] .trkList .hd').getBoundingClientRect(), ch = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect(), tb = ${V}.querySelector('.trkCard2[data-card="list"] .trkList .hd .tabWrap'); const t = tb && tb.getClientRects().length ? tb.getBoundingClientRect() : null; return { hdT: Math.round(hd.top), hdB: Math.round(hd.bottom), chT: Math.round(ch.top), chB: Math.round(ch.bottom), chR: Math.round(ch.right), tT: t ? Math.round(t.top) : null, tL: t ? Math.round(t.left) : null }; })())`));
+        ok(bar.hdB - bar.hdT <= 46 && bar.chT >= bar.hdT - 2 && bar.chB <= bar.hdB + 2 && (bar.tT == null || (bar.tT >= bar.hdT - 1 && bar.tL >= bar.chR - 1)), `device 932×370 (home bar 21): the drawer's bar is ONE row — ☰ n ⌄ then the tabs, level (${JSON.stringify(bar)})`); }
+      ok(!!D.scale, `device 932×370 (island ${island}): the scale strip is there (${JSON.stringify(D.scale)})`);
+      ok(D.zoom && D.zoom.b >= 370 - 50 && D.zoom.r - D.zoom.l > D.zoom.b - D.zoom.t, `device 932×370 (island ${island}): the zoom is a horizontal pair on the bottom edge (${JSON.stringify(D.zoom)})`);
+      const all = ['x', 'pill', 'zoom', 'scale', 'help', 'attrib', 'listChip', 'lMax', 'lSwap', ...Object.keys(D).filter((k) => (k.startsWith('L:') || k.startsWith('R:')) && D[k])].filter((k) => D[k]);
+      const clash = []; for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (hit(D[all[i]], D[all[j]])) clash.push(`${all[i]}×${all[j]}`);
+      for (const k of all) if (D[k] && D.panel && !['x', 'listChip', 'lMax', 'lSwap'].includes(k) && hit(D[k], D.panel)) clash.push(`${k}×panel`);
+      ok(!clash.length, `device 932×370 (island ${island}): nothing overlaps (${clash.join(' ') || 'clear'})`);
+      await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b']) v.style.removeProperty(k); return 1; })()`);
+    }
+    // ── ★ the no-regression check (Stuart: "portrait perfect"): 430×932 with the portrait insets — not the short layout ──
+    { await p.size(430, 932, true); await sleep(1200);
+      await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-t', '59px'); v.style.setProperty('--sai-b', '34px'); v.style.setProperty('--sai-l', '0px'); v.style.setProperty('--sai-r', '0px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1500);
+      const P = JSON.parse(await p.ev(RECTS));
+      await shot('portrait-430x932-insets.png');
+      ok(!P.short, 'portrait 430×932: not the short layout');
+      { const c = JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${V}.querySelector('.mDock[data-dock="list"]'); const h = d.querySelector('.hCard').getBoundingClientRect(); const kids = [...d.querySelectorAll('.mchip *')].filter((k) => k.getClientRects().length && !k.children.length); return { open: d.classList.contains('open'), frameB: Math.round(h.bottom), contentB: Math.round(Math.max(...kids.map((k) => k.getBoundingClientRect().bottom))) }; })())`));
+        ok(c.open || (c.frameB >= 932 - 1 && c.contentB <= 932 - 34 + 1), `portrait 430×932: the collapsed LIST chip's frame on the bottom edge, its content above the 34 px inset (${JSON.stringify(c)})`); }
+      const all = ['x', 'pill', 'zoom', 'scale', 'help', 'listChip', ...Object.keys(P).filter((k) => (k.startsWith('L:') || k.startsWith('R:')) && P[k])].filter((k) => P[k]);
+      const clash = []; for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (hit(P[all[i]], P[all[j]])) clash.push(`${all[i]}×${all[j]}`);
+      ok(!clash.length, `portrait 430×932: nothing overlaps (${clash.join(' ') || 'clear'})`);
+      await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b', '--sai-t']) v.style.removeProperty(k); return 1; })()`);
+    }
+    // ── ★★ ANDROID (Stuart: "our servers get a lot of Androids using browsers"): Chrome's UA (no iOS island rule — env() as
+    //    reported), a punch-hole inset at the top in portrait / the side in landscape, gesture navigation at the bottom ──
+    await p.send('Emulation.setUserAgentOverride', { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36' });
+    for (const [name, w, h, ins] of [['pixel7', 412, 915, { t: 32, b: 24, l: 0, r: 0 }], ['pixel7', 915, 412, { t: 0, b: 24, l: 32, r: 0 }],
+                                     ['small', 360, 740, { t: 28, b: 20, l: 0, r: 0 }], ['small', 740, 360, { t: 0, b: 20, l: 28, r: 0 }],
+                                     ['galaxyS', 384, 854, { t: 30, b: 24, l: 0, r: 0 }], ['galaxyS', 854, 384, { t: 0, b: 24, l: 0, r: 30 }]]) {
+      const tag = `android ${name} ${w}×${h}`;
+      await p.size(w, h, true); await sleep(1200);
+      await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-t', '${ins.t}px'); v.style.setProperty('--sai-b', '${ins.b}px'); v.style.setProperty('--sai-l', '${ins.l}px'); v.style.setProperty('--sai-r', '${ins.r}px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1500);
+      await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(1000);
+      const A = JSON.parse(await p.ev(RECTS));
+      await shot(`${name}-${w}x${h}.png`);
+      ok(!(await p.ev(`document.documentElement.dataset.island || ''`)), `${tag}: no iOS island rule on Android`);
+      const all = ['x', 'pill', 'zoom', 'scale', 'help', 'attrib', 'listChip', ...Object.keys(A).filter((k) => (k.startsWith('L:') || k.startsWith('R:')) && A[k])].filter((k) => A[k]);
+      const clash = []; for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) if (hit(A[all[i]], A[all[j]])) clash.push(`${all[i]}×${all[j]}`);
+      ok(!clash.length, `${tag}: nothing overlaps (${clash.join(' ') || 'clear'})`);
+      ok(all.filter((k) => k !== 'pill').every((k) => onScreen(A[k], w, h)), `${tag}: every control on screen (${all.filter((k) => k !== 'pill' && !onScreen(A[k], w, h)).join(',') || 'all'})`);
+      ok(!A.hd || A.hd.b - A.hd.t <= 46, `${tag}: the drawer's bar is one line (${A.hd ? A.hd.b - A.hd.t : '-'} px)`);
+      if (w > h) ok(A.short && A.panel && A.panel.b >= h - 2, `${tag}: short landscape — the drawer a side panel`);
+      await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b', '--sai-t']) v.style.removeProperty(k); return 1; })()`);
+    }
+    await p.send('Emulation.setUserAgentOverride', { userAgent: '' });
+    // ── ★★ Stuart 17:1x: the TIME card — urgency brings it out, a › (a real touch) tucks it, it STAYS tucked while the clock runs,
+    //    and only the next, more urgent stage brings it out again (the app's SDRScreen timeOut rule) ──
+    { await p.size(932, 370, true); await sleep(800);
+      const TD = `${V}.querySelector('[data-dock="time"]')`;
+      const st = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${TD}; return d ? { hidden: d.hidden, tucked: d.classList.contains('tucked'), num: d.querySelector('.tNum')?.textContent || '' } : null; })())`));
+      await p.ev(`window.__vibeSessionLeft(100); 1`); await sleep(1500);
+      const a = await st();
+      ok(a && !a.hidden && !a.tucked, `TIME: under 2 minutes the card comes out (${JSON.stringify(a)})`);
+      const r = JSON.parse(await p.ev(`JSON.stringify(${TD}.querySelector('.hTuck').getBoundingClientRect())`));
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      await p.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      await p.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await sleep(800);
+      const b = await st();
+      ok(b && b.tucked, `TIME: a tap on its › tucks it (${JSON.stringify(b)})`);
+      await sleep(10000);
+      const c = await st();
+      ok(c && c.tucked && c.num !== b.num, `TIME: …and it stays tucked for 10 s while the countdown runs (${b.num} → ${c.num})`);
+      await p.ev(`window.__vibeSessionLeft(400); 1`); await sleep(1500);
+      const d0 = await st();
+      ok(d0 && d0.tucked, 'TIME: a calmer stage leaves it tucked');
+      await p.ev(`window.__vibeSessionLeft(100); 1`); await sleep(1500);
+      const e = await st();
+      ok(e && !e.tucked, `TIME: the next, more urgent stage brings it out again (${JSON.stringify(e)})`);
+    }
     // ── safe areas: a notch on the left (59 px), the corner on the right (20), the home bar (21) ──
     await p.size(932, 430, true); await sleep(1200);
     await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-l', '59px'); v.style.setProperty('--sai-r', '20px'); v.style.setProperty('--sai-b', '21px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1500);
     const S = JSON.parse(await p.ev(RECTS));
     await shot('landscape-932x430-insets.png');
-    const ctl = ['x', 'listChip', 'lMax', 'lSwap', 'zoom', 'scale', 'help', 'attrib', ...Object.keys(S).filter((k) => (k.startsWith('L:') || k.startsWith('R:')) && S[k])].filter((k) => S[k]);
+    // ★ Stuart 17:1x: EDGE pieces (✕, chips, tabs, the drawer) sit on the physical edge with their content padded in — checked
+    //   in the device case above; here the FREE-STANDING controls stand clear of the insets
+    const ctl = ['zoom', 'scale', 'help', 'attrib', 'lMax', 'lSwap'].filter((k) => S[k]);
     const inInset = ctl.filter((k) => S[k].l < 59 - 1 || S[k].r > 932 - 20 + 1 || S[k].b > 430 - 21 + 1);
-    { // ★ and anything else pressable in the map's chrome (a tucked tab, a lent chip's tab) — not only the named ones
-      const stray = JSON.parse(await p.ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) button, #srvHealth button')].filter((e) => e.getClientRects().length && !e.closest('[hidden]') && getComputedStyle(e).visibility !== 'hidden' && !e.closest('.trkCards, .trkPark, .maplibregl-canvas-container, .maplibregl-marker, .maplibregl-popup')).map((e) => { const b = e.getBoundingClientRect(); return { c: (e.className || e.tagName) + '', l: Math.round(b.left), r: Math.round(b.right), b: Math.round(b.bottom) }; }).filter((b) => b.r - b.l > 2 && (b.l < 58 || b.r > 913 || b.b > 410)))`));
-      ok(!stray.length, `insets: no other control in an inset area (${JSON.stringify(stray).slice(0, 400)})`);
-    }
-    ok(!inInset.length, `insets: no control in an inset area (${inInset.map((k) => `${k} ${JSON.stringify(S[k])}`).join(' ') || 'clear'})`);
+    ok(!inInset.length, `insets: no free-standing control in an inset area (${inInset.map((k) => `${k} ${JSON.stringify(S[k])}`).join(' ') || 'clear'})`);
     ok(S.canvas && S.canvas.l <= 0 && S.canvas.r >= 932, `insets: the map canvas runs edge to edge (${JSON.stringify(S.canvas)})`);
     ok(await p.ev(`/viewport-fit=cover/.test(document.querySelector('meta[name=viewport]').content)`), 'a map up: the viewport is viewport-fit=cover');
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
