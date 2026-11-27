@@ -12,7 +12,8 @@ how many cards can be open follows the window; a phone shows one at a time.
   viewer's receiver position, RINGS / FIT / RANGE enable rules, the range outline shape). Rebase onto b96-rangefeed /
   b96-asklock / b96-feedtest when they merge: the only shared lines are main.ts `adsbChromeMount` / `openAirSeaViewer`,
   tracks.ts `makeAcLayer` and adsblayer.js `mk()` + the `ctlHost` append (two lines).
-- **WEB PAGE DONE, APP NOT STARTED** — Stuart sees the web page first (live preview), then the app port below.
+- **WEB PAGE DONE (iterating live with Stuart 11-27 to 13:10), APP NOT STARTED** — the app port below. The layout of
+  record is "What is where" — the tweak list is history.
 - Live preview (while it runs): `http://<Mac LAN IP>:47610/` — scratchpad `mapcards/run-preview.sh` (a local door: the
   Lenovo PiAware Beast feed read-only + a fake RTL replaying a synthetic VDL2 clip; NAVTEX fixtures + a ship store
   seeded by `mapcards/seed.mjs`) and `mapcards/preview.mjs` (serves web/dist, proxies the rest, rebuilds through the
@@ -28,43 +29,36 @@ how many cards can be open follows the window; a phone shows one at a time.
    open beside it (right to left), the fits keep clear of that corner. The line is `dialChat.mapBarLine` (six new
    chat-words keys, 8 languages); the app's MapTopStrip keeps `mapSharedLine` until its port.
 
-## What is where (web)
+## What is where (web) — as of 11-27 13:10 (supersedes tweak 2's bar)
 
-| Always on (the bar) | |
-|---|---|
-| EXIT x / CLOSE MAP | first, as before |
-| title | not shown (tweak 2); kept hidden for the dialog's name and the drivers |
-| "Shared VFO: … n/max" + CHAT | the `share` slot (main.ts `mapSharedSync` → `dialChat.mapBarLine`) — ADS-B's own CHAT in the `top` slot when the line is not shown |
-| card buttons | NOT in the bar: a rail on the map's top-right edge, `.trkMapHost .cardBtns` — each `[data-cbtn]`, `aria-expanded` |
-| live rate, right after CHAT | `.rate` — `ADS-B 1,425/s` (adsbReport.msgRate is per second), `VDL2 98 msg/min` (avReport.msgRate), `AIS 12 msg/min`; nothing on the viewer |
+**No top bar** (Stuart 12:50–13:06): the map runs the full height. `.trkTop` stays in the DOM (drivers, slots) but is an
+overlay with nothing of its own on show. Four CORNER PIECES, one system:
 
-The old status paragraph (`.st`) is kept for screen readers only (1 px, clipped) — drivers still read it. Its facts went:
-
-| Fact | Now in |
-|---|---|
-| counts per layer | VIEW chips (as before) and LIST tabs |
-| "N heard, not on the map" | LIST card's first line |
-| warnings in force | VIEW card's first line (`navWarnStatus`) |
-| furthest aircraft | MAP card, under the layer keys |
-| frequency / gain / capture of the live mode | TUNE card's first line (`adsbStatus` / `avStatus` / `aisStatus` / …) |
-| what the scope hides (OTHER RADIOS / THIS SESSION) | VIEW card, under the SOURCES SHOWN chip |
-
-| Card | Holds | Offered |
+| Corner | What | Where in code |
 |---|---|---|
-| LIST | `.trkList` (tabs, sort, filter, safety strip, rows; NDB's and ADS-B's chips in the `head` slot) | always |
-| TUNE | the TUNE rows (`.tunePop [data-tune]`, `data-dial` — the ask lock greys them), ADS-B's GAIN and capture warning (`tune` slot) | only with rows or a control: never on the viewer |
-| VIEW | SHOW chips (`.tgl`), OTHER RADIOS (`.scope`) | while either has a chip |
-| MAP | AUTO (`.fit`, the shared auto fit's key), FIT (`.fitOnce`), FIT TO (`.fitSel`), the ADS-B layer's RINGS / RANGE / LABELS / ⌖ and NDB's RINGS / UNHEARD (`ctl` slot), the time filter | always |
-| KEY | the legend (`.trkKey`) | while there is one |
-| SOURCES | per radio (from aircraft.json / the ship store's `radios`, labels from /vibeserver/radios) and per feed (aircraft.json `feeds`) | only with 2+ sources |
+| top-left | the EXIT — a red corner piece, 52 px, square outer corner; aria/title = what it does ("Close map", "Exit datalink", "Leave server"); greyed by the ask lock when it leaves a whole-radio mode | `.trkTop .exit` (CSS in tracks.ts, label from `setChrome`) |
+| top-right | RATE — this radio's live rate (ADS-B n/s · VDL2/AIS n/min) and each feed's own messages a second (`vibe_feeds.h` "perSec", parsed into `AvFeed.perSec`); never a count; hidden with no rate. One source = a static reading; several = "+N" ⌄ and a card dropping from it, a row per source (live / stalled), written in place | `setRateRows` (tracks.ts), rows from `asCardsSync` (main.ts) |
+| bottom-left | LIST — the drawer (below) and its chip, the toggle: glyph, count, ⌃ / ⌄ | `.mChipsBL`, `.trkCard2[data-card="list"]` |
+| bottom-right | the ? (HELP grows out of it) and the vertical scale — one stack that lifts over the open drawer, 8 px clear of its maximise tab; the scale shortens before it reaches the right column; both step away while LIST is maximised; the map credits' (i) stays hidden under the drawer | `liftOverList`, `scaleDraw` (`scaleMaxPx`) |
 
-**How many open** (`src/utils/mapCards.ts`, shared with the app): window < 600 px wide = ONE (opening another shuts the
-first); wider = columns of 340 px, as many as fit in 72 % of the width (max 3), two stacked per column when the window is
-≥ 700 px tall; LIST alone in its own column. The oldest gives way. Remembered per viewer in `localStorage`
-(`vibesdr.mapCards.narrow` / `.wide`, try/catch): defaults nothing on a phone-width window, LIST on a wide one.
-**Escape** shuts the top (last opened) card, then the selection, then the map, as before. Every control is a real
-`<button>`, so the pad and the keyboard reach them (gamepad.ts walks focusables); opening a card by a press moves focus
-into it, Escape / BACK comes back to its button.
+Top-centre: the shared-tuner PILL (`dialChat.mapBarLine` words, `mapSharedSync`) — tap = the CHAT card; it wraps rather
+than lose its count and keeps clear of the X and the right column (`--trk-pill-pad`).
+Left edge, under the X: SERVERS, TUNE, LAYERS (and MAP when the map is tall — `oneSide`, the X counted in the stack).
+Right edge, under RATE: CHAT (glyph + unread badge, one gentle pulse per new message; its card holds the chat's own
+`#chatLog` + `#chatPhrases`, moved in while open — `mapChatCard` — no typing; folds 2 s after a reply; a message restarts
+its idle clock), then MAP in the flank layout, then the zoom ± (`--trk-zoom-top`, always under the column).
+
+**LIST drawer**: flush left/bottom; a phone's full width, else `clamp(420px, 30vw, 640px)`; NORMAL height = 22 % of the
+visual viewport in whole rows, 3–7; MAXIMISE (the folder tab on its top edge, M, a long press of the chip) = up to just
+under the left chips, AUTO pauses, remembered (`vibesdr.mapListMax`); Escape restores first, then folds. No title row, no
+footer strip: the chip floats over the last row with a fade. Header = one scrolling tab row (edge fades + ‹ › only where
+there is more) + ONE sort toggle (rings = nearest, clock = latest). Rows: `[flag] NAME [MIL][EMERG] [FL241 | 97nm]` over
+the subtitle; right side the SNR chip and the age (compact on a phone); no bearing (`trkRowHtml`, `trkKvPill`,
+`acTags.ts`). LIST steps aside (measured) while a transient card would cover it.
+
+**Transient cards** (TUNE, LAYERS, SERVERS, MAP, HELP, RATE, CHAT): one at a time; fold on a map tap, another card,
+`CARD_IDLE_MS` idle, Escape / BACK; AUTO pauses while one (or an item's card, or the maximised LIST) is open and resumes
+without a forced glide. Every card is opaque, no backdrop blur; the map never resizes under a card.
 
 **FIT TO ONE LAYER** (Stuart 11-27: "with this much data the fit button doesnt work"). On the AIR & SEA map the shared
 auto fit (mapAutoFit.ts) always owns the camera now (the ADS-B layer's own AUTO and FIT keys are hidden in the card —
@@ -114,8 +108,10 @@ Reuse `src/utils/mapCards.ts` as is (limits, columns, defaults, FIT trim and def
 pattern for each card button: a small chip that expands in place into a panel, collapses on its own chevron / ✕, an
 outside tap, or BACK; `useListNav` for the pad; `AccessibilityInfo` reduce-motion for the pop-out.
 
-1. `src/components/MapTopStrip.tsx` — becomes the bar: EXIT, the shared line + CHAT (already there), a row of card chips
-   (new `MapCardChips`), the rate at the right. Drop the SHOW row and the TUNE chip from it.
+1. `src/components/MapTopStrip.tsx` — NO BAR any more (13:06 layout above): it becomes the four corner pieces (EXIT
+   top-left, RATE top-right, LIST bottom-left, ? + scale bottom-right), the shared-tuner pill top-centre and the edge
+   chips (SERVERS / TUNE / LAYERS left, CHAT / MAP right). The pill and CHAT exist today; RATE needs the feeds'
+   `perSec` (already in the app's aircraft.json poll). Safe areas from `useSafeAreaInsets`, never a device check.
 2. New `src/components/MapCard.tsx` — the ServersChip-style shell (chip → panel, PopupShell glass, NavCard keys), one
    per card; `MapCards.tsx` lays them out with `cardColumns(open, width, height)` from `useWindowDimensions` (window,
    never device), persists `open` per narrow / wide in the app's settings store.

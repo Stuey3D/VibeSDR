@@ -2001,11 +2001,18 @@
     }
 
     /* ── the frame loop ─────────────────────────────────────────────────────────────────────── */
+    /* ★★★ beta96 IDLE COST (Stuart 11-27 13:18: "my iphone started burning my leg"; Safari 14.6 % CPU and the GPU at a
+     *  steady 64 fps on his Mac with the map left alone). Every moving aircraft was dead-reckoned and the whole layer
+     *  setData'd 18–30 times a second — each setData costs MapLibre a worker parse and two or three repaints, so the map
+     *  never stopped drawing. At map scale 2–4 positions a second read as smooth: GPU layer 4 Hz (2 Hz past 60 aircraft),
+     *  DOM markers 2 Hz. Between those steps NOTHING runs — the wait is a timer, never a spinning rAF — so the map draws no
+     *  frame and the page sleeps. */
     function frameGap(n) {
-      if (lm) return n > AC_GLIDE_MAX ? 500 : n > 60 ? 100 : 66;     // ★ DOM markers: a few fps is the honest rate
-      return n > AC_GLIDE_MAX ? 250 : n > 150 ? 50 : n > 60 ? 33 : 0;
+      if (lm) return 500;
+      return n > 60 ? 500 : 250;
     }
-    function kick() { if (!rafId && !destroyed) rafId = requestAnimationFrame(frame); }
+    let waitT = 0;
+    function kick() { if (!rafId && !waitT && !destroyed) rafId = requestAnimationFrame(frame); }
     let lastT = 0;
     function frame() {
       rafId = 0;
@@ -2013,7 +2020,7 @@
       const t = now();
       const n = ac.size;
       const gap = frameGap(n);
-      if (gap && t - lastFlush < gap) { rafId = requestAnimationFrame(frame); return; }
+      if (gap && t - lastFlush < gap) { waitT = setTimeout(() => { waitT = 0; kick(); }, gap - (t - lastFlush)); return; }
       const dt = lastT ? Math.min(250, t - lastT) : 16; lastT = t;
       lastFlush = t;
       let animating = false;
@@ -2259,6 +2266,7 @@
         destroyed = true;
         try { if (dprMq) dprMq.removeEventListener('change', dprChanged); } catch (e) { /* gone */ }
         if (rafId) cancelAnimationFrame(rafId);
+        if (waitT) { clearTimeout(waitT); waitT = 0; }
         if (rangeTimer) clearInterval(rangeTimer);
         if (rangeDrawTimer) clearTimeout(rangeDrawTimer);
         doc.removeEventListener('visibilitychange', onVis);

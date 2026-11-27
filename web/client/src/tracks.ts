@@ -504,6 +504,10 @@ const CSS = `
 .trkRow .sp,.trkRow .rg,.trkRow .ag{font:12px/1.2 ui-monospace,Menlo,monospace;color:#cfd9e3;white-space:nowrap;text-align:right}
 .trkRow .ag{color:#8596a7;min-width:2.6em}
 .trkRow .ag .agS{display:none}
+.trkRow.stale{opacity:.4}
+.trkList .hd .lPause{all:unset;box-sizing:border-box;flex:none;display:inline-flex;align-items:center;gap:3px;padding:3px 7px;border-radius:6px;background:#3a2c0a;border:1px solid #ffd34d;color:#ffd34d;font:700 11px/1 ui-monospace,Menlo,monospace;cursor:pointer}
+.trkList .hd .lPause[hidden]{display:none}
+.trkList .hd .lPause:focus-visible{outline:2px solid #ffd34d;outline-offset:1px}
 .trkRow.kvRow{grid-template-columns:minmax(0,1fr) auto auto!important}
 .trkRow .id b .kv{display:inline-flex;align-items:stretch;flex:none;margin-left:6px;border:1px solid #33475a;border-radius:4px;font:600 9.5px/14px ui-monospace,Menlo,monospace;color:#b8c6d4;white-space:nowrap;vertical-align:1px}
 .trkRow .id b .kv span{padding:0 4px}
@@ -812,7 +816,7 @@ const CSS = `
 .trkCards .sideB>.trkCard2[data-card="list"]{padding-bottom:env(safe-area-inset-bottom,0px)!important}
 /* ★ Stuart 12:55 ("the collapse button can simply cut in over the data in that corner"): no strip — the rows run to the
  *  drawer's bottom; the chip floats over the corner on its own opaque plate; a spacer after the last row lets it scroll clear */
-.trkCard2[data-card="list"] .rows::after{content:"";display:block;height:var(--trk-lchip-h,34px)}
+.trkCard2[data-card="list"] .rows::after{content:"";display:block;height:calc(var(--trk-lchip-h,34px) + 6px)}
 .trkView .mChipsBL{z-index:800}
 .mDock[data-dock="list"].open{visibility:visible}
 .mDock[data-dock="list"].open .hCard{background:#0b110d!important}
@@ -1161,7 +1165,7 @@ export class TrackView {
       + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
         + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
-        + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
+        + `<button class="lPause" type="button" hidden>\u2016 <span class="n"></span></button><span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
         + `<button class="lMax" type="button" aria-pressed="false" aria-label="Maximise the list" title="Maximise the list (M)"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`)
       + card('servers', 'SERVERS', `<div class="srvBody" role="group" aria-label="Servers and radios"></div>`)
@@ -1243,6 +1247,12 @@ export class TrackView {
       vv?.addEventListener('resize', on); vv?.addEventListener('scroll', on);
     }
     if (typeof ResizeObserver === 'undefined') window.addEventListener('resize', () => this.cardsLayout());
+    this.rowsEl.addEventListener('scroll', () => {
+      const st = this.rowsEl.scrollTop;
+      if (st > 6 && !this.listFrozen) this.listFreeze(true);
+      else if (st <= 1 && this.listFrozen) this.listFreeze(false);
+    }, { passive: true });
+    (r.querySelector('.trkList .hd .lPause') as HTMLElement).addEventListener('click', (e) => { e.stopPropagation(); this.rowsEl.scrollTo({ top: 0 }); this.listFreeze(false); });
     this.rowsEl.addEventListener('pointerdown', (e) => {
       const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
       this.down = { key: row?.dataset.key || '', at: performance.now(), x: e.clientX, y: e.clientY };
@@ -1540,6 +1550,15 @@ export class TrackView {
       let n = Math.min(7, Math.max(3, Math.round((vh * 0.22) / rowH)));
       while (n > 1 && head + n * rowH > room) n--;
       this.listNormH = Math.round(head + n * rowH);
+      /* ★ Stuart 13:13 ("we must only cover when scrolling is available"): a short list (3 ships, a couple of messages)
+       *  shrinks to its rows plus the chip's own clear space under them — no row under the chip, no empty drawer */
+      if (rowsEl && rowsEl.childElementCount <= n + 2) {
+        const chipH = parseFloat(this.root.style.getPropertyValue('--trk-lchip-h')) || 34;
+        const content = (Array.from(rowsEl.children) as HTMLElement[]).reduce((t, c) => t + c.offsetHeight, 0);
+        // fits without scrolling → its rows and the chip's clear strip (at most the chip's height over normal: a list that
+        // just fills the drawer gets the strip rather than a row under the chip)
+        if (content <= n * rowH) this.listNormH = Math.round(head + content + chipH + 4);
+      }
       this.listMaxH = Math.max(this.listNormH, Math.round(m.height - capTop - (parseFloat(this.root.style.getPropertyValue('--trk-list-bottom')) || 0)));
       setv('--trk-list-card-h', `${this.listMax ? this.listMaxH : this.listNormH}px`);
       // ★ the scale bar steps right of the open LIST (not just its chip)
@@ -1602,6 +1621,47 @@ export class TrackView {
   /* ★★★ the LIST maximised (Stuart 12:46): it fills the map under the chips' column; AUTO pauses (there is no map to fit);
    *  remembered per viewer; Escape un-maximises before it folds. One layout at the toggle, then a transform slide. */
   private listNormH = 0;
+  private listFrozen = false;
+  private rowsPending = '';
+  /** Frozen: each row already shown takes its new content in place; new keys are held (counted); gone keys dim. */
+  private frozenApply(html: string) {
+    const t = document.createElement('div'); t.innerHTML = html;
+    const fresh = new Map<string, HTMLElement>();
+    for (const r of Array.from(t.querySelectorAll('.trkRow[data-key]')) as HTMLElement[]) fresh.set(r.dataset.key!, r);
+    const shown = new Set<string>();
+    for (const r of Array.from(this.rowsEl.querySelectorAll('.trkRow[data-key]')) as HTMLElement[]) {
+      const k = r.dataset.key!; shown.add(k);
+      const n = fresh.get(k);
+      if (!n) { r.classList.add('stale'); continue; }
+      const sel = r.classList.contains('sel'), gp = r.classList.contains('gpFocus');
+      if (r.innerHTML !== n.innerHTML) r.innerHTML = n.innerHTML;
+      const want = n.className + (sel ? ' sel' : '') + (gp ? ' gpFocus' : '');
+      if (r.className !== want) r.className = want;
+    }
+    let held = 0; for (const k of fresh.keys()) if (!shown.has(k)) held++;
+    this.pauseShow(held);
+  }
+  private pauseShow(held: number) {
+    const b = this.root.querySelector('.trkList .hd .lPause') as HTMLElement | null;
+    if (!b) return;
+    b.hidden = !this.listFrozen;
+    const t = held ? `+${held}` : '';
+    const n = b.querySelector('.n') as HTMLElement; if (n.textContent !== t) n.textContent = t;
+    b.title = held ? `Paused while you scroll — ${held} new; press (or scroll to the top) to bring them in` : 'Paused while you scroll — press (or scroll to the top) to carry on';
+    b.setAttribute('aria-label', b.title);
+  }
+  private listFreeze(on: boolean) {
+    if (on === this.listFrozen) return;
+    this.listFrozen = on;
+    if (!on) {   // resume: the newest order, the held rows in
+      this.lastRows = '';
+      const html = this.rowsPending;
+      if (html) { this.rowsEl.innerHTML = html; this.lastRows = html; if (this.sel) this.markSel(this.sel); }
+      this.rowsCountWas = -1; requestAnimationFrame(() => this.cardsLayout());
+    }
+    this.pauseShow(0);
+  }
+  private rowsCountWas = -1;
   private listMaxH = 0;
   listMax = (() => { try { return localStorage.getItem('vibesdr.mapListMax') === '1'; } catch { return false; } })();
   setListMax(on: boolean) {
@@ -2112,6 +2172,7 @@ export class TrackView {
     const sig = JSON.stringify([tabs, current]);
     if (sig === this.tabSig) return;
     const changedTab = !this.tabSig || JSON.parse(this.tabSig)[1] !== current;
+    if (changedTab && this.listFrozen) { this.listFrozen = false; this.pauseShow(0); }   // ★ another tab: the old one carries on
     this.tabSig = sig;
     if (tabs.length === 1) lt.textContent = tabs[0].label;
     const tg: Record<string, string> = { aircraft: LAYER_GLYPH.aircraft, ships: LAYER_GLYPH.ship, navtex: LAYER_GLYPH.navtex, sondes: LAYER_GLYPH.balloon, navaids: LAYER_GLYPH.navaid };
@@ -2752,7 +2813,12 @@ export class TrackView {
       if (this.acLayer) this.placeAcObstacle();
     }
     else this.pending = items;
-    if (rowsHtml !== this.lastRows) {
+    /* ★★★ Stuart 13:15 ("when scrolling the list it should pause moving when new aircraft come in"): scrolled away from
+     *  the top, the order FREEZES — rows update in place (FL, distance, age, SNR), new ones are held, gone ones dim; a
+     *  "‖ +N" key beside the sort says so; it, or scrolling back to the top, applies the lot */
+    this.rowsPending = rowsHtml;
+    if (this.listFrozen && rowsHtml !== this.lastRows) { this.frozenApply(rowsHtml); this.lastRows = rowsHtml; }
+    else if (rowsHtml !== this.lastRows) {
       const top = this.rowsEl.scrollTop;
       /* ★ beta96 (ADS-B's live list, redrawn every second) the controller's highlight and the keyboard's focus are on an
        *  element about to be replaced: found again by its key */
@@ -2761,6 +2827,9 @@ export class TrackView {
       const focusKey = act && this.rowsEl.contains(act) ? (act.closest('.trkRow') as HTMLElement | null)?.dataset.key || '' : '';
       this.rowsEl.innerHTML = rowsHtml; this.lastRows = rowsHtml;
       this.rowsEl.scrollTop = top;
+      // ★ the LIST's height follows a short list (fits its rows) — re-measured once after the render, only when the count moved
+      const cnt = this.rowsEl.childElementCount;
+      if (cnt !== this.rowsCountWas) { this.rowsCountWas = cnt; requestAnimationFrame(() => this.cardsLayout()); }
       if (this.sel) this.markSel(this.sel);
       const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
       const byKey = (k: string) => this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(k) : k.replace(/["\\]/g, '')}"]`) as HTMLElement | null;

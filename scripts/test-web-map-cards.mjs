@@ -103,18 +103,30 @@ async function sizeChecks(p, tag, w, h, o) {
   ok(await p.ev(`!!${V}?.querySelector('.trkTop .exit')?.getClientRects().length`), `${tag} ${w}: the way out is on screen (${await p.ev(`${V}?.querySelector('.trkTop .exit')?.textContent`)})`);
   if (o.radio) {
     ok(await p.until(`!!document.getElementById('mapShLine')?.getClientRects().length`, 6000), `${tag} ${w}: the shared tuner line (listeners / ask) is on screen: ${await p.ev(`document.getElementById('mapShLine')?.textContent`)}`);
-    ok(await p.ev(`!!document.getElementById('mapChat')?.getClientRects().length`), `${tag} ${w}: CHAT is on screen`);
-    const r = await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`);
-    ok(/^VDL2 [\d.,]+ msg\/min$/.test(r), `${tag} ${w}: the incoming messages: "${r}"`);
-    const order = await p.ev(`(() => { const bar = ${V}.querySelector('.trkTop'); const els = [bar.querySelector('.exit'), document.getElementById('mapShLine'), document.getElementById('mapChat'), bar.querySelector('.rate')];
-      if (els.some(e => !e || !bar.contains(e) || !e.getClientRects().length)) return 'missing';
-      for (let i = 1; i < els.length; i++) if (!(els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING)) return 'order';
-      const vis = [...bar.querySelectorAll('button, .rate, .ttl')].filter(e => e.getClientRects().length && !e.closest('[hidden]'));
-      return vis.length === 4 ? 'ok' : 'extra: ' + vis.map(e => e.textContent.trim().slice(0, 20)).join(' | '); })()`);
-    ok(order === 'ok', `${tag} ${w}: the bar is EXIT | the shared line | CHAT | the rate, nothing else (${order})`);
+    /* ★★★ NO TOP BAR (Stuart 12:50–13:06): the X a corner piece top-left, the pill top-centre, RATE top-right, CHAT under
+     *  it, the zoom under them — no header taking the map's height, nothing overlapping */
+    const L = JSON.parse(await p.ev(`JSON.stringify((() => { const r = (e) => { if (!e || !e.getClientRects().length || e.closest('[hidden]')) return null; const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+      const m = ${V}.querySelector('.trkMapHost').getBoundingClientRect();
+      return { map: { t: m.top, h: m.height }, vh: innerHeight, x: r(${V}.querySelector('.trkTop .exit')), pill: r(document.getElementById('mapShLine')), rate: r(${V}.querySelector('.mDock[data-dock="rate"] .hCard')),
+        chat: r(${V}.querySelector('.mDock[data-dock="chat"] .hCard')), zoom: r(${V}.querySelector('.maplibregl-ctrl-top-left, .leaflet-top.leaflet-left')), servers: r(${V}.querySelector('.mDock[data-dock="servers"] .hCard')),
+        rateTxt: ${V}.querySelector('.mDock[data-dock="rate"] .ru')?.textContent || '', rateStatic: ${V}.querySelector('.mDock[data-dock="rate"]').classList.contains('static') }; })())`));
+    ok(L.map.t <= 1 && Math.abs(L.map.h - L.vh) <= 1, `${tag} ${w}: no header — the map runs the full height (${L.map.t}, ${L.map.h} of ${L.vh})`);
+    ok(L.x && L.x.l <= 1 && L.x.t <= 1 && L.x.r - L.x.l >= 44, `${tag} ${w}: the X is the top-left corner piece, ≥ 44 px (${JSON.stringify(L.x)})`);
+    ok(L.servers && L.x && L.servers.t >= L.x.b + 8, `${tag} ${w}: SERVERS under the X with a gap`);
+    ok(L.rate && L.rate.t <= 1 && L.rate.r >= w - 1 && /\/min$/.test(L.rateTxt), `${tag} ${w}: RATE the top-right corner piece, a rate (${L.rateTxt})`);
+    ok(L.chat && L.rate && L.chat.t >= L.rate.b - 1, `${tag} ${w}: CHAT under RATE`);
+    const hit = (a, b) => a && b && a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
+    ok(!hit(L.pill, L.x) && !hit(L.pill, L.rate) && !hit(L.pill, L.chat) && !hit(L.zoom, L.rate) && !hit(L.zoom, L.chat) && !hit(L.zoom, L.pill),
+       `${tag} ${w}: the pill, the X, RATE, CHAT and the zoom never overlap`);
+    // CHAT: its chip opens the chat card (the canned replies); the pill opens it too
+    await p.ev(`${V}.querySelector('[data-cbtn="chat"]').click(); 1`); await sleep(500);
+    ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="chat"]'); return !!c && !c.hidden && !!c.querySelector('#chatPhrases') && !!c.querySelector('#chatLog'); })()`), `${tag} ${w}: CHAT opens its card — the log and the canned replies`);
+    await shutTransients(p);
+    ok(await p.ev(`!!document.getElementById('chatPanel')?.contains(document.getElementById('chatPhrases'))`), `${tag} ${w}: …folded, the chat's nodes are home again`);
     ok(/^Shared VFO: .+ \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
+    ok(await p.ev(`(() => { const d = ${V}.querySelector('.mDock[data-dock="rate"]'); return d.hidden || /\/s$|\/min$/.test(d.querySelector('.ru').textContent); })()`), `${tag} ${w}: RATE shows a rate or nothing — never a count`);
   }
   ok(await p.ev(`(() => { const s = ${V}.querySelector('.trkTop .st'); const r = s.getBoundingClientRect(); return r.width <= 1 && r.height <= 1; })()`), `${tag} ${w}: the status paragraph is not on screen`);
   ok(await p.ev(`!${V}.querySelector('.trkTop .ttl').getClientRects().length`), `${tag} ${w}: no title in the bar`);
@@ -459,6 +471,51 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
         for (const r of [...rows.querySelectorAll('.trkRow')].slice(0, 12)) { const a = r.querySelector('.ag'); const b = a?.getBoundingClientRect();
           if (!a || !b.width || !a.textContent.trim() || b.right > R.right + 1 || a.scrollWidth > a.clientWidth + 1) out.push(r.dataset.key); } return out.join(','); })()`);
       ok(!bad, `${ww}×${hh}: every row shows its age, whole${bad ? ' — not: ' + bad : ''}`);
+    }
+    // ── the chip covers a row only when the list scrolls (Stuart 13:13) ──
+    { const r0 = await rowsAt(390, 844, true);
+      const geo = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), rows = c.querySelector('.rows'), chip = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect();
+        const under = [...rows.querySelectorAll('.trkRow')].filter(r => { const b = r.getBoundingClientRect(); return b.height && b.bottom > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
+        return { scroll: rows.scrollHeight > rows.clientHeight + 1, under, h: Math.round(c.getBoundingClientRect().height), spacer: getComputedStyle(rows, '::after').height }; })())`));
+      const g1 = await geo();
+      ok(g1.scroll && g1.under >= 1 && parseFloat(g1.spacer) > 0, `AIRCRAFT (scrolls): the chip floats over the last row, a spacer after the rows (${JSON.stringify(g1)})`);
+      const ships = await p.ev(`(() => { const t = ${V}.querySelector('.trkList .hd .tab[data-tab="ships"]'); if (!t) return false; t.click(); return true; })()`);
+      if (ships) { await sleep(900);
+        const g2 = await geo();
+        ok(!g2.scroll && g2.under === 0 && g2.h <= g1.h + 40, `SHIPS (a few rows): no row under the chip, the drawer at most the chip's strip over normal (${JSON.stringify(g2)})`);
+        await p.ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]')?.click(); 1`); await sleep(600); }
+      void r0;
+    }
+    // ── the last thing in the list always scrolls clear of the chip, on every tab (Stuart 13:15) ──
+    { await rowsAt(390, 844, true);
+      const tabs = JSON.parse(await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkList .hd .tab')].map(t => t.dataset.tab))`));
+      for (const tb of tabs.length ? tabs : ['']) {
+        if (tb) { await p.ev(`${V}.querySelector('.trkList .hd .tab[data-tab="${tb}"]').click(); 1`); await sleep(800); }
+        const g = JSON.parse(await p.ev(`JSON.stringify((() => { const rows = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); rows.scrollTop = rows.scrollHeight; const last = rows.lastElementChild;
+          const chip = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect(); return { last: last ? Math.round(last.getBoundingClientRect().bottom) : 0, chipTop: Math.round(chip.top) }; })())`));
+        await sleep(200);
+        ok(!g.last || g.last <= g.chipTop - 4, `${tb || 'the list'}: scrolled to the end, the last item clears the chip (${g.last} ≤ ${g.chipTop} − 4)`);
+        await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 0; return 1; })()`); await sleep(300);
+      }
+      if (tabs.includes('aircraft')) { await p.ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click(); 1`); await sleep(600); }
+    }
+    // ── scrolled, the order holds (Stuart 13:15): rows update in place, new ones wait behind "‖ +N" ──
+    { await rowsAt(390, 844, true);
+      await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 3 * (r.querySelector('.trkRow')?.offsetHeight || 45); r.dispatchEvent(new Event('scroll')); return 1; })()`); await sleep(300);
+      const keys0 = await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].map(r => r.dataset.key))`);
+      // two new, nearer aircraft: the next draw's rows with two extra at the top
+      await p.ev(`(() => { const v = window.__vibeTrkView; const html = v.rowsPending || v.lastRows; const extra = ['__t1', '__t2'].map(k => '<div class="trkRow kvRow" data-key="' + k + '"><span class="id"><b><span class="nmT">' + k + '</span></b><small></small></span><span class="rg"></span><span class="ag">now</span></div>').join('');
+        v.lastRows = ''; v.update ? 0 : 0; v.frozenTest = true; v['frozenApply'](extra + html); v.rowsPending = extra + html; return 1; })()`); await sleep(200);
+      const keys1 = await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].map(r => r.dataset.key))`);
+      const pz = JSON.parse(await p.ev(`JSON.stringify((() => { const b = ${V}.querySelector('.trkList .hd .lPause'); return { shown: !b.hidden && b.getBoundingClientRect().width > 0, text: b.textContent.trim() }; })())`));
+      ok(keys0 === keys1 && pz.shown && /\+2$/.test(pz.text), `scrolled: the rows hold their order, "‖ +2" shows (${pz.text})`);
+      await p.ev(`${V}.querySelector('.trkList .hd .lPause').click(); 1`); await sleep(400);
+      const after = JSON.parse(await p.ev(`JSON.stringify({ hid: ${V}.querySelector('.trkList .hd .lPause').hidden, n: ${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="__t"]').length })`));
+      ok(after.hid && after.n === 2, `…pressed: the new rows are in, the key gone (${JSON.stringify(after)})`);
+      await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 200; r.dispatchEvent(new Event('scroll')); return 1; })()`); await sleep(300);
+      const fz = await p.ev(`!${V}.querySelector('.trkList .hd .lPause').hidden`);
+      await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 0; r.dispatchEvent(new Event('scroll')); return 1; })()`); await sleep(300);
+      ok(fz && await p.ev(`${V}.querySelector('.trkList .hd .lPause').hidden`), '…scrolled down it pauses again; back at the top it carries on by itself');
     }
     // ── the FL | distance pill beside the tags; no bearing in the rows (Stuart 13:10) ──
     for (const [ww, hh, mob] of [[375, 667, true], [390, 844, true], [1440, 900, false]]) {
