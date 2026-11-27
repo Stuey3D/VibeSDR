@@ -182,8 +182,8 @@ try {
     // ★★ Stuart 16:53: the licence words live in HELP with the map's other credits — never in the LIST
     ok(await until(`/Mictronics/.test(${V}?.querySelector('.trkCard2[data-card="help"] .hCredit')?.textContent || '') && !!${V}?.querySelector('.trkCard2[data-card="help"] .hCredit a[href="https://opendatacommons.org/licenses/by/1-0/"]') && !${V}?.querySelector('.rows .avCredit')`, 6000),
        `beta91: the ODC-By notice is in HELP, not the list (${await ev(`${V}?.querySelector('.trkCard2[data-card="help"] .hCredit')?.textContent`)})`);
-    ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,RANGE,LABELS,⌖',   // ★ beta94 + RANGE: the ADS-B layer's range outline key (b94-accard) is the aviation map's too
-       `beta90: the ADS-B map's controls on the aviation map (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`)})`);
+    ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .slot-ctl .acKeys button')].map(b => b.textContent).join(',')`) === 'RINGS,RANGE,LABELS,⌖' && !(await ev(`!!document.querySelector('.trkView:not([hidden]) .vsadsb-ctl')`)),   // ★ beta97 the layer builds no keys (keys:false): the MAP card draws them (AUTO / FIT are the card's own row)
+       `beta90: the ADS-B map's controls on the aviation map, drawn by the MAP card (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .slot-ctl .acKeys button')].map(b => b.textContent).join(',')`)})`);
     ok(await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk[data-key^="a:"]').length === 0`), 'beta90: no aircraft drawn twice (the track layer has only the stations)');
     // ★ map cards: the scale is the vertical edge chip, NM on an aviation map (Stuart 11-27)
     const scale = await ev(`document.querySelector('.trkView:not([hidden]) .mScale .vsLbl')?.dataset.t || ''`);

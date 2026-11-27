@@ -12,6 +12,8 @@
  * ★ Everything shown came off the air or a server: every string is escaped where it meets HTML (esc).
  */
 import { wireIslandSide } from './islandSide';
+import { padHighlight, activePadLayout } from './gamepad';
+import { padFace } from './padFace';
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { dataUrl } from './origin';
@@ -210,17 +212,13 @@ const CSS = `
 .trkCard2 .tunePop[hidden]{display:block}
 .trkCard2 .slot-tune:empty{display:none}
 .trkCard2 .slot-tune{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid #151f29}
-.trkCard2 .slot-ctl .vsadsb-ctl{position:static!important;display:flex!important;flex-wrap:wrap;gap:5px;margin:0!important;box-shadow:none!important;background:none!important;border:0!important;padding:0!important;inset:auto!important;transform:none!important}
-.trkCard2 .slot-ctl .vsadsb-ctl button{background:#1e2a36!important;color:#e8eef5!important;border:1px solid #33475a!important;border-radius:6px!important;padding:6px 10px!important;font:600 12px/1 system-ui,sans-serif!important;margin:0!important;cursor:pointer;min-width:0!important;height:auto!important}
-.trkCard2 .slot-ctl .vsadsb-ctl button.on{background:#ffd34d!important;color:#111!important;border-color:#ffd34d!important}
-.trkCard2 .slot-ctl .vsadsb-ctl button{border-radius:999px!important;padding:5px 11px!important;font:700 11px/1 ui-monospace,Menlo,monospace!important;letter-spacing:.06em}
 .trkCard2 .slot-ctl .btn{border-radius:999px;padding:5px 11px;font:700 11px/1 ui-monospace,Menlo,monospace}
 .trkCard2 .slot-ctl .btn[aria-pressed="true"],.trkCard2 .slot-ctl .btn.on{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkCard2 .fitSect .btn.fit.on{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkCard2 .fitSect .btn{border-radius:999px;padding:5px 12px;font:700 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
-.trkCard2 .slot-ctl .vsadsb-ctl button:focus-visible{outline:2px solid #ffd34d!important}
-.trkCard2 .slot-ctl .vsadsb-ctl button[data-k="auto"],.trkCard2 .slot-ctl .vsadsb-ctl button[data-k="fit"]{display:none!important}
 .trkCard2 .slot-ctl:empty{display:none}
+.trkCard2 .slot-ctl .acKeys{display:flex;flex-wrap:wrap;gap:5px}
+.trkCard2 .slot-ctl .acKeys .btn[disabled]{opacity:.45;cursor:not-allowed}
 .trkCard2 .fitSel{display:flex;flex-wrap:wrap;gap:5px}
 .trkCard2 .note{color:#8596a7;font-size:11px;margin-top:6px}
 .trkCard2 .note:empty{display:none}
@@ -268,6 +266,11 @@ const CSS = `
  *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
  *  and a chip's own lit / open state only */
 .trkView{--chip-rim:rgba(120,200,120,.45)}
+.trkCard2[data-card="help"] .hPad:empty{display:none}
+.trkCard2[data-card="help"] .hPad{padding:2px 0 8px;margin-bottom:8px;border-bottom:1px solid #22303d;font-size:12px}
+.trkCard2[data-card="help"] .hPadH{font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#8fa2b5;margin:2px 0 6px}
+.trkCard2[data-card="help"] .hPadR{display:flex;gap:8px;align-items:baseline;padding:2px 0}
+.trkCard2[data-card="help"] .hPadR .k{flex:none;min-width:84px;color:var(--hc,#5BE36B);font-weight:700}
 /* health / time's tabs: the muted rim like every tab; their colour lives in the ICON (the tab's text colour), as the pill's */
 .trkView .edgeDock:not(.crit) .hTab{border-color:var(--chip-rim)!important}
 .trkView{--sai-l:env(safe-area-inset-left,0px);--sai-r:env(safe-area-inset-right,0px);--sai-t:env(safe-area-inset-top,0px);--sai-b:env(safe-area-inset-bottom,0px)}
@@ -865,6 +868,14 @@ const HELP_GLYPH: Record<string, string> = {
   list: LIST_SVG.replace('mIco', 'tIco'), stats: modeIconSvg('stats', 'tIco'), rate: modeIconSvg('clock', 'tIco'), chat: modeIconSvg('spots', 'tIco'),
 };
 const FIT_KEY = 'vibesdr.mapFitTo';
+/** ★★★ beta97 the ADS-B layer's state for the MAP card's keys (adsblayer.js ctlState / onCtl) */
+interface AcCtl { auto: 'on' | 'off' | 'paused'; fit: boolean; rings: boolean; range: boolean; rangeOffered: boolean; labels: boolean; rx: boolean }
+const AC_KEYS: Array<[string, string, string]> = [
+  ['rings', 'RINGS', 'Range rings in nautical miles around the receiver'],
+  ['range', 'RANGE', 'ADS-B RANGE outline: the furthest aircraft heard on each bearing (not the distance rings)'],
+  ['labels', 'LABELS', 'Callsign and altitude beside each aircraft'],
+  ['centre', '⌖', 'Recentre on the aircraft'],
+];
 export { CARD_IDS, type CardId, trimOutliers };
 
 export interface TrackViewOpts {
@@ -960,6 +971,30 @@ export class TrackView {
   private sel = '';
   private inerted: HTMLElement[] = [];
   private acLayer: any = null;                       // ★ beta90 the ADS-B layer (aircraft:true)
+  /** ★★★ beta97 the ADS-B layer's keys in the MAP card — drawn here, the layer's actions behind them (adsblayer.js keys:false).
+   *  AUTO and FIT are the card's own AUTO / FIT row (one camera control for every map), so they are not repeated. */
+  private acCtl(st: AcCtl | null) {
+    const slot = this.slot('ctl');
+    let host = slot.querySelector(':scope > .acKeys') as HTMLElement | null;
+    if (!st || !this.acLayer) { host?.remove(); this.cardsLayout(); return; }
+    if (!host) {
+      host = document.createElement('div'); host.className = 'acKeys';
+      host.innerHTML = AC_KEYS.map(([k, t, title]) => `<button type="button" class="btn" data-ac="${k}" title="${esc(title)}"${k === 'centre' ? ' aria-label="Recentre"' : ''}>${esc(t)}</button>`).join('');
+      host.addEventListener('click', (e) => { const b = (e.target as HTMLElement).closest('[data-ac]') as HTMLElement | null; if (b && !(b as HTMLButtonElement).disabled) this.acLayer?.actions?.[b.dataset.ac!]?.(); });
+      slot.appendChild(host);
+    }
+    const set = (k: string, on: boolean, hidden = false, disabled = false, title = '') => {
+      const b = host!.querySelector(`[data-ac="${k}"]`) as HTMLButtonElement | null; if (!b) return;
+      b.setAttribute('aria-pressed', String(on)); b.classList.toggle('on', on); b.hidden = hidden; b.disabled = disabled;
+      if (title) b.title = title;
+    };
+    const noRx = 'Not available: this server has not given its receiver position';
+    set('rings', st.rings, false, !st.rx, st.rx ? 'Range rings in nautical miles around the receiver' : noRx);
+    set('range', st.range, !st.rangeOffered);
+    set('labels', st.labels);
+    set('centre', false);
+    this.cardsLayout();
+  }
   private acKeys = new Map<string, string>();        // item key → its hex, and back
   private acHex = new Map<string, string>();
 
@@ -1015,7 +1050,7 @@ export class TrackView {
       + `<div class="mChips mChipsScale"><div class="edgeDock mDock mScale" data-dock="scale" role="img" aria-label="Map scale"><div class="hCard"><div class="mScaleBody"><span class="vsLine"></span><span class="vsLbl"></span></div></div></div></div>`
       + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
       + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
-      + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
+      + card('help', 'HELP', `<div class="hPad"></div><div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
         + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
         + `<button class="lPause" type="button" hidden>\u2016 <span class="n"></span></button><span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
@@ -1224,7 +1259,8 @@ export class TrackView {
   /** ★ BACK / Escape on the map: the card holding `from` (focus), else — unless an item's own card is open (the selection
    *  goes first) — the top card. True = one was shut. The pad's BACK reaches it through main.ts hooks.back. */
   closeTopCard(from: EventTarget | null = document.activeElement): boolean {
-    const inCard = (from as HTMLElement | null)?.closest?.('.trkCard2') as HTMLElement | null;
+    // ★★ the pad / keyboard highlight counts as being in a card (real focus may sit on an item's card on the map)
+    const inCard = ((from as HTMLElement | null)?.closest?.('.trkCard2') ?? this.root.querySelector('.gpFocus')?.closest('.trkCard2:not([data-card="list"])')) as HTMLElement | null;
     const open = this.openCards.filter((id) => this.cardAvail.has(id) && this.cardOrder.includes(id));
     const shown = Array.from(this.cardsEl.querySelectorAll('.trkCard2')).map((c) => (c as HTMLElement).dataset.card as CardId);
     const top = inCard && this.root.contains(inCard) ? inCard.dataset.card as CardId : this.sel ? undefined : [...open].reverse().find((id) => shown.includes(id));
@@ -1233,6 +1269,8 @@ export class TrackView {
     this.cardOpen(top, false, true);
     this.cardClosedAt = performance.now();
     if (inCard) (this.root.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus();
+    this.navScope();
+    padHighlight(this.root.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null);   // ★★ the pad's ring back on its chip
     return true;
   }
   isCardOpen(id: CardId): boolean { return this.cardOrder.includes(id); }
@@ -1259,6 +1297,7 @@ export class TrackView {
     //     is the layout's (a phone shows the newest: LIST comes back when the transient one shuts)
     void cardToggle;
     this.cardOrder = cardOpenRule(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on);
+    if (on && id === 'help') this.helpPad();
     if (on && !STICKY_CARDS.has(id)) this.shortEdgeTuck();
     if (save) this.cardsSave();
     this.cardsLayout();
@@ -1270,7 +1309,47 @@ export class TrackView {
       // ★ TUNE: onto the modes (the live one), not the gain row lent above them (map-shared e2e: keyboard / pad)
       const first = (id === 'tune' ? el?.querySelector('.cb .tpRow[aria-checked="true"], .cb .tpRow') : null) ?? el?.querySelector('.cb button:not([disabled]):not([hidden]), .cb [tabindex="0"]');
       (first as HTMLElement | null)?.focus({ preventScroll: true });
+      queueMicrotask(() => { this.navScope(); padHighlight((first as HTMLElement | null) ?? null); });   // ★★ the pad's ring goes in with it
     }
+  }
+  /* ★★★ V12 CONTROLLERS ON THE MAP (Stuart's fixed scheme — gamepad.ts): the highlight walks the chips (the top row in
+   *  landscape, the left family in portrait), the LIST (one stop: enter takes its rows, back gives them up) and the
+   *  bottom-right group; ENTER on a chip opens its card and the highlight goes INSIDE it — the open card is the scope
+   *  until BACK shuts it and puts the highlight back on its chip. The map itself, its markers and popups are never
+   *  stops (data-gpskip); its zoom keys and credits are (data-gpkeep). Zoom = MAP zoom (zoomBy); tune = the radio only
+   *  where TUNE applies (main.ts hooks). */
+  private navScope() {
+    if (!this.open) { this.root.removeAttribute('data-navscope'); return; }
+    const top = [...this.cardOrder].reverse().find((id) => !STICKY_CARDS.has(id) && this.cardAvail.has(id));
+    const el = top ? this.root.querySelector(`.trkCards .trkCard2[data-card="${top}"]`) as HTMLElement | null : null;
+    for (const c of Array.from(this.root.querySelectorAll('.trkCard2[data-navscope]'))) if (c !== el) c.removeAttribute('data-navscope');
+    if (el && !el.hidden && el.getClientRects().length) { el.setAttribute('data-navscope', ''); this.root.removeAttribute('data-navscope'); }
+    else this.root.setAttribute('data-navscope', '');
+  }
+  private navMarks() {
+    for (const m of Array.from(this.root.querySelectorAll('.maplibregl-map, .leaflet-container')) as HTMLElement[]) m.setAttribute('data-gpskip', '');
+    for (const c of Array.from(this.root.querySelectorAll('.maplibregl-ctrl-top-left, .maplibregl-ctrl-bottom-right, .leaflet-top.leaflet-left, .leaflet-bottom.leaflet-right')) as HTMLElement[]) c.setAttribute('data-gpkeep', '');
+    const L = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
+    if (L && !L.hasAttribute('data-navbox')) {
+      L.setAttribute('data-navbox', ''); L.dataset.navstart = '.trkRow:not(.nopos)';   // ★ the first row that has a place on the map
+      const rows = L.querySelector('.rows') as HTMLElement | null; if (rows) rows.dataset.navlist = '.trkList .hd';
+    }
+  }
+  /** ★★ the pad's / keyboard's ZOOM on a map: the map's own zoom keys (as a tap — AUTO steps aside the same way) */
+  zoomBy(d: 1 | -1) {
+    const k = this.root.querySelector(d > 0 ? '.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in' : '.maplibregl-ctrl-zoom-out, .leaflet-control-zoom-out') as HTMLElement | null;
+    k?.click();
+  }
+  /** ★ the HELP card's controller lines, in the layout in use (Switch-style face glyphs by POSITION, never letters) */
+  private helpPad() {
+    const el = this.root.querySelector('.trkCard2[data-card="help"] .hPad') as HTMLElement | null;
+    if (!el) return;
+    const sticks = activePadLayout() === 'sticks';
+    const rows: Array<[string, string]> = sticks
+      ? [['D-pad', 'move the highlight'], [padFace('bottom'), 'open / choose'], [padFace('right'), 'back / shut'], ['left stick turned', 'tune (where TUNE applies)'], ['right stick turned', 'zoom the map']]
+      : [['D-pad', 'move the highlight'], ['R', 'open / choose'], ['L', 'back / shut'], [padFace('top') + ' ' + padFace('bottom'), 'zoom the map in / out'], [padFace('left') + ' ' + padFace('right'), 'tune down / up (where TUNE applies)']];
+    el.innerHTML = `<div class="hPadH">With a controller</div>` + rows.map(([k, w]) => `<div class="hPadR"><span class="k">${k}</span><span>${esc(w)}</span></div>`).join('')
+      + `<div class="hPadR"><span class="k">keyboard</span><span>arrows / WASD move · Enter · Esc back · &lt; &gt; tune · − + zoom</span></div>`;
   }
   /** Which cards may be offered (a card with nothing in it has no button — AGENTS.md: never a dead control). */
   /** A chip and its card offered (true) or withdrawn — mapChromeApi chips(). */
@@ -1298,6 +1377,7 @@ export class TrackView {
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
     this.cardsTell();
+    queueMicrotask(() => { this.navScope(); this.navMarks(); });
     { /* ★★★ Stuart 11-27: a TALL window puts every chip down the LEFT (SERVERS, TUNE, LAYERS, MAP CONTROLS; LIST bottom-left);
        *  a shorter one flanks — MAP CONTROLS top-right. By the window, live as it is resized. */
       // ★ the whole stack measured: every offered chip's own height (a tucked one counts as out — no flapping as it tucks)
@@ -2355,6 +2435,8 @@ export class TrackView {
     for (const el of Array.from(this.root.querySelectorAll('[data-dial], [data-dial] button')) as HTMLElement[]) if (el.tagName === 'BUTTON' || el.tagName === 'SELECT' || el.tagName === 'INPUT') mark(el, !!why);
   }
   get dialLocked(): { why: string; exit: boolean } { return { why: this.dialWhy, exit: this.dialExit }; }
+  /** ★★ the pad's / keyboard's TUNE on this map: only where TUNE is offered (a viewer, a map with nothing to tune: none) */
+  get canTune(): boolean { return this.cardAvail.has('tune'); }
   /** A press the lock refuses: true = refused (the host was told). */
   private dialRefuses(t: EventTarget | null): boolean {
     if (!this.dialWhy) return false;
@@ -2667,6 +2749,7 @@ export class TrackView {
     (window as any).__vibeTrkView = this;   // ★ for drivers (scripts/test-web-map-cards.mjs): the view last shown
     if (this.open) return;
     this.root.hidden = false;
+    this.navScope();   // ★★ V12 the pad / keyboard highlight stays on the map (gamepad.ts scope), never the page under it
     // ★ the page under the map is not reachable while the map covers it (keyboard, a screen reader)
     this.inerted = [];
     for (const el of Array.from(document.body.children) as HTMLElement[]) {
@@ -2833,6 +2916,7 @@ export class TrackView {
       host.addEventListener('pointermove', (e) => { if (e.buttons && x0 >= 0 && Math.hypot(e.clientX - x0, e.clientY - y0) > 8 && !(e.target as HTMLElement).closest?.('.trkCard2, .mDock, .mHelp')) { x0 = -1; moved(); } });
       host.addEventListener('pointerup', () => { x0 = -1; }); }
     this.mapSay({ gl: this.vm, lm: this.vm ? null : this.lmap });   // ★ beta96 stage 8 a host layer (NDB) joins this map
+    this.navMarks();
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
 
@@ -2849,12 +2933,14 @@ export class TrackView {
         receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
         obstacles: () => this.chromeRects(),   // ★ an aircraft's card keeps clear of every chip, corner piece and card
         imageBase: this.o.imageBase ?? null,
-        ctlHost: this.slot('ctl'),   // ★★★ beta96 its keys in the MAP card (map cards), not floating over the map
+        // ★★★ beta97 the layer builds NO keys (keys:false): the MAP card draws its own and calls layer.actions (acCtl)
+        keys: false, onCtl: (st: AcCtl) => this.acCtl(st),
         onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },
         // ★ an aircraft tapped on the map: its list row is marked (the layer opens its own card)
         onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
       });
       this.placeAcObstacle();
+      try { this.acCtl(this.acLayer.ctlState?.() ?? null); } catch { /* an older layer: no keys */ }
       this.cardsLayout();
       w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
     } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }

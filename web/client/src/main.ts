@@ -25999,15 +25999,22 @@ function initKeyboard() {
   // ★★ The controller keyboard listens first (capture): it needs to know whether a hand, a keyboard or a pad acted last.
   initPadKeyboard();
   initGamepad({
-    tune: (d) => { if (spec) nudge(d * step); },
+    // ★★★ V12 ON A MAP (Stuart's scheme): tune only where TUNE applies — a locked dial gives the ask pulse, never a tune;
+    //     zoom = the MAP's zoom (its own keys), never the spectrum under it
+    tune: (d) => {
+      const mv = mapShOpenView()?.v;
+      if (mv) { if (!mv.canTune) return; const lk = mv.dialLocked; if (lk.why) { mv.onDialLocked?.(lk.why); return; } }
+      if (spec) nudge(d * step);
+    },
     swapVfo: () => spec?.swapVfo(),   // ★★ V12 VFO A/B — V on a keyboard, △ / START tap on a pad (gamepad.ts)
     typeFreq: (digit) => { if (spec) openFreqEntry(digit); },   // ★★ a digit typed on the page opens the box with it
-    zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
+    zoom: (d) => { const mv = mapShOpenView()?.v; if (mv) { mv.zoomBy(d); return; } if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
       // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
       const admin = document.getElementById('adminPanel');
       if (admin && !admin.hidden) { closeAdmin(); return true; }
-      const anyOpen = !!document.querySelector('.open');
+      // ★ the map's own chips (the open LIST's .open) are not a panel over the map
+      const anyOpen = [...document.querySelectorAll('.open')].some((e) => !e.closest('.trkView'));
       // ★★★ beta96 map cards: with nothing over the map, BACK shuts the map's top card before anything leaves the mode
       if (!anyOpen) { const mv = mapShOpenView()?.v; if (mv?.closeTopCard()) return true; }
       closePanels();

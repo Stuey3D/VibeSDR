@@ -138,7 +138,7 @@ try {
   ok(await until(`${tg} === JSON.stringify(['NAVTEX','WARNINGS','WEATHER','SHIPS','DSC','SEA AREAS'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row), SEA AREAS last: ${await ev(tg)}`);
   ok(await ev(`${view}.querySelectorAll('[data-tgl].live').length`) === 0, 'no decoder running: no layer marked LIVE');
   ok(await ev(`JSON.stringify([...${view}.querySelectorAll('.tgl .grp')].map(g => g.textContent))`) === JSON.stringify(['MARITIME']) || await ev(`${view}.querySelectorAll('.tgl .grp').length`) === 0, 'one group drawn: no group names, or MARITIME once');
-  ok(!(await ev(`!!${view}.querySelector('.vsadsb-ctl, [class*="vsadsb-ctl"]')`)), 'no aircraft here: the ADS-B layer\'s AUTO / RINGS keys are not made (no dead controls)');
+  ok(!(await ev(`!!${view}.querySelector('.vsadsb-ctl, [class*="vsadsb-ctl"], .acKeys')`)), 'no aircraft here: the ADS-B layer\'s AUTO / RINGS keys are not made (no dead controls)');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^(SOLENT TRADER|ISLAND FERRY|NAB PILOT):/.test(e.getAttribute('aria-label') || '')).length === 3`, 10000), 'the three stored ships on the map');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(e => /^DSC DISTRESS from MMSI 232001234/.test(e.getAttribute('aria-label') || '') && e.innerHTML.includes('SOS'))`, 5000), 'the DSC distress pin, with SOS');
   // ★★ beta90 a scale bar on every map — NM beside km on the sea map (vibemapgl.js / vibemap.js, TrackView 'marine')
