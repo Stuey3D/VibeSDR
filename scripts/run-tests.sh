@@ -2878,6 +2878,9 @@ npx tsx scripts/test_airsea_standalone.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 npx tsx scripts/test_aircraft_feeds_app.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96 follow-up: the phone\x27s feeds card — FIND, ADD tests first, ADD ANYWAY, no dead buttons (FEED-TEST.md) ──\033[0m\n'
+node scripts/test_aircraft_feeds_setup.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: the two live maps\x27 rules (test_live_maps, ONE-MAP.md) ──\033[0m\n'
 npx tsx scripts/test_live_maps.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

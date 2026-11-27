@@ -3,7 +3,8 @@
  * Server mode and VibeServer Lite. Stored as ONE JSON list, exactly ServerConfig::aircraftFeeds (vibe_feeds.h parseSources —
  * the engine checks it again and refuses in words). Pure: tested by scripts/test_aircraft_feeds_app.ts. */
 
-export type FeedFmt = 'beast' | 'sbs';
+/** ★ beta96 follow-up: 'uberhfdl' = an UberSDR's HFDL add-on, read over HTTP (vibe_uberhfdl.h) — connect only, HFDL. */
+export type FeedFmt = 'beast' | 'sbs' | 'uberhfdl';
 export type FeedDir = 'connect' | 'listen';
 export type FeedLabel = 'adsb' | 'hfdl' | 'vdl2' | 'acars';
 export interface FeedSource { fmt: FeedFmt; dir: FeedDir; host?: string; port: number; label: FeedLabel; name?: string }
@@ -12,8 +13,11 @@ export const FEED_LABEL_WORD: Record<FeedLabel, string> = { adsb: 'ADS-B', hfdl:
 
 /** The form's defaults for a format (Beast: connect to :30005; BaseStation: dumphfdl connects in to :32010, HFDL). */
 export function feedDefaults(fmt: FeedFmt): { dir: FeedDir; port: number; label: FeedLabel } {
-  return fmt === 'sbs' ? { dir: 'listen', port: 32010, label: 'hfdl' } : { dir: 'connect', port: 30005, label: 'adsb' };
+  return fmt === 'sbs' ? { dir: 'listen', port: 32010, label: 'hfdl' }
+       : fmt === 'uberhfdl' ? { dir: 'connect', port: 8080, label: 'hfdl' } : { dir: 'connect', port: 30005, label: 'adsb' };
 }
+/** What each format is called (the Setup page's feedsFmtWord). */
+export function feedFmtWord(fmt: FeedFmt): string { return fmt === 'sbs' ? 'BaseStation' : fmt === 'uberhfdl' ? 'UberSDR HFDL' : 'Beast'; }
 
 /** The stored text → the list ('' or junk = none). */
 export function parseFeeds(json: string | null | undefined): FeedSource[] {
@@ -25,11 +29,11 @@ export function parseFeeds(json: string | null | undefined): FeedSource[] {
   for (const e of j.slice(0, FEED_MAX)) {
     if (!e || typeof e !== 'object') continue;
     const o = e as Record<string, unknown>;
-    const fmt: FeedFmt = o.fmt === 'sbs' ? 'sbs' : 'beast';
-    const dir: FeedDir = o.dir === 'listen' ? 'listen' : 'connect';
+    const fmt: FeedFmt = o.fmt === 'sbs' || o.fmt === 'uberhfdl' ? o.fmt : 'beast';
+    const dir: FeedDir = o.dir === 'listen' && fmt !== 'uberhfdl' ? 'listen' : 'connect';
     const port = Number(o.port);
     if (!(port >= 1 && port <= 65535)) continue;
-    const label: FeedLabel = fmt === 'beast' ? 'adsb' : (['adsb', 'hfdl', 'vdl2', 'acars'].includes(String(o.label)) ? String(o.label) as FeedLabel : 'hfdl');
+    const label: FeedLabel = fmt === 'beast' ? 'adsb' : fmt === 'uberhfdl' ? 'hfdl' : (['adsb', 'hfdl', 'vdl2', 'acars'].includes(String(o.label)) ? String(o.label) as FeedLabel : 'hfdl');
     const f: FeedSource = { fmt, dir, port, label };
     if (dir === 'connect') { const h = typeof o.host === 'string' ? o.host.trim().slice(0, 253) : ''; if (!h) continue; f.host = h; }
     if (typeof o.name === 'string' && o.name.trim()) f.name = o.name.trim().slice(0, 40);
@@ -62,7 +66,8 @@ export function feedAddrWhy(t: string): string {
 /** The ADD form → {src} or {error} (feedsFromForm). */
 export function feedFromForm(fmt: FeedFmt, dir: FeedDir, addr: string, port: string | number, label: FeedLabel, name: string, list: FeedSource[]):
     { src: FeedSource; error?: undefined } | { src?: undefined; error: string } {
-  const f: FeedSource = { fmt, dir, port: 0, label: fmt === 'beast' ? 'adsb' : label };
+  if (fmt === 'uberhfdl') dir = 'connect';   // ★ read from the UberSDR: this server always connects
+  const f: FeedSource = { fmt, dir, port: 0, label: fmt === 'beast' ? 'adsb' : fmt === 'uberhfdl' ? 'hfdl' : label };
   if (list.length >= FEED_MAX) return { error: `at most ${FEED_MAX} aircraft feeds` };
   if (dir === 'connect') {
     const why = feedAddrWhy(addr);
@@ -82,6 +87,26 @@ export function feedFromForm(fmt: FeedFmt, dir: FeedDir, addr: string, port: str
   const n = String(name || '').trim().slice(0, 40);
   if (n) f.name = n;
   return { src: f };
+}
+
+/* ── ★★ beta96 follow-up: TEST / FIND before saving (the engine's vibe_feed_test.h, through VibeLocalSDR.feedTest) ── */
+export const feedKey = (f: FeedSource): string => [f.fmt, f.dir, f.host || '', f.port, f.label].join('|');
+/** The engine's test answer → {ok, text} (the Setup page's feedTestWords). */
+export function feedTestWords(j: any): { ok: boolean; text: string } {
+  if (!j || typeof j !== 'object') return { ok: false, text: 'The test did not answer — is the app’s server engine available?' };
+  const line = String(j.line || j.verdict || 'no answer').slice(0, 300);
+  return { ok: !!j.ok, text: (j.ok ? '✓ ' : '✗ ') + line + (j.hint ? ' — ' + String(j.hint).slice(0, 300) : '') };
+}
+export interface FeedHit { src: FeedSource; name: string; line: string }
+/** The FIND answer → ready-to-add sources (each read again through parseFeeds) and the line (feedFindWords). */
+export function feedFindWords(j: any): { hits: FeedHit[]; text: string } {
+  if (!j || typeof j !== 'object') return { hits: [], text: 'The search did not answer — is the app’s server engine available?' };
+  const hits: FeedHit[] = [];
+  for (const h of (Array.isArray(j.hits) ? j.hits : []).slice(0, 5)) {
+    const src = parseFeeds(JSON.stringify([h && h.src]))[0];
+    if (src) hits.push({ src, name: String(h.name || '').slice(0, 40), line: String(h.line || '').slice(0, 200) });
+  }
+  return { hits, text: String(j.line || '').slice(0, 400) + (hits.length ? '' : (j.hint ? ' ' + String(j.hint).slice(0, 300) : '')) };
 }
 
 /** The running server's word on each source (/vibeserver/adsb-feed `sources`: {title, label, line|state}) → one line each. */
