@@ -30,7 +30,7 @@
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
   | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
-  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest' | 'stats' | 'statsLine';
+  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest' | 'stats' | 'statsLine' | 'waterfall';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -81,6 +81,11 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { d: 'M2.5 11.5C5.5 9.2 7.2 6.2 10 6.6s4.2 2.4 6.6 0.6S19.5 2.8 21.6 2.6', w: 1.9 },
   ],
   /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
+  /* ★★ V12 the map drawer's LIVE WATERFALL (Stuart 11-27): a spectrum trace over the waterfall's falling lines */
+  waterfall: [
+    { d: 'M3 10l3-2.5 2 1.5 3-5 2.5 4.5 2.5-2 2 1.5L21 7' },
+    { d: 'M3 14h18M3 17.5h18M3 21h18', w: 1.5 },
+  ],
   list: [
     { d: 'M9 6h11M9 12h11M9 18h11' },
     { c: [4.5, 6, 1.2], fill: true }, { c: [4.5, 12, 1.2], fill: true }, { c: [4.5, 18, 1.2], fill: true },

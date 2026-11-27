@@ -48337,9 +48337,13 @@ static std::string vsTunableJson() {
             double cl = b.chans.front(), ch = b.chans.front();
             for (double c : b.chans) { cl = std::min(cl, c); ch = std::max(ch, c); }
             char e[320];
-            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f,\"channels\":%zu,\"chLo\":%.0f,\"chHi\":%.0f}", first ? "" : ",",
+            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f,\"channels\":%zu,\"chLo\":%.0f,\"chHi\":%.0f,\"chans\":[", first ? "" : ",",
                           b.id, b.name, b.region, b.centreHz, b.chans.size(), cl, ch);
             j += e; first = false;
+            /* ★★ V12 `chans`: every channel the band decodes (Hz) — the map drawer's live waterfall marks each one, labelled,
+             *  from this table, never a copy of its own (ACARS's channels are not evenly spaced: chLo / chHi cannot say them) */
+            for (size_t i = 0; i < b.chans.size() && i < 64; i++) { char c[24]; std::snprintf(c, sizeof c, "%s%.0f", i ? "," : "", b.chans[i]); j += c; }
+            j += "]}";
         }
         j += "]";
         if (vsModeBlocked("avdata+text")) j += ",\"avdataText\":true";

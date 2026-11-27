@@ -918,6 +918,40 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="list"] .lMax:focus-visible{outline:2px solid #ffd34d;outline-offset:-3px}
 .trkCards .trkCard2[data-card="list"][hidden] .lMax,.trkCards .trkCard2[data-card="list"].stepAside .lMax{display:none}
 .trkView.lMax .trkCards .sideB{top:var(--trk-cb-top,0px)!important}
+/* ★★★ V12 the LIST ↔ WATERFALL tab: the maximise tab's mirror at the drawer's top-LEFT (same size, shape, material) */
+.trkCard2[data-card="list"] .lSwap{all:unset;box-sizing:border-box;position:absolute;top:-19px;left:22px;width:44px;height:19px;display:flex;align-items:flex-start;justify-content:center;padding-top:3px;
+  background:#0b110d;border:1px solid #2c3a4a;border-bottom:0;border-radius:9px 9px 0 0;color:#2c3a4a;cursor:pointer;z-index:2}
+.trkCard2[data-card="list"] .lSwap[hidden]{display:none}
+.trkCard2[data-card="list"] .lSwap svg{width:13px;height:13px;color:var(--hc,#5BE36B)}
+.trkCard2[data-card="list"] .lSwap::before,.trkCard2[data-card="list"] .lSwap::after{content:"";position:absolute;bottom:-1px;width:9px;height:9px;pointer-events:none}
+.trkCard2[data-card="list"] .lSwap::before{left:-9px;background:radial-gradient(circle at 0 0,transparent 7.5px,currentColor 8px,currentColor 8.6px,#0b110d 9.2px)}
+.trkCard2[data-card="list"] .lSwap::after{right:-9px;background:radial-gradient(circle at 100% 0,transparent 7.5px,currentColor 8px,currentColor 8.6px,#0b110d 9.2px)}
+.trkCard2[data-card="list"] .lSwap:focus-visible{outline:2px solid #ffd34d;outline-offset:-3px}
+.trkCards .trkCard2[data-card="list"][hidden] .lSwap,.trkCards .trkCard2[data-card="list"].stepAside .lSwap{display:none}
+/* the collapsed chip's own ≋ tab (opens the drawer on the waterfall); room above the chip for it */
+.trkView.wfOn .mChipsBL{padding-top:22px;margin-top:-22px}
+.mDock[data-dock="list"] .hCard{position:relative}
+.mDock[data-dock="list"] .lSwapC{all:unset;box-sizing:border-box;position:absolute;top:-19px;left:14px;width:40px;height:19px;display:flex;align-items:flex-start;justify-content:center;padding-top:3px;
+  background:var(--ctl-card-bg,#16202a);border:1px solid var(--bar-border,#2c3a4a);border-bottom:0;border-radius:9px 9px 0 0;color:var(--hc,#5BE36B);cursor:pointer}
+.mDock[data-dock="list"] .lSwapC svg{width:13px;height:13px}
+.mDock[data-dock="list"] .lSwapC[hidden],.mDock[data-dock="list"].open .lSwapC,.mDock[data-dock="list"].tucked .lSwapC{display:none}
+.mDock[data-dock="list"] .lSwapC:focus-visible{outline:2px solid #ffd34d;outline-offset:-3px}
+/* the waterfall's view: the list's rows and its bar's tools give way to the picture and the dial in words */
+.trkList .wfPane{display:none}
+.trkList[data-pane="wf"] .wfPane{display:flex;order:1;flex:1 1 auto;min-height:0;position:relative}
+.trkList[data-pane="wf"] .rows,.trkList[data-pane="wf"] .safety,.trkList[data-pane="wf"] .filt{display:none!important}
+.trkList[data-pane="wf"] .hd>:not(.wfInfo){display:none!important}
+.trkCard2[data-card="list"][data-pane="wf"] .cb>.facts{display:none}
+.trkList .hd .wfInfo{display:none}
+.trkList[data-pane="wf"] .hd .wfInfo{display:block;color:#cfd9e3;font:700 11px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.mapWf{position:relative;flex:1 1 auto;min-height:0;background:#000;overflow:hidden;pointer-events:none}
+.mapWf canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.mapWf .mwMarks{position:absolute;inset:0}
+.mapWf .mwLine{position:absolute;top:0;bottom:0;width:1px;margin-left:-.5px;background:rgba(255,211,77,.28)}
+.mapWf .mwLine.on{background:rgba(255,160,40,.85)}
+.mapWf .mwBand{position:absolute;top:0;bottom:0;background:rgba(255,160,40,.13)}
+.mapWf .mwLbl{position:absolute;transform:translateX(-50%);padding:0 3px;border-radius:3px;background:rgba(0,0,0,.62);color:#cfd9e3;font:600 9.5px/12px ui-monospace,Menlo,monospace;white-space:nowrap}
+.mapWf .mwLbl.on{color:#ffb347}
 .mChipsBL .mDock[data-dock="list"] .mchip .ic{display:inline-flex!important;flex-direction:row!important;align-items:center;gap:6px}
 .trkView.listOverAttrib .maplibregl-ctrl-attrib,.trkView.listOverAttrib .leaflet-control-attribution{visibility:hidden}
 /* ★ Stuart 12:34 ("no gap on mac but there is on iphone"): an old phone rule inset the cards' layer 6 px — the layer is the
@@ -1092,6 +1126,7 @@ function glyphOf(id: string): LayerGlyph {
 /** ★ the SERVERS and LIST chips' glyphs — the house set (modeIcons.ts): the servers glyph IS the app's ServersChip's */
 const SERVERS_SVG = modeIconSvg('servers', 'mIco');
 const LIST_SVG = modeIconSvg('list', 'mIco');
+const WF_SVG = modeIconSvg('waterfall', 'mIco');
 /** ★ the HELP card's glyphs — each chip's own */
 const HELP_GLYPH: Record<string, string> = {
   servers: SERVERS_SVG.replace('mIco', 'tIco'), tune: modeIconSvg('radio', 'tIco'), layers: P16(TUNE_ICON_PATH.aircraft), map: modeIconSvg('map', 'tIco'),
@@ -1252,7 +1287,10 @@ export class TrackView {
         + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
         + `<button class="lPause" type="button" hidden>\u2016 <span class="n"></span></button><span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
-        + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
+        + `<span class="wfInfo" aria-live="off"></span><button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div><div class="wfPane" aria-label="Live waterfall"></div></div>`
+        /* ★★★ V12 (Stuart 11-27): the LIST ↔ WATERFALL switch — a folder tab out of the drawer's TOP-LEFT, the mirror of the
+         *  maximise tab at its top-right; it carries the OTHER view's glyph. Only on a live map over a radio (setWaterfall). */
+        + `<button class="lSwap" type="button" hidden aria-label="Show the live waterfall" title="Live waterfall (W)">${WF_SVG}</button>`
         + `<button class="lMax" type="button" aria-pressed="false" aria-label="Maximise the list" title="Maximise the list (M)"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`)
       + card('servers', 'SERVERS', `<div class="srvBody" role="group" aria-label="Servers and radios"></div>`)
       + card('rate', 'RATE', `<div class="rateBody" role="list" aria-label="Message rate by source"></div>`)
@@ -1299,6 +1337,7 @@ export class TrackView {
       if (b.dataset.cbtn === 'rate' && this.rateStatic) return;
       if (b.dataset.cbtn === 'chat' && b.getAttribute('aria-disabled') === 'true') { this.onDialLocked?.(b.title); return; }
       if (b.dataset.cbtn === 'list' && this.listAside) { this.closeTransients(); return; }
+      if (b.dataset.cbtn === 'list' && !this.isCardOpen('list')) this.setPane('list', false);   // ★ the chip opens the LIST; the ≋ tab the waterfall
       this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
     };
     // ★★★ tweak 4 (Stuart 11-27): the open card IS the chip, expanded in place — a press on its header (or its ‹ / ›) shrinks
@@ -1364,6 +1403,18 @@ export class TrackView {
         const t = e.target as HTMLElement | null; if (t && (t.closest('input, textarea, select, [contenteditable="true"]'))) return;
         if (!this.isCardOpen('list')) return;
         e.preventDefault(); e.stopPropagation(); this.setListMax(!this.listMax);
+      });
+      /* ★★★ V12 the LIST ↔ WATERFALL tabs: the drawer's top-left tab swaps its contents in place; the collapsed chip's
+       *  own ≋ tab opens the drawer straight onto the waterfall. W does the same from the keyboard. */
+      const hc = r.querySelector('.mDock[data-dock="list"] .hCard') as HTMLElement | null;
+      hc?.insertAdjacentHTML('beforeend', `<button class="lSwapC" type="button" hidden aria-label="Open the live waterfall" title="Live waterfall (W)">${WF_SVG}</button>`);
+      (r.querySelector('.lSwap') as HTMLElement | null)?.addEventListener('click', (e) => { e.stopPropagation(); this.setPane(this.pane === 'wf' ? 'list' : 'wf'); });
+      (r.querySelector('.lSwapC') as HTMLElement | null)?.addEventListener('click', (e) => { e.stopPropagation(); this.waterfallOpen(); });
+      r.addEventListener('keydown', (e) => {
+        if ((e.key !== 'w' && e.key !== 'W') || e.metaKey || e.ctrlKey || e.altKey || !this.wfOffered) return;
+        const t = e.target as HTMLElement | null; if (t && (t.closest('input, textarea, select, [contenteditable="true"]'))) return;
+        e.preventDefault(); e.stopPropagation();
+        if (!this.isCardOpen('list') || this.listAside) this.waterfallOpen(); else this.setPane(this.pane === 'wf' ? 'list' : 'wf');
       });
       if (this.listMax) { r.classList.add('lMax'); const b = r.querySelector('.lMax') as HTMLElement | null; if (b) { b.setAttribute('aria-pressed', 'true'); b.setAttribute('aria-label', 'Restore the list'); } }
     }
@@ -1491,6 +1542,7 @@ export class TrackView {
   private cardsTell(force?: Set<CardId>) {
     const now = force ?? new Set(this.cardOrder);
     for (const c of CARD_IDS) if (now.has(c) !== this.cardsTold.has(c)) { if (now.has(c)) this.cardsTold.add(c); else this.cardsTold.delete(c); this.onCard?.(c, now.has(c)); }
+    this.wfTell();
   }
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
@@ -1644,7 +1696,8 @@ export class TrackView {
       this.listNormH = Math.round(head + n * rowH);
       /* ★ Stuart 13:13 ("we must only cover when scrolling is available"): a short list (3 ships, a couple of messages)
        *  shrinks to its rows plus the chip's own clear space under them — no row under the chip, no empty drawer */
-      if (rowsEl && rowsEl.childElementCount <= n + 2) {
+      // ★ the waterfall's view is always the full drawer (n rows' height) — it has no rows to shrink to
+      if (rowsEl && this.pane !== 'wf' && rowsEl.childElementCount <= n + 2) {
         const chipH = parseFloat(this.root.style.getPropertyValue('--trk-lchip-h')) || 34;
         const content = (Array.from(rowsEl.children) as HTMLElement[]).reduce((t, c) => t + c.offsetHeight, 0);
         // fits without scrolling → its rows and the chip's clear strip (at most the chip's height over normal: a list that
@@ -1789,6 +1842,62 @@ export class TrackView {
     }
   }
   private listMaxPause() { this.fitPauseForCards(); }   // ★ maximised counts as a card over the map: AUTO waits
+  /* ★★★ V12 THE LIVE WATERFALL in the LIST's drawer (Stuart 11-27): a live map over a radio offers it (setWaterfall); the
+   *  drawer shows EITHER the list OR the waterfall, swapped in place by the top-left tab — same size, no close / reopen.
+   *  The host is told the moment the waterfall becomes visible (its pane, to draw into) and the moment it is not (null:
+   *  the drawer shut, swapped back, stepped aside for a card, or the map gone) — the spectrum runs only in between. */
+  private wfOffered = false;
+  private pane: 'list' | 'wf' = 'list';
+  private wfToldEl: HTMLElement | null = null;
+  /** The host: the waterfall's pane while it is on screen, null as it goes. */
+  onWaterfall: ((pane: HTMLElement | null) => void) | null = null;
+  /** Offer the waterfall (a live map over a radio) or not (the viewer, a map with no radio): the tabs come and go. */
+  setWaterfall(on: boolean) {
+    if (on === this.wfOffered) return;
+    this.wfOffered = on;
+    for (const b of Array.from(this.root.querySelectorAll('.lSwap, .lSwapC')) as HTMLElement[]) b.hidden = !on;
+    this.root.classList.toggle('wfOn', on);
+    if (!on && this.pane === 'wf') this.setPane('list', false); else this.wfTell();
+    this.layoutSig = ''; this.cardsLayout();
+  }
+  get waterfallShowing(): boolean { return !!this.wfToldEl; }
+  /** The drawer opened onto the waterfall (the collapsed chip's ≋ tab, W). */
+  waterfallOpen() {
+    if (!this.wfOffered) return;
+    if (this.listAside) this.closeTransients();
+    this.setPane('wf', false);
+    if (!this.isCardOpen('list')) this.cardOpen('list', true, true); else { this.layoutSig = ''; this.cardsLayout(); }
+  }
+  /** The drawer's bottom bar in the waterfall view: what the waterfall needs (the dial frequency). */
+  setWaterfallInfo(html: string) {
+    const el = this.root.querySelector('.trkList .wfInfo') as HTMLElement | null;
+    if (el && el.innerHTML !== html) el.innerHTML = html;
+  }
+  private setPane(p: 'list' | 'wf', relayout = true) {
+    if (p === 'wf' && !this.wfOffered) p = 'list';
+    this.pane = p;
+    const card = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
+    card?.setAttribute('data-pane', p);
+    this.list?.setAttribute('data-pane', p);
+    const sw = this.root.querySelector('.lSwap') as HTMLElement | null;
+    if (sw) {
+      sw.innerHTML = p === 'wf' ? LIST_SVG : WF_SVG;
+      const w = p === 'wf' ? 'Show the list' : 'Show the live waterfall';
+      sw.setAttribute('aria-label', w); sw.title = `${p === 'wf' ? 'The list' : 'Live waterfall'} (W)`;
+    }
+    const lm = this.root.querySelector('.lMax') as HTMLElement | null;
+    if (lm) { const what = p === 'wf' ? 'waterfall' : 'list'; lm.setAttribute('aria-label', `${this.listMax ? 'Restore' : 'Maximise'} the ${what}`); }
+    if (relayout) { this.layoutSig = ''; this.cardsLayout(); }
+    this.wfTell();
+  }
+  private wfTell() {
+    const pane = this.list?.querySelector('.wfPane') as HTMLElement | null;
+    const on = this.wfOffered && this.pane === 'wf' && this.isCardOpen('list') && !this.listAside && !this.root.hidden && !!pane;
+    const el = on ? pane : null;
+    if (el === this.wfToldEl) return;
+    this.wfToldEl = el;
+    try { this.onWaterfall?.(el); } catch { /* the host's fault is its own */ }
+  }
   private lpFired = false;
   private listAside = false;
   private listStepAside() {
@@ -1813,6 +1922,7 @@ export class TrackView {
     list.toggleAttribute('inert', aside);
     dock.classList.toggle('aside', aside);
     dock.title = aside ? 'The list is tucked away while that card is open — press to bring it back' : '';
+    this.wfTell();
   }
   /** ★★★ tweak 3 the LAYERS chip: a glyph and a count per layer present ([plane] 157 [ship] 3 [NAVTEX] 40); a slim column
    *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */
@@ -2641,6 +2751,7 @@ export class TrackView {
     this.tuneOpen(false);
     this.cardsTell(new Set());   // ★ every card the host filled gives its nodes back (CHAT's log and replies)
     this.root.hidden = true;
+    this.wfTell();   // ★ the waterfall's pane goes with the map: the host stops the spectrum and takes its canvases home
     if (!document.querySelector('.trkView:not([hidden])')) { document.body.classList.remove('trkMapUp'); window.dispatchEvent(new Event('vibe:mapclosed')); }
     this.attribObs?.disconnect(); this.attribObs = null;
     for (const el of this.inerted) el.inert = false;

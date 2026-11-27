@@ -291,6 +291,8 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
 // ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
+import { MapWf } from './mapWf';
+import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, type MapWfModel } from '../../../src/utils/mapWfModel';   // ★★★ V12 the map drawer's live waterfall
 import { rankCard } from '../../../src/utils/spotRanks';   // ★ V12 beta90 the gallery's ranking card
 import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
 
@@ -1706,6 +1708,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       noteFrame();
       linkFrames++;   // ★ the DATA control's AUTO controller counts what arrives
       wf!.push(bins, centerHz, bwHz);
+      if (mapWfInst) mapWfFeed(bins, centerHz, bwHz);   // ★★★ V12 the map drawer's waterfall, only while it shows
       updateSignal(bins, centerHz, bwHz);
       syncNfmVoiceRow();
       // ★ Auto squelch's reference: how far the channel stands above its empty neighbours on THIS
@@ -4156,7 +4159,7 @@ function loop(frameTs?: number) {
    *  panel's rate. Under a map it runs 5 times a second (the rows are still taken in; only the drawing waits). */
   /* ★ Stuart 14:24 ("the waterfall doesn't need to run at all under the map"): under a same-page map the loop STOPS and
    *  the server sends this listener no spectrum ({"type":"spec","on":0}); the map's close restarts both (specUnderMap). */
-  if (trackViewUp()) { loopParked = true; specUnderMap(true); return; }
+  if (trackViewUp()) { loopParked = true; specUnderMap(!mapWfShowing()); return; }
   requestAnimationFrame(loop);
 }
 let loopParked = false, specOffSent = false;
@@ -4166,7 +4169,7 @@ function specUnderMap(covered: boolean) {
     specOffSent = covered;
     try { spec?.send({ type: 'spec', on: covered ? 0 : 1 }); } catch { /* not open: the next connect starts it on */ }
   }
-  if (!covered && loopParked) { loopParked = false; requestAnimationFrame(loop); }
+  if (!covered && loopParked && !trackViewUp()) { loopParked = false; requestAnimationFrame(loop); }
 }
 (window as any).__vibeSpecUnderMap = () => ({ off: specOffSent, parked: loopParked });
 window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderMap(false); mapChromeAdopt(false); });
@@ -4290,6 +4293,11 @@ function mapGainPw(pw: HTMLElement) {
 }
 function mapChromeAdopt(on: boolean) {
   mapGainLend(on);
+  for (const v of [asView, ismMapView, ismGalView]) if (v) {   // ★★★ V12 every live map over this radio offers the waterfall
+    v.onWaterfall = mapWfShow;
+    if (on && v.open) v.setWaterfall(!!spec);
+  }
+  if (!on && mapWfInst) mapWfShow(null);
   const h = document.getElementById('srvHealth');
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
   const col = v?.querySelector('.mChipsR') as HTMLElement | null;
@@ -4310,6 +4318,42 @@ function mapChromeAdopt(on: boolean) {
   if (b && badgeHome.parent && b.parentNode !== badgeHome.parent) (badgeHome.parent as Element).insertBefore(b, badgeHome.next && badgeHome.next.parentNode === badgeHome.parent ? badgeHome.next : null);
 
   mapTimeSync();
+}
+/* ★★★ V12 THE MAP DRAWER'S LIVE WATERFALL (Stuart 11-27; mapWf.ts). Every live map over this radio offers it (the folder
+ *  tab at the drawer's top-left); the spectrum runs at the server ONLY while it is on screen ({"type":"spec","on":1} as
+ *  it appears, on:0 as it goes) and it starts FRESH each time (no backfill). Passive: its canvas takes no input, so no tap
+ *  on it can tune — the ask-before-tuning lock never comes into it. The span and markers fit the MODE (mapWfModel). */
+let mapWfInst: MapWf | null = null;
+let mapWfSeen = new Map<string, string>();   // a station's last ident reading — a new one is stamped
+let mapWfInfoAt = 0;
+function mapWfShowing(): boolean { return !!mapWfInst; }
+function mapWfShow(pane: HTMLElement | null) {
+  if (pane) {
+    mapWfInst?.destroy();
+    mapWfInst = new MapWf(String(prefs().palette || 'gqrx'));
+    pane.appendChild(mapWfInst.el);
+    mapWfSeen = new Map(); mapWfModel(true);   // ★ what was decoded before it opened is not stamped as if it were now
+    specUnderMap(false);
+  } else {
+    mapWfInst?.destroy(); mapWfInst = null;
+    specUnderMap(trackViewUp());
+  }
+}
+(window as any).__vibeMapWf = () => (mapWfInst ? { ...mapWfInst.stats, spec: !specOffSent } : null);
+function mapWfFeed(bins: Float32Array, centerHz: number, bwHz: number) {
+  const m = mapWfModel(false);
+  if (!m || !mapWfInst) return;
+  mapWfInst.push(bins, centerHz, bwHz, m);
+  const now = performance.now();
+  if (now - mapWfInfoAt > 250) { mapWfInfoAt = now; for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setWaterfallInfo(escapeHtml(m.info)); }
+}
+/** The waterfall's span, markers and stamps for what the radio is doing now (src/utils/mapWfModel.ts — one rule for both
+ *  clients). `prime` only notes the idents already read, so they are not stamped as if decoded now. */
+function mapWfModel(prime: boolean): MapWfModel | null {
+  if (vmOn && vmReport) return wfModelVor(vmReport, mapWfSeen, prime);
+  if (ndbOn && ndbReport) return wfModelNdb(ndbReport, mapWfSeen, prime);
+  if (avOn && avReport) { const band = avBands.find((b) => b.id === avReport!.band); const m = band ? wfModelChannels(band) : null; if (m) return m; }
+  return spec ? wfModelVfo(spec.vfoA()) : null;
 }
 function mapTimeSync() {
   const t = document.getElementById('rxTimeLeft');
