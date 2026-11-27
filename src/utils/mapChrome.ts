@@ -104,6 +104,21 @@ export interface ChromeGeom {
 
 const finite = (v: number, d = 0) => (Number.isFinite(v) ? v : d);
 
+/** ★★★ beta97 (Stuart, build 587: the pill sat left of centre on the Mac) the pill CENTRED ON THE WINDOW, slid only as far
+ *  as it must to stay inside its band (clear of the ✕ / RATE corners, or the side panel and the bottom-right row). */
+export function pillLeft(band: { x: number; w: number }, w: number, winW: number): number {
+  const lo = band.x, hi = band.x + Math.max(0, band.w - w);
+  return Math.max(lo, Math.min(hi, winW / 2 - w / 2));
+}
+
+/** ★★★ beta97 a map's NOTICE (the feed lost, the time limit, the antenna) in the cards' own layout — never the page's banner
+ *  under the pill (Stuart, build 587): its heading from the words (the page's old rule), or null for nothing to say. */
+export function feedNotice(w: string | null | undefined): { title: string; text: string } | null {
+  const t = String(w ?? '').trim();
+  if (!t) return null;
+  return { title: /on the map|Map time/.test(t) ? 'TIME LIMIT' : /reconnecting|lost/.test(t) ? 'AIRCRAFT FEED' : 'CHECK THE ANTENNA', text: t };
+}
+
 /** ★★★ THE LAYOUT, from the window and the real insets. */
 export function chromeGeom(p: ChromeIn): ChromeGeom {
   const w = Math.max(0, finite(p.w)), h = Math.max(0, finite(p.h));
@@ -466,6 +481,28 @@ export function sourceRows(o: { aircraft: ReadonlyArray<{ radios?: string[] }>; 
 /** ★★ LIVE ELSEWHERE (Stuart 15:31, the web's `others`): which layers another of this server's radios — or its feeds —
  *  heard an aircraft on in the last minute (the same table SOURCES and RATE read; no fetch). layer id → source names. */
 const SRC_LAYER: Record<string, string> = { 'ADS-B': 'adsb', VDL2: 'vdl2', ACARS: 'acars', HFDL: 'hfdl', 'ADS-C': 'adsc' };
+/** ★★★ beta97 (Stuart, build 587: ADS-B said "LIVE 0" while PiAware put 33 on the map, and the LAYERS chip lost its aircraft)
+ *  how many each layer's OTHER sources hold — this server's other radios and its feeds, heard in the last minute (the same
+ *  table and rule as layerOthers). A row with both this radio and others shows BOTH counts (layerSplit). */
+export function layerOtherCounts(aircraft: ReadonlyArray<{ age: number; src: string[]; radios?: string[] }>, o: { mine: string; onRadio: boolean }): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of aircraft) {
+    if (!(p.age < 60)) continue;
+    if (!(p.radios ?? []).some((r) => !(o.onRadio && r === o.mine))) continue;
+    const seen = new Set<string>();
+    for (const s of p.src) { const id = SRC_LAYER[s]; if (!id || seen.has(id)) continue; seen.add(id); out[id] = (out[id] ?? 0) + 1; }
+  }
+  return out;
+}
+/** ★★★ A LAYERS row's badges and counts: this radio live AND other sources → BOTH — the filled LIVE with this radio's count
+ *  (green) and the outlined LIVE with the others' count; one source → one badge / count as before (liveBadges). The row's
+ *  TOTAL (the LAYERS chip's family count) is never less than either: the sources overlap (one aircraft, two receivers), so the
+ *  larger of the two is what is on the map at least — a family never vanishes because this radio has heard 0 so far. */
+export function layerSplit(r: { n?: number; nOther?: number; live?: boolean; others?: string[] }): { split: boolean; mine?: number; other?: number; total?: number } {
+  const split = !!r.live && !!r.others?.length && r.nOther != null;
+  if (!split) return { split: false, total: r.n };
+  return { split: true, mine: r.n ?? 0, other: r.nOther, total: Math.max(r.n ?? 0, r.nOther ?? 0) };
+}
 export function layerOthers(aircraft: ReadonlyArray<{ age: number; src: string[]; radios?: string[] }>, o: { mine: string; onRadio: boolean;
                             names: Record<string, string>; feedTitle?: string }): Record<string, string[]> {
   const out = new Map<string, Set<string>>();
@@ -523,13 +560,14 @@ export const LAYER_FAMILY: Record<string, 'aircraft' | 'ship' | 'navtex' | 'ball
   adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', adsc: 'aircraft',
   ships: 'ship', dsc: 'ship', navst: 'navtex', sondes: 'balloon', vor: 'beacon', ndb: 'beacon',
 };
-export function layerFamilies(rows: Array<{ id: string; n?: number; colour?: string }>, toggled: Record<string, boolean>): Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> {
+export function layerFamilies(rows: Array<{ id: string; n?: number; nOther?: number; live?: boolean; others?: string[]; colour?: string }>, toggled: Record<string, boolean>): Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> {
   const out: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> = [];
   for (const r of rows) {
     const f = LAYER_FAMILY[r.id];
-    if (!f || toggled[r.id] === false || !(r.n && r.n > 0)) continue;
+    const n = layerSplit(r).total;   // ★★★ beta97 the row's TOTAL (both sources), never only this radio's
+    if (!f || toggled[r.id] === false || !(n && n > 0)) continue;
     const have = out.find((x) => x.glyph === f);
-    if (have) have.n += r.n; else out.push({ glyph: f, n: r.n, colour: r.colour || '#9fb0c2' });
+    if (have) have.n += n; else out.push({ glyph: f, n, colour: r.colour || '#9fb0c2' });
   }
   return out;
 }

@@ -33,7 +33,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -48,7 +48,9 @@ const C = {
 };
 const F = DECODER_FONT;
 
-export interface MapLayerRow { id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string }
+export interface MapLayerRow { id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string;
+  /** ★★★ beta97 the layer's count from this server's OTHER sources (both badges + both counts when this radio is live too) */
+  nOther?: number }
 export interface MapStatsSection { mode: string; rows: Array<{ key: string; label: string; value: string; name: string }> }
 export interface MapCtlState { auto: 'on' | 'off' | 'paused'; rings?: boolean; range?: boolean; rangeOffered?: boolean; labels?: boolean; aircraft: boolean }
 export interface MapGainHandlers { onAgc: (on: boolean) => void; onSet: (at: number) => void; onUnlock?: (password: string) => Promise<boolean>; onMore?: () => void }
@@ -124,6 +126,9 @@ export interface MapChromeProps {
   onZoom: (dir: 1 | -1) => void;
   /** a tap on the map (the page told us): transient cards fold */
   mapTapSeq: number;
+  /** ★★★ beta97 the map's notice (feedNotice: the feed lost, the time limit, the antenna) — a strip under the pill, × hides it
+   *  until its words change; never the page's own banner */
+  notice?: { title: string; text: string } | null;
   /** ★★★ beta97 the bottom-right group's top, from the window's foot (measured): the page opens its credits above it */
   onBrTop?: (px: number) => void;
   /** LIST's footprint for the page (the attribution, the fit's obstacle). */
@@ -182,6 +187,7 @@ type Transient = ChipId | 'help' | null;
 
 export default function MapChrome(p: MapChromeProps) {
   const [card, setCard] = useState<Transient>(null);
+  const [noticeX, setNoticeX] = useState<string | null>(null);   // ★★★ beta97 the notice the × hid (until its words change)
   const [listOpen, setListOpen] = useState(p.winW >= 600);
   const [listMax, setListMax] = useState(false);
   const [pane, setPane] = useState<'list' | 'wf'>('list');
@@ -324,8 +330,25 @@ export default function MapChrome(p: MapChromeProps) {
         )}
 
         {/* ── the shared-tuner pill ── */}
-        {!!p.shared && <Pill g={g} text={p.shared.text} locked={p.shared.dialLocked} pulseAt={pulseAt} reduce={reduce}
+        {!!p.shared && <Pill g={g} winW={p.winW} text={p.shared.text} locked={p.shared.dialLocked} pulseAt={pulseAt} reduce={reduce}
                              onPress={() => p.chat?.onOpen()} disabled={!p.chat || p.chat.disabled} />}
+        {/* ★★★ beta97 THE MAP'S NOTICE in the cards' layout (Stuart, build 587: the page's banner sat under the pill): a strip
+            centred on the window just below the pill (tall) or above it (short), clear of the chip columns; × hides it until
+            the words change */}
+        {!!p.notice && noticeX !== p.notice.text && (() => {
+          const nw = Math.min(440 * k, p.winW - 2 * (CHIP + GAP) * k - p.insets.left - p.insets.right);
+          const left = Math.max(p.insets.left + (CHIP + GAP) * k, p.winW / 2 - nw / 2);
+          const v = g.pill.at === 'top' ? { top: (p.shared ? g.pill.y + g.pill.h : p.insets.top) + GAP * k } : { bottom: (p.shared ? g.pill.h : p.insets.bottom) + GAP * k };
+          return (
+            <NavRow><View style={[s.notice, { left, width: nw }, v]} accessibilityRole="alert" accessibilityLabel={`${p.notice.title}: ${p.notice.text}`}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.noticeHead}>{p.notice.title}</Text>
+                <Text style={s.noticeTxt}>{p.notice.text}</Text>
+              </View>
+              <ChipKey style={s.cardX} words={`Hide the notice: ${p.notice.title}`} onPress={() => setNoticeX(p.notice!.text)} hitSlop={6}><Text style={s.cardXTxt}>{'\u00d7'}</Text></ChipKey>
+            </View></NavRow>
+          );
+        })()}
 
         {/* ── the open transient card ── */}
         {card && card !== 'help' && renderCard(card as ChipId)}
@@ -489,7 +512,7 @@ function PulseWrap({ pulseAt, reduce, style, children }: { pulseAt: number; redu
     </View>
   );
 }
-function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: ReturnType<typeof chromeGeom>; text: string; locked: boolean; pulseAt: number; reduce: boolean; onPress: () => void; disabled: boolean }) {
+function Pill({ g, winW, text, locked, pulseAt, reduce, onPress, disabled }: { g: ReturnType<typeof chromeGeom>; winW: number; text: string; locked: boolean; pulseAt: number; reduce: boolean; onPress: () => void; disabled: boolean }) {
   const styles = useStyles();
   const k = useK();
   const words = pillWords(text, Math.floor((g.pill.w - 24 * k) / (7.2 * k))   /* 11 pt mono ≈ 0.6 em + 0.5 spacing = 7.1 pt a character (6.4 let it ellipsise through the count) */);
@@ -497,7 +520,7 @@ function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: Retu
   // ★★★ attached to its edge (the web's): the inset is padding inside it, so its words sit clear of the notch / home bar
   const edgePad = g.pill.at === 'top' ? { paddingTop: g.pill.pad } : { paddingBottom: g.pill.pad };
   return (
-    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: g.pill.x + (g.pill.w - w) / 2, width: w, height: g.pill.h }}>
+    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: pillLeft(g.pill, w, winW), width: w, height: g.pill.h }}>
       <NavRow>
         <ChipKey style={[styles.pill, locked && styles.pillLocked, g.pill.at === 'top' ? styles.pillTop : styles.pillBottom, edgePad, { width: '100%', height: '100%' }]}
                  words={`${text} — ${disabled ? 'chat is not available here' : 'open the chat'}`} onPress={() => { if (!disabled) onPress(); }}>
@@ -662,16 +685,26 @@ function LayerRows({ l }: { l: NonNullable<MapChromeProps['layers']> }) {
         const head = r.group && r.group !== lastG ? r.group : '';
         if (r.group) lastG = r.group;
         const b = badges[i];
+        const sp = layerSplit(r);   // ★★★ beta97 this radio AND others: both badges, both counts
         return (
           <React.Fragment key={r.id}>
             {!!head && <Text style={styles.grp}>{head}</Text>}
             <NavRow>
-              <ChipKey style={[styles.rowKey, !on && styles.dim]} words={`${r.words}${r.n != null ? `, ${r.n}` : ''}${b ? `, ${b.words}` : ''} — ${on ? 'shown; hide it' : 'hidden; show it'}`}
+              <ChipKey style={[styles.rowKey, !on && styles.dim]} words={`${r.words}${sp.split ? `, ${sp.mine} from this radio, ${sp.other} from ${r.others!.join(', ')}` : `${r.n != null ? `, ${r.n}` : ''}${b ? `, ${b.words}` : ''}`} — ${on ? 'shown; hide it' : 'hidden; show it'}`}
                        onPress={() => l.onToggle(r.id, !on)}>
                 {!!r.colour && <View style={[styles.dot, { backgroundColor: r.colour }]} />}
                 <Text style={[styles.rowKeyTxt, { flex: 1 }]} numberOfLines={1}>{r.label}</Text>
-                {b && <Text style={[styles.lv, b.kind === 'other' && styles.lvOut]}>{b.text}</Text>}
-                {r.n != null && <Text style={styles.layerN}>{r.n}</Text>}
+                {sp.split ? (
+                  <>
+                    <Text style={styles.lv}>LIVE</Text><Text style={[styles.layerN, styles.layerNMine]}>{sp.mine}</Text>
+                    <Text style={[styles.lv, styles.lvOut]}>LIVE</Text><Text style={styles.layerN}>{sp.other}</Text>
+                  </>
+                ) : (
+                  <>
+                    {b && <Text style={[styles.lv, b.kind === 'other' && styles.lvOut]}>{b.text}</Text>}
+                    {r.n != null && <Text style={styles.layerN}>{r.n}</Text>}
+                  </>
+                )}
                 <View style={[styles.toggle, on && styles.toggleOn]}><View style={[styles.toggleKnob, on && { alignSelf: 'flex-end' }]} /></View>
               </ChipKey>
             </NavRow>
@@ -1082,6 +1115,11 @@ const RAW = {
   lv: { fontFamily: F, fontSize: 9, fontWeight: '800', letterSpacing: 1, color: '#08140b', backgroundColor: C.live, borderWidth: 1, borderColor: C.live, borderRadius: 3, paddingHorizontal: 4, overflow: 'hidden' },
   lvOut: { backgroundColor: 'transparent', color: '#8fd79a', borderColor: '#4f8f5a' },
   layerN: { fontFamily: F, fontSize: 11, color: C.dim, minWidth: 26, textAlign: 'right' },
+  layerNMine: { color: C.live, marginRight: 6 },
+  notice: { position: 'absolute', flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim,
+            borderLeftWidth: 3, borderLeftColor: '#ff6b5e', borderRadius: 10, paddingVertical: 6, paddingLeft: 10, paddingRight: 4, zIndex: 30 },
+  noticeHead: { fontFamily: F, fontSize: 10.5, fontWeight: '800', letterSpacing: 0.8, color: '#ff6b5e' },
+  noticeTxt: { fontSize: 12, color: C.ink, marginTop: 1 },
   toggle: { width: 30, height: 16, borderRadius: 8, backgroundColor: '#333', padding: 2 },
   toggleOn: { backgroundColor: '#3f8f52' },
   toggleKnob: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#ddd' },

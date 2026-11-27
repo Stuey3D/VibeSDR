@@ -44,11 +44,11 @@ ok(!/exitAdsb\(\)|exitAis\(\)|exitSondes\(\)|exitVormap\(\)|exitNdb\(\)|avUiOff\
 
 console.log('── ★★★ beta97 LAYERS (MapChrome): counts and dots ──');
 const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
-ok(/export interface MapLayerRow \{ id: string; label: string; words: string; n\?: number; colour\?: string; live\?: boolean; others\?: string\[\]; group\?: string \}/.test(mc), 'a row may carry n, colour and its LIVE state');
+ok(/export interface MapLayerRow \{ id: string; label: string; words: string; n\?: number; colour\?: string; live\?: boolean; others\?: string\[\]; group\?: string;/.test(mc) && /nOther\?: number \}/.test(mc), 'a row may carry n, colour, its LIVE state and the other sources\' count');
 ok(/\{!!r\.colour && <View style=\{\[styles\.dot, \{ backgroundColor: r\.colour \}\]\} \/>\}/.test(mc) && /\{r\.n != null && <Text style=\{styles\.layerN\}>\{r\.n\}<\/Text>\}/.test(mc),
    'a colour dot, the count');
-ok(/words=\{`\$\{r\.words\}\$\{r\.n != null \? `, \$\{r\.n\}` : ''\}/.test(mc), 'a screen reader hears the count');
-ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string; live\?: boolean; others\?: string\[\]; group\?: string \}>;/.test(mo), 'MapOverlay passes them through (with LIVE / elsewhere)');
+ok(/words=\{`\$\{r\.words\}\$\{sp\.split \? `, \$\{sp\.mine\} from this radio, \$\{sp\.other\} from/.test(mc) && /\$\{r\.n != null \? `, \$\{r\.n\}` : ''\}/.test(mc), 'a screen reader hears the count (both, where split)');
+ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string; live\?: boolean; others\?: string\[\]; group\?: string; nOther\?: number \}>;/.test(mo), 'MapOverlay passes them through (with LIVE / elsewhere / the others\' count)');
 
 console.log('── the ISM mesh map ──');
 const ism = sc.slice(sc.indexOf('const ismTrk = useMemo'), sc.indexOf('const ismMapUp ='));

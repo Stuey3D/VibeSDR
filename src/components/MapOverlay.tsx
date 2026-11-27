@@ -105,6 +105,7 @@ import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the 
  *  like the adsb maps") — the ADS-B map's camera, shared: src/utils/mapAutoFit.ts. Every kind but HFDL (its SNAP follows
  *  the latest flight) and ADS-B (the reference, its own AUTO key). */
 import { MAP_AUTOFIT_JS } from '../utils/mapAutoFit';
+import { feedNotice } from '../utils/mapChrome';   // ★★★ beta97 the feed warning as the cards' notice
 import { LEGEND_READ_JS, legendClean, type LegendItem } from '../utils/mapLegend';   // ★★★ beta97 the KEY inside the MAP card
 import { mapPageShown, mapPageWritten, type MapPage } from '../utils/mapPage';   // ★★★ beta96 the page kept with its kind and opening
 import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols';   // ★ beta92 the APRS symbols' legend rows   // ★ the spot card's HH:MM:SS UTC (the slot's start)
@@ -205,7 +206,7 @@ interface MapOverlayProps {
           ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string;
           /** ★★ V12 2026-11-01 the NAVTEX map: its layer keys, a card's gallery text (fetched when it opens), and TRANSCRIBE's
            *  TRANSLATE TO for the gallery's own TRANSLATE in the card ('' = the phone's language). */
-          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string }>;   // ★★★ beta97 live / others = LAYERS' LIVE badges (mapChrome liveBadges)
+          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string; nOther?: number }>;   // ★★★ beta97 live / others = LAYERS' LIVE badges (mapChrome liveBadges)
           toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;   // ★★★ beta96 SHOW counts + dots
           /** ★ beta95 the map's padded view [s, w, n, e], rounded to 2° (the sea areas in view are sent — seaCompose's view) */
           onView?: (box: [number, number, number, number]) => void;
@@ -442,15 +443,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none;}
   select{-webkit-user-select:auto;user-select:auto;}
   body{display:flex;flex-direction:column;font-family:'Courier New',monospace;}
-  /* ★★ The feed warning (AdsbReport.feedWarn): red-edged, at the top of the map, wraps; × hides it until it changes. */
-  #feedwarn{position:absolute;left:10px;right:10px;top:8px;z-index:900;max-width:640px;margin:0 auto;display:flex;gap:10px;align-items:flex-start;
-    padding:8px 10px 8px 12px;border-radius:8px;background:rgba(8,6,2,0.96);border:1px solid #ff6b5e;font-size:12px;letter-spacing:0.3px;
-    line-height:1.4;color:rgba(${T.x},0.92);}
-  #feedwarn b{color:#ff6b5e;white-space:nowrap;letter-spacing:0.8px;}
-  #feedwarn span{flex:1 1 auto;min-width:0;}
-  #feedwarn button{flex:0 0 auto;background:none;border:0;color:rgba(${T.x},0.6);font-size:18px;line-height:1;padding:0 2px;font-family:inherit;}
-  @media (max-width:1000px){#feedwarn{top:100px;}}
-  @media (max-width:520px){#feedwarn{flex-wrap:wrap;}#feedwarn b{flex:1 0 auto;order:0;}#feedwarn button{order:1;}#feedwarn span{order:2;flex-basis:100%;}}
   #map{flex:1;position:relative;overflow:hidden;background:${T.bg};}
   /* ★★★ THE MAP'S BACKDROP IS THE BASEMAP'S COLOUR, NOT THE APP'S. This was ${T.bg} — near
      black — behind a LIGHT basemap, so every tile that had not arrived yet showed as a black
@@ -686,7 +678,6 @@ ${/* ★★★ beta97 THE MAP CARDS: no map has a top bar or a filter row any mo
 <div id="map">
   <div id="lmap"></div>
  ${/* ★★ beta96 stage 6: ADS-B mode's screen is the AIR & SEA map — its capture and antenna warnings live there */ ''}
-  ${kind === 'airsea' ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
   <div id="legend"${kind === 'digi' ? ' class="dgoff"' : ''}>
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
@@ -1612,15 +1603,7 @@ if(KIND==='hfdl'){
 /* ★★★ The ADS-B page ('adsb') is retired: the live report's aircraft arrive as the AIR & SEA map's _adsb items (the
  *  track block below hands them to the same shared layer, acMake), and its two warnings live here. */
 if(KIND==='airsea'){
-  /* ★★ The feed warning, as a text node (never HTML): a string, or '' to hide it. × hides it until the wording changes. */
-  window.__adsbFeedWarn=function(w){
-    var el=document.getElementById('feedwarn');if(!el)return;
-    w=String(w||'');
-    if(!w||el.getAttribute('data-x')===w){el.style.display='none';return;}
-    el.children[0].textContent=/on the map|Map time/.test(w)?'TIME LIMIT':/reconnecting/.test(w)?'AIRCRAFT FEED':'CHECK THE ANTENNA';   /* ★★ beta96 a lost feed is not the antenna; the standalone map's time limit */
-    el.children[1].textContent=w;el.style.display='';
-    el.children[2].onclick=function(){el.setAttribute('data-x',w);el.style.display='none';};
-  };
+  /* ★★★ beta97 the feed warning is the cards' NOTICE (MapChrome, under the pill) — the page draws no banner of its own */
 }
 
 // ════════ NDB (V12) — the shared beacon layer, fed by React Native ════════
@@ -2631,12 +2614,6 @@ export default function MapOverlay(
   /* ★★★ beta96 stage 6: ADS-B mode's map is the AIR & SEA map. Its aircraft are that map's `_adsb` items (SDRScreen
    *  airSeaTrk → pushTrk, the same double-encoded literal); only its warnings and its list's body are ADS-B's own here. */
   const adsbLive = kind === 'airsea' && !!adsbList;
-  // ★★ The feed warning (AdsbReport.feedWarn) — JSON literal, never source; only on a change.
-  const pushFeedWarn = () => {
-    if (kind !== 'airsea') return;
-    webRef.current?.injectJavaScript(`window.__adsbFeedWarn&&window.__adsbFeedWarn(${JSON.stringify(adsbFeedWarn ?? '')});true;`);
-  };
-  useEffect(() => { if (visible) pushFeedWarn(); }, [kind, visible, adsbFeedWarn]); // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★ V12 NDB: the layer's feed (ndbMapFeed — the web's renderMap) each report, double-encoded as ADS-B's is; the
    *  selected beacon (a marker tapped, or a row) is kept here so the list and the card follow. */
   const [ndbSel, setNdbSel] = useState(0);
@@ -2935,7 +2912,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushNdb();
                              if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); }
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
                                               if (trkRef.current?.focus) trkFocus(trkRef.current.focus); } }}
@@ -3197,7 +3174,7 @@ export default function MapOverlay(
                           selected: trkSel && trkSel.startsWith('adsb:') ? trkSel.slice(5) : null,
                           logoBase: local ? null : (radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/',
                         } : null}
-                        adsbGain={adsbLive ? adsbGain ?? null : null} adsbCapture={adsbLive ? adsbCapture ?? null : null}
+                        adsbGain={adsbLive ? adsbGain ?? null : null} adsbCapture={adsbLive ? adsbCapture ?? null : null} feedWarn={kind === 'airsea' ? adsbFeedWarn ?? '' : ''}
                         ndb={ndbLive && trk.tab === 'navaids' && ndb ? {
                           ndb, selected: ndbSel, onSelect: (id: number) => ndbChoose(id, true),
                           prefs: ndbPrefs ?? parseNdbMapPrefs(null), onPrefs: ndbSetPrefs,
@@ -3244,7 +3221,7 @@ function MapCardsHost(p: {
   ctl: MapCtlState; mpp: number; mapTapSeq: number; legendItems: LegendItem[]; creditsOn: boolean; pageCall: (fn: string, ...args: unknown[]) => void; onFootprint: (w: number, h: number) => void;
   selected: string | null; onFocus: (key: string) => void;
   route: { name: string; on: boolean } | null; onRoute: () => void;
-  adsb: AdsbBodyInput | null; adsbGain: MapOverlayProps['adsbGain'] | null; adsbCapture: { short: string; rest: string } | null;
+  adsb: AdsbBodyInput | null; adsbGain: MapOverlayProps['adsbGain'] | null; adsbCapture: { short: string; rest: string } | null; feedWarn: string;
   ndb: NdbBodyInput | null;
 }) {
   const t = p.trk;
@@ -3264,7 +3241,7 @@ function MapCardsHost(p: {
   useEffect(() => () => { if (noteT.current) clearTimeout(noteT.current); }, []);
   // ── LAYERS: the SHOW toggles with their counts and LIVE (this radio's own layers) ──
   const layerRows: MapLayerRow[] = (t.toggles ?? []).map((x) => ({ id: x.id, label: x.label.replace(/^●\s*/, ''), words: x.words, n: x.n, colour: x.colour,
-    live: x.live ?? /^●/.test(x.label), others: x.others, group: x.group }));
+    live: x.live ?? /^●/.test(x.label), others: x.others, group: x.group, nOther: x.nOther }));
   const fam = layerFamilies(layerRows, t.toggled ?? {}).map((f) => ({ glyph: f.glyph as ModeIconName, n: f.n, colour: f.colour }));
   // ── TUNE: the modes (2+), the one-row gain (ADS-B live: the server's ramp), the live mode's facts ──
   const g = p.adsbGain;
@@ -3321,7 +3298,7 @@ function MapCardsHost(p: {
         wf={p.cards?.wf ?? null}
         scale={p.mpp > 0 ? { mpp: p.mpp, nm: p.kind === 'airsea' || p.kind === 'avdata' || p.kind === 'vormap' || p.kind === 'ais' || p.kind === 'navtex' || p.kind === 'dsc' } : null}
         onZoom={(d) => p.pageCall('__cardsZoom', d)}
-        mapTapSeq={p.mapTapSeq} onBrTop={(px) => p.pageCall('__cardsBr', px)}
+        mapTapSeq={p.mapTapSeq} notice={feedNotice(p.feedWarn)} onBrTop={(px) => p.pageCall('__cardsBr', px)}
         onFootprint={(w, h) => p.onFootprint(w, h)} />
       {nb.card}
       {nb.dialog}

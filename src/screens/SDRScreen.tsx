@@ -289,7 +289,7 @@ import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMiniWaterfall';   // ★★★ beta97 the map drawer's waterfall
 import type { MapCardsIn } from '../components/MapChrome';
-import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers } from '../utils/mapChrome';
+import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers, layerOtherCounts } from '../utils/mapChrome';
 import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
 import { wfModelChannels, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
@@ -3281,6 +3281,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  purpose: it is about the other sources, whatever this viewer's scope shows) */
   const asOthersElsewhere = useMemo(() => layerOthers((avShared?.aircraft ?? []) as Array<{ age: number; src: string[]; radios?: string[] }>,
     { mine: mapRadio.mine, onRadio: !asViewer, names: mapRadioNames, feedTitle: avShared?.feeds?.[0]?.title }), [avShared, mapRadio.mine, asViewer, mapRadioNames]);
+  const asOthersN = useMemo(() => layerOtherCounts((avShared?.aircraft ?? []) as Array<{ age: number; src: string[]; radios?: string[] }>,
+    { mine: mapRadio.mine, onRadio: !asViewer }), [avShared, mapRadio.mine, asViewer]);   // ★★★ beta97 the other sources' counts
   const asSrcS = useMemo(() => airSeaScope({ shared: avShared, sharedSkew: avSkewRef.current, ships: shipStore, nav: navReport, warn: navWarnRep, met: navMetRep,
     dscG: dscGal, navSkew: navSkewRef.current, adsb: adsbReport, ais: aisReport, av: avReport, sd: sdReport, vm: vmReport, sdStored, vmStored }, asSc, Math.floor(Date.now() / 1000), asFirst.current),
     [asSc, avShared, shipStore, navReport, navWarnRep, navMetRep, dscGal, adsbReport, aisReport, avReport, sdReport, vmReport, sdStored, vmStored]);
@@ -13069,7 +13071,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       toggles: [...liveChips(present, live).map((c) => ({ id: c.id, label: c.live ? `\u25CF ${c.label}` : c.label, words: c.words,
                   n: c.id === 'airports' || c.id === 'areas' ? undefined : showN[c.id] ?? undefined, colour: LIVE_CHIP_COLOUR[c.id],
                   /* ★★★ beta97 LAYERS' outlined LIVE: another of this server's radios or its feeds heard it in the last minute */
-                  live: c.live, others: asOthersElsewhere[c.id] })),
+                  live: c.live, others: asOthersElsewhere[c.id],
+                  /* ★★★ beta97 BOTH counts where this radio and others hold the layer (Stuart, build 587: "LIVE 0" with 33 from PiAware) */
+                  nOther: c.live && asOthersElsewhere[c.id]?.length ? asOthersN[c.id] ?? 0 : undefined })),
                 ...(asOthersOffered ? [{ id: OTHER_RADIOS_CHIP, label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS }] : [])],
       toggled: asOthersOffered ? { ...toggled, [OTHER_RADIOS_CHIP]: mapOthers } : toggled,
 

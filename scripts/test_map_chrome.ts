@@ -5,7 +5,7 @@
 //   npx tsx scripts/test_map_chrome.ts
 import { readFileSync } from 'node:fs';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, listStops, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, listStops, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -200,6 +200,28 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
   ok(/<NavCtx\.Provider value=\{inside \? scope\.navCtx : outerNav\}>/.test(mc) && /\{listStop\}\n\s*<NavCtx\.Provider value=\{inside \? scope\.navCtx : null\}>\n\s*<ScrollView/.test(mc),
      'ListDrawer: its controls in the chrome walk (outerNav) when outside, the rows only inside; the LIST stop just above the rows');
+}
+
+// ── ★★★ beta97 build 587: both counts where this radio AND others hold a layer; the chip's TOTAL; the pill centred; the notice ──
+{
+  const ac = [{ age: 5, src: ['ADS-B'], radios: ['feed'] }, { age: 5, src: ['ADS-B'], radios: ['feed', 'r1'] }, { age: 5, src: ['ADS-B', 'VDL2'], radios: ['r1'] }, { age: 90, src: ['ADS-B'], radios: ['feed'] }];
+  const oc = layerOtherCounts(ac, { mine: 'r1', onRadio: true });
+  ok(oc.adsb === 2 && !oc.vdl2, `other sources' counts: this radio's own and stale (>60 s) aircraft left out (${JSON.stringify(oc)})`);
+  const row = { id: 'adsb', n: 0, nOther: 33, live: true, others: ['PiAware'] };
+  const sp = layerSplit(row);
+  ok(sp.split && sp.mine === 0 && sp.other === 33 && sp.total === 33, 'ADS-B LIVE 0 (this radio) + LIVE 33 (PiAware): both badges, both counts; total 33');
+  ok(!layerSplit({ n: 12, live: true }).split && layerSplit({ n: 12, live: true }).total === 12, 'one source: one badge / count as before');
+  const fam = layerFamiliesX([row, { id: 'navst', n: 46 }], {});
+  ok(fam.length === 2 && fam[0].glyph === 'aircraft' && fam[0].n === 33 && fam[1].n === 46, `the LAYERS chip: ✈ 33 over NAVTEX 46 — a family never vanishes because this radio has 0 (${JSON.stringify(fam)})`);
+  ok(pillLeft({ x: 80, w: 1000 }, 300, 1200) === 450, 'the pill centred on the WINDOW (not its band)');
+  ok(pillLeft({ x: 80, w: 300 }, 280, 1200) === 100, 'slid only as far as it must to stay inside its band');
+  ok(feedNotice('UberSDR HFDL lost — reconnecting · PiAware still live')?.title === 'AIRCRAFT FEED' && feedNotice('')=== null && feedNotice('Map time: 4 min on the map')?.title === 'TIME LIMIT', 'the notice\'s heading from its words; nothing to say → no strip');
+  const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  ok(!/feedwarn/.test(mo) && !/__adsbFeedWarn/.test(mo), 'the page\'s own top banner (#feedwarn) is deleted');
+  ok(/notice=\{feedNotice\(p\.feedWarn\)\}/.test(mo) && /feedWarn=\{kind === 'airsea' \? adsbFeedWarn \?\? '' : ''\}/.test(mo) && /\{!!p\.notice && noticeX !== p\.notice\.text && /.test(mc),
+     'the warning is the cards\' notice strip (radio and viewer paths), × hides it until its words change');
+  ok(/top: \(p\.shared \? g\.pill\.y \+ g\.pill\.h : p\.insets\.top\) \+ GAP \* k/.test(mc), 'tall: directly below the pill, never under it');
 }
 
 // ── the pill's words ──
