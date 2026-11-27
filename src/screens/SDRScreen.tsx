@@ -87,6 +87,7 @@ import SatellitePanel, { SatRemindBanner, type SatRemindToast } from '../compone
 import { SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_REMIND_NOTE, SatSchedule, satPassKey, satSchedDegradedText,
          satSchedNowText, satSchedPlan, satSchedRemindDue, satSchedStep, satSchedWhy, satSession, satSessionLine, satKeyKind, satOnSharedDial, SAT_SCHED_SHARED_NOTE,
          type SatSchedPrev, type SatSchedRun } from '../services/satSchedule';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
+import { SatStepKeeper, satClickDialHz, satPassbandOf } from '../services/satTune';   // ★★★ beta97 tuning inside a pass
 import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindWhy,
          SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
@@ -4350,6 +4351,15 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [stepOpen,  setStepOpen]  = useState(false);
   const stepRef = useRef(step);
   useEffect(() => { stepRef.current = step; }, [step]);
+  /* ★★★ beta97 THE SATELLITE VIEW TUNES IN 500 Hz (Stuart, RS-44: "can't manually move the VFO in a linear transponder
+   *  window" — the step was still WFM's 100 kHz, so a tap snapped past the signal and out of the passband, ending the lock).
+   *  In: 500 Hz, the listener's own step held; a step they choose in the view stands for the rest of the visit; out: theirs
+   *  back. Every way in and out sets satOn, so the effect sees them all. One rule with the web page (src/services/satTune.ts). */
+  const satStepKeep = useRef(new SatStepKeeper()).current;
+  useEffect(() => {
+    const v = satOn ? satStepKeep.enter(stepRef.current) : satStepKeep.leave(stepRef.current);
+    if (v != null) setStep(v);
+  }, [satOn]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ★★ AIRBAND CHANNEL NAME — which of the two names the listener selected at a frequency that has
    *  two (118.000 is the 25 kHz channel "118.000" AND the 8.33 kHz channel "118.005"). Set by the
@@ -11426,7 +11436,14 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  the waterfall never reach the right frequency"). */
     const s = stepRef.current;
     // ★ …unless the listener switched it off at the foot of the step sheet (snapTap): then exactly where the tap lands.
-    const snapped = snapTapRef.current ? snapToStep(hz, s) : Math.round(hz);   // exact 25/3 kHz on the 8.33 step — utils/airband.ts
+    /* ★★★ beta97 (src/services/satTune.ts, the web page's same rule): with a satellite's Doppler lock live the DIAL is the
+     *  satellite frame and the waterfall the received spectrum (the needle is drawn at dial + satMarkerShiftHz) — the tap
+     *  takes the shift off before snapping, and a tap inside the picked transponder's passband never snaps out of it (out =
+     *  the server ends the lock). No lock: shift 0, the ordinary snap (exact 25/3 kHz on the 8.33 step — utils/airband.ts). */
+    const satLive = satOnRef.current ? satRoRef.current : null;
+    const satPk = satLive ? satPickedRef.current : null;
+    const snapped = satClickDialHz(hz, satMarkerShiftHz(satLive), s, snapTapRef.current,
+      satPk ? satPassbandOf(satListRef.current?.sats.find((x) => x.norad === satPk.norad)?.tx[satPk.tx]) : null);
     const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, snapped));
     userTuneSeq.current++;   // ★ a PERSON asked (entry) — see the note on userTuneSeq
