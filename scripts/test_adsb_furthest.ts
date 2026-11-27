@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { adsbImageBase } from '../web/client/src/adsb.ts';
-import { adsbFurthestOf, adsbLongestTrackedOf, adsbNewestOf, adsbChips } from '../src/services/adsbList.ts';
+import { adsbFurthestOf, adsbLongestTrackedOf, adsbNewestOf } from '../src/services/adsbList.ts';
 /* ★★ V12 map purge (Stuart 11-27: "old and new fighting each other"): the web's own NEWEST / FURTHEST / LONGEST chips are gone
  *  (the map's STATS card replaced them, every source merged), so the cases below run on the ONE rule left — the app's. */
 const adsbFurthest = (r: any, rx: any) => adsbFurthestOf((r?.aircraft ?? []) as never, rx);
@@ -105,9 +105,7 @@ ok(adsbFurthest({ type: 'adsb', aircraft: [ac[3]] } as never, rx) === null, 'web
     ok(JSON.stringify(lw) === JSON.stringify(la), `longest tracked, report ${i + 1}: app ${JSON.stringify(la)} = web ${JSON.stringify(lw)}`);
   });
   ok(adsbNewestOf(null, sa, 9999) === null && sa.size === 0, 'app newest: leaving forgets them all');
-  const chips = adsbChips(rep(seq[3]), rx, new Map(), 0);
-  ok(chips.map((c) => c.key).join(',') === 'FURTHEST,LONGEST TRACKED', `chips: in the web's order, only those with an aircraft (${chips.map((c) => c.key)})`);
-  ok(chips[1].figure === '141 NM' && chips[1].name === 'BAW12', 'chips: LONGEST TRACKED 141 NM · BAW12');
+  // ★★★ beta97 the header chips (adsbChips) were DELETED with the old list head — STATS (src/utils/mapStats.ts) holds them now
 }
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `adsb furthest: all ${passes} passed`);
 process.exit(fails ? 1 : 0);

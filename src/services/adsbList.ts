@@ -199,7 +199,6 @@ export const parseListOpen = (v: string | null | undefined): boolean => v !== '0
  * top bar crowded on a portrait iPhone). Read from the RAW report (the server's fields — tracked_nm, r), not `Aircraft`. */
 
 export interface AdsbChipSrc { hex?: unknown; flight?: unknown; r?: unknown; lat?: unknown; lon?: unknown; tracked_nm?: unknown }
-export interface AdsbChip { key: 'NEWEST' | 'FURTHEST' | 'LONGEST TRACKED'; figure: string; name: string; hex: string }
 
 const chipNum = (v: unknown): number | null => { const n = Number(v); return v == null || v === '' || !isFinite(n) ? null : n; };
 /** The web's cleanHex: the ~ of a non-ICAO address kept, lower case, 7 at most. */
@@ -264,15 +263,3 @@ export function adsbNewestOf(list: readonly AdsbChipSrc[] | null, firstSeen: Map
   return { hex: best, name: chipName(byHex.get(best)!, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) };
 }
 
-/** The header's chips in the web's order — NEWEST, FURTHEST, LONGEST TRACKED — each only when it has an aircraft. */
-export function adsbChips(list: readonly AdsbChipSrc[] | null, rx: { lat: number; lon: number } | null,
-                          firstSeen: Map<string, number>, nowMs: number): AdsbChip[] {
-  const out: AdsbChip[] = [];
-  const nw = adsbNewestOf(list, firstSeen, nowMs);
-  if (nw) out.push({ key: 'NEWEST', figure: '', name: nw.name, hex: nw.hex });
-  const far = adsbFurthestOf(list, rx);
-  if (far) out.push({ key: 'FURTHEST', figure: `${Math.round(far.nm)} NM`, name: far.name, hex: far.hex });
-  const lg = adsbLongestTrackedOf(list);
-  if (lg) out.push({ key: 'LONGEST TRACKED', figure: `${Math.round(lg.nm)} NM`, name: lg.name, hex: lg.hex });
-  return out;
-}
