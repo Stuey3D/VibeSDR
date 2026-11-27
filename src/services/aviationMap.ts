@@ -346,7 +346,14 @@ export function avPlaneAdsb(p: AvPlane): AvAdsbShape | null {
   if (p.labelName || p.label) rows.push(['Last message', p.labelName ? `${p.labelName}${p.label ? ` (label ${p.label})` : ''}` : `label ${p.label}`]);
   if (p.app) rows.push(['Application', p.app]);
   if (p.via) rows.push(['Via', p.via]);
-  const sparse = p.posSrc !== 'ADS-B' || !!p.lastSeen;
+  /* ★★ b96-rangefeed (Stuart 11-27, "range ring still too slow to update"): SPARSE = THE POSITION IS A DATALINK ONE
+   *  (ACARS / VDL2 / HFDL / ADS-C). An ADS-B (Mode S) position is never sparse, whoever heard it — this radio, another
+   *  radio here, a Beast feed — not even a "last seen" one (an aircraft at the edge of range, still answering but its
+   *  position over a minute old). That one was handed to the layer as a datalink aircraft: it glided up to 400 NM like
+   *  one, and it was the first of the layer's two-fix pair at a clamped time, so its next FRESH fix read as a bad jump
+   *  and the outline waited one more fix — for exactly the far aircraft. Its seen_pos (> AV_FADE_SEC) still draws it in
+   *  the stale tone on either clock; it has no track or speed, so it is never flown on. */
+  const sparse = p.posSrc !== 'ADS-B';
   // ★ beta91: the route the datalink heard (rows above) wins; the database's only where the aircraft said none
   const { r: _r, t: _t, route, ...info } = p.info ?? {};
   return {

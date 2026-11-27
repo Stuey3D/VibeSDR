@@ -205,5 +205,32 @@ console.log('── beta91: the ADS-B aircraft data on every source (vibe_aircra
   yes('the RN words are the same text', `${AV_DATA_CREDIT.lead}${AV_DATA_CREDIT.mic}${AV_DATA_CREDIT.mid}${AV_DATA_CREDIT.odc}`.length > 60 && ch.includes(AV_DATA_CREDIT.mid));
 }
 
+console.log('── b96-rangefeed: an ADS-B position is never sparse, whoever heard it; a datalink one always is (Stuart 11-27) ──');
+{
+  // the Lenovo's AIR & SEA map, 11-27: ADS-B from a server-level Beast feed (PiAware) — aircraft.json rows as it sent them
+  const NOW2 = 1795770661;
+  const feedTbl = sharedSanitise({ now: NOW2, count: 5, adsbLive: 1, adsbLast: 0, adsbNow: 3,
+    feeds: [{ title: 'PiAware', label: 'ADS-B', state: 'connected', aircraft: 3 }], aircraft: [
+      // a fresh feed fix (radios ["feed"])
+      { key: '406A99', icao: '406A99', flight: 'VKG520', lat: 53.7, lon: -0.3, posAge: 1, posSrc: 'ADS-B', alt: 36000, trk: 20, gs: 450, src: ['ADS-B'], srcAge: { 'ADS-B': 0 }, age: 0, n: 900, radios: ['feed'], first: 300 },
+      // at the edge of range: still answering (DF11/DF4), but its position 90 s old — "last seen"
+      { key: '484C5A', icao: '484C5A', flight: 'KLM1523', lat: 53.9, lon: 2.4, posAge: 90, posSrc: 'ADS-B', alt: 37000, src: ['ADS-B'], srcAge: { 'ADS-B': 4 }, age: 4, n: 300, radios: ['feed'] },
+      // another radio on this server, heard on ADS-B
+      { key: '4CA97B', icao: '4CA97B', flight: 'RYR12AB', lat: 52.6, lon: -1.3, posAge: 0, posSrc: 'ADS-B', src: ['ADS-B'], srcAge: { 'ADS-B': 0 }, age: 0, n: 30, radios: ['59a1a7d0'] },
+      // datalink positions: VDL2, and an ADS-C report over HFDL
+      { key: '406D4D', icao: '406D4D', flight: 'M38506', lat: 51.0, lon: 3.3, posAge: 40, posSrc: 'VDL2', src: ['VDL2'], srcAge: { VDL2: 40 }, age: 40, n: 2 },
+      { key: 'A1B2C3', icao: 'A1B2C3', flight: 'UAL901', lat: 55.0, lon: -20.0, posAge: 300, posSrc: 'ADS-C', src: ['HFDL', 'ADS-C'], srcAge: { HFDL: 300, 'ADS-C': 300 }, age: 300, n: 1 },
+    ] })!;
+  const planes = avNowRule(avMerge(null, feedTbl), feedTbl).planes;
+  const shape = (icao: string) => avPlaneAdsb(planes.find((p) => p.icao === icao)!)!;
+  eq('a Beast feed\'s fresh ADS-B fix: NOT sparse (it dead-reckons and grows the live outline)', shape('406A99').sparse, false);
+  eq('…another radio\'s ADS-B fix: not sparse', shape('4CA97B').sparse, false);
+  const ls = planes.find((p) => p.icao === '484C5A')!;
+  yes('a "last seen" ADS-B fix (90 s old, still answering) stays "last seen"', !!ls.lastSeen && ls.trk == null && ls.gs == null);
+  eq('…and is NOT sparse either: an ADS-B position, ADS-B\'s stale tone (seen_pos past the fade), never the datalink glide', [shape('484C5A').sparse, (shape('484C5A').seen_pos ?? 0) > 600], [false, true]);
+  eq('a VDL2 position: sparse (glides, never grows the ADS-B outline)', shape('406D4D').sparse, true);
+  eq('an ADS-C position over HFDL: sparse', shape('A1B2C3').sparse, true);
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

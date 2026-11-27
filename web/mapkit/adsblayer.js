@@ -223,15 +223,19 @@
   /* ★★ V12 beta94 THE RANGE OUTLINE (Stuart, 2026-11-25: "a jagged ring around the receiver showing the maximum range
    *  detected" — Virtual Radar Server's range plot). The server keeps the furthest believed position per 1° bearing
    *  (vibe_adsb_range.h); this turns its 360 distances (km, 0 = nothing heard that way) into a closed ring of [lon, lat],
-   *  each vertex on its bin's middle bearing. A bearing nothing was heard on is skipped — the line joins its neighbours
-   *  rather than diving to the receiver. Fewer than three bearings is not an outline: null. */
+   *  each vertex on a BOUNDARY between two bins, at the further of the two (b96-rangefeed, Stuart 11-27: aircraft sat just
+   *  outside the line). A vertex on each bin's middle bearing cut every bin's edges short by its lower neighbour — so the
+   *  very aircraft that set a bearing's range (the furthest, the ones anyone looks at) were drawn 0.5–4 km OUTSIDE it, a
+   *  whole icon at a regional zoom. On the boundaries, both ends of a bin's edge are at least its range: every position
+   *  that counted is on or inside the line, still one vertex per bearing (no staircase). A boundary with nothing heard on
+   *  either side is skipped — the line joins its neighbours rather than diving to the receiver. Fewer than three: null. */
   function rangeRing(lat, lon, km) {
     if (!isFinite(lat) || !isFinite(lon) || !Array.isArray(km)) return null;
-    const pts = [];
-    for (let i = 0; i < km.length; i++) {
-      const k = Number(km[i]);
+    const pts = [], n = km.length;
+    for (let i = 0; i < n; i++) {
+      const k = Math.max(Number(km[i]) || 0, Number(km[(i - 1 + n) % n]) || 0);   // bins i-1 and i meet at bearing i
       if (!(k > 0)) continue;
-      const d = destination(lat, lon, (i + 0.5) * 360 / km.length, k * 1000 / NM_M);
+      const d = destination(lat, lon, i * 360 / n, k * 1000 / NM_M);
       pts.push([d.lon, d.lat]);
     }
     if (pts.length < 3) return null;
@@ -1055,6 +1059,11 @@
 
     let rx = opts.receiver && isFinite(opts.receiver.lat) && isFinite(opts.receiver.lon) ? { lat: +opts.receiver.lat, lon: +opts.receiver.lon } : null;
     if (rx && rx.lat === 0 && rx.lon === 0) rx = null;      // ★ Null Island is "unknown", as on the HFDL map
+    /* ★★ b96-rangefeed (Stuart 11-27: "i cant activate the range rings either" — RINGS / FIT greyed on a server set up with
+     *  only a locator, opened from the front door): the receiver is the host's (its lat/lon, else its locator square's
+     *  centre — rxPosition.ts — with its approx words), ELSE the range outline's centre once GET range answers (the server's
+     *  own location: the locator's centre there too). rxNote: the words the controls' titles add for a position not exact. */
+    let rxNote = rx && opts.receiver && typeof opts.receiver.approx === 'string' ? opts.receiver.approx : '', rxFromRange = false;
     const prefs = Object.assign({ autoZoom: true, fit: true, rings: true, labels: true, range: true, rangeAll: false }, opts.prefs || {});
     /* ★ opts.imageBase: where this server serves the OWNER's logos and silhouettes ("…/adsb/"), or absent = none —
      *   and (beta94) this radio's range outline and the trails.
@@ -1150,9 +1159,10 @@
       bRange.title = rangeTitle();
       // ★ A control that cannot do anything is shown disabled with the reason, never left inert (AGENTS.md).
       bFit.disabled = !rx; bRings.disabled = !rx;
-      if (!rx) { bFit.title = bRings.title = 'The receiver’s position is not known on this server'; }
-      else { bFit.title = prefs.fit ? 'Fit to aircraft — tap to keep the receiver in the middle' : 'Receiver centred — tap to fit the view to the aircraft instead';
-             bRings.title = 'Range rings in nautical miles around the receiver'; }
+      if (!rx) { bFit.title = bRings.title = 'Not available: this server has not given its receiver position (no latitude/longitude or locator, and no ADS-B range outline yet)'; }
+      else { const n = rxNote ? ' (the receiver position is ' + rxNote + ')' : '';
+             bFit.title = (prefs.fit ? 'Fit to aircraft — tap to keep the receiver in the middle' : 'Receiver centred — tap to fit the view to the aircraft instead') + n;
+             bRings.title = 'Range rings in nautical miles around the receiver' + n; }
     }
     function setPref(k, v) {
       if (prefs[k] === v) return;
@@ -1171,7 +1181,7 @@
     bCentre.addEventListener('click', () => { paused = false; az.reset(); paintCtl(); cameraStep(true); });
     /* ── ★★ V12 beta94 THE RANGE OUTLINE (vibe_adsb_range.h; ADSB.md "The range outline") ─────────────────────────────
      *  GET <imageBase>range — this radio's outline over the owner's window (7 / 30 / 90 days or all time), the all-time
-     *  one and the furthest catch ever. Fetched when the map opens, then every 5 minutes while it is shown and the page
+     *  one and the furthest catch ever. Fetched when the map opens, then every 15 minutes (RANGE_POLL_MS) while it is shown and the page
      *  is visible (it grows slowly; a poll is floored, never per report — memory: cloudflare_workers_limit_incident).
      *  ★★ BOLD, NOT CALM (Stuart, 11-25: "make the line thicker and a bolder colour too so its easier to see on the
      *  map"): a 3 px magenta edge — clear of the aircraft's green/amber/grey/red/blue tones and the amber rings, on both
@@ -1188,11 +1198,16 @@
     function serverCentre() { return rangeData && rangeData.lat != null && rangeData.lon != null ? { lat: rangeData.lat, lon: rangeData.lon } : null; }
     function liveCentre() { return rx || serverCentre(); }
     function drawCentre() { return serverCentre() || rx; }
-    /** One aircraft's new fix: counted only on its second consistent position in a row (the server's posOk). */
-    function liveRangeFix(s, fix, sparse) {
+    /** One aircraft's new fix: counted only on its second consistent position in a row (the server's posOk).
+     *  ★★ b96-rangefeed: posT is WHEN the position was made (now − seen_pos, NOT clamped: the glide's fix.t stops at 60 s,
+     *  so a position two minutes old followed by a fresh one looked like 25 NM in a minute — a "bad fix" — and the far
+     *  aircraft at the edge of range, whose positions come and go, waited one more fix to count). A datalink (sparse)
+     *  position is never the first of two ADS-B fixes: it clears the pair. */
+    function liveRangeFix(s, fix, sparse, posT) {
+      if (sparse) { s.rg = null; return false; }
       const prev = s.rg;
-      s.rg = { lat: fix.lat, lon: fix.lon, t: fix.t };
-      if (sparse || !rangeConsistent(prev, s.rg)) return false;
+      s.rg = { lat: fix.lat, lon: fix.lon, t: posT };
+      if (!rangeConsistent(prev, s.rg)) return false;
       const c = liveCentre();
       if (!c) return false;
       // ★ the receiver moved (a different site, the server's 5 km rule): the live bins start again around it
@@ -1286,6 +1301,12 @@
           if (destroyed || !j || !j.ok || !Array.isArray(j.km)) return;
           rangeData = { window: Number(j.window) || 0, lat: j.lat == null ? null : Number(j.lat), lon: j.lon == null ? null : Number(j.lon),
                         km: j.km, allKm: Array.isArray(j.allKm) ? j.allKm : [], far: j.far || null, record: j.record || null, days: j.days };
+          // ★★ b96-rangefeed the LAST fallback for the receiver: the outline's centre (RINGS, FIT and the house then work)
+          const sc = serverCentre();
+          if (!rx && sc && isFinite(sc.lat) && isFinite(sc.lon) && !(sc.lat === 0 && sc.lon === 0)) {
+            rx = { lat: sc.lat, lon: sc.lon }; rxFromRange = true; rxNote = 'approximate — the centre of the server\u2019s ADS-B range outline';
+            drawRx(); drawRings(); az.reset(); if (prefs.autoZoom && !paused) cameraStep(true);
+          }
           paintCtl(); paintRangeKey(); drawRange();
         })
         .catch(() => { rangeBusy = false; });   // ★ an older server (404) or no network: no outline, no button
@@ -1295,7 +1316,7 @@
     }
     const onVis = () => { if (doc.visibilityState !== 'hidden') rangeTick(); };
     if (imageBase != null) {
-      rangeTimer = setInterval(rangeTick, 30000);   // ★ looks every 30 s; asks only when 5 min have passed
+      rangeTimer = setInterval(rangeTick, 30000);   // ★ looks every 30 s; asks only when RANGE_POLL_MS (15 min) has passed — the answer is MERGED with the live outline (rangeGeo), never replaces it
       doc.addEventListener('visibilitychange', onVis);
     }
     paintCtl();
@@ -1942,7 +1963,8 @@
           else fix.track = s.fix.track;
         }
         if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
-        if (liveRangeFix(s, fix, !!raw.sparse)) rangeGrew = true;     // ★ beta95 the outline grows live
+        // ★ beta95 the outline grows live (b96-rangefeed: the position's own time, not the glide's clamped one)
+        if (liveRangeFix(s, fix, !!raw.sparse, t - Math.max(0, Math.min(3600, num(raw.seen_pos) || 0)) * 1000)) rangeGrew = true;
         if (!s.tr) s.tr = [];
         if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
         if (!s.disp) {
@@ -2148,9 +2170,10 @@
         for (const s of ac.values()) if (s.disp && !s.goneAt) out.push({ hex: s.hex, lat: s.disp.lat, lon: s.disp.lon, hdg: s.hdg, track: s.fix ? s.fix.track : null, gliding: !!s.corr, sparse: !!(s.a && s.a.sparse) });
         return out;
       },
-      setReceiver(lat, lon) {
+      setReceiver(lat, lon, approx) {
         const la = Number(lat), lo = Number(lon);
         rx = isFinite(la) && isFinite(lo) && !(la === 0 && lo === 0) && lat != null && lon != null ? { lat: la, lon: lo } : null;
+        rxNote = rx && typeof approx === 'string' ? approx : ''; rxFromRange = false;   // ★ b96-rangefeed the host's own position wins
         paintCtl(); drawRx(); drawRings(); az.reset();
         if (prefs.autoZoom && !paused) cameraStep(true);
       },
@@ -2220,6 +2243,8 @@
       },
       /** ★ beta94 what the range outline draws (a test's view): null until the server has answered or (beta95) the map
        *  has grown one live. live = the bearings grown from this map's own positions; liveFar its furthest. */
+      /** ★ b96-rangefeed the receiver the map uses: {lat, lon, from: 'host' | 'range', note} | null (tests, the host) */
+      receiverNow() { return rx ? { lat: rx.lat, lon: rx.lon, from: rxFromRange ? 'range' : 'host', note: rxNote } : null; },
       rangeShown() {
         if (!rangeData && !liveHas()) return null;
         const g = rangeGeo();

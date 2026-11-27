@@ -139,6 +139,7 @@
 #include "vibe_dab_confirm.h"   // ★ V12: when a service list is true enough to reconcile bookmarks by
 #include "vibe_dab_block_quality.h"   // ★ V12: how well each block decodes here (working / marginal / not working)
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
+#include "vibe_adsb_range_feed.h"  // ★ b96-rangefeed: the range outline counts the shared table's other ADS-B (feeds, other radios)
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
 #include "vibe_posgal.h"        // ★★★ beta96 maps2: the day's sondes and VOR stations in the gallery (the AIR & SEA map's stored layers)
@@ -53862,7 +53863,16 @@ void LocalSdrShim::afcSyncHw(bool allowMove) {
          g_ppmNow.load(std::memory_order_relaxed) + have, g_ppmNow.load(std::memory_order_relaxed) + want,
          g_ppmNow.load(std::memory_order_relaxed), want, g_afc.target() - want);
 }
-void LocalSdrShim::setAdsbRangeFiles(const std::string& prefix) { vibeadsb::rangeStore().setFiles(prefix); }
+void LocalSdrShim::setAdsbRangeFiles(const std::string& prefix) {
+    vibeadsb::rangeStore().setFiles(prefix);
+    /* ★★ b96-rangefeed (Stuart 11-27): THIS process answers /adsb/range, so it also counts the ADS-B positions every other
+     *  source on this machine wrote to the shared table — a server-level Beast feed (the front door owns it), the other
+     *  radios — around the server's location (vibe_adsb_range_feed.h; docs/v12/RANGE-FEED.md). */
+    vibeadsb::startTableRangeFollower([](double& la, double& lo) {
+        la = g_bgLat.load(); lo = g_bgLon.load();
+        return la == la && lo == lo;
+    });
+}
 void LocalSdrShim::setAfcFile(const std::string& path, bool handheld) {
     std::lock_guard<std::mutex> lk(g_afcMtx);
     g_afcFile = path; g_afcHandheld = handheld;
