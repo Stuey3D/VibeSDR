@@ -274,7 +274,7 @@ import ChatDrawer,
 import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
          askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, mapSharedLine, type DialState } from '../services/dialChat';
-import { airSeaTuneRows, airSeaTuneChip } from '../services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE chip
+import { airSeaTuneRows, airSeaLiveModes, airSeaTuneChip } from '../services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE chip
 import { radiosOf, otherRadiosOffered, sessionOffered, otherRadiosOf, radiosSeen, sessionStart, sessionWindow, withSession, FirstSeen, scopeRadioOk, OTHER_RADIOS_KEY_APP,
          OTHER_RADIOS_LABEL, OTHER_RADIOS_WORDS, OTHER_RADIOS_CHIP, SESSION_ID, SESSION_WORDS, type MapScope } from '../services/mapScope';   // ★★★ beta96 the maps' scope
 import { airSeaScope, airSeaLiveOk } from '../services/airSeaScope';
@@ -13128,12 +13128,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     const k = asLiveMode === 'ais' ? (aisReport?.combo === 'ais+dsc' ? 'maritime' : 'ais') : asLiveMode === 'avdata' ? 'av' : asLiveMode === 'sondes' ? 'sd' : asLiveMode;
     if (k && k !== asLastRef.current) { asLastRef.current = k; void AsyncStorage.setItem('lsv_airsea_last', k).catch(() => {}); }
   }, [asLiveMode, aisReport?.combo]);
-  const asMenuOne = !IS_APPLE_TV && !!(client.current as any)?.isVibe;   // ★ the Mode sheet's AIR & SEA LIVE in place of seven keys
-  const airSeaRows = useMemo(() => (!(client.current as any)?.isVibe || IS_APPLE_TV) ? [] : airSeaTuneRows({
+  /* ★★★ beta97 (Stuart, build 586: "AIR & SEA missing from TUNES THE RADIO ITSELF"): whether this is a VibeServer is the
+   *  ROUTE's (serverType) as well as the client's — the client ref is not state, so a radio whose capabilities arrived before
+   *  the client existed kept an EMPTY row list (the memo below never ran again) and the key never appeared. */
+  const vibeHere = !IS_APPLE_TV && ((route.params.serverType ?? 'ubersdr') === 'vibeserver' || !!(client.current as any)?.isVibe);
+  const asMenuOne = vibeHere;   // ★ the Mode sheet's AIR & SEA LIVE in place of seven keys
+  const airSeaRows = useMemo(() => !vibeHere ? [] : airSeaTuneRows({
     adsb: adsbCap ? { ok: adsbCap.ok, why: adsbCap.why ?? '' } : undefined, avdata: avCap, avBands: avCap?.bands, vormap: vmCap, vormapLo: vmCap?.lo, vormapHi: vmCap?.hi,
     ndb: ndbCap, ndbLo: ndbCap?.lo, ndbHi: ndbCap?.hi, ais: aisCap, aisDsc: !!aisCap?.dsc, sondes: sdCap, sondeBands: sdCap?.bands, only: onlyModeHere || '',
   }, { mode: asLiveMode as any, avBand: avReport?.band, sdBand: sdReport?.band, aisDsc: aisReport?.combo === 'ais+dsc' }),
-  [adsbCap, avCap, vmCap, ndbCap, aisCap, sdCap, onlyModeHere, asLiveMode, avReport?.band, sdReport?.band, aisReport?.combo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  [vibeHere, adsbCap, avCap, vmCap, ndbCap, aisCap, sdCap, onlyModeHere, asLiveMode, avReport?.band, sdReport?.band, aisReport?.combo]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** A TUNE row picked (or AIR & SEA LIVE's landing): the mode, through the Mode sheet's own steps; the ask gate first. */
   const airSeaTune = useCallback((id: string) => {
     markInteract();
@@ -18378,7 +18382,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★★ beta96 MENU CONSOLIDATION (Stuart 11-26): ONE AIR & SEA LIVE key for ADS-B, the DATALINK, AIS, MARITIME, NDB,
            *  VOR MAP and SONDES (the map's TUNE chip switches between them) — the separate keys below are then not passed. Not on
            *  Apple TV (no maps there: its boxes keep their own keys). VIEWS' AIR & SEA beside GALLERY is the viewer. */
-          airSeaAvail: asMenuOne && (airSeaRows.some((r) => !r.why) || airSeaOn),
+          airSeaAvail: asMenuOne && (airSeaLiveModes({ adsb: adsbCap ? { ok: adsbCap.ok, why: adsbCap.why ?? '' } : undefined, avdata: avCap, vormap: vmCap, ndb: ndbCap,
+                                                       ais: aisCap, aisDsc: !!aisCap?.dsc, sondes: sdCap, only: onlyModeHere || '' }).length > 0 || airSeaOn),   // ★★★ the web's rule (airSeaLiveModes)
           airSeaOn,
           onAirSea: () => { markInteract(); setModeSelOpen(false); toggleAirSeaLive(); },
           airSeaViewAvail: asMenuOne && (!!adsbCap?.ok || !!avCap?.ok || hfdlCapable || !!aisCap?.ok || dscCapable || navAvail),
