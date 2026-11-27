@@ -41,7 +41,7 @@ import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFo
          type OrbFollow, type OrbView } from '../services/orbcomm';
 import { ORB_NO_TUNE } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
-import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
+import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHeardText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrSkimLine, xpdrWhat, XPDR_SKIM_TITLE, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
 import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_PRIO_WHAT, SAT_SCHED_SHARED_NOTE, satPassKey, satSchedKeyText, satSchedPrioText, satSchedRowText,
          type SatSchedEntry, type SatSchedSlot, type SatSessionKind } from '../services/satSchedule';
@@ -158,6 +158,8 @@ export interface SatellitePanelProps {
    *  VFO A there in USB and asks the finder to follow it). */
   xpdr?: XpdrStatus | null;
   onXpdrListen?: (row: XpdrRow) => void;
+  /** ★★★ beta97 SKIM FT8/FT4: the finder's digital-mode skimmer on / off (services/xpdr.ts xpdrSkimMsg) */
+  onXpdrSkim?: (on: boolean) => void;
   orbMax?: number;
   onOrbMax?: (k: number) => void;
   /** ★★ beta94 SHOW (Stuart 11-25): which satellites' passes the list shows (null = All) and its change — the screen keeps it
@@ -623,6 +625,24 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 <View style={s.pk}>
                   <Text style={[s.detailNp, s.caveat]}>{xpdrHint(p.xpdr)}</Text>
                   {!!xpdrFollowText(p.xpdr?.follow ?? null) && <Text style={[s.detailNp, s.orbName]}>{xpdrFollowText(p.xpdr?.follow ?? null)}</Text>}
+                  {/* ★★★ beta97 THE DIGITAL-MODE SKIMMER: SKIM (the benchmark set its default; the listener always may), its
+                       state in one line, what it heard (newest first; "caught up" = decoded from the queue after its slot) */}
+                  {!!p.xpdr?.skim && (
+                    <View>
+                      <View style={s.nameRow}>
+                        {!!p.onXpdrSkim && (
+                          <View style={s.keys}>
+                            <DecoderKey label="SKIM FT8/FT4" active={p.xpdr.skim.on} onPress={() => p.onXpdrSkim!(!p.xpdr!.skim!.on)}
+                                        accessibilityLabel={XPDR_SKIM_TITLE} />
+                          </View>
+                        )}
+                        <Text style={[s.detailNp, { flexShrink: 1 }]}>{xpdrSkimLine(p.xpdr.skim)}</Text>
+                      </View>
+                      {p.xpdr.skim.heard.slice(0, 8).map((hd, i) => (
+                        <Text key={`${hd.t}-${hd.call}-${i}`} style={[s.mono, hd.late && s.orbHeld]} numberOfLines={1}>{xpdrHeardText(hd)}</Text>
+                      ))}
+                    </View>
+                  )}
                   {(p.xpdr?.rows ?? []).some((r) => r.kind === 'cw' && !!r.text) && (
                     <View style={s.keys}>
                       {/* ★ EXPLAIN ↔ RAW: the legend names what a press does, as in the CW box */}

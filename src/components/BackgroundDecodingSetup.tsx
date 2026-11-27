@@ -450,11 +450,36 @@ export default function BackgroundDecodingSetup(p: Props) {
             </View>
           );
         })}
+        {/* ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER (the Setup page's spSkim / spSkimMode / spSkimIq, the same words):
+             under its switch the speed and keep-the-IQ; on, it draws the transponder ticks on any radio */}
+        {(caps.satXpdr ?? []).length > 0 && (<>
+          <View style={[st.row, { justifyContent: 'space-between' }]}>
+            <Text style={{ color: model.sat.on ? C.text : C.textDim, fontFamily: F, fontSize: 13, flex: 1 }}>
+              <Text style={{ fontWeight: '700' }}>Skim transponder digital modes</Text>{' \u00b7 FT8 and FT4 decoded across the whole passband of each linear transponder ticked below, as each slot ends. Spots are tagged with the satellite and the pass, appear in the spots list and on the map, and are not sent to PSK Reporter.'}</Text>
+            <Switch value={model.sat.skim} disabled={!model.sat.on} onValueChange={(x) => set((m) => { m.sat.skim = x; })}
+              trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+          </View>
+          {model.sat.skim && (<>
+            <Text style={hint}>Skimmer speed (here and in a listener{'\u2019'}s SATELLITE box):</Text>
+            <View style={[st.row, { flexWrap: 'wrap', paddingLeft: 12 }]}>
+              {key('Auto', () => set((m) => { m.sat.skimMode = 'auto'; }), model.sat.skimMode === 'auto', !model.sat.on)}
+              {key('Live', () => set((m) => { m.sat.skimMode = 'live'; }), model.sat.skimMode === 'live', !model.sat.on)}
+              {key('Catch-up', () => set((m) => { m.sat.skimMode = 'catchup'; }), model.sat.skimMode === 'catchup', !model.sat.on)}
+            </View>
+            <Text style={hint}>{model.sat.skimMode === 'auto' ? 'Auto: the benchmark decides. ' : ''}Live decodes every window as each slot ends; catch-up queues what it cannot decode in time (bounded by this machine{'\u2019'}s memory {'\u2014'} the oldest goes first) and works it off during and after the pass. A listener can always switch SKIM on in the SATELLITE box.</Text>
+            <View style={[st.row, { justifyContent: 'space-between', paddingLeft: 12 }]}>
+              <Text style={{ color: model.sat.on ? C.text : C.textDim, fontFamily: F, fontSize: 13, flex: 1 }}>Keep the corrected IQ of each skimmed pass (a WAV in the gallery with the Doppler already taken out, up to 64 MB or a quarter of the gallery{'\u2019'}s size), to skim again or share</Text>
+              <Switch value={model.sat.skimIq} disabled={!model.sat.on} onValueChange={(x) => set((m) => { m.sat.skimIq = x; })}
+                trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+            </View>
+          </>)}
+        </>)}
         {/* ★★★ beta96 SINGLE MODE: SATELLITES — linear transponders: for the pass every listener has their own VFO across the
-             passband with their own AUTO DOPPLER (the Setup page's spXpdr, the same words) */}
-        {!!p.satSingle && (caps.satXpdr ?? []).length > 0 && (<>
-          <Text style={[hint, { color: C.text }]}>Linear transponders {'—'} for the pass every listener gets their own VFO across the
-            passband, SSB or CW, with their own AUTO DOPPLER; at loss of signal everyone is back to watching.</Text>
+             passband with their own AUTO DOPPLER (the Setup page's spXpdr, the same words). ★★★ beta97 also wherever the skimmer is on. */}
+        {(!!p.satSingle || model.sat.skim) && (caps.satXpdr ?? []).length > 0 && (<>
+          <Text style={[hint, { color: C.text }]}>{p.satSingle
+            ? 'Linear transponders \u2014 for the pass every listener gets their own VFO across the passband, SSB or CW, with their own AUTO DOPPLER; at loss of signal everyone is back to watching.'
+            : 'Linear transponders \u2014 when one ticked here passes, the radio follows it and the skimmer decodes FT8 and FT4 across its passband.'}</Text>
           {caps.satXpdr.map((d) => {
             const on = model.sat.birds.some((b) => b.norad === d.norad && b.label === d.label);
             return (

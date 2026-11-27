@@ -44,6 +44,68 @@ export interface XpdrStatus {
   dop: number;
   rows: XpdrRow[];
   follow: XpdrFollow | null;
+  /** ★★★ beta97 the digital-mode skimmer (FT8 / FT4 across the whole passband — decoders/sat_skim.h), null = none */
+  skim: XpdrSkim | null;
+}
+
+/* ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER, the clients' half (docs/v12/SAT-SKIM.md). The finder's status carries
+ *  "skim":{on, mode "live"|"catchup", windows, workers, depth, queued, qslots, qmb, capmb, lag, dropped, decoded, spots, late,
+ *  wait "doppler"?, heard:[{t slot UTC, m mode, c call, g grid, s snr, f Hz (satellite frame), x message, late?}]}. The SATELLITE
+ *  box shows a SKIM switch (→ {"type":"xpdr_skim","on":…}), one line of state and the compact list of what it heard. */
+export interface XpdrHeard { t: number; mode: 'FT8' | 'FT4'; call: string; grid: string; snr: number; hz: number; text: string; late: boolean }
+export interface XpdrSkim {
+  on: boolean;
+  mode: 'live' | 'catchup';
+  windows: number; workers: number; depth: number;
+  queued: number; qslots: number; qmb: number; capmb: number; lag: number;
+  dropped: number; decoded: number; spots: number; late: number;
+  waiting: boolean;
+  heard: XpdrHeard[];
+}
+export const XPDR_SKIM_MAX_HEARD = 20;
+/** The SKIM switch's words for a screen reader. */
+export const XPDR_SKIM_TITLE = 'Decode FT8 and FT4 across the whole transponder as each slot ends (spots tagged via the satellite, not sent to PSK Reporter)';
+export function parseXpdrSkim(v: unknown): XpdrSkim | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const n = (x: unknown) => Math.max(0, num(x));
+  const heard: XpdrHeard[] = [];
+  if (Array.isArray(o.heard)) {
+    for (const h of o.heard.slice(0, XPDR_SKIM_MAX_HEARD)) {
+      if (!h || typeof h !== 'object') continue;
+      const x = h as Record<string, unknown>;
+      const call = str(x.c, 12).replace(/[^A-Za-z0-9/]/g, '').toUpperCase();
+      const hz = num(x.f);
+      if (!call || !(hz > 0)) continue;
+      heard.push({ t: num(x.t), mode: x.m === 'FT4' ? 'FT4' : 'FT8', call, grid: str(x.g, 6).replace(/[^A-Za-z0-9]/g, '').toUpperCase(),
+                   snr: Math.round(num(x.s)), hz, text: str(x.x, 48), late: x.late === true });
+    }
+  }
+  return { on: o.on === true, mode: o.mode === 'catchup' ? 'catchup' : 'live', windows: n(o.windows), workers: n(o.workers), depth: n(o.depth),
+           queued: n(o.queued), qslots: n(o.qslots), qmb: n(o.qmb), capmb: n(o.capmb), lag: n(o.lag), dropped: n(o.dropped),
+           decoded: n(o.decoded), spots: n(o.spots), late: n(o.late), waiting: o.wait === 'doppler', heard };
+}
+/** What SKIM sends. */
+export const xpdrSkimMsg = (on: boolean): { type: 'xpdr_skim'; on: boolean } => ({ type: 'xpdr_skim', on });
+/** The skimmer's one line: "FT8 + FT4 · 9 windows · live · 3 spots", "catching up — 2 slots waiting", "waiting for the Doppler lock". */
+export function xpdrSkimLine(k: XpdrSkim | null | undefined): string {
+  if (!k) return '';
+  if (!k.on) return k.mode === 'catchup'
+    ? 'FT8 / FT4 skimmer off — this server decodes it as catch-up (behind the pass, as the processor allows). SKIM switches it on.'
+    : 'FT8 / FT4 skimmer off — SKIM switches it on.';
+  if (k.waiting) return 'FT8 / FT4: waiting for the Doppler lock';
+  const parts = [`FT8 + FT4 · ${k.windows} window${k.windows === 1 ? '' : 's'} · ${k.mode === 'catchup' ? 'catch-up' : 'live'}`];
+  if (k.qslots > 1 || k.lag > 20) parts.push(`catching up — ${k.qslots} slot${k.qslots === 1 ? '' : 's'} waiting${k.lag > 0 ? `, ${Math.round(k.lag)} s behind` : ''}`);
+  if (k.dropped > 0) parts.push(`${k.dropped} slot${k.dropped === 1 ? '' : 's'} dropped (queue full)`);
+  parts.push(`${k.spots} spot${k.spots === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+/** One heard row: "20:55:07 FT4 DL6UMR JO71 −6 dB 145.8590" (+ " · caught up" when decoded from the queue). */
+export function xpdrHeardText(h: XpdrHeard): string {
+  const d = new Date(h.t * 1000);
+  const two = (x: number) => String(x).padStart(2, '0');
+  const t = Number.isFinite(d.getTime()) ? `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}:${two(d.getUTCSeconds())}` : '';
+  return `${t} ${h.mode} ${h.text || h.call} ${h.snr > 0 ? '+' : ''}${h.snr} dB ${(h.hz / 1e6).toFixed(4)}${h.late ? ' · caught up' : ''}`;
 }
 
 /** A row is drawn FADED after this long unheard (Stuart: "a row fades after a minute of silence"). */
@@ -55,7 +117,10 @@ export const XPDR_HINT = 'Every CW signal is decoded and every voice gets LISTEN
 /** ★★★ beta94 …when the finder also decodes the bird's telemetry. */
 export const XPDR_HINT_TLM = 'Every CW signal is decoded, every voice gets LISTEN, and the telemetry decodes here too — LISTEN on it to hear it. Tap the waterfall to tune anywhere else.';
 /** The box's plain line for this status (the telemetry's when the finder decodes it). */
-export const xpdrHint = (st: XpdrStatus | null | undefined): string => (st && st.tlm > 0 ? XPDR_HINT_TLM : XPDR_HINT);
+export const xpdrHint = (st: XpdrStatus | null | undefined): string => (st && st.tlm > 0 ? XPDR_HINT_TLM : XPDR_HINT)
+  + (st?.skim ? XPDR_HINT_SKIM : '');   // ★★★ beta97 the skimmer, when the server has one
+/** ★★★ beta97 …and when the server skims the transponder's digital modes. */
+export const XPDR_HINT_SKIM = ' SKIM FT8/FT4 decodes FT8 and FT4 across the whole passband (spots tagged via the satellite, not sent to PSK Reporter).';
 /** ★★★ beta94 LISTEN on the telemetry puts the dial this far below its carrier (USB: the carrier heard at ~1.5 kHz). */
 export const XPDR_TLM_LISTEN_BELOW_HZ = 1500;
 export const XPDR_MAX_ROWS = 40;
@@ -96,7 +161,8 @@ export function parseXpdrStatus(d: unknown): XpdrStatus | null {
     if (id) follow = { id, src, off: num(f.off) };
   }
   const tlm = num(o.tlm);
-  return { slice: box(o.slice), span: box(o.span), beacon: num(o.beacon), tlm: tlm > 1e6 ? tlm : 0, dop: num(o.dop), rows, follow };
+  return { slice: box(o.slice), span: box(o.span), beacon: num(o.beacon), tlm: tlm > 1e6 ? tlm : 0, dop: num(o.dop), rows, follow,
+           skim: parseXpdrSkim(o.skim) };
 }
 
 /** Is this row FADED (not heard for a minute)? */

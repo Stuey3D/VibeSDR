@@ -2628,8 +2628,31 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
              SAT_XPDR_DOWNLINKS to the engine). Drawn ONLY on a radio set to Single mode: SATELLITES (AGENTS.md: a control that
              only works on one radio should not be there) — for its pass the radio becomes a locked range over the passband
              and every listener tunes their own VFO across it with their own AUTO DOPPLER (docs/v12/SAT-SINGLE.md). -->
+        <!-- ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER (decoders/sat_skim.h, docs/v12/SAT-SKIM.md — Stuart 11-27). Under the
+             switch (the decoder rule): FT8 + FT4 across a ticked transponder's whole passband on an unattended pass, the
+             skimmer's speed (listeners' SATELLITE box too) and keep-the-IQ. The transponder ticks below are drawn when it is
+             on (any radio) or on a SATELLITES radio (the hybrid). -->
+        <label style="display:flex;gap:8px;align-items:center;margin:8px 0 3px 0">
+          <input type="checkbox" id="spSkim" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span><b>Skim transponder digital modes</b> &middot; FT8 and FT4 decoded across the whole passband of each linear
+            transponder ticked below, as each slot ends. Spots are tagged with the satellite and the pass, appear in the spots
+            list and on the map, and are not sent to PSK Reporter.</span></label>
+        <div id="spSkimOpts" style="margin:2px 0 2px 24px">
+          <p class="why" style="margin:2px 0">Skimmer speed (here and in a listener&rsquo;s SATELLITE box):
+            <select id="spSkimMode" style="width:auto;display:inline-block">
+              <option value="auto">Auto &mdash; the benchmark decides</option>
+              <option value="live">Live &mdash; every slot as it ends</option>
+              <option value="catchup">Catch-up &mdash; behind the pass, as the processor allows</option></select></p>
+          <p class="why" id="spSkimNote" style="margin:2px 0">Live decodes every window as each slot ends; catch-up queues what
+            it cannot decode in time (bounded by this machine&rsquo;s memory &mdash; the oldest goes first) and works it off during
+            and after the pass. A listener can always switch SKIM on in the SATELLITE box.</p>
+          <label style="display:flex;gap:8px;align-items:center;margin:3px 0">
+            <input type="checkbox" id="spSkimIq" style="width:16px;height:16px;accent-color:var(--amber)">
+            <span>Keep the corrected IQ of each skimmed pass (a WAV in the gallery with the Doppler already taken out, up to
+              64 MB or a quarter of the gallery&rsquo;s size), to skim again or share</span></label>
+        </div>
         <div id="spXpdrWrap" class="hide">
-          <p class="why" style="margin:8px 0 2px 0"><b>Linear transponders</b> &mdash; for the pass every listener gets their
+          <p class="why" style="margin:8px 0 2px 0" id="spXpdrHead"><b>Linear transponders</b> &mdash; for the pass every listener gets their
             own VFO across the passband, SSB or CW, with their own AUTO DOPPLER; at loss of signal everyone is back to watching.</p>
           <div id="spXpdr"></div>
         </div>
@@ -9320,7 +9343,7 @@ const SAT_XPDR_DOWNLINKS = [
   { norad: 60209, label: "Transponder", name: "MO-122 (MESAT1)", what: "435.810\u2013435.840 MHz" },
   { norad: 44881, label: "Transponder", name: "TO-108 (CAS-6)", what: "145.915\u2013145.935 MHz, on intermittently" },
 ];
-let spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor" };
+let spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor", skim: false, skimMode: "auto", skimIq: false };
 /* ★★★ beta94 one capture holds a Meteor pass AND the ORBCOMM band at or above this sample rate (the server's
  *  backgroundCapsJson "satBoth".minRate — vibe_sat_pass_sched.h bothMinRate, test-sat-pass-sched §8 holds the two equal);
  *  an Airspy HF+ never does (its edges are cropped: 768 kHz usable at 912). Below it the priority decides. */
@@ -9347,9 +9370,18 @@ function spRender() {
     const t = document.createElement("span"); t.textContent = b.name + " \u00b7 " + b.what;
     l.appendChild(c); l.appendChild(t); box.appendChild(l);
   });
-  // ★★★ beta96 the linear transponders — only on a SATELLITES radio (single mode "sat"); a tick made elsewhere is kept but not drawn
+  // ★★★ beta96 the linear transponders — on a SATELLITES radio (single mode "sat"), ★★★ beta97 or wherever the skimmer is on;
+  //     a tick made elsewhere is kept but not drawn
   {
-    const sat = !!bgRadio && bgRadio.singleMode === "sat";
+    const satR = !!bgRadio && bgRadio.singleMode === "sat";
+    const sat = satR || spModel.skim;
+    if ($("spSkim")) { $("spSkim").checked = spModel.skim; $("spSkim").disabled = !spModel.on; }
+    if ($("spSkimOpts")) $("spSkimOpts").classList.toggle("hide", !spModel.skim);
+    if ($("spSkimMode")) { $("spSkimMode").value = spModel.skimMode; $("spSkimMode").disabled = !spModel.on; }
+    if ($("spSkimIq")) { $("spSkimIq").checked = spModel.skimIq; $("spSkimIq").disabled = !spModel.on; }
+    if ($("spXpdrHead")) $("spXpdrHead").innerHTML = satR
+      ? "<b>Linear transponders</b> &mdash; for the pass every listener gets their own VFO across the passband, SSB or CW, with their own AUTO DOPPLER; at loss of signal everyone is back to watching."
+      : "<b>Linear transponders</b> &mdash; when one ticked here passes, the radio follows it and the skimmer decodes FT8 and FT4 across its passband.";
     if ($("spXpdrWrap")) $("spXpdrWrap").classList.toggle("hide", !sat);
     const xb = $("spXpdr");
     if (xb) {
@@ -9396,7 +9428,7 @@ function bgNewProfile() { return { centre: 0, from: "00:00", to: "00:00", vfos: 
 function bgLoad(r) {
   bgRadio = r || null;
   bgModel = { on: false, waitMin: 5, keepInRange: true, profiles: [] };
-  spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor" };
+  spModel = { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: "meteor", skim: false, skimMode: "auto", skimIq: false };
   try {
     const j = r && r.bgDecode ? JSON.parse(r.bgDecode) : null;
     if (j && typeof j === "object") {
@@ -9410,7 +9442,10 @@ function bgLoad(r) {
       spModel = { on: !!(sp && sp.on), minEl: sp && sp.minEl >= 0 ? +sp.minEl : 20,
                   birds: birds.filter(function (b) { return !spIsMeteor(b); }),
                   meteor: !!(sp && (sp.meteor === true || birds.some(spIsMeteor))), orbcomm: !!(sp && sp.orbcomm === true),
-                  first: sp && sp.first === "orbcomm" ? "orbcomm" : "meteor" };
+                  first: sp && sp.first === "orbcomm" ? "orbcomm" : "meteor",
+                  // ★★★ beta97 the satellite digital-mode skimmer (absent = off / auto)
+                  skim: !!(sp && sp.skim === true), skimMode: sp && (sp.skimMode === "live" || sp.skimMode === "catchup") ? sp.skimMode : "auto",
+                  skimIq: !!(sp && sp.skimIq === true) };
       bgModel.keepInRange = j.keepInRange !== false;
       bgModel.profiles = Array.isArray(j.profiles) ? j.profiles.map(function (p) {
         const q = { centre: +p.centre || 0, from: p.from || "00:00", to: p.to || "00:00",
@@ -9454,6 +9489,10 @@ function bgLoad(r) {
       if ($("spMeteor")) $("spMeteor").addEventListener("change", function () { spModel.meteor = $("spMeteor").checked; spRender(); });
       if ($("spOrbcomm")) $("spOrbcomm").addEventListener("change", function () { spModel.orbcomm = $("spOrbcomm").checked; spRender(); });
       if ($("spFirst")) $("spFirst").addEventListener("change", function () { spModel.first = $("spFirst").value === "orbcomm" ? "orbcomm" : "meteor"; });
+      // ★★★ beta97 the skimmer's switch (draws the transponder ticks), its speed and keep-the-IQ
+      if ($("spSkim")) $("spSkim").addEventListener("change", function () { spModel.skim = $("spSkim").checked; spRender(); });
+      if ($("spSkimMode")) $("spSkimMode").addEventListener("change", function () { const v = $("spSkimMode").value; spModel.skimMode = v === "live" || v === "catchup" ? v : "auto"; });
+      if ($("spSkimIq")) $("spSkimIq").addEventListener("change", function () { spModel.skimIq = $("spSkimIq").checked; });
     }
   }
   spRender();
@@ -9952,7 +9991,10 @@ function bgCollect() {
   if ($("spMeteor")) spModel.meteor = !!$("spMeteor").checked;
   if ($("spOrbcomm")) spModel.orbcomm = !!$("spOrbcomm").checked;
   if ($("spFirst")) spModel.first = $("spFirst").value === "orbcomm" ? "orbcomm" : "meteor";
-  const spAny = spModel.on || spModel.birds.length > 0 || spModel.meteor || spModel.orbcomm;
+  if ($("spSkim")) spModel.skim = !!$("spSkim").checked;
+  if ($("spSkimMode")) { const v = $("spSkimMode").value; spModel.skimMode = v === "live" || v === "catchup" ? v : "auto"; }
+  if ($("spSkimIq")) spModel.skimIq = !!$("spSkimIq").checked;
+  const spAny = spModel.on || spModel.birds.length > 0 || spModel.meteor || spModel.orbcomm || spModel.skim || spModel.skimMode !== "auto" || spModel.skimIq;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
   if (!spAny && !bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim" || v.dec === "wefax-stations"; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
@@ -9964,6 +10006,10 @@ function bgCollect() {
     if (spModel.meteor) out.satPasses.meteor = true;
     if (spModel.orbcomm) out.satPasses.orbcomm = true;
     if (spModel.first === "orbcomm") out.satPasses.first = "orbcomm";
+    // ★★★ beta97 the skimmer (absent unless set — vibe_bgdecode_config.h toJson's order)
+    if (spModel.skim) out.satPasses.skim = true;
+    if (spModel.skimMode === "live" || spModel.skimMode === "catchup") out.satPasses.skimMode = spModel.skimMode;
+    if (spModel.skimIq) out.satPasses.skimIq = true;
   }
   return JSON.stringify(out, function (k, v) { return k.indexOf("__") === 0 ? undefined : v; });   // ★ the page's own notes stay here
 }

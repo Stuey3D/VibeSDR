@@ -81,6 +81,7 @@
  * frames can only be parsed against the decoder currently attached. Never sniff.
  */
 
+import { xpdrSkimMsg } from '../../../src/services/xpdr';   // ★★★ beta97 the satellite skimmer's SKIM switch
 import { parseSpotVia } from '../../../src/services/satTune';   // ★★★ beta97 spots via a satellite
 import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
@@ -413,6 +414,11 @@ export class DecoderClient {
   xpdrFollow(id: string) {
     if (this.mode !== 'xpdr') return;
     this._send({ type: 'xpdr_follow', id: id.slice(0, 12) });
+  }
+  /** ★★★ beta97 the SATELLITE box's SKIM switch: the finder's FT8 / FT4 skimmer on or off. Only while it is attached. */
+  xpdrSkim(on: boolean) {
+    if (this.mode !== 'xpdr') return;
+    this._send(xpdrSkimMsg(on));
   }
   private _send(o: Record<string, unknown>) {
     const ws = this.ws;

@@ -17450,6 +17450,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             client.current?.tune(l.hz, l.mode as SDRMode);
             decoderClient.current?.xpdrFollow(l.follow.id);
           }}
+          onXpdrSkim={(on) => { markInteract(); decoderClient.current?.xpdrSkim(on); }}   // ★★★ beta97 SKIM FT8/FT4
           orbMax={satOrbMax}
           onOrbMax={(k) => {   // ★★ 2026-11-24 the manual fallback under AUTO: re-attach with "max_carriers" (0 = AUTO)
             markInteract();

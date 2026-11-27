@@ -16,3 +16,6 @@ c++ -std=c++17 -O2 -I "$CPP/ft8_lib" -o "$OUT/ft8_synth" tools/ft8-bench/ft8_syn
 echo "$OUT/ft8_synth"
 c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/ftx_sweep" tools/ft8-bench/ftx_sweep.cpp "$CPP/decoders/ft8_decoder.cpp" "$CPP/decoders/ftx_fine.cpp" "$OUT"/obj/*.o -lpthread
 echo "$OUT/ftx_sweep"
+# ★★★ beta97 the satellite digital-mode skimmer's CPU per slot (decoders/sat_skim.h) — sat_skim_bench [windows] [slots] [rate]
+c++ -std=c++17 -O2 -I "$CPP" -I "$CPP/ft8_lib" -o "$OUT/sat_skim_bench" tools/ft8-bench/sat_skim_bench.cpp "$CPP/decoders/sat_skim.cpp" "$CPP/decoders/digi_tuner.cpp" "$CPP/decoders/ft8_decoder.cpp" "$CPP/decoders/ftx_fine.cpp" "$OUT"/obj/*.o -lpthread
+echo "$OUT/sat_skim_bench"

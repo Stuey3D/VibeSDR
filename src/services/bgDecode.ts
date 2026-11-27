@@ -21,7 +21,11 @@ export type BgProfile = { centre: number; from: string; to: string; vfos: BgVfo[
 export type BgSatPasses = { on: boolean; minEl: number; birds: { norad: number; label: string }[];
   /** ★★★ beta94 the two groups (vibe::bg::SatPasses): every Meteor-M pass · ORBCOMM sky-plot monitoring · which wins where
    *  one capture cannot hold both (absent in the JSON = false / Meteor first). */
-  meteor: boolean; orbcomm: boolean; first: 'meteor' | 'orbcomm' };
+  meteor: boolean; orbcomm: boolean; first: 'meteor' | 'orbcomm';
+  /** ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER (vibe_bgdecode_config.h SatPasses::skim / skimMode / skimIq): a ticked
+   *  linear transponder's passes taken unattended and their FT8 / FT4 skimmed; the skimmer's speed (listeners too); keep the
+   *  corrected IQ. Absent = off / 'auto'. */
+  skim: boolean; skimMode: 'auto' | 'live' | 'catchup'; skimIq: boolean };
 /** ★★★ beta94 one capture holds a Meteor pass and the ORBCOMM band (backgroundCapsJson "satBoth"; null = an older engine). */
 export type BgSatBoth = { needHz: number; minRate: number; narrow: string[] };
 export type BgModel = { on: boolean; waitMin: number; keepInRange: boolean; profiles: BgProfile[]; sat: BgSatPasses };
@@ -97,7 +101,7 @@ export const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB
 export const DSC_HF = [2187500, 4207500, 6312000, 8414500, 12577000, 16804500];
 export const DSC_VHF = 156525000;
 
-export const emptyBgModel = (): BgModel => ({ on: false, waitMin: 5, keepInRange: true, profiles: [], sat: { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: 'meteor' } });
+export const emptyBgModel = (): BgModel => ({ on: false, waitMin: 5, keepInRange: true, profiles: [], sat: { on: false, minEl: 20, birds: [], meteor: false, orbcomm: false, first: 'meteor', skim: false, skimMode: 'auto', skimIq: false } });
 export const bgNewProfile = (): BgProfile => ({ centre: 0, from: '00:00', to: '00:00', vfos: [{ hz: 0, mode: 'usb', dec: 'navtex' }] });
 
 /** ★★★ beta94 a Meteor LRPT downlink — the Meteor group, not a tick of its own. */
@@ -124,7 +128,8 @@ export function parseBg(json: string | null | undefined): BgModel {
           ? sp.birds.filter((b: any) => b && +b.norad > 0 && typeof b.label === 'string').map((b: any) => ({ norad: +b.norad, label: String(b.label) })) : [];
         // ★★★ beta94 a Meteor bird ticked before the groups existed IS the Meteor group now (the Setup page's bgLoad)
         m.sat = { on: !!sp.on, minEl: sp.minEl >= 0 ? +sp.minEl : 20, birds: birds.filter((b) => !bgSatIsMeteor(b)),
-                  meteor: sp.meteor === true || birds.some(bgSatIsMeteor), orbcomm: sp.orbcomm === true, first: sp.first === 'orbcomm' ? 'orbcomm' : 'meteor' };
+                  meteor: sp.meteor === true || birds.some(bgSatIsMeteor), orbcomm: sp.orbcomm === true, first: sp.first === 'orbcomm' ? 'orbcomm' : 'meteor',
+                  skim: sp.skim === true, skimMode: sp.skimMode === 'live' || sp.skimMode === 'catchup' ? sp.skimMode : 'auto', skimIq: sp.skimIq === true };
       }
       m.profiles = Array.isArray(j.profiles) ? j.profiles.map((p: any): BgProfile => {
         const q: BgProfile = {
@@ -148,7 +153,7 @@ export function parseBg(json: string | null | undefined): BgModel {
 /** The string to store — the Setup page's bgCollect. Off with nothing set up stores nothing at all (''). */
 export function collectBg(m: BgModel): string {
   const anything = m.profiles.some((p) => p.ism || p.ais || p.centre > 0 || p.vfos.some((v) => v.hz > 0 || v.dec === 'ndb-skim' || v.dec === 'wefax-stations'));
-  const satAny = !!m.sat && (m.sat.on || m.sat.birds.length > 0 || m.sat.meteor || m.sat.orbcomm);
+  const satAny = !!m.sat && (m.sat.on || m.sat.birds.length > 0 || m.sat.meteor || m.sat.orbcomm || m.sat.skim || m.sat.skimMode !== 'auto' || m.sat.skimIq);
   if (!m.on && !anything && !satAny) return '';
   const out: any = { on: m.on, waitMin: m.waitMin, profiles: m.profiles.map((p) => {
     const q: any = { centre: p.centre, from: p.from, to: p.to, vfos: p.vfos.map((v) => (v.fax ? { hz: v.hz, mode: v.mode, dec: v.dec, fax: v.fax } : { hz: v.hz, mode: v.mode, dec: v.dec })) };
@@ -162,6 +167,9 @@ export function collectBg(m: BgModel): string {
     if (m.sat.meteor) out.satPasses.meteor = true;            // ★★★ beta94, absent unless set
     if (m.sat.orbcomm) out.satPasses.orbcomm = true;
     if (m.sat.first === 'orbcomm') out.satPasses.first = 'orbcomm';
+    if (m.sat.skim) out.satPasses.skim = true;                // ★★★ beta97, absent unless set
+    if (m.sat.skimMode === 'live' || m.sat.skimMode === 'catchup') out.satPasses.skimMode = m.sat.skimMode;
+    if (m.sat.skimIq) out.satPasses.skimIq = true;
   }
   return JSON.stringify(out);
 }

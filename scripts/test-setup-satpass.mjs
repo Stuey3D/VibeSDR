@@ -28,7 +28,9 @@ const els = { bgProfiles: new El('div'), hwBg: new El('div'), bgOn: new El('inpu
               // ★★★ beta94 the groups and their priority
               spMeteor: new El('input'), spOrbcomm: new El('input'), spBothNote: new El('p'), spFirstRow: new El('label'), spFirst: mkSelect(['meteor', 'orbcomm']),
               // ★★★ beta96 the linear transponders (Single mode: SATELLITES only)
-              spXpdrWrap: new El('div'), spXpdr: new El('div') };
+              spXpdrWrap: new El('div'), spXpdr: new El('div'),
+              // ★★★ beta97 the satellite digital-mode skimmer
+              spSkim: new El('input'), spSkimOpts: new El('div'), spSkimMode: mkSelect(['auto', 'live', 'catchup']), spSkimIq: new El('input'), spXpdrHead: new El('p') };
 const document = { createElement: (t) => (t === 'select' ? mkSelect([]) : new El(t)) };
 const $ = (id) => els[id];
 const cfg = { serverUtcOffsetMin: 0 };
@@ -98,5 +100,21 @@ ok(/RS-44 · Transponder · 435\.610–435\.670 MHz/.test(els.spXpdr.text()), 'R
 xb()[0].checked = true; xb()[0].onchange();
 ok(JSON.stringify(api.sp().birds) === '[{"norad":44909,"label":"Transponder"}]', `a tick stores the transponder (${JSON.stringify(api.sp().birds)})`);
 ok(/"birds":\[\{"norad":44909,"label":"Transponder"\}\]/.test(api.bgCollect() || ''), 'saved inside satPasses');
+// ★★★ beta97 "Skim transponder digital modes": on ANY radio it draws the transponder ticks; its speed and keep-the-IQ under it
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 2400000, bgDecode: JSON.stringify({ on: false, satPasses: { on: true, minEl: 10, birds: [] } }) });
+ok(!els.spSkim.checked && els.spSkimOpts.classList.contains('hide') && els.spXpdrWrap.classList.contains('hide'), 'skim off: its options hidden, no transponder rows on a general radio');
+els.spSkim.checked = true; els.spSkim.onchange();
+ok(!els.spSkimOpts.classList.contains('hide') && !els.spXpdrWrap.classList.contains('hide') && xb().length === 8, 'skim on: its options and the 8 transponders drawn on a general radio');
+xb()[5].checked = true; xb()[5].onchange();
+els.spSkimMode.value = 'catchup'; els.spSkimMode.onchange();
+els.spSkimIq.checked = true; els.spSkimIq.onchange();
+const saved = api.bgCollect() || '';
+ok(/"skim":true/.test(saved) && /"skimMode":"catchup"/.test(saved) && /"skimIq":true/.test(saved) && /"norad":43803,"label":"Transponder"/.test(saved),
+   'saved inside satPasses: skim, its speed, keep-the-IQ and JO-97\'s tick (' + saved.slice(saved.indexOf('"satPasses"'), saved.indexOf('"satPasses"') + 160) + ')');
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 2400000, bgDecode: saved });
+ok(els.spSkim.checked && els.spSkimMode.value === 'catchup' && els.spSkimIq.checked, 'read back as saved');
+api.bgLoad({ driver: 'rtlsdr', mode: 'open', rate: 2400000, bgDecode: JSON.stringify({ on: false, satPasses: { on: true, minEl: 10, birds: [] } }) });
+ok(!/skim/.test(api.bgCollect() || ''), 'untouched, an older setting is written back without the skimmer\'s keys');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

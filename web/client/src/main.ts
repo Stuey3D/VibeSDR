@@ -11400,6 +11400,8 @@ function satPanelGet(): SatPanel | null {
         spec.tune(clampTune(l.hz), l.mode as SDRMode, { recenter: false, retarget: true });
         decoders?.xpdrFollow(l.follow.id);
       },
+      // ★★★ beta97 SKIM: the finder's FT8 / FT4 skimmer on or off (decoders/sat_skim.h)
+      xpdrSkim: (on) => { decoders?.xpdrSkim(on); },
       // ★★ 2026-11-24 ORBCOMM: CARRIERS AUTO / 1–6 re-attaches with "max_carriers"; the sky plot of THIS radio (its /r/<id>)
       orbMax: (k) => {
         satOrbMax = k;

@@ -329,7 +329,7 @@ inline const std::vector<Control>& controlTable() {
         // ★★★ b96-2 (Stuart 11-27: "why cant i schedule satellite passes on the xcover?") UNATTENDED SATELLITE PASSES — saved
         //    INSIDE bgDecode (satPasses), so it rides the bgOn write below; run by the shim's satPassTick on every platform. With
         //    no row the whole block was pruned. #spBirds / #spXpdr are the containers of generated ticks with no ids. Lite too.
-        { "hwSatPass spOn spMinEl spMeteor spOrbcomm spFirst spBirds spXpdr", D_RADIO, 0 },
+        { "hwSatPass spOn spMinEl spMeteor spOrbcomm spFirst spBirds spXpdr spSkim spSkimMode spSkimIq", D_RADIO, 0 },   // ★★★ beta97 the satellite skimmer
         { "dxOn dxWait dxBands dxRaster dxOirt dxExt dxViewAdmin", D_RADIO, 0 },
         { "afServe afPort afOpen afPush",                D_RADIO, 0 },   // ★★ V12 beta96 flight trackers (the phone's adsbFeed; the page's adsbShare)
         { "rawIqOn rawIqLan rawIqStreams rawIqLocalOnly", D_RADIO, P_NOT_LITE },

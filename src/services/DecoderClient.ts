@@ -617,6 +617,11 @@ export class DecoderClient {
     if (this.active !== 'xpdr' || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.ws.send(JSON.stringify({ type: 'xpdr_follow', id: id.slice(0, 12) }));
   }
+  /** ★★★ beta97 the SATELLITE box's SKIM switch: the finder's FT8 / FT4 skimmer on or off. Only while the finder is attached. */
+  xpdrSkim(on: boolean) {
+    if (this.active !== 'xpdr' || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: 'xpdr_skim', on }));
+  }
 
   sendChat(text: string) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;

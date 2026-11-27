@@ -417,7 +417,7 @@ int main(int argc, char** argv) {
             {"bgOn","r:bgDecode"},{"bgWait","r:bgDecode"},{"bgKeepInRange","r:bgDecode"},{"bgProfiles","r:bgDecode"},
             // ★★★ b96-2 unattended satellite passes — inside bgDecode (satPasses)
             {"hwSatPass","r:bgDecode"},{"spOn","r:bgDecode"},{"spMinEl","r:bgDecode"},{"spMeteor","r:bgDecode"},{"spOrbcomm","r:bgDecode"},
-            {"spFirst","r:bgDecode"},{"spBirds","r:bgDecode"},{"spXpdr","r:bgDecode"},
+            {"spFirst","r:bgDecode"},{"spBirds","r:bgDecode"},{"spXpdr","r:bgDecode"},{"spSkim","r:bgDecode"},{"spSkimMode","r:bgDecode"},{"spSkimIq","r:bgDecode"},
             {"dxOn","r:dxScan"},{"dxWait","r:dxScan"},{"dxBands","r:dxScan"},{"dxRaster","r:dxScan"},{"dxOirt","r:dxScan"},{"dxExt","r:dxScan"},{"dxViewAdmin","r:dxScan"},
             {"rawIqOn","r:rawIq"},{"rawIqLan","r:rawIqLanMaxHz"},{"rawIqStreams","r:rawIqMax"},{"rawIqLocalOnly","r:rawIq"},
             {"rspVibeAgc","r:rspVibeAgc"},{"rfNotch","r:rfNotch"},{"dabNotch","r:dabNotch"},{"rspAmNotch","r:rspAmNotch"},{"rspHdr","r:rspHdr"},

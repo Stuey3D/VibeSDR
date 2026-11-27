@@ -143,6 +143,7 @@ const TABLE = [
   P(['spOn', 'spMinEl'], 'Unattended satellite passes', 'bgDecode'),
   // ★★★ beta94 the Meteor / ORBCOMM groups and their priority — the same JSON, BackgroundDecodingSetup's "Satellite passes"
   P(['spMeteor', 'spOrbcomm', 'spFirst'], 'Satellite passes', 'bgDecode'),
+  P(['spSkim', 'spSkimMode', 'spSkimIq'], 'Skim transponder digital modes', 'bgDecode'),
   // ★★★ V12 the idle DX scanner (components/DxScanSetup) — one JSON blob, RadioConfig::dxScan; Lite too (the same engine)
   P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxOirt', 'dxExt', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
   // ★★ V12 beta96 share ADS-B with flight trackers (components/AdsbFeedSetup) — one JSON blob, RadioConfig::adsbFeed

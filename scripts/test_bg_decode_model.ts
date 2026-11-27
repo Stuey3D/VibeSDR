@@ -157,5 +157,16 @@ ok(!bgReach('icom', false, 0).ismOk && !bgReach('icom', false, 0).aisOk, 'an Ico
   ok(BG_FAX_MAX === 8, 'at most 8 ticks (the engine\'s kMaxFaxFreqs)');
 }
 
+console.log('── ★★★ beta97 the satellite digital-mode skimmer in satPasses ──');
+{
+  const m = parseBg(JSON.stringify({ on: false, satPasses: { on: true, minEl: 20, birds: [{ norad: 43803, label: 'Transponder' }], skim: true, skimMode: 'live', skimIq: true } }));
+  ok(m.sat.skim && m.sat.skimMode === 'live' && m.sat.skimIq, 'read: skim, its speed, keep-the-IQ');
+  const out = collectBg(m) || '';
+  ok(/"skim":true/.test(out) && /"skimMode":"live"/.test(out) && /"skimIq":true/.test(out), 'written back (the Setup page\'s keys)');
+  const old = parseBg(JSON.stringify({ on: false, satPasses: { on: true, minEl: 20, birds: [] } }));
+  ok(!old.sat.skim && old.sat.skimMode === 'auto' && !old.sat.skimIq && !/skim/.test(collectBg(old) || ''), 'an older setting: off / auto, written back without them');
+  ok(parseBg(JSON.stringify({ satPasses: { skimMode: 'warp' } })).sat.skimMode === 'auto', 'an unknown speed reads as auto');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -4,7 +4,7 @@
 // (ORBCOMM's: the slice titled, an arrow per signal, faded ones hollow). The server side is vibeserver/test-xpdr.cpp and
 // scripts/test-server-xpdr.mjs. Silent. Run: npx tsx scripts/test_xpdr_app.ts
 import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListen, xpdrListenable, xpdrListenLabel, xpdrOverlayFrom, xpdrRowsSorted, xpdrWhat,
-         XPDR_FADE_SEC, XPDR_HINT, XPDR_HINT_TLM, XPDR_SLICE_LABEL } from '../src/services/xpdr';
+         XPDR_FADE_SEC, XPDR_HINT, XPDR_HINT_TLM, XPDR_SLICE_LABEL, parseXpdrSkim, xpdrSkimLine, xpdrHeardText, xpdrSkimMsg } from '../src/services/xpdr';
 import { orbOverlayKey, orbOverlayLayout, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
 import { parseSatPicked, parseSatReadout, satPickTlm, satChanText, satDecView, satDecWord, satDopplerBadge, satFollowHz, satMarkerShiftHz,
          SatFollowDial, SAT_FOLLOW_TUNE_GUARD_MS } from '../src/services/satellites';
@@ -151,6 +151,26 @@ console.log('── ★★★ beta94 transponder + telemetry (Stuart 11-25: "han
   ok(satPickTlm(pk2) && satPickTlm(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: 'fctlm' })), '★ a finder with "tlm" decodes telemetry (as a telemetry pick does)');
   ok(!satPickTlm(pk) && !satPickTlm(parseSatPicked({ type: 'sat', state: 'picked', norad: 1, tx: 0, decoder: 'xpdr', params: { tlm: 'x' } })) && !satPickTlm(null),
      '…RS-44\'s finder (no "tlm") and junk do not');
+}
+
+console.log('── ★★★ beta97 the digital-mode skimmer ("skim" in the status) ──');
+{
+  const k = parseXpdrStatus({ ...real, skim: { on: true, mode: 'live', windows: 9, workers: 4, depth: 0, queued: 0, qslots: 0, qmb: 0, capmb: 64, lag: 0,
+    dropped: 0, decoded: 27, spots: 2, late: 0,
+    heard: [{ t: 1795812907.5, m: 'FT4', c: 'pf7x', g: 'JO22', s: -13, f: 145858958, x: 'CQ PF7X JO22' },
+            { t: 1795812907.5, m: 'FT4', c: 'DL6UMR', g: 'JO71', s: -6, f: 145859021, x: 'CQ DL6UMR JO71', late: true },
+            { t: 1, m: 'FT8', c: '<"x>', f: 1 }, { c: 'G4ABC', f: 0 }] } })!.skim!;
+  ok(!!k && k.on && k.windows === 9 && k.heard.length === 3 && k.heard[0].call === 'PF7X' && k.heard[1].late, 'a real skim object parses (calls cleaned, a row with no frequency dropped)');
+  ok(k.heard[2].call === 'X', 'a junk call is cleaned to what a call may hold');
+  ok(xpdrSkimLine(k) === 'FT8 + FT4 · 9 windows · live · 2 spots', 'its line: ' + xpdrSkimLine(k));
+  ok(xpdrHeardText(k.heard[0]) === '20:55:07 FT4 CQ PF7X JO22 -13 dB 145.8590', 'a heard row: ' + xpdrHeardText(k.heard[0]));
+  ok(xpdrHeardText(k.heard[1]).endsWith(' · caught up'), 'a spot decoded from the queue says it was caught up');
+  ok(xpdrSkimLine(parseXpdrSkim({ on: true, mode: 'catchup', windows: 25, qslots: 3, lag: 41, dropped: 1, spots: 0 })) === 'FT8 + FT4 · 25 windows · catch-up · catching up — 3 slots waiting, 41 s behind · 1 slot dropped (queue full) · 0 spots',
+     'catching up, in words');
+  ok(xpdrSkimLine(parseXpdrSkim({ on: true, wait: 'doppler' })) === 'FT8 / FT4: waiting for the Doppler lock', 'waiting for the lock');
+  ok(xpdrSkimLine(parseXpdrSkim({ on: false, mode: 'catchup' })).startsWith('FT8 / FT4 skimmer off — this server decodes it as catch-up'), 'off on a catch-up box says what SKIM will do');
+  ok(parseXpdrStatus(real)!.skim === null && parseXpdrSkim('x') === null && noThrow(() => parseXpdrSkim({ heard: 'x' })), 'no skim = null; junk never throws');
+  ok(JSON.stringify(xpdrSkimMsg(false)) === '{"type":"xpdr_skim","on":false}', 'SKIM sends {"type":"xpdr_skim","on":…}');
 }
 
 console.log(`\n${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);

@@ -49,12 +49,14 @@ import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, S
 // ★★★ beta96 SINGLE MODE: SATELLITES — the watch-only view (src/services/satSingle.ts — one set of rules with the app)
 import { SAT_SINGLE_ONLY, SAT_SINGLE_WHY, satHybridText, satSingleHead, satSingleLastText, satSinglePlanRows, satSingleSub,
          type SatHybridInfo, type SatSingle } from '../../../src/services/satSingle';
-import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
+import { parseXpdrStatus, xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHeardText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrSkimLine, xpdrWhat, XPDR_SKIM_TITLE, type XpdrRow, type XpdrStatus } from '../../../src/services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyModeOf, skyModesHtml, skyPlotMerge, skyPlotQuery, skyPlotSvg, skySceneFor, skySummaryFor, SKY_LEGEND, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../../../src/utils/skyPlot';
 
 export interface SatPanelDeps {
   /** ★★★ beta94 the transponder finder's LISTEN on a voice row: tune VFO A there (USB) and ask the finder to follow it */
   xpdrListen?: (row: XpdrRow) => void;
+  /** ★★★ beta97 SKIM: the finder's FT8 / FT4 skimmer on / off ({"type":"xpdr_skim"}) */
+  xpdrSkim?: (on: boolean) => void;
   list: () => void;
   /** {"op":"pick"} (spectrum.ts satPick — false = the ask-before-tuning gate held it). */
   pick: (norad: number, tx: number, doppler: boolean) => boolean;
@@ -266,6 +268,10 @@ const CSS = `
 #satPanel .sat-xp .sat-xr.on .sat-xf{color:var(--amber)}
 #satPanel .sat-xp .sat-xr button{min-height:26px;padding:1px 8px;margin-left:4px}
 #satPanel .sat-xp .sat-xt{color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#satPanel .sat-xp .sat-xs{padding:3px 0;overflow-wrap:anywhere}
+#satPanel .sat-xp .sat-xs button{min-height:26px;padding:1px 8px}
+#satPanel .sat-xp .sat-xh{font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0}
+#satPanel .sat-xp .sat-xh.faded{color:var(--text-dim)}
 /* ★★ 2026-11-24 ORBCOMM: the birds, the carriers' manual fallback, the sky plot, the packets (subscriber messages raw) */
 #satPanel .sat-orb{margin-top:6px;font:12px/1.35 ui-monospace,Menlo,monospace}
 #satPanel .sat-orb[hidden]{display:none}
@@ -766,6 +772,7 @@ export class SatPanel {
     if (act === 'orbsky') { this.orbSky = !this.orbSky; this.paintPick(); return; }
     if (act === 'skymode') { this.skyMode = skyModeOf(b.dataset.v); this.paintPick(); return; }
     if (act === 'xexplain') { xpdrCwPlainSet(!xpdrCwPlain()); this.xpKey = ''; this.render(); return; }   // ★★ beta96
+    if (act === 'xskim') { const k = this.xp?.skim; if (k && this.deps.xpdrSkim) { this.deps.xpdrSkim(!k.on); k.on = !k.on; this.xpKey = ''; this.render(); } return; }   // ★★★ beta97
     if (act === 'xlisten') { const r = this.xp?.rows.find((x) => x.id === b.dataset.xid); if (r && this.deps.xpdrListen) this.deps.xpdrListen(r); return; }
     if (act === 'orbmax') { this.orbMaxK = Math.max(0, Math.min(6, Number(b.dataset.v) || 0)); this.deps.orbMax?.(this.orbMaxK); this.paintPick(); return; }
     if (act === 'show') { this.setShow(satShowGroup((b.dataset.g || 'all') as SatShowGroup | 'all', this.showF)); return; }
@@ -1102,6 +1109,13 @@ export class SatPanel {
     let h = `<div class="sat-cav">${esc(xpdrHint(st))}</div>`;
     const fw = xpdrFollowText(st?.follow ?? null);
     if (fw) h += `<div class="sat-note">${esc(fw)}</div>`;
+    /* ★★★ beta97 THE DIGITAL-MODE SKIMMER (Stuart 11-27): SKIM (on/off — the benchmark set its default, the listener always
+     *  may), its state in one line, and what it heard, newest first — compact; the spots list and the map have them too */
+    const sk = st?.skim ?? null;
+    if (sk) {
+      h += `<div class="sat-xs"><span class="sat-tk"><button data-act="xskim" class="${sk.on ? 'on' : ''}" aria-pressed="${sk.on}" title="${esc(XPDR_SKIM_TITLE)}">SKIM FT8/FT4</button></span> <span class="sat-dim">${esc(xpdrSkimLine(sk))}</span></div>`;
+      for (const hd of sk.heard.slice(0, 8)) h += `<div class="sat-xh${hd.late ? ' faded' : ''}">${esc(xpdrHeardText(hd))}</div>`;
+    }
     const rows = xpdrRowsSorted(st?.rows ?? []);
     /* ★★ beta96 (Stuart 11-26: "we need the raw/explain here for the cw"): EXPLAIN ↔ RAW over the CW rows — the CW box's key,
      *  the SAME stored setting (main.ts 'vibe.cwPlain') and dictionary (src/utils/cwVocab); the legend names what a press does */
