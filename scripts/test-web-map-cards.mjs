@@ -283,6 +283,15 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
         const HS = `JSON.stringify((() => { const h = document.getElementById('srvHealth'); if (!h) return null; const c = h.querySelector('.hCard') || h; const cs = getComputedStyle(c); const r = c.getBoundingClientRect();
           return { inMap: !!h.closest('.trkView'), tucked: h.classList.contains('tucked'), w: Math.round(r.width), h: Math.round(r.height), bg: cs.backgroundColor, border: cs.borderTopColor + ' ' + cs.borderTopWidth, radius: cs.borderRadius, font: cs.fontFamily + ' ' + cs.fontSize, pad: cs.padding }; })())`;
         const hMap = JSON.parse(await p.ev(HS));
+        // ★ Stuart 15:13: its tab brings the card out, its › puts it back — both ways, with real clicks at their centres
+        if (hMap) {
+          const clickAt = async (sel) => { const r = JSON.parse(await p.ev(`JSON.stringify((() => { const e = document.querySelector('${'$'}{sel}'); if (!e) return null; const q = e.getBoundingClientRect(); return [q.left + q.width / 2, q.top + q.height / 2]; })())`)); if (r) await p.ev(`document.elementFromPoint(${'$'}{r[0]}, ${'$'}{r[1]})?.click(); 1`); };
+          await clickAt('.trkView:not([hidden]) #srvHealth .hTab'); await sleep(500);
+          const outNow = await p.ev(`!document.getElementById('srvHealth').classList.contains('tucked')`);
+          await clickAt('.trkView:not([hidden]) #srvHealth .hTuck'); await sleep(500);
+          const backNow = await p.ev(`document.getElementById('srvHealth').classList.contains('tucked')`);
+          ok(outNow && backNow, `SERVER HEALTH on the map: its tab brings the card out (${outNow}), its › tucks it again (${backNow})`);
+        }
         await p.ev(`${V}.querySelector('.trkTop .exit').click(); 1`); await sleep(1500);
         const hPage = JSON.parse(await p.ev(HS));
         if (hMap && hPage) { const same = ['bg', 'border', 'radius', 'font', 'pad'].every((k) => hMap[k] === hPage[k]);
@@ -596,6 +605,9 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
         return { mapH: Math.round(m.height), left, hits }; })())`));
       ok(L.mapH < 600 || L.left, `${ww}×${hh}: the left family on the left (map ${L.mapH} px)`);
       ok(!L.hits.length, `${ww}×${hh}: no chip overlaps another${L.hits.length ? ' — ' + L.hits.join(', ') : ''}`);
+      // ★ Stuart 15:13: every chip is the TOP thing where it is drawn — a map marker never takes its tap
+      const buried = await p.ev(`(() => { const out = []; for (const e of ${V}.querySelectorAll('.mDock:not([hidden]) .hCard, .mDock:not([hidden]) .hTab, .edgeDock .hTab, .trkTop .exit, .mHelp')) { if (!e.getClientRects().length || getComputedStyle(e).visibility === 'hidden') continue; const q = e.getBoundingClientRect(); if (q.width < 4 || q.right <= 0 || q.left >= innerWidth) continue; const h = document.elementFromPoint(q.left + q.width / 2, q.top + q.height / 2); if (h && !e.contains(h) && !h.contains(e) && !h.closest('.edgeDock, .mDock, .trkTop, .mHelp')) out.push((e.closest('[data-dock]')?.dataset.dock || e.className) + ' under ' + (h.className || h.tagName)); } return out.join(', '); })()`);
+      ok(!buried, `${ww}×${hh}: every chip is on top where it is drawn${buried ? ' — ' + buried : ''}`);
     }
     // ── one side or flanking, by the map's own height (Stuart's phones) ──
     for (const [ww, hh, want] of [[375, 667, 'R'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {

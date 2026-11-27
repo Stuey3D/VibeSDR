@@ -4305,9 +4305,10 @@ function mapChromeAdopt(on: boolean) {
 function mapTimeSync() {
   const t = document.getElementById('rxTimeLeft');
   const text = t && !t.hidden ? (t.textContent || '').trim() : '';
-  // ★ the tab's card says what the limit means, in the soft-limit's own words (never an alarm)
-  const why = softLimit ? 'A soft limit: you keep listening after it, until somebody else is waiting for a place.' : 'When it runs out your session ends, so the next listener can have a turn.';
-  for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft(text, t?.className || '', why);
+  // ★ Stuart 15:13: the app's SessionClock in an EdgeChip — the page's own deadline and limit, its words in the card
+  void text;
+  const leftS = sessionDeadline ? Math.max(0, Math.round((sessionDeadline - Date.now()) / 1000)) : null;
+  for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft(leftS, softLimit);
 }
 window.addEventListener('vibe:mapopened', () => { mapChromeAdopt(true); mapDeckVars(); });
 /** ★ the shared-tuner bar wears the control deck's material: the look (skin, transparency) is put on #mcard only

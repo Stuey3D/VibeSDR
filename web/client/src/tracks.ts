@@ -23,6 +23,7 @@ import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the 
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
 import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
+import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT } from './healthTuck';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
@@ -776,14 +777,17 @@ body.askLocked .mapGainHost .gRow{opacity:.45}
 .trkView .mChipsR #rxBadge{position:relative!important;top:auto!important;right:auto!important;align-self:flex-end;padding-right:12px;margin-top:-4px}
 /* ★ Stuart 15:09: TIME is a slim tab on the edge ("Guaranteed time 6:53", vertical); a tap pops a small card — the time,
  *  and what the limit means — that folds itself after 9 s or on a second tap */
-.mTime .hCard{padding:6px 5px!important;min-width:30px}
-.mTime .tBtn{all:unset;cursor:pointer;display:flex;flex-direction:column;align-items:flex-end;gap:6px}
-.mTime .tBtn:focus-visible{outline:2px solid #ffd34d;outline-offset:2px}
-.mTime .tl{writing-mode:vertical-rl;transform:rotate(180deg);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#cfd9e3}
-.mTime .tw{display:none;max-width:220px;font:12px/1.35 system-ui,sans-serif;color:#cfd9e3;white-space:normal}
-.mTime.open .hCard{padding:9px 12px!important}
-.mTime.open .tl{writing-mode:horizontal-tb;transform:none;font-size:12px}
-.mTime.open .tw{display:block}
+/* ★ the TIME EdgeChip: SessionClock's caption and number (Atkinson where the page has it), the frame in the stage's colour */
+.trkView .mChipsR .mTime{position:relative;align-self:flex-end;pointer-events:auto;--tc:rgba(255,160,0,.45);--tn:#ffb833;--tcap:rgba(255,160,0,.65)}
+.trkView .mChipsR .mTime[data-stage="1"]{--tc:rgba(255,225,77,.7);--tn:#ffe14d;--tcap:rgba(255,225,77,.9)}
+.trkView .mChipsR .mTime[data-stage="2"]{--tc:rgba(255,90,90,.75);--tn:#ff6b6b;--tcap:rgba(255,140,140,.95)}
+.mTime .hCard{border-color:var(--tc)!important}
+.mTime .hTab{color:var(--tn);border-color:var(--tc)!important}
+.mTime .tClock{display:flex;flex-direction:column;align-items:center;gap:2px;padding:2px 6px 2px 2px}
+.mTime .tCap{font:700 9px/1.2 'Atkinson Hyperlegible',system-ui,sans-serif;letter-spacing:.08em;color:var(--tcap)}
+.mTime .tNum{font:700 20px/1.1 'Atkinson Hyperlegible',ui-monospace,Menlo,monospace;color:var(--tn);font-variant-numeric:tabular-nums}
+.mTime .tNum.soft{font-size:11px;line-height:15px;max-width:150px;text-align:center;font-weight:400}
+.mTime .tIcon{display:inline-flex}
 .mTime.warn .tl{color:#ffd479}.mTime.crit .tl{color:#ff8a7d}
 .trkCard2[data-card="stats"] .stTabs{display:flex;gap:4px;padding:6px 8px 2px;flex-wrap:wrap}
 .trkCard2[data-card="stats"] .stTabs[hidden]{display:none}
@@ -1227,7 +1231,13 @@ export class TrackView {
       + `${dock('stats', 'left', 'STATS', `<span class="ic">${modeIconSvg('stats', 'mIco')}</span>`, 'the stats card')}</div>`
       + `<div class="mChips mChipsR">${dock('rate', 'right', 'RATE', `<span class="ic rateIc"><span class="rv"><span class="rn"></span><span class="ru"></span></span><span class="rmore"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'every source\u2019s message rate')}`
       + `${dock('chat', 'right', 'CHAT', `<span class="ic"><svg class="mIco" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="9" cy="10.5" r="1.1" fill="currentColor"/><circle cx="12" cy="10.5" r="1.1" fill="currentColor"/><circle cx="15" cy="10.5" r="1.1" fill="currentColor"/></svg><span class="unr" hidden></span></span>`, 'the chat')}`
-      + `<div class="edgeDock mDock mTime" data-dock="time" hidden><div class="hCard"><button type="button" class="tBtn" aria-expanded="false"><span class="tl" role="timer" aria-live="off"></span><span class="tw"></span></button></div></div>`
+      /* ★★★ Stuart 15:13: TIME is the APP's EdgeChip (src/components/EdgeChip.tsx + SDRScreen's SessionClock) — a card
+       *  with its › joined to the edge, flicked away to a tab carrying the clock glyph and a ‹; the tab's colour is the
+       *  countdown's stage (amber · yellow · red; a soft limit never red). The same edge-dock machinery as the health
+       *  pill (healthTuck.ts wireEdgeDock). Not an mDock: it is not a card chip, it has no card-rules. */
+      + `<div class="edgeDock mTime" data-dock="time" data-side="right" hidden><div class="hCard"><button type="button" class="hTuck" aria-label="Hide the time remaining" title="Tuck away">›</button>`
+      + `<div class="hBody tClock" role="timer" aria-live="off"><span class="tCap"></span><span class="tNum"></span></div></div>`
+      + `<button type="button" class="hTab" aria-label="Time remaining" title="Time remaining"><span class="tIcon"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 7v5l3.5 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="hTabChev" aria-hidden="true">‹</span></button></div>`
       + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
       + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
@@ -1920,18 +1930,32 @@ export class TrackView {
     };
   }
   /** ★★ Stuart 14:38 the TIME LIMIT on the map (the radio page's #rxTimeLeft, mirrored): shown only while a limit applies. */
-  setTimeLeft(text: string, cls = '', why = '') {
-    const d = this.root.querySelector('.mDock[data-dock="time"]') as HTMLElement | null;
+  /** The session clock (SessionClock's words): `leftS` seconds, or null for no limit; `soft` a guarantee, not a sentence. */
+  private timeUser: 'shown' | 'tucked' | null = null;
+  setTimeLeft(leftS: number | null, soft: boolean) {
+    const d = this.root.querySelector('[data-dock="time"]') as HTMLElement | null;
     if (!d) return;
-    const btn = d.querySelector('.tBtn') as HTMLButtonElement;
-    if (!btn.dataset.wired) { btn.dataset.wired = '1'; btn.onclick = (e) => { e.stopPropagation(); const o = !d.classList.contains('open'); d.classList.toggle('open', o); btn.setAttribute('aria-expanded', String(o)); if (o) setTimeout(() => { d.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }, 9000); }; }
-    const w = d.querySelector('.tw') as HTMLElement; if (w.textContent !== why) w.textContent = why;
-    d.hidden = !text;
-    const t = d.querySelector('.tl') as HTMLElement;
-    if (t.textContent !== text) t.textContent = text;
-    d.classList.toggle('warn', /\bwarn\b/.test(cls)); d.classList.toggle('crit', /\bcrit\b/.test(cls));
-    d.title = text ? `Time left on this server: ${text}` : '';
+    if (!d.dataset.wired) {
+      d.dataset.wired = '1';
+      wireEdgeDockT(d, 'right', () => { this.timeUser = 'tucked'; this.setTimeLeft(this.timeLast.left, this.timeLast.soft); }, () => { this.timeUser = 'shown'; this.setTimeLeft(this.timeLast.left, this.timeLast.soft); });
+    }
+    this.timeLast = { left: leftS, soft };
+    d.hidden = leftS == null;
+    if (leftS == null) return;
+    // the stage, as the app's: 2 = under 30 s, 1 = under 2 min; a soft limit never reaches red
+    const stage = soft ? (leftS > 0 && leftS < 120 ? 1 : 0) : leftS < 30 ? 2 : leftS < 120 ? 1 : 0;
+    const cap = soft ? (leftS <= 0 ? 'GUARANTEED TIME OVER' : 'GUARANTEED TIME ENDS IN') : 'YOUR TURN ENDS IN';
+    const num = soft && leftS <= 0 ? 'yours until someone else wants it' : `${Math.floor(leftS / 60)}:${String(Math.floor(leftS % 60)).padStart(2, '0')}`;
+    const c = d.querySelector('.tCap') as HTMLElement, n = d.querySelector('.tNum') as HTMLElement;
+    if (c.textContent !== cap) c.textContent = cap;
+    if (n.textContent !== num) n.textContent = num;
+    n.classList.toggle('soft', soft && leftS <= 0);
+    d.dataset.stage = String(stage);
+    // shown as the app decides: urgency brings it out; otherwise it waits as its tab — the listener's own flick wins
+    const out = this.timeUser ? this.timeUser === 'shown' : stage >= 1;
+    edgeDockSetT(d, out);
   }
+  private timeLast: { left: number | null; soft: boolean } = { left: null, soft: false };
   /** The right column, where the page's own chips (SERVER HEALTH) are lent while the map is up. */
   rightColumn(): HTMLElement { return this.root.querySelector('.mChipsR') as HTMLElement; }
   /** ★★ THE LAYOUT REGISTRY (Stuart 15:04): every piece of chrome over the map — the corner pieces, the edge chips, the
@@ -2644,7 +2668,9 @@ export class TrackView {
       if (!w.VibeAdsbLayer) runSource(ADSB_LAYER_JS);
     }
     const holder = document.createElement('div');
-    holder.style.cssText = 'position:absolute;inset:0';
+    // ★ Stuart 15:13 ("health chip doesn't expand"): the map in its OWN stacking context (z-index 0) — a station or
+    //   label marker's own z-index climbed over the edge chips and took the tap meant for SERVER HEALTH's tab
+    holder.style.cssText = 'position:absolute;inset:0;z-index:0';
     this.mapHost.insertBefore(holder, this.mapHost.firstChild);
     const rx = this.rx;
     const kit = await probeMapGL();
