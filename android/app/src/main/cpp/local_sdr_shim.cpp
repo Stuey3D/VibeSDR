@@ -14620,10 +14620,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
 
+    /** ★★★ b96-satgrace a `mode_resume` a gate refused is still ANSWERED, in words — the app otherwise waits 8 s for an
+     *  answer that never comes and says "the receiver left AIS while you were away", which may not be true. A mode the
+     *  radio is still in is a plain yes (a question about the radio's state moves nothing). */
+    void modeResumeGated(const std::shared_ptr<net::Socket>& sock, const std::string& msg, const std::string& why) {
+        if (!sock) return;
+        const std::string kind = jsonStr(msg, "mode");
+        if (kind != "adsb" && kind != "ndb" && kind != "ism" && kind != "ais" && kind != "avdata" && kind != "sondes" && kind != "vormap") return;
+        const bool on = kind == "adsb" ? g_adsbMode.load() : kind == "ndb" ? g_ndbMode.load() : kind == "ism" ? g_ismMode.load()
+                      : kind == "ais" ? g_aisMode.load() : kind == "avdata" ? g_avMode.load() : kind == "sondes" ? g_sdMode.load()
+                      : g_vorMode.load();
+        sendText(sock, "{\"type\":\"mode_resume\",\"mode\":\"" + kind + "\",\"ok\":" + (on ? "1" : "0")
+                       + (on ? std::string() : ",\"why\":\"" + dabEscape(why) + "\"") + "}");
+    }
     void clientFrame(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
-        if (singleSatRefuses(sock, msg)) return;   // ★★★ beta96 single mode: satellites — listeners watch
-        if (scanLockRefuses(sock, msg)) return;
-        if (askRefuses(sock, msg)) return;
+        const bool resumeAsk = msg.find("mode_resume") != std::string::npos && jsonStr(msg, "type") == "mode_resume";
+        if (singleSatRefuses(sock, msg)) {   // ★★★ beta96 single mode: satellites — listeners watch
+            if (resumeAsk) {
+                const std::string sw = satHoldWhy();
+                modeResumeGated(sock, msg, sw.empty() ? std::string("This receiver follows the satellite passes itself \xe2\x80\x94 its owner has set it up that way.") : sw);
+            }
+            return;
+        }
+        if (scanLockRefuses(sock, msg)) {
+            if (resumeAsk) modeResumeGated(sock, msg, "The owner's band scan has the receiver just now.");
+            return;
+        }
+        if (askRefuses(sock, msg)) {
+            if (resumeAsk) modeResumeGated(sock, msg, "Somebody else has the dial now \xe2\x80\x94 ask in chat before changing the receiver.");
+            return;
+        }
         struct ViewOnly { explicit ViewOnly(bool on) { t_askViewOnly = on; } ~ViewOnly() { t_askViewOnly = false; } } vo(askViewOnly(sock, msg));
         dabScanUserTune(msg);
         handleControl(sock, msg);
@@ -39709,6 +39735,61 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  until the session ends (satWorkEndLocked), then puts it back. satKeepPaused_ names the mode (the admin line). */
     std::atomic<bool> satWantsRadio_{false};
     std::string satKeepPaused_;
+    /* ══ ★★★ b96-satgrace (Mac Ha, beta96, Meteor passes on, weak WiFi: "the radio keeps jumping to a Meteor pass and AIS
+     *  ended — the receiver left AIS while you were away", over and over). Three faults, fixed together:
+     *   1. THE GRACE. The scheduler took the radio the instant no socket was open — a 1–2 s WiFi blink was enough. Every
+     *      whole-radio mode waits modeLeaveGraceS() for its last listener to come back; the passes now wait the same
+     *      (satEmptySince_): nobody connected for the whole grace, or no pass starts and no kept mode is paused.
+     *   2. GIVE IT BACK. A listener arriving gave the pass up but left the kept mode (AIS) off — the app then asked for
+     *      it back and got no truthful answer. The mode the pass paused (satKeepPaused_) is now re-entered at once
+     *      (satKeepGiveBackLocked), before the newcomer is sent anything, so the map simply carries on.
+     *   3. THE TRUTH. While a pass holds the radio, a returning listener's mode_resume says so (satHoldWhy). ══ */
+    double satEmptySince_ = -1;                      // under satPassMtx_: -1 = nobody since the start, 0 = somebody here
+    std::mutex satHoldMtx_;                          // the pass now holding the radio, for satHoldWhy (any thread)
+    std::string satHoldName_;
+    double satHoldUntil_ = 0;
+    void satHoldSet(const std::string& name, double until) {
+        std::lock_guard<std::mutex> lk(satHoldMtx_);
+        satHoldName_ = name; satHoldUntil_ = until;
+    }
+    /** "" = no unattended satellite work holds the radio; else the words for a returning listener. Any thread. */
+    std::string satHoldWhy() {
+        if (!satPassBusy_.load() && !satWantsRadio_.load()) return std::string();
+        std::string name; double until;
+        { std::lock_guard<std::mutex> lk(satHoldMtx_); name = satHoldName_; until = satHoldUntil_; }
+        if (name.empty()) return "Unattended ORBCOMM monitoring has the receiver just now \xe2\x80\x94 it is given back the moment you connect.";
+        if (until <= 0) return "A scheduled " + name + " pass has the receiver just now.";
+        const std::time_t t = (std::time_t)until;
+        std::tm g{}; gmtime_r(&t, &g);
+        char b[16]; std::snprintf(b, sizeof b, "%02d:%02d", g.tm_hour, g.tm_min);
+        return "A scheduled " + name + " pass has the receiver until " + b + " UTC.";
+    }
+    /** ★★★ b96-satgrace GIVE IT BACK: the kept mode a pass paused (`kept`, satKeepPaused_'s name) is re-entered at once for
+     *  the listener who ended the session — through the mode's own door, exactly as its keep tick does (adsbKeepTick,
+     *  mapKeepTick), and as the keep's again (nobody's use of it). The connect path then does what it always does with a
+     *  kept mode (bgWholePauseForListener: join it, or the owner's landing). Caller holds satPassMtx_. */
+    void satKeepGiveBackLocked(const std::string& kept, const std::string& who) {
+        if (kept.empty() || stopping.load()) return;
+        bool back = false;
+        satPassInternal() = true;   // ★ our own entry is not an arrival
+        if (kept == "ADS-B") {
+            if (!g_adsbMode.load() && vsAdsbWhyNot().empty()) handleControl(nullptr, "{\"type\":\"adsb\",\"on\":1}");
+            if (g_adsbMode.load()) { adsbByKeep_.store(true); back = true; }
+        } else if (g_vsBgKind.load(std::memory_order_relaxed) != vibekeep::None) {
+            const vibekeep::Entry e = vsBgEntry();
+            if (e.name == kept) {
+                if (!bgModeOnNow() && bgWhyNot().empty()) {
+                    avCentreOverride_.store(e.kind == vibekeep::Avdata && e.band == "vdl2" ? keepVdl2Centre() : 0.0);
+                    handleControl(nullptr, e.msg);
+                }
+                if (bgModeOnNow()) { mapByKeep_.store(true); applyAutoIf(); back = true; }
+                else avCentreOverride_.store(0.0);
+            }
+        }
+        satPassInternal() = false;
+        LOGI("[sat] %s \xe2\x80\x94 %s %s", who.c_str(), kept.c_str(),
+             back ? "is back at once (the pass had paused it)" : "could not be re-entered now; its keep tick takes the radio back when it can");
+    }
     /** ★★★ beta96 the kept mode that RIDES the session instead of pausing (kept VDL2 on the shared 137 MHz capture) — "" = none. */
     std::string satKeepShared_;
     /** ★★★ beta96 can kept VDL2 share a capture with a Meteor pass on this radio (the 137.9 downlink, the wider case)? */
@@ -39788,7 +39869,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (satPass_.on) satPassEndLocked(why);
         if (orbSkyOn_.load()) orbSkyStopLocked(why);
         satPassBoth_ = false; satPassCentre_ = 0;
-        if (!satWork_.on) { satPassBusy_.store(false); satWantsRadio_.store(false); satKeepPaused_.clear(); satKeepShared_.clear(); return; }
+        // ★★★ b96-satgrace a LISTENER ended it (resume = false): the kept mode the pass paused comes back at once
+        const std::string keptBack = resume ? std::string() : satKeepPaused_;
+        if (!satWork_.on) {
+            satPassBusy_.store(false); satWantsRadio_.store(false); satKeepPaused_.clear(); satKeepShared_.clear();
+            satKeepGiveBackLocked(keptBack, why);
+            return;
+        }
         const SatWork w = satWork_;
         if (restore && w.saved && w.audio > 0) {
             satPassInternal() = true;
@@ -39809,6 +39896,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         satKeepPaused_.clear(); satKeepShared_.clear();
         satWantsRadio_.store(false);   // ★ beta95 the keep-running mode's tick takes the radio back on its next pass
         if (!resume) bgWanted_.store(false);
+        satKeepGiveBackLocked(keptBack, why);   // ★★★ b96-satgrace — after the radio is back where the session found it
         LOGI("[sat] unattended satellite work over (%s)%s", why.c_str(), resume && w.pausedBg ? "; background decoding resumes" : "");
     }
 
@@ -40036,9 +40124,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
         // ★★★ beta96 single mode: satellites — the radio is the passes', listeners only watch (singleSatRefuses), so a
         //     listener neither ends a session nor holds one off
-        if (singleSatNow()) anyone = false;
+        const bool singleNowTick = singleSatNow();
+        if (singleNowTick) anyone = false;
         const vibe::sat::Clock clk = satClock();
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
+        const double nowS = nowSecs();
+        if (anyone) satEmptySince_ = 0;                          // ★★★ b96-satgrace (the grace, below)
+        else if (satEmptySince_ == 0) satEmptySince_ = nowS;
         satHybridCycleTickLocked();   // ★★★ beta96 the hybrid's switch: the listeners' sockets recycled ~2 s after the notice
         keepOrbRiderTickLocked(cfg, why);   // ★★★ beta96 the sky plot beside kept VDL2 (no session, any listener welcome)
         // 1. what ends regardless: blocked, a listener, a pass's LOS
@@ -40052,7 +40144,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             satPassNow_ = satPass_.name + " " + satPass_.label + " \xe2\x80\x94 listeners have their own VFO across the passband until LOS";
             return;
         }
-        if (!why.empty() || anyone) { satPassNow_ = !why.empty() ? why : "a listener has the radio"; return; }
+        // ★★★ b96-satgrace THE GRACE: the radio is free only once nobody has been connected for modeLeaveGraceS() — the
+        //     wait every whole-radio mode gives its last listener (a WiFi blink, a phone switching apps). Nobody at all since
+        //     the server started is free at once; single mode: satellites never waits (the radio is the passes').
+        {
+            if (!why.empty() || anyone) { satPassNow_ = !why.empty() ? why : "a listener has the radio"; return; }
+            const double grace = modeLeaveGraceS();
+            if (!satWork_.on && !satWantsRadio_.load() && !singleNowTick && satEmptySince_ > 0 && nowS - satEmptySince_ < grace) {
+                char b[200];
+                std::snprintf(b, sizeof b, "waiting \xe2\x80\x94 the last listener left %.0f s ago; a pass takes the radio only after %.0f s with nobody connected (they may be coming back)",
+                              nowS - satEmptySince_, grace);
+                satPassWhy_ = satPassNow_ = b;
+                return;
+            }
+        }
         if (!satWork_.on) {
             if (nowSecs() < satPassRetryAt_) { satPassNow_ = "another program has the radio \xe2\x80\x94 trying again shortly"; return; }
             // ★★ beta95 ADS-B that KEEP RUNNING put there (nobody's use of it) is not waited for — a due pass takes it (step 5)
@@ -40124,6 +40229,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         // 5. start what runs
+        // ★★★ b96-satgrace what holds the radio, for a returning listener's answer (satHoldWhy)
+        if (o.runPass && (satPass_.on || best.tx >= 0)) satHoldSet(satPass_.on ? satPass_.name : best.sd.name, satPass_.on ? satPass_.los : best.ps.los);
+        else if (!satPass_.on) satHoldSet(std::string(), 0);
         /* ★★★ beta95 A PASS TAKES THE RADIO FROM KEPT-RUNNING ADS-B (Stuart 11-25: "warn, don't block"). ADS-B leaves through
          *  its own door (the radio back on the owner's plain landing); the keep tick stands aside while satWantsRadio_ is
          *  up; the session starts on the next tick and, at LOS, satWorkEndLocked lets ADS-B back in. Only for a PASS —
@@ -40263,10 +40371,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** ★ A listener (or a decoder socket) arrived: the session is given up — the radio back as it was found. */
     void satPassGiveUp(const char* who) {
-        if (!satPassBusy_.load() || satPassInternal()) return;
+        // ★★★ b96-satgrace …or a pass has just paused a kept mode and its session starts on the next tick (satWantsRadio_)
+        if ((!satPassBusy_.load() && !satWantsRadio_.load()) || satPassInternal()) return;
         if (singleSatNow()) return;   // ★★★ beta96 single mode: satellites — an arrival watches, it never takes the radio
         std::lock_guard<std::recursive_mutex> pl(satPassMtx_);
-        if (satWork_.on) satWorkEndLocked(who ? who : "a listener arrived", true, false);
+        satEmptySince_ = 0;   // ★ somebody is here: the grace starts again from their leaving
+        if (satWork_.on || satWantsRadio_.load()) satWorkEndLocked(who ? who : "a listener arrived", true, false);
     }
 
     /* ══ ★★★ beta96 SINGLE MODE: SATELLITES — WATCH ONLY + THE LINEAR-TRANSPONDER HYBRID (docs/v12/SAT-SINGLE.md) ═══════
@@ -41934,6 +42044,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★★ beta96 the landing map's kept mode (VDL2, AIS …) is the idle default the same way — unless it IS what comes back
         const vibekeep::Entry ke = vsBgEntry();
         const bool idleMap = mapKeptNow() && !(kind == ke.kindWord() && ((kind != "avdata" && kind != "ism") || rec.ismBand == ke.band));
+        /* ★★★ b96-satgrace AN UNATTENDED SATELLITE PASS HAS THE RADIO — say that, with the bird and when it ends, never "while
+         *  you were away" (Mac Ha). A listener's arrival gives an ordinary pass up (satPassGiveUp), so this is what a radio
+         *  whose passes do not yield (single mode: satellites) answers. */
+        {
+            const std::string sw = satHoldWhy();
+            if (!sw.empty()) return sw;
+        }
         if (rec.kind != kind || rec.at <= 0.0)
             return std::string("The receiver is no longer in ") + name + " \xe2\x80\x94 it has been restarted or used since you left.";
         if (((adsb && !idleAdsb) || ndb || (ism && !idleMap) || (ais && !idleMap) || g_dabMode.load()))
