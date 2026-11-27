@@ -59,6 +59,12 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 beta97 2026-11-27 — ORBCOMM LABELS AGREE WITH THE DECODER (b97-orbcomm-labels; Stuart, XCover beta96: two carriers
+  //     labelled FM116, the card naming one). Checked against the code: src/utils/orbcommView.ts orbLabelPlan (both clients'
+  //     labels, the slice's marks and the card), knownSignals.ts SAT_GUESS_COLOUR #ffb833 + the "?", services/orbcomm.ts
+  //     orbGuessText ("probably FM116?"); the server half is vibe_orbcomm_run.h who_ (carriers[].sat/norad/how, a row's rfs).
+  //     A label with no ORBCOMM decoder running is a prediction, so amber too. The tours and website say nothing of this.
+  { v: 'V12 (experimental)', detail: 'ORBCOMM LABELS NO LONGER NAME A SATELLITE THE DECODER HAS NOT. The waterfall put “ORBCOMM FM116” where FM116’s listed channel was predicted to be — but ORBCOMM satellites change channel, so the name could land on a carrier the decoder had not identified, while the SATELLITE box listed it as “not yet named”. Now a satellite’s name is shown plainly, in the usual sky blue, only on the carrier the ORBCOMM decoder has identified as that satellite (by its own position report, or by its channel and Doppler, as the box says) — on every such carrier if it hears one satellite on more than one, and the box lists them all. A name that is only a prediction is shown in amber with a question mark, “ORBCOMM FM116?”, on the waterfall, on the carrier’s mark and in the box (“probably FM116?”); it turns into the usual label once the decoder confirms it. With no ORBCOMM decoder running, ORBCOMM channel labels are predictions, so they are amber too. Other satellites’ labels are unchanged. Needs a VibeServer updated to this beta for the box’s carrier list; the colours work with any.' },
   // ★★ V12 beta97 2026-11-27 — WHO TOOK THE PICTURE (b97-gallery-source; Stuart, Sony beta96). Checked against the code: the
   //     badge and the open item's line are src/utils/galleryOrigin.ts (web main.ts galOriginTag, app GalleryOverlay), the
   //     source line shows the item's "p" (web main.ts `src`, GalleryOverlay s.dim); the server half is vibe_gallery.h
