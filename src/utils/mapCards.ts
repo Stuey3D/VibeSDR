@@ -111,20 +111,20 @@ export const MAP_HELP: Array<{ id: Exclude<CardId, 'help'>; name: string; words:
   { id: 'tune', name: 'TUNE', words: 'Change mode and gain. Faded when you must ask in chat first.' },
   { id: 'layers', name: 'LAYERS', words: 'What is on the map. Tap a row to show or hide it.' },
   { id: 'map', name: 'MAP', words: 'Time filter, fit, rings, range, labels, sources and the key.' },
-  { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message. On a live map its top-left tab swaps in the live waterfall.' },
+  { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message. On a live map, the waterfall key on its chip swaps in the live waterfall.' },
   { id: 'stats', name: 'STATS', words: 'Per mode: newest, furthest, furthest tracked (distance) and longest tracked (time). Tap one to show it.' },
   { id: 'rate', name: 'RATE', words: 'Messages a minute (ADS-B a second). With several sources, tap for each one.' },
   { id: 'chat', name: 'CHAT', words: 'The shared radio\u2019s canned messages \u2014 how listeners agree who tunes next.' },
 ];
 export const MAP_HELP_NOTES: string[] = [
-  'The round X top-left closes the map (or leaves the mode). The pill at the top shows who shares the radio; tap it to chat.',
-  'Tap a chip to open its card; tap the card\u2019s heading to close it. Escape or BACK closes it too.',
+  'The red \u2715 in the top-left corner closes the map (or leaves the mode). The pill shows who shares the radio (at the top; at the bottom on a phone on its side); tap it to chat.',
+  'Tap a chip to open its card; the \u00d7 at the top right of a card closes it. Escape or BACK closes it too.',
   'LIVE (in LAYERS): filled \u2014 this radio is decoding it now; outlined \u2014 another of the server\u2019s radios or its feeds is (hover for which); none \u2014 stored.',
   'SERVER HEALTH (right edge): the server\u2019s processor, memory and temperature \u2014 tap it for the details.',
   'TIME (right edge, only when the server limits sessions): how long you have left here.',
   'On a phone-sized window one card opens at a time.',
-  'WATERFALL (live maps over a radio): the small tab at the list’s top-left — or on its chip — shows what the radio hears instead of the list: the decoder’s channels marked, idents stamped as they are read. It only shows; tapping it tunes nothing.',
-  'A short landscape window (a phone on its side) puts the list down the left side and SERVERS, TUNE, LAYERS, STATS and MAP along the bottom.',
+  'WATERFALL (live maps over a radio): the waterfall key beside the list on its chip, or the tab at the open list\u2019s top-left, shows what the radio hears instead of the list: the decoder\u2019s channels marked, idents stamped as they are read. It only shows; tapping it tunes nothing.',
+  'A short landscape window (a phone on its side) puts every chip in one row along the top \u2014 \u2715 first, then SERVERS, TUNE, LAYERS, STATS and MAP, with CHAT, HEALTH, TIME and RATE at the right end \u2014 and each card drops down from its chip; the list is a panel down the left side and the shared-tuner pill sits at the bottom centre.',
 ];
 
 /** ★★★ Stuart 11-27 (tweak 5): "list is the only one that stays open the others collapse back". LIST is STICKY (open until

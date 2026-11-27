@@ -277,8 +277,7 @@ export default function MapChrome(p: MapChromeProps) {
             {MAP_HELP.filter((h) => h.id === 'list' || h.id === 'map' || chips.includes(h.id as ChipId)).map((h) => (
               <Text key={h.id} style={s.helpLine}><Text style={s.helpName}>{h.name}  </Text>{h.words}</Text>
             ))}
-            {MAP_HELP_NOTES.filter((n) => !/short landscape/i.test(n)).map((n, i) => <Text key={i} style={s.helpNote}>{n}</Text>)}
-            <Text style={s.helpNote}>{g.short ? 'This short landscape window puts every chip along the top and the list down the left side.' : 'Turn the phone on its side for the top row and a side list.'}</Text>
+            {MAP_HELP_NOTES.map((n, i) => <Text key={i} style={s.helpNote}>{n}</Text>)}
           </Card>
         )}
 
