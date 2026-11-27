@@ -320,6 +320,18 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     ok(await p.until(`${Z} === 'paused'`, 3000), `LAYERS open: AUTO paused (${await p.ev(Z)})`);
     await p.ev(`${V}.querySelector('.trkCard2[data-card="layers"] > .ch').click(); 1`); await sleep(500);
     ok(await p.until(`${Z} === 'on'`, 3000), `LAYERS folded: AUTO on again (${await p.ev(Z)})`);
+    // ── an ITEM's card (an aircraft from the LIST) pauses AUTO too: the map holds still under it; folding it resumes ──
+    await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(400);
+    await p.ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]')?.click(); 1`); await sleep(800);
+    const row = await p.ev(`(() => { const r = [...${V}.querySelectorAll('.trkCard2[data-card="list"] .trkRow')].find(x => !x.classList.contains('nopos')); if (!r) return ''; r.click(); return r.dataset.key || 'row'; })()`);
+    if (row) {
+      await sleep(2500);   // ★ the fly to it
+      const cam = `(() => { const m = window.__vibeTrkView.fitPointsForTest().map; const c = m.getCenter(); return [c.lat.toFixed(4), c.lng.toFixed(4), m.getZoom().toFixed(2)].join(','); })()`;
+      const c0 = await p.ev(cam); await sleep(7000); const c1 = await p.ev(cam);
+      ok(await p.ev(`${Z} === 'paused'`) && c0 === c1, `an aircraft's card open: AUTO paused, the map still through the ticks (${c0} → ${c1}, ${await p.ev(Z)})`);
+      await p.ev(`${V}.querySelector('.trkMapHost').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 1`); await sleep(1200);
+      ok(await p.until(`${Z} === 'on'`, 4000), `its card folded: AUTO on again (${await p.ev(Z)})`);
+    } else console.log('   (no placed aircraft in the LIST to open — the item-card pause not checked)');
     // ── the SCALE chip: right edge, clear of the LIST, live with the zoom ──
     const sc = JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${V}.querySelector('.mScale:not([hidden]) .hCard'); if (!d) return null; const b = d.getBoundingClientRect(); const l = ${V}.querySelector('.trkCard2[data-card="list"]'); const lb = l && !l.hidden ? l.getBoundingClientRect() : null;
       return { right: Math.round(b.right), w: innerWidth, clash: !!lb && b.left < lb.right && b.right > lb.left && b.top < lb.bottom && b.bottom > lb.top, text: d.textContent.trim() }; })())`));

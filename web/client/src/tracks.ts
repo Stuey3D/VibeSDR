@@ -723,11 +723,11 @@ const CSS = `
 .mDock .lg svg{width:15px;height:15px}
 /* ★ the SCALE chip: right edge, bottom, above the ? (and clear of the zoom ± up top) */
 .mChipsScale{right:0;bottom:calc(var(--trk-attrib-h,0px) + 50px)}
-.mScale .hCard{cursor:default!important;padding:5px 8px 5px 8px!important}
-.mScaleBody{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
-.mScaleBody .maplibregl-ctrl-scale,.mScaleBody .leaflet-control-scale-line{background:transparent!important;border-color:#cfd9e3!important;color:#e8eef5!important;
-  font:600 10px/1.2 ui-monospace,Menlo,monospace!important;margin:0!important;padding:0 3px!important;box-shadow:none!important}
-.mScaleBody .leaflet-control-scale{margin:0!important}
+.mScale .hCard{cursor:default!important;padding:6px 5px!important;min-width:0!important}
+.mScale[hidden]{display:none}
+.mScaleBody{display:flex;align-items:flex-start;gap:4px}
+.mScaleBody .vsLine{display:block;width:6px;box-sizing:border-box;border:solid #e8eef5;border-width:2px 0 2px 2px}
+.mScaleBody .vsLbl{display:flex;flex-direction:column;align-items:center;font:700 10px/1.05 ui-monospace,Menlo,monospace;color:#e8eef5}
 .mDock .zst{position:relative;display:block;width:18px;height:18px;color:#7ee787}
 .mDock .zst:empty{display:none}
 .mDock .zst svg{position:absolute;inset:0;width:18px;height:18px}
@@ -985,7 +985,8 @@ export class TrackView {
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
       // ★★★ the SCALE as its own little edge chip (Stuart 11-27: "scale could be its own little chip on the side of the
       //     screen"), bottom right above the ? — the map's own scale lines, moved in (scaleDock), live with every zoom
-      + `<div class="mChips mChipsScale"><div class="edgeDock mDock mScale" data-dock="scale" aria-label="Map scale" role="img"><div class="hCard"><div class="mScaleBody"></div></div></div></div>`
+      // ★ Stuart 11-27: "it doesnt have to collapse, just sit at the side with a line, and 100nm could be vertical too"
+      + `<div class="mChips mChipsScale"><div class="edgeDock mDock mScale" data-dock="scale" role="img" aria-label="Map scale"><div class="hCard"><div class="mScaleBody"><span class="vsLine"></span><span class="vsLbl"></span></div></div></div></div>`
       + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
       + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
       + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
@@ -1842,16 +1843,24 @@ export class TrackView {
    *  selection is cleared (then it resumes; AUTO switched OFF stays off).
    *  Not while the ADS-B layer owns the camera (its AUTO / FIT keys). */
   private selPaused = false;
+  /* ★★★ Stuart 12:14 ("not pausing auto zoom when card is open"): an ITEM's card (an aircraft, a ship, a station — a tap on
+   *  its marker or its LIST row) pauses AUTO like a chip's card: the map holds still under it (the MAP chip amber); it
+   *  folds → AUTO resumes with one glide. A pan or zoom by hand meanwhile turns AUTO OFF (the red sign), as ever. On the
+   *  AIR & SEA map the shared auto fit always owns the camera (applyCamera), so this holds there too. */
   private selPause() {
-    if (this.acLayer && this.camOwner !== 'track') return;
-    try { const st = this.af?.state?.(); if (st?.on) { if (!st.paused) this.af.pause(); this.selPaused = true; } } catch { /* none */ }
+    if (this.acLayer && this.camOwner !== 'track' && !this.o.mixed) return;
+    try { const st = this.af?.state?.(); if (st?.on && !st.paused) { this.af.pause(); this.selPaused = true; this.movedWhilePaused = false; } } catch { /* none */ }
+    this.zoomStateSync();
   }
   private selResume() {
     if (!this.selPaused) return;
     this.selPaused = false;
-    if (this.acLayer && this.camOwner !== 'track') return;
-    try { const st = this.af?.state?.(); if (st?.on && st.paused) this.af.resume(); } catch { /* none */ }
+    if (this.acLayer && this.camOwner !== 'track' && !this.o.mixed) return;
+    if (!this.cardPausedFit && !this.movedWhilePaused) try { const st = this.af?.state?.(); if (st?.on && st.paused) { this.af.resume(); this.af.fitNow?.(); } } catch { /* none */ }
+    this.zoomStateSync();
   }
+  /** A pan or zoom by hand while AUTO waited for a card: it stays off when the card folds (the person took the map). */
+  private movedWhilePaused = false;
   private markSel(k: string) {
     if (k && k !== this.sel) this.selPause(); else if (!k && this.sel) this.selResume();
     if (k !== this.sel) try { this.onSel?.(k); } catch (e) { console.error('[tracks] onSel', e); }
@@ -1944,7 +1953,7 @@ export class TrackView {
     //   again had no KEY (and setLegend found nothing to fill)
     // ★ beta96 the cards (open ones and the park) are the view's, not the map's — they stay
     for (const el of Array.from(this.mapHost.children)) if (!el.classList.contains('trkCards') && !el.classList.contains('trkPark') && !el.classList.contains('trkSlot') && !el.classList.contains('cardBtns') && !el.classList.contains('mChips') && !el.classList.contains('mHelp')) el.remove();
-    { const sb = this.root.querySelector('.mScaleBody') as HTMLElement | null; if (sb) sb.innerHTML = ''; }   // ★ the scale lines go with their map
+    this.scaleMap = null;   // ★ the scale goes with its map
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null; this.selPaused = false;
   }
@@ -1971,7 +1980,7 @@ export class TrackView {
       if (my !== this.gen) return;
       try {
         const vm = w.VibeMapGL.createNow(holder, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail,
-                                                   ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind(),
+                                                   ...(this.o.profile ? { profile: this.o.profile } : {}), scale: false,   // ★ the SCALE chip draws ours
                                                    center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 7 : 1.5 });
         if (vm) {
           this.vm = vm;
@@ -1995,7 +2004,7 @@ export class TrackView {
     if (my !== this.gen) return;
     // ★ the shared map data (coastlines, places) — as AdsbMap draws it under Leaflet
     if (!w.VibeMap) { try { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); } catch (e) { console.error('[tracks] vibemap', e); } }
-    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), ...(this.o.profile ? { profile: this.o.profile } : {}), scale: this.scaleKind() });
+    if (w.VibeMap) this.vmL = w.VibeMap.attach(this.lmap, { dataBase: dataUrl('/mapdata/v1/'), ...(this.o.profile ? { profile: this.o.profile } : {}), scale: false });   // ★ the SCALE chip draws ours
     this.attach(this.lmap, L);
   }
   /** The scale bar's units: NM beside km on the sea and air maps. */
@@ -2044,7 +2053,7 @@ export class TrackView {
             const p = layer.points(); const m = this.morePoints?.(); return m?.length ? [...p, ...m] : p;
           },
           receiver: () => layer.receiver(), button: this.fitBtn,
-          onState: () => { if (this.cardPausedFit) { try { const st = this.af?.state?.(); if (st && (!st.on || !st.paused)) this.cardPausedFit = false; } catch { /* none */ } } this.zoomStateSync(); },
+          onState: () => { if (this.cardPausedFit || this.selPaused) { try { const st = this.af?.state?.(); if (st && (!st.on || !st.paused)) { this.cardPausedFit = false; this.selPaused = false; this.movedWhilePaused = false; } } catch { /* none */ } } this.zoomStateSync(); },
           what: this.o.listTitle.toLowerCase().replace(/s$/, ''),
           obstacle: () => this.cardsObstacle(),
         });
@@ -2058,6 +2067,12 @@ export class TrackView {
     this.watchAttrib();
     this.attribAuto();
     this.scaleDock();
+    { const host = this.mapHost; let x0 = -1, y0 = -1;
+      const moved = () => { if ((this.cardPausedFit || this.selPaused) && !this.movedWhilePaused) { this.movedWhilePaused = true; this.zoomStateSync(); } };
+      host.addEventListener('wheel', (e) => { if (!(e.target as HTMLElement).closest?.('.trkCard2, .mDock, .mHelp')) moved(); }, { passive: true });
+      host.addEventListener('pointerdown', (e) => { x0 = e.clientX; y0 = e.clientY; });
+      host.addEventListener('pointermove', (e) => { if (e.buttons && x0 >= 0 && Math.hypot(e.clientX - x0, e.clientY - y0) > 8 && !(e.target as HTMLElement).closest?.('.trkCard2, .mDock, .mHelp')) { x0 = -1; moved(); } });
+      host.addEventListener('pointerup', () => { x0 = -1; }); }
     this.mapSay({ gl: this.vm, lm: this.vm ? null : this.lmap });   // ★ beta96 stage 8 a host layer (NDB) joins this map
     if (this.wantFocus) { const k = this.wantFocus; this.wantFocus = ''; setTimeout(() => this.focus(k), 50); }
   }
@@ -2101,7 +2116,8 @@ export class TrackView {
   private zoomStateSync() {
     let st: { on?: boolean; paused?: boolean } | null = null;
     try { st = this.af?.state?.() ?? null; } catch { st = null; }
-    const z: 'on' | 'off' | 'paused' | '' = !st ? '' : this.cardPausedFit ? 'paused' : st.on && !st.paused ? 'on' : 'off';
+    const z: 'on' | 'off' | 'paused' | '' = !st ? '' : this.movedWhilePaused && (this.cardPausedFit || this.selPaused) ? 'off'
+      : this.cardPausedFit || this.selPaused ? 'paused' : st.on && !st.paused ? 'on' : 'off';
     if (z === this.zoomStateNow) return;
     this.zoomStateNow = z;
     const dk = this.root.querySelector('.mDock[data-dock="map"]') as HTMLElement | null;
@@ -2122,18 +2138,43 @@ export class TrackView {
     try {
       const st = this.af?.state?.();
       if (open && !this.cardPausedFit && st?.on && !st.paused) { this.cardPausedFit = true; this.af.pause(); }
-      else if (!open && this.cardPausedFit) { this.cardPausedFit = false; const s2 = this.af?.state?.(); if (s2?.on && s2.paused) this.af.resume(); }
+      else if (open && !this.cardPausedFit && this.selPaused) { this.cardPausedFit = true; }
+      else if (!open && this.cardPausedFit) { this.cardPausedFit = false; const s2 = this.af?.state?.(); if (!this.selPaused && !this.movedWhilePaused && s2?.on && s2.paused) { this.af.resume(); this.af.fitNow?.(); } }
     } catch (e) { console.error('[tracks] fit pause', e); }
     this.zoomStateSync();
   }
   /** ★ the map's scale lines (MapLibre's / Leaflet's own control — still theirs, still live) into the SCALE chip. A press
    *  does nothing: it is a reading, not a control. */
+  /* ★★★ THE VERTICAL SCALE (Stuart 11-27): a line down the right edge as long as a round distance at this zoom (1 · 2 · 5 ×
+   *  10ⁿ), its words stacked beside it a character a line ("1 0 0 n m"). NM on the sea and air maps, km on the others. True
+   *  at the map's centre latitude (Mercator stretches it away from there — as every scale bar is, MapLibre's included). */
+  private scaleMap: any = null;
   private scaleDock() {
-    const body = this.root.querySelector('.mScaleBody') as HTMLElement | null;
-    if (!body) return;
-    body.innerHTML = '';
-    for (const el of Array.from(this.mapHost.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale')) as HTMLElement[]) body.appendChild(el);
-    (this.root.querySelector('.mScale') as HTMLElement).hidden = !body.children.length;
+    const map = this.acMap ?? this.lmap;
+    if (!map) return;
+    this.scaleMap = map;
+    const upd = () => { try { this.scaleDraw(); } catch (e) { console.error('[tracks] scale', e); } };
+    try { map.on?.('zoomend moveend resize', upd); } catch { /* none */ }
+    try { if (this.vm?.map?.on) for (const ev of ['zoom', 'move', 'resize']) this.vm.map.on(ev, upd); } catch { /* none */ }
+    upd();
+  }
+  private scaleDraw() {
+    const map = this.scaleMap, chip = this.root.querySelector('.mScale') as HTMLElement | null;
+    if (!map || !chip) return;
+    const c = map.getCenter?.(), z = map.getZoom?.();
+    if (!c || !Number.isFinite(z)) { chip.hidden = true; return; }
+    const mpp = 40075016.686 * Math.cos(((c.lat ?? c[1]) * Math.PI) / 180) / (256 * Math.pow(2, z));   // metres per CSS px (Leaflet zoom)
+    const nm = this.scaleKind() === 'nautical', unit = nm ? 1852 : 1000, word = nm ? 'nm' : 'km';
+    const maxPx = 96, max = (mpp * maxPx) / unit;
+    const p10 = Math.pow(10, Math.floor(Math.log10(Math.max(max, 1e-6))));
+    const nice = [5, 2, 1].map((k) => k * p10).find((v) => v <= max) ?? p10;
+    const px = Math.max(12, Math.round((nice * unit) / mpp));
+    const label = `${nice >= 1 ? Math.round(nice) : nice}${word}`;
+    const line = chip.querySelector('.vsLine') as HTMLElement, lbl = chip.querySelector('.vsLbl') as HTMLElement;
+    line.style.height = `${px}px`;
+    if (lbl.dataset.t !== label) { lbl.dataset.t = label; lbl.innerHTML = [...label].map((ch) => `<span>${esc(ch)}</span>`).join(''); }
+    chip.setAttribute('aria-label', `Map scale: the line is ${nice} ${nm ? 'nautical miles' : 'kilometres'}`);
+    chip.hidden = false;
   }
   private attribT: ReturnType<typeof setTimeout> | null = null;
   private attribAuto() {
