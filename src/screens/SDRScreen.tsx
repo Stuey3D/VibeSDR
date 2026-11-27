@@ -370,6 +370,7 @@ import { autoOrder, autoLikely, togglePreferred, parsePreferred, receiverLanguag
 import { translateRows } from '../services/translateTargets';
 import { dabOnlyFrom } from '../services/dabOnly';   // ★★ V12 DAB only — the web page's rule
 import { onlyModeFrom, onlyModeNote, onlyModeWhy } from '../services/onlyMode';
+import { mapLockedMode, onlyModeBeforeHwinfo, otherRadiosDoor, doorOf } from '../utils/mapExit';   // ★★★ beta96 the way off a map (Stuart 11-27)
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo, type SatSingle } from '../services/satSingle';   // ★★★ beta96 single mode: satellites (the web page's rules)   // ★★ V12 the only mode — the web page's rule
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
@@ -819,10 +820,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [doorPending, setDoorPending] = useState(true);
   const [door, setDoor] = useState<VibeFrontDoor | null>(null);
   const [radioBase, setRadioBase] = useState<string | null>(null);
+  /** ★★★ beta96 (Stuart 11-27, Almere) the radio's only mode as its /vibeserver.json says it BEFORE the connect (null = not
+   *  known) — a map-locked radio goes straight to its map, never through a radio screen (mapExit.ts). hwinfo, once it has
+   *  spoken, is the word. */
+  const [preOnly, setPreOnly] = useState<string | null>(null);
+  /** ★★★ beta96 how many radios the server behind an address that names its radio (`…/r/<id>`) has — the Servers menu's
+   *  OTHER RADIOS ON THIS SERVER row (mapExit.otherRadiosDoor). 0 = not known / none. */
+  const [siblingRadios, setSiblingRadios] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setDoorPending(true); setDoor(null); setRadioBase(null);
+    setDoorPending(true); setDoor(null); setRadioBase(null); setPreOnly(null); setSiblingRadios(0);
     (async () => {
       /* ★★★ DO NOT ASK SOMEBODY ELSE'S RECEIVER FOR OUR OWN FILES (2026-09-22, urgent).
        *  John Seamons (KiwiSDR) wrote with his proxy's access log: VibeSDR fetching
@@ -867,6 +875,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //    answer nothing useful here and connect as they always have.
         const occ = await fetchOccupancy(baseUrl).catch(() => null);
         if (cancelled) return;
+        if (occ?.onlyMode !== undefined) setPreOnly(occ.onlyMode);   // ★★★ beta96 before the connect (this address IS the radio)
         /* ★★★ AN ADDRESS THAT NAMES A RADIO IS A CHOICE ALREADY MADE — and this held the connect
          *   for it. Arriving at /r/<id> there is no front door to fetch (the radio answers
          *   frontDoor:false), so the branch below invents a door of one to carry the owner's
@@ -884,6 +893,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         const namesRadio = /\/r\/[^/]+$/.test(baseUrl);
         if (namesRadio && bounceIfFirstRadio(baseUrl)) return;   // ★★ the radio already playing — see bounceIfFirstRadio
         if (namesRadio) setRadioBase(baseUrl);
+        // ★★★ beta96 the server behind it: its other radios, for the Servers menu (never holds the connect)
+        if (namesRadio && doorOf(baseUrl)) fetchFrontDoor(doorOf(baseUrl)).then((d2) => { if (!cancelled) setSiblingRadios(d2?.radios.length ?? 0); }).catch(() => {});
         if (occ && (occ.antenna || occ.landingMessage)) {
           setDoor({
             name: instanceName || 'VibeServer',
@@ -996,6 +1007,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then(o => {
         if (dead) return;
         setDabCapable(o?.dab === true);
+        if (o?.onlyMode !== undefined) setPreOnly(o.onlyMode);   // ★★★ beta96 the radio's only mode, until hwinfo says
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
         // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
         // ★★★ V12 DECODER REACH: a decoder this radio cannot tune comes back false WITH its reason — its key stays, greyed
@@ -1253,6 +1265,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const chooseRadio = useCallback(async (id: string) => {
     if (bounceIfFirstRadio(radioBaseUrl(baseUrl, id))) return;   // ★★ the radio already playing in the other ear
     chosenFromListRef.current = id;   // ★ Back from it comes back to this list (onBackToPicker)
+    // ★★★ beta96 (Stuart 11-27, Almere) the radio's only mode BEFORE the connect — a map-locked radio opens on its map
+    const occR = await fetchOccupancy(radioBaseUrl(baseUrl, id), 1500).catch(() => null);
+    setPreOnly(occR?.onlyMode !== undefined ? occR.onlyMode : null);
     const pin = radioPins.current[id];
     if (pin) {
       const q = await resolveRadioAuth(radioBaseUrl(baseUrl, id), pin);
@@ -4442,6 +4457,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwDabOnly, setHwDabOnly] = useState<boolean | null>(null);
   /** ★★ V12 THE ONLY MODE — the server's hwinfo `onlyMode` ("" none / the admin), null = an older server that never said. */
   const [hwOnlyMode, setHwOnlyMode] = useState<string | null>(null);
+  /* ★★★ beta96 A RADIO LOCKED TO A MAP MODE (Stuart 11-27, Almere's ADS-B radio from the Mac app: the map had CLOSE MAP and no
+   *  Servers chip, and CLOSE MAP dropped him on a 1090 MHz waterfall "which may have caused the server to exit a mode its not
+   *  meant to exit"). The server's onlyMode (hwinfo; before it, the radio's /vibeserver.json) is one of the AIR & SEA map's
+   *  modes: the map IS the screen — up from the moment it is known, EXIT = LEAVE SERVER, Back leaves the server, the Servers
+   *  chip on it. The signed-in admin is told '' and has the radio screen. Not Apple TV (no WebView: its box stands in). */
+  const mapLockedHere = IS_APPLE_TV ? '' : mapLockedMode(onlyModeBeforeHwinfo(hwOnlyMode, hwOnlyMode ?? '', preOnly));
   /** The owner has FIXED the gain on this band — no gain controls at all. See onHwGainLocked. */
   const [hwGainLocked, setHwGainLocked] = useState(false);
   /** The least IF gain reduction the owner allows on this band, in dB; -1 = none. */
@@ -4820,6 +4841,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     sdMap: sdMapOpen, sdOn,   // ★ V12 the SONDES box's MAP (the mode carries on)
     avMap: avMapOpen, avOn, avFocusDatalink: avMapFocus === 'datalink',   // ★ V12 the DATALINK box's MAP; beta90 VIEWS' AVIATION standalone
     picked: mapKind,
+    lockedMap: !!mapLockedHere,   // ★★★ beta96 a map-locked radio: the AIR & SEA map is up, whatever view flag says otherwise
   });
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
@@ -12576,7 +12598,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ V12 the SONDES map: the sondes at their last position, a chosen one's track from the newest report (no request). */
   /** ★★★ beta96 THE AIR & SEA MAP is up (any of its openers: ADS-B, AIS, the shipping / NAVTEX / aviation MAPs, and since
    *  stage 8 SONDES and the VOR map) — its polls (aircraft.json, the ship store) run while it is */
-  const airSeaShown = (adsbViewOpen || ndbViewOpen || aisViewOpen || navMapOpen || (avMapOpen && (avOn || avMapFocus !== 'datalink')) || (sdMapOpen && sdOn) || (vmMapOpen && vmOn)) && !IS_APPLE_TV;
+  /* ★★★ beta96 A MAP-LOCKED RADIO's VIEW IS ALWAYS ITS MODE's (Stuart 11-27, Almere): opened the moment the lock is known —
+   *  before the first report, so the map is the first thing seen — and put back whenever anything puts it away (a refused
+   *  exit's putAway, a key): there is no radio screen to fall to, and the content (aircraft, ships …) flows through it. */
+  useEffect(() => {
+    if (!mapLockedHere) return;
+    if (mapLockedHere === 'adsb' && !adsbViewOpen) setAdsbViewOpen(true);
+    else if (mapLockedHere === 'ais' && !aisViewOpen) setAisViewOpen(true);
+    else if (mapLockedHere === 'ndb' && !ndbViewOpen) setNdbViewOpen(true);
+    else if (mapLockedHere === 'sondes' && !sdMapOpen) setSdMapOpen(true);
+    else if (mapLockedHere === 'vormap' && !vmMapOpen) setVmMapOpen(true);
+    else if (mapLockedHere === 'avdata' && !avMapOpen) { setAvMapFocus('datalink'); setAvMapOpen(true); }
+  }, [mapLockedHere, adsbViewOpen, aisViewOpen, ndbViewOpen, sdMapOpen, vmMapOpen, avMapOpen]);
+  const airSeaShown = (!!mapLockedHere || adsbViewOpen || ndbViewOpen || aisViewOpen || navMapOpen || (avMapOpen && (avOn || avMapFocus !== 'datalink')) || (sdMapOpen && sdOn) || (vmMapOpen && vmOn)) && !IS_APPLE_TV;
   const sdTrk = useMemo(() => ({
     items: sondeTrackItems(sdReportS), rows: sondeTrackRows(sdReportS, trkRx), status: sondeStatus(sdReportS), empty: sondeEmpty(sdReportS),
     trail: (key: string) => Promise.resolve(sondeTrail(sdReportRef.current, key)),
@@ -12945,7 +12979,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     const chrome = liveChrome('airsea', airSeaMode, onlyModeHere === airSeaMode && screenMode);
     const live = chrome.live;
     // ★ the app's DATALINK map is its box's (the mode carries on): CLOSE MAP; AIS / ADS-B / SONDES / VOR MAP's map is the mode (EXIT …)
-    const exitLabel = screenMode ? chrome.exitLabel : 'CLOSE MAP';
+    // ★★★ beta96 a map-locked radio: LEAVE SERVER (mapExit.mapExitKey) — there is no radio screen behind this map
+    const exitLabel = mapLockedHere ? 'LEAVE SERVER' : screenMode ? chrome.exitLabel : 'CLOSE MAP';
     const ship = (aisViewOpen ? aisShipTrk : navTrk) as typeof navTrk;   // ★ never Apple TV's bare aisTrk here (airSeaUp is off there)
     const av = avTrk;
     // ── the chips: each composer's own presence (its no-dead-controls rule), ours in order, the live ones first ──
@@ -15633,7 +15668,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers button at the top left is your Back button. While a decoder box covers its spot it tucks into a small tab on the left edge; tap that just the same. Tap it to return to the server list, favourite this server, set it as your default, or refresh a connection that is behaving oddly. Listen to a 2nd server keeps this one playing while you add another server of any kind, or a second radio on a VibeServer — two servers or VFO A/B, never both at once.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers button at the top left is your Back button. While a decoder box covers its spot it tucks into a small tab on the left edge; tap that just the same — the same tab is on every full-screen map. Tap it to return to the server list, switch to another radio on this server, favourite this server, set it as your default, or refresh a connection that is behaving oddly. Listen to a 2nd server keeps this one playing while you add another server of any kind, or a second radio on a VibeServer — two servers or VFO A/B, never both at once.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -15924,6 +15959,35 @@ export default function SDRScreen({ route, navigation }: Props) {
       />
       </PanelBoundary>
   );
+  /* ★★★ beta96 (Stuart 11-27, Almere: "i'd be stuck and need to force quit the app to exit the server") THE SERVERS CHIP'S
+   *  PROPS — ONE OBJECT for the chip over the waterfall AND the chip on every full-screen map (MapOverlay `servers`), so the
+   *  two can never offer different ways out. Leaving is never behind the ask-before-tuning lock: leaving is not tuning. */
+  const otherDoor = otherRadiosDoor({ baseUrl, doorRadios: door?.radios.length ?? 0, siblingRadios });
+  const onOtherRadios = otherDoor ? () => {
+    setMenuOpen(false);
+    if (dualIdRef.current) leaveForeground(dualIdRef.current);
+    const left = chosenFromListRef.current ?? (radioBase ? decodeURIComponent(radioBase.slice(radioBase.lastIndexOf('/r/') + 3)) : otherDoor.radioId);
+    // ★ the door's list, the same fresh screen ‹ Back from a radio chosen there opens (doorReturn.ts), on the radio just left
+    doorVisit.stash({ base: otherDoor.doorBase, radioId: left, pins: radioPins.current, adminAuthQ: adminAuthQRef.current });
+    navigation.replace('SDR', { ...doorReturnParams(route.params, newLocalSession), baseUrl: otherDoor.doorBase });
+  } : undefined;
+  const serversChipProps = {
+    serverName: instanceName ?? baseUrl,
+    isFavourite,
+    isDefault,
+    canFavourite: !isLocal,
+    onBack: onBackToPicker,
+    onOtherRadios,
+    onToggleFavourite,
+    onSetDefault,
+    // ★ Only where a refresh can do something — never a dead row (AGENTS.md).
+    onRefresh: canRefresh ? onConnectionRefresh : undefined,
+    // ★★ V12 two servers — only on a server that can (no dead row), and only while there is no pairing.
+    onListenSecond: dualMyId && !refusal && canListenSecond(route.params) && dualShape.phase === 'off' ? onListenSecond : undefined,
+    closesVfoB: abOn,
+    otherName: dualBg?.name,
+    onStopOther: dualBg ? stopBackground : undefined,
+  };
   return (
     <DecoderAvoidContext.Provider value={decoderAvoid}>
     <BoxRectsContext.Provider value={onBoxRects}>
@@ -17266,21 +17330,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           anchorRef={tourRef('serversChip')}
           top={serversTop}
           left={serversLeft}
-          serverName={instanceName ?? baseUrl}
-          isFavourite={isFavourite}
-          isDefault={isDefault}
-          canFavourite={!isLocal}
-          onBack={onBackToPicker}
-          onToggleFavourite={onToggleFavourite}
-          onSetDefault={onSetDefault}
-          // ★ Only where a refresh can do something — never a dead row (AGENTS.md).
-          onRefresh={canRefresh ? onConnectionRefresh : undefined}
-          // ★★ V12 two servers — only on a server that can (no dead row), and only while there is no pairing.
-          onListenSecond={dualMyId && !refusal && canListenSecond(route.params) && dualShape.phase === 'off'
-            ? onListenSecond : undefined}
-          closesVfoB={abOn}
-          otherName={dualBg?.name}
-          onStopOther={dualBg ? stopBackground : undefined}
+          {...serversChipProps}   /* ★★★ beta96 the same object as every map's chip (above) */
           openToken={serversToken}
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
@@ -18702,7 +18752,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
       {(!IS_TV || ((shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' || shownMap === 'airsea') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
-                                onClose={() => (shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'vormap' ? setVmMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : shownMap === 'airsea' ? (setAdsbViewOpen(false), setNdbViewOpen(false), setAisViewOpen(false), setAvMapOpen(false), setNavMapOpen(false), setSdMapOpen(false), setVmMapOpen(false)) : setMapKind(null))}
+                                onClose={() => (mapLockedHere ? onBackToPicker() : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? setSdMapOpen(false) : shownMap === 'vormap' ? setVmMapOpen(false) : shownMap === 'avdata' ? setAvMapOpen(false) : shownMap === 'airsea' ? (setAdsbViewOpen(false), setNdbViewOpen(false), setAisViewOpen(false), setAvMapOpen(false), setNavMapOpen(false), setSdMapOpen(false), setVmMapOpen(false)) : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
@@ -18711,7 +18761,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'vormap' ? exitVormap() : shownMap === 'avdata' ? setAvMapOpen(false) : shownMap === 'airsea' ? closeAirSea() : setMapKind(null))}
+        /* ★★★ beta96 a map-locked radio: EXIT is LEAVE SERVER — there is no radio screen to close the map onto */
+        onClose={() => (mapLockedHere ? onBackToPicker() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : shownMap === 'sondes' ? exitSondes() : shownMap === 'vormap' ? exitVormap() : shownMap === 'avdata' ? setAvMapOpen(false) : shownMap === 'airsea' ? closeAirSea() : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
         rxLat={shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' || shownMap === 'sondes' || shownMap === 'avdata' || shownMap === 'vormap' || shownMap === 'airsea' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' || shownMap === 'airsea' ? navReport?.rx : null))?.lat ?? null : undefined}
@@ -18747,6 +18798,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         tune={mapTune}
         dialLock={mapLockWhy ? { why: mapLockWhy, exitMoves: mapExitMoves, onDialLocked: () => { nudgeAsk(); } } : null}
         safeInsets={insets}
+        /* ★★★ beta96 (Stuart 11-27, Almere) the Servers chip on the map — always; and a map-locked radio leaves the server */
+        servers={serversChipProps}
+        leaveServer={!!mapLockedHere && shownMap === 'airsea'}
         overlay={(!!dualMyId && dualShape.phase === 'paired') || (chatOpen && mapLine.show) ? (<>{chatOpen && mapLine.show ? chatDrawerEl : null}{!!dualMyId && dualShape.phase === 'paired' ? (
           // ★★ V12 the second server's card over the map too (Stuart, 2026-10-30: "the 2nd server chip control should also
           //   be accessible here too … with the ability to minimise it the same as in waterfall mode") — the same card,
@@ -18789,6 +18843,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
         onRetry={() => fullReconnect()}
         safeInsets={insets}
+        servers={serversChipProps}   /* ★★★ beta96 the Servers chip on this map too */
         overlay={!!dualMyId && dualShape.phase === 'paired' ? (
           // ★★ V12 the second server's card over the on-device spots map too (Stuart, 2026-10-30) — see the map above.
           <PanelBoundary name="Second server (map)">

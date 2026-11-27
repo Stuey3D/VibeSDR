@@ -61,9 +61,12 @@ export interface ShownMapState {
   vmMap: boolean; vmOn: boolean; sdMap: boolean; sdOn: boolean;
   avMap: boolean; avOn: boolean; avFocusDatalink: boolean;
   picked: ShownMapKind | null;
+  /** ★★★ beta96 (Stuart 11-27, Almere) a radio locked to a map mode (mapExit.mapLockedMode): its map is the only screen. */
+  lockedMap?: boolean;
 }
 export function shownMapOf(s: ShownMapState): ShownMapKind | null {
   if (s.appleTv) return s.picked;   // ★ no WebView on Apple TV — only the Mode sheet's server maps were ever offered there
+  if (s.lockedMap) return 'airsea';   // ★★★ beta96 a map-locked radio: the AIR & SEA map always (no radio screen behind it)
   // ★★★ beta96 stage 6: ADS-B's screen is the AIR & SEA map too — AIS ↔ ADS-B is the SAME page, re-titled (__trkChrome)
   // ★★★ beta96 stage 8: NDB too (the 'ndb' page is retired)
   return s.adsbView ? 'airsea' : s.ndbView ? 'airsea'

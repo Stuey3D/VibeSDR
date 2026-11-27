@@ -716,6 +716,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    (refused + logged), the admin may; hwinfo onlyMode beside dabOnly (2026-11-18).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-only-mode.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta96 (Stuart 11-27, Almere) A MAP-LOCKED RADIO: Single mode ADS-B says onlyMode in /vibeserver.json before any socket
+#    (the app goes straight to the map), and every leave a client could send leaves it in ADS-B; the app's way off every map
+#    (the Servers chip inside each map's Modal, Back, LEAVE SERVER, Other radios) — src/utils/mapExit.ts.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-map-locked.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_map_exit.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and in the clients: one rule in the web page, the app and the R36S (an older server read from its blocked modes), and
 #    the real web page in headless MUTED Edge: in DAB without asking, no EXIT DAB, "DAB only on this receiver".
 if npx tsx scripts/test-dab-only-clients.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

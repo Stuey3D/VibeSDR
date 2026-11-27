@@ -34,6 +34,9 @@ import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, use
 import { useOverlay, usePanelNav } from './PanelNav';
 import MapTopStrip, { mapTopStripShown, type MapSharedProps, type MapTuneProps } from './MapTopStrip';   // ★★★ beta96 the shared line, CHAT, TUNE
 import { NavCard, CardKey } from './NavCard';
+import ServersChip from './ServersChip';   // ★★★ beta96 (Stuart 11-27, Almere) the way off every map
+import { appAlert } from './AppAlert';
+import { mapBackAction, mapChipTop, MAP_LEAVE_OFFER } from '../utils/mapExit';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -235,6 +238,13 @@ interface MapOverlayProps {
   overlay?: React.ReactNode;
   /** ★★ V12 THE ONLY MODE: this map's mode is the receiver's only one — the note, and CLOSE MAP in place of its EXIT. */
   only?: string;
+  /** ★★★ beta96 (Stuart 11-27, Almere: "i'd be stuck and need to force quit the app to exit the server") THE SERVERS CHIP ON
+   *  THE MAP — the waterfall's own chip (the same props, SDRScreen's one object), tucked to its edge tab. Always drawn when
+   *  given, whatever EXIT says and whatever the dial lock says: leaving the server is not tuning. */
+  servers?: MapServersChip | null;
+  /** ★★★ beta96 A MAP-LOCKED RADIO (mapExit.mapLockedMode): the map is its only screen — EXIT reads LEAVE SERVER (onClose
+   *  leaves the server) and Back leaves the server; no CLOSE MAP to a waterfall the listener can do nothing with. */
+  leaveServer?: boolean;
   /** ★★ V12 beta90 THE DIGI MODES MAP (kind 'digi'): this server keeps stations (stations.json) — the age filter offers the
    *  server's windows and tells onDigiWindow when it changes; the stations come in through `spots`. */
   storeWindows?: boolean;
@@ -274,6 +284,8 @@ function buildHtml(
           spotModes?: string[];
           /** ★★ V12 THE ONLY MODE: the note ("ADS-B only on this receiver") — the EXIT key becomes CLOSE MAP. */
           only?: string;
+          /** ★★★ beta96 a map-locked radio: the EXIT key is LEAVE SERVER (mapExit.mapExitKey). */
+          leave?: boolean;
           /** ★★ V12 beta90 kind 'digi': the server keeps stations — its windows in the age filter. */
           storeWindows?: boolean },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
@@ -721,7 +733,9 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
 </style>
 </head><body>
 <div id="topbar">
-  ${opts?.only
+  ${opts?.leave
+    ? '<button id="back" aria-label="Leave this server — back to the server list. The map is this receiver&#39;s only screen">LEAVE SERVER</button>'   /* ★★★ beta96 a map-locked radio */
+    : opts?.only
     ? `<button id="back" aria-label="Close the map — ${esc(opts.only)}, and the mode carries on">CLOSE MAP</button>`   /* ★★ V12 the only mode: no EXIT */
     : kind === 'ais' ? '<button id="back" aria-label="Exit AIS and give the receiver back">EXIT AIS</button>'
     : kind === 'aprs' ? '<button id="back" aria-label="Close the map — the APRS decoder carries on">CLOSE MAP</button>'
@@ -2431,10 +2445,14 @@ function spotToData(s: SpotRow) {
   };
 }
 
+/** ★★★ beta96 the Servers chip's props a map is handed — the waterfall chip's own (SDRScreen serversChipProps); the map places it. */
+export type MapServersChip = Omit<React.ComponentProps<typeof ServersChip>,
+  'top' | 'left' | 'compact' | 'edgeInset' | 'navId' | 'openToken' | 'closeToken' | 'onExpandedChange' | 'anchorRef' | 'onChipWidth'>;
+
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
-    shared, tune, dialLock,
+    shared, tune, dialLock, servers, leaveServer = false,
     storeWindows, onDigiWindow, aprsPoints, aprsFocus, amateur, amScope, digiOverlay, digiRadios, digiWindow, digiTotals }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
@@ -2463,8 +2481,9 @@ export default function MapOverlay(
   //    and Enter pressed the receiver's controls BEHIND the map. Now the screen yields while it is up, and Back closes
   //    it only when it is on top — the city picker opened from it takes Back first (it used to close the MAP and leave
   //    the picker up).
-  const closeRef = useRef(onClose); closeRef.current = onClose;
-  useOverlay(visible, { name: 'map', onBack: () => closeRef.current() });
+  // ★★★ beta96 Back is onBackPress (below — mapExit.mapBackAction): the same for Android's Back, a pad's and a keyboard's.
+  const backRef = useRef<() => void>(onClose);
+  useOverlay(visible, { name: 'map', onBack: () => backRef.current() });
   useEffect(() => { if (!disconnected) setIgnored(false); }, [disconnected]);
   const injected = useRef<Set<string>>(new Set());
   /* ★★ THE GPU MAP'S FILES FIRST: copied into <documents>/mapgl/ once (mapglPack.ts). Until that
@@ -2524,10 +2543,10 @@ export default function MapOverlay(
   const html = useMemo(
     () => (kind && glOk !== null && (kind !== 'airsea' || (adsbPrefsReady && ndbPrefsReady)) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
-        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, storeWindows }, ink) : ''),
+        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, leave: leaveServer, storeWindows }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(','), only, storeWindows],
+    [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(','), only, leaveServer, storeWindows],
   );
   /* ★★★ THE PAGE IS WRITTEN TO DISK BESIDE THE MAP PACK AND LOADED FROM THERE.
    *
@@ -2720,6 +2739,27 @@ export default function MapOverlay(
    *  mode, which retunes the shared radio — refused with the reason while the server says this listener may not move it. */
   const exitLocked = !!dialLock?.why && dialLock.exitMoves;
   const closeGuarded = () => { if (exitLocked && dialLock) { dialLock.onDialLocked(dialLock.why); return; } onClose(); };
+  /* ★★★ beta96 (Stuart 11-27, Almere) THE SERVERS CHIP ON THE MAP, and BACK (Android's hardware Back, a pad's, a keyboard's):
+   *  the menu open → Back closes it; a map-locked radio → Back LEAVES THE SERVER; a locked EXIT (ask before tuning, an owner's
+   *  scan) → Back OFFERS to leave the server — it used to do nothing at all, and the map's Modal covers the waterfall's chip,
+   *  so a touch user was stuck until a force quit; otherwise the map's own EXIT, as before. */
+  const [chipOpen, setChipOpen] = useState(false);
+  const [chipClose, setChipClose] = useState(0);
+  const leave = () => { setChipClose((t) => t + 1); servers?.onBack(); };
+  const onBackPress = () => {
+    switch (mapBackAction({ chipOpen, locked: leaveServer, exitLocked, canLeave: !!servers })) {
+      case 'collapse': setChipClose((t) => t + 1); return;
+      case 'leave': leave(); return;
+      case 'offer':
+        appAlert(MAP_LEAVE_OFFER.title, MAP_LEAVE_OFFER.body(dialLock?.why ?? ''), [
+          { text: MAP_LEAVE_OFFER.leave, onPress: leave },
+          { text: MAP_LEAVE_OFFER.stay, style: 'cancel' },
+        ]);
+        return;
+      default: closeGuarded();
+    }
+  };
+  backRef.current = onBackPress;
   // ★ the page's own top bar's height (the strip sits under it) — reported by the page (mapTop)
   const [mapTop, setMapTop] = useState(0);
   // ★ one pad order for the strip and the live list (TrackLiveList), as the AMATEUR map's keys share theirs
@@ -2878,8 +2918,8 @@ export default function MapOverlay(
     <Modal
       visible
       transparent={false}
-      animationType="slide"
-      onRequestClose={closeGuarded}
+      animationType={leaveServer ? 'none' : 'slide'}   /* ★★★ beta96 a map-locked radio: straight to the map, no slide over a radio screen */
+      onRequestClose={onBackPress}
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
       {/* ★ A Modal is its own native root: the Mac's pinch detector below needs a gesture root inside it. */}
@@ -3248,6 +3288,13 @@ export default function MapOverlay(
             </View>
             </NavCard>
           </View>
+        )}
+        {/* ★★★ beta96 the Servers chip — the waterfall's, tucked to its tab on the left edge (mapExit.mapChipTop) */}
+        {servers && (
+          <ServersChip {...servers} compact navId="serversChipMap" edgeInset={safeInsets?.left ?? 0}
+            top={mapChipTop(winH, safeInsets?.top ?? 0, mapTop, isTrkKind && stripOn)}
+            left={Math.max(12, (safeInsets?.left ?? 0) + 8)}
+            closeToken={chipClose} onExpandedChange={setChipOpen} />
         )}
         {overlay}
       </MacRoot>
