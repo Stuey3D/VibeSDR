@@ -1449,6 +1449,7 @@ if node --no-warnings scripts/test_reopenTune.ts >/dev/null; then pass=$((pass+1
 #     waterfall view on the previous frequency" after a switch to another app): no lapse while our own socket is closed,
 #     one mode_resume ask per lapse, refusals said in words, an old server's silence given up on.
 if node --no-warnings scripts/test_wholeModeResume.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wholeModeResume.ts"; fi
+if node --no-warnings scripts/test_map_pack_read.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_map_pack_read.ts"; fi
 # ★★★ V12 HELD SESSION — "VibeSDR paused" (2026-10-27): the note only in a quiet map mode on iOS, its words and deadline
 #     (the hold, or a hard limit sooner), the permission asked once — and a CLOSED SQUELCH NEVER QUIET (read from source).
 if node --no-warnings scripts/test_sessionHoldNotice.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_sessionHoldNotice.ts"; fi
@@ -2284,6 +2285,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     linear-transponder HYBRID at AOS (own VFO + AUTO DOPPLER each, independent tuning, outside refused, a joiner), LOS back.
 printf '\n\033[1m── Single mode: SATELLITES (watch only + the transponder hybrid) ──\033[0m\n'
 node --max-old-space-size=512 scripts/test-server-sat-single.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ b96-satgrace (Mac Ha): unattended passes vs a kept AIS map — a 2 s socket drop never loses the radio, a pass waits the
+#     grace (or the held session), and a listener back mid-pass gets AIS back at once with nothing to explain.
+printf '\n\033[1m── Satellite passes: the grace, and the kept mode given back ──\033[0m\n'
+node --max-old-space-size=512 scripts/test-server-sat-grace.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ beta94 ORBCOMM: another ORBCOMM pick KEEPS the whole-band decoder (no second attach, its counts run on), a joiner who
 #     opens SATELLITE is told the room's pick and joins the same run; then the web box following the decoder after the pick's

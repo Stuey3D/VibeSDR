@@ -42,6 +42,7 @@ import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
 import { ensureMapPack, writeMapPage } from '../services/mapPack';
 import { ensureMapglPack, readPackRange } from '../services/mapglPack';
+import { PACK_READ_JS } from '../services/mapPackRead';
 import { detailInstalled, readDetailRange } from '../services/mapglDetail';
 import { jsStringLiteral, isAllowedHostFetchPath } from '../utils/pageSafety';
 import { wsOriginFor } from '../utils/safeUrl';
@@ -914,10 +915,14 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     /* ★★★ beta96 THE BUNDLED PACKS BY RANGE TOO (mapglPack.ts readPackRange): basic 18 MB + relief + runways used to sit
      *  in this page whole (~30 MB) while a map was open. Same bridge and deliverer as the detail pack. */
-    var packRange=window.ReactNativeWebView?function(name,off,len){return new Promise(function(res){
-      var id='mp'+(++window.__mgSeq);window.__mgWait[id]=res;
+    /* ★★★ b96-satgrace (Mac Ha: ships and no land) each piece is ASKED AGAIN when it times out or comes back empty — a
+     *  few tries, each waiting longer (a busy bridge is slow, not gone); a late answer to an earlier try still counts
+     *  (its waiter is kept for two minutes). mapPackRead.ts has the whole story and the test. */
+    var packRange=window.ReactNativeWebView?(${PACK_READ_JS})(function(name,off,len,cb){
+      var id='mp'+(++window.__mgSeq);window.__mgWait[id]=cb;
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgpack',id:id,f:name,off:off,len:len}));
-      setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
+      setTimeout(function(){delete window.__mgWait[id];},120000);
+    },{onRetry:function(n,k,why){console.warn('GPU map: '+n+' read retried (try '+k+', '+why+')');}}):null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,packRange:packRange,
       profile:((KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
@@ -925,7 +930,10 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
-      GLVM.ready.catch(function(e){console.error('GPU map: '+e);});
+      /* ★★★ b96-satgrace NEVER A SILENT BLANK: the basemap could not start (the basic pack unreadable even after the
+       *  retries) — the app is told, rebuilds the page on the Leaflet map and says why (MapOverlay glfail). */
+      GLVM.ready.catch(function(e){console.error('GPU map: '+e);
+        try{if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'glfail',why:String(e&&e.message||e)}));}catch(e2){}});
       // ★ The greyline on EVERY map (Stuart): HFDL 2026-09-27 — how many aircraft fly in the dark — and the
       //   digital / CW spots 2026-09-28, where it is propagation information, as in the web client.
       GLVM.setNight(true);}
@@ -2463,6 +2471,13 @@ export default function MapOverlay(
    *  answers, no page is built; if it FAILS, the page is built for Leaflet — a map, never a hole. */
   const [glOk, setGlOk] = useState<boolean | null>(null);
   const [glBase, setGlBase] = useState('mapgl/');
+  /** ★★★ b96-satgrace why the GPU basemap gave way to Leaflet (the page's glfail) — shown on the map; null = it did not. */
+  const [glNote, setGlNote] = useState<string | null>(null);
+  useEffect(() => {   // ★ said for long enough to read, then out of the way (the simpler map stays for this screen)
+    if (!glNote) return;
+    const t = setTimeout(() => setGlNote(null), 15000);
+    return () => clearTimeout(t);
+  }, [glNote]);
   useEffect(() => {
     if (!visible || glOk !== null) return;
     let dead = false;
@@ -3050,6 +3065,16 @@ export default function MapOverlay(
             }
             /* ★★★ beta96 A BYTE RANGE OF A BUNDLED PACK (basic / relief / runways — mapglPack.ts readPackRange): read by
              *  range like the detail pack, never whole into the page. */
+            /* ★★★ b96-satgrace THE GPU BASEMAP COULD NOT START (the basic pack unreadable after the page's retries —
+             *  mapPackRead.ts): never ships over no land, silently. The page is rebuilt on the Leaflet map (glOk false, the
+             *  same fallback as no WebGL 2 or no files) and the reason is shown on it (glNote). */
+            if (m && (m as any).t === 'glfail') {
+              const why = String((m as any).why || 'the map files could not be read');
+              console.warn('GPU map failed, rebuilding on Leaflet:', why);
+              setGlNote(`The detailed map could not load its land (${why}) — showing the simpler map instead.`);
+              setGlOk(false);
+              return;
+            }
             if (m && (m as any).t === 'mgpack' && (m as any).id) {
               const id = String((m as any).id);
               const b64 = readPackRange(glBase, String((m as any).f || ''), Number((m as any).off) || 0, Number((m as any).len) || 0);
@@ -3122,6 +3147,16 @@ export default function MapOverlay(
           }}
         />
         </MacPinch>
+        )}
+        {/* ★★★ b96-satgrace the GPU basemap could not start — said on the map, never only in a console (glfail) */}
+        {!!glNote && !packError && !!pageUri && (
+          <View pointerEvents="none" style={{ position: 'absolute', left: 12, right: 12, bottom: (safeInsets?.bottom ?? 0) + 56,
+                                              alignItems: 'center' }}>
+            <Text style={{ color: '#ffd9a0', fontSize: 12, textAlign: 'center', backgroundColor: 'rgba(0,0,0,0.72)',
+                           paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, overflow: 'hidden' }}>
+              {glNote}
+            </Text>
+          </View>
         )}
         {/* ★★ beta92 THE DIGI MODES MAP's keys — the window and the panels, over the map's top-left (DigiMapKeys). */}
         {kind === 'digi' && !!pageUri && !packError && digiMapTop > 0 && (
