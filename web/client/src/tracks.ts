@@ -1458,7 +1458,11 @@ export class TrackView {
     { /* ★★★ Stuart 11-27: a TALL window puts every chip down the LEFT (SERVERS, TUNE, LAYERS, MAP CONTROLS; LIST bottom-left);
        *  a shorter one flanks — MAP CONTROLS top-right. By the window, live as it is resized. */
       // ★ the whole stack measured: every offered chip's own height (a tucked one counts as out — no flapping as it tucks)
-      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden && d.dataset.dock !== 'rate' && d.dataset.dock !== 'chat');   // ★ the scale counted, as when the one-side rule was calibrated
+      /* ★ Stuart 14:58 ("the map controls moved over to the right on the iphone"): ONLY the left family counts — SERVERS,
+       *  TUNE, LAYERS, STATS, MAP CONTROLS, LIST at the foot, and the ✕ above them. The right column (RATE, CHAT, TIME,
+       *  the lent SERVER HEALTH, the zoom) and the bottom-right stack never push the family into flanking. */
+      const LEFT_FAMILY = new Set(['servers', 'tune', 'layers', 'stats', 'map', 'list']);
+      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden && LEFT_FAMILY.has(d.dataset.dock || ''));
       const xH = ((this.root.querySelector('.trkTop .exit') as HTMLElement | null)?.offsetHeight || 48) + 14;   // ★ the X above SERVERS
       const stackH = docks.reduce((t, d) => t + Math.max(40, (d.querySelector('.hCard') as HTMLElement).offsetHeight) + 8, 16 + xH);
       const one = oneSide(this.mapHost.clientHeight || 0, stackH);

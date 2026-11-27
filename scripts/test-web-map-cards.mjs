@@ -572,6 +572,18 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       await shutTransients(p);
     }
     await p.size(1440, 900, false); await sleep(500);
+    // ── Stuart 14:58: on the phones the left family stays on the left when it fits; nothing on either edge overlaps ──
+    for (const [ww, hh] of [[430, 932], [393, 852], [375, 667]]) {
+      await p.size(ww, hh, true); await sleep(900); await shutTransients(p);
+      const L = JSON.parse(await p.ev(`JSON.stringify((() => { const m = ${V}.querySelector('.trkMapHost').getBoundingClientRect();
+        const fam = ['servers', 'tune', 'layers', 'stats', 'map'].map(id => ${V}.querySelector('.mDock[data-dock="' + id + '"]:not([hidden])')).filter(Boolean);
+        const left = fam.every(d => d.getBoundingClientRect().left <= m.left + 1);
+        const all = [...${V}.querySelectorAll('.mDock:not([hidden]) .hCard, .trkTop .exit, #mapShLine, .maplibregl-ctrl-top-left, .mHelp, .mChipsScale, #srvHealth .hCard')].filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden').map(e => { const r = e.getBoundingClientRect(); return { n: (e.closest('[data-dock]')?.dataset.dock || e.id || e.className).toString().slice(0, 20), l: r.left, t: r.top, r: r.right, b: r.bottom }; });
+        const hits = []; for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) { const a = all[i], c = all[j]; if (a.l < c.r - 1 && a.r > c.l + 1 && a.t < c.b - 1 && a.b > c.t + 1 && !(a.l >= c.l && a.r <= c.r && a.t >= c.t && a.b <= c.b) && !(c.l >= a.l && c.r <= a.r && c.t >= a.t && c.b <= a.b)) hits.push(a.n + '×' + c.n); }
+        return { mapH: Math.round(m.height), left, hits }; })())`));
+      ok(L.mapH < 600 || L.left, `${ww}×${hh}: the left family on the left (map ${L.mapH} px)`);
+      ok(!L.hits.length, `${ww}×${hh}: no chip overlaps another${L.hits.length ? ' — ' + L.hits.join(', ') : ''}`);
+    }
     // ── one side or flanking, by the map's own height (Stuart's phones) ──
     for (const [ww, hh, want] of [[375, 667, 'R'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {
       await p.size(ww, hh, true); await sleep(700);
