@@ -199,7 +199,16 @@ try {
       await sleep(900);
       const m1 = lastOf(sp, 'sat');
       ok(m1 && (m1.state === 'TRACK' || m1.state === 'COAST') && m1.nominal === 437800500, `a 500 Hz nudge keeps the lock (nominal ${m1?.nominal})`);
-      const off1 = m1?.offset ?? 0;
+      // ★★★ beta97 a MODE CHANGE KEEPS THE LOCK (Stuart: tune to a signal, then USB / CW / RTTY to find out what it is)
+      sp.send({ type: 'tune', frequency: 437800500, mode: 'usb' });
+      await sleep(1200);
+      const mU = lastOf(sp, 'sat');
+      ok(mU && (mU.state === 'TRACK' || mU.state === 'COAST') && mU.nominal === 437800500 && !jsons(sp, 'sat').some((m) => m.state === 'OFF'),
+         `★ beta97 a mode change (USB) keeps the lock and the dial (${mU?.state}, nominal ${mU?.nominal})`);
+      sp.send({ type: 'tune', frequency: 437800500, mode: 'nfm' });
+      await sleep(900);
+      ok(['TRACK', 'COAST'].includes(lastOf(sp, 'sat')?.state), '…and back to NFM: still locked');
+      const off1 = lastOf(sp, 'sat')?.offset ?? 0;
       sp.send({ type: 'sat', op: 'unlock' });
       ok(await until(() => lastOf(sp, 'sat')?.state === 'OFF', 3000), 'unlocked');
       await until(() => Math.abs((lastOf(sp, 'config')?.vfo ?? 0) - 437800500) > 50, 2000);
@@ -262,8 +271,18 @@ try {
       await sleep(1200);
       ok(!jsons(other, 'sat').some((m) => m.state === 'TRACK'), 'another listener on the same radio is not moved');
       other.close();
+      // ★★★ beta97 a mode change KEEPS the lock (it ended it before): the channel rebuilt once, the shift still moving
+      const preMode = (S.L().match(/client channel: /g) || []).length;
+      sp.txt.length = 0;
       sp.send({ type: 'tune', frequency: 437790000, mode: 'usb' });
-      ok(await until(() => { const m = lastOf(sp, 'sat'); return m && m.state === 'OFF' && /Mode changed/.test(m.why || ''); }, 3000), `a mode change ends it: ${lastOf(sp, 'sat')?.why}`);
+      await sleep(2500);
+      const modeSeq = jsons(sp, 'sat');
+      ok(!modeSeq.some((m) => m.state === 'OFF') && modeSeq.filter((m) => m.state === 'TRACK' || m.state === 'COAST').length >= 3,
+         `★ beta97 a mode change (USB, 10 kHz down) keeps the lock: ${JSON.stringify(modeSeq.slice(-1)[0])?.slice(0, 120)}`);
+      ok(modeSeq.slice(-1)[0]?.nominal === 437790000, `…the nominal where they tuned (${modeSeq.slice(-1)[0]?.nominal})`);
+      ok((S.L().match(/client channel: /g) || []).length - preMode <= 1, '…the channel rebuilt at most once for the new mode');
+      sp.send({ type: 'tune', frequency: 437100000, mode: 'usb' });
+      ok(await until(() => { const m = lastOf(sp, 'sat'); return m && m.state === 'OFF' && /Tuned away/.test(m.why || ''); }, 3000), `a tune far away still ends it: ${lastOf(sp, 'sat')?.why}`);
       sp.close();
     } finally { S.stop(); }
   }

@@ -13180,15 +13180,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                                  : "a pass starts: measuring headroom, then holding the gain (clips only)")
                                              : "AOS: the satellite is up — measuring headroom again");
     }
-    /** ★ A shared-dial tune or mode change while locked (brief §9): a nudge under 15 kHz moves the nominal and keeps the
-     *  lock; a deliberate tune, a mode change, a bookmark ends it — the dial goes where the person asked, no freeze. */
+    /** ★ A shared-dial tune while locked (brief §9): a nudge (inside a transponder's passband, or under 15 kHz) moves the
+     *  nominal and keeps the lock; a deliberate tune away, a bookmark ends it — the dial goes where the person asked, no
+     *  freeze. ★★★ beta97 a MODE CHANGE KEEPS THE LOCK (Stuart: tune to a transponder signal, then USB / LSB / CW or RTTY
+     *  to find out what it is) — the shared channel's rebuild carries the shift (vfoOffsetNow). */
     void satSharedTuneCheck(const std::string& type, const std::string& msg) {
-        const std::string m = jsonStr(msg, "mode");
-        std::string cur; { std::lock_guard<std::recursive_mutex> lk(modeMtx); cur = this->mode; }
-        if (!m.empty() && m != cur) { satEndShared("Mode changed \xe2\x80\x94 Doppler correction ended", false, true); return; }
         double v = 0;
         // ★★★ beta92 a NUDGE keeps the pick whole: the lock follows the dial (Engine::nudge), and the pick's decoder and the
-        //     pass's gain hold are untouched — only a tune past the lock's reach (or a mode change) drops the pick too
+        //     pass's gain hold are untouched — only a tune past the lock's reach drops the pick too
         if (type == "tune" && jsonNum(msg, "frequency", v) && v > 0 && !satEngine().nudge(kSatShared, v))
             satEndShared("Tuned away \xe2\x80\x94 Doppler correction ended", false, true);
     }
@@ -24732,14 +24731,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★★ V12 SAT DOPPLER (brief §9): while this listener is locked, a nudge under 15 kHz moves the nominal and
                  *  keeps the lock (the reconnect handshake's re-sent frequency is the nominal itself — a nudge of 0); a
                  *  mode change or a deliberate tune ends it, and the dial goes where they asked (no freeze, no config). */
+                /* ★★★ beta97 A MODE CHANGE KEEPS THE LOCK (Stuart, RS-44: tune to a signal, then USB / LSB / CW or RTTY to
+                 *  find out what it is). Only a tune past the lock's reach (Engine::nudge: outside the passband), AUTO DOPPLER
+                 *  off or leaving SATELLITE ends it. The rebuilt channel carries the shift (clientRetune's residual) and keeps
+                 *  its pass-wide size (satMaxShiftHz) while the lock is on. */
                 if (me->satOn) {
                     double tv = 0;
-                    // ★★★ beta92 a nudge keeps the pick whole (lock, decoder, gain hold); a tune away or a mode change drops it too
-                    if (!m.empty() && m != me->mode) satEndListener(me, "Mode changed \xe2\x80\x94 Doppler correction ended", false, true);
-                    else if (jsonNum(msg, "frequency", tv) && tv > 0 && !satEngine().nudge(me->session, tv))
+                    // ★★★ beta92 a nudge keeps the pick whole (lock, decoder, gain hold); a tune away drops it too
+                    if (jsonNum(msg, "frequency", tv) && tv > 0 && !satEngine().nudge(me->session, tv))
                         satEndListener(me, "Tuned away \xe2\x80\x94 Doppler correction ended", false, true);
                 }
-                if (!m.empty() && m != me->mode) { me->satMaxShiftHz = 0;   // ★ the channel is rebuilt anyway: back to its own size
+                if (!m.empty() && m != me->mode) { if (!me->satOn) me->satMaxShiftHz = 0;   // ★ the channel is rebuilt anyway: back to its own size (a live lock keeps the pass's)
                                                    me->mode = m; me->bwHz = paramsFor(m).bandwidth; changed = true;
                                                    specLoadEpoch.fetch_add(1, std::memory_order_relaxed); }
                 if (jsonNum(msg, "frequency", v) && v > 0) {
