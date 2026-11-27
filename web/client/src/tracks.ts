@@ -626,6 +626,10 @@ const CSS = `
 /* ★★★ V12 SAFE AREAS (Stuart 11-27, iPhone landscape): the map runs edge to edge (viewport-fit=cover while a map is up —
  *  TrackView.show) and every control is padded in by the inset on ITS side only (the app's islandSide rule). One set of
  *  vars, so a driver can simulate a notch (scripts/test-web-map-landscape.mjs). */
+/* ★ Stuart 19:xx ("tone down the green border, it looks highlighted by a controller"): the RESTING rim of every chip and
+ *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
+ *  and a chip's own lit / open state only */
+.trkView{--chip-rim:rgba(120,200,120,.45)}
 .trkView{--sai-l:env(safe-area-inset-left,0px);--sai-r:env(safe-area-inset-right,0px);--sai-t:env(safe-area-inset-top,0px);--sai-b:env(safe-area-inset-bottom,0px)}
 .mChips{position:absolute;z-index:790;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 /* ★ tweak 4: SERVERS top-left where the app has it, then TUNE, LAYERS; the zoom ± step over to the right, under MAP */
@@ -1028,7 +1032,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★ Stuart 19:xx: the collapsed LIST chip is ONE rounded rectangle with a full border — [☰ n ⌃ | ≋] (the waterfall beside
  *  the list, live maps over a radio only). Portrait / desktop: it sits its border + corner radius PAST the left and bottom
  *  edges (the joined-to-the-edge look, as the cards); short landscape: all four corners inside the safe rectangle. */
-.trkView .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{flex-direction:row!important;align-items:stretch!important;border:1.5px solid var(--hc,#5BE36B)!important;border-radius:12px!important;
+.trkView .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{flex-direction:row!important;align-items:stretch!important;border:1.5px solid var(--chip-rim)!important;border-radius:12px!important;
   margin:0 0 -13.5px -13.5px;padding-left:calc(6px + 13.5px + var(--sai-l))!important;padding-bottom:calc(13.5px + var(--sai-b))!important}
 .trkView[data-short] .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{margin:0;padding-left:6px!important;padding-bottom:0!important}
 .trkView .mChipsScale{right:var(--sai-r);margin-bottom:var(--sai-b)}
@@ -1088,7 +1092,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
   background:rgba(8,12,8,.86);border:1.5px solid rgba(120,200,120,.45);box-shadow:0 2px 8px rgba(0,0,0,.45)}
 .mHelp:hover,.mHelp:focus-visible,.mHelp.on{border-color:var(--hc,#5BE36B);outline:none;background:#16231a}
 .trkCards .sideH{right:10px;bottom:calc(var(--trk-attrib-h,0px) + 48px);top:20%;justify-content:flex-end;width:min(340px,calc(100% - 20px))}
-.trkCards .sideH>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-radius:12px;transform-origin:bottom right;background:rgba(8,12,8,.94)}
+.trkCards .sideH>.trkCard2{border:1.5px solid var(--chip-rim);border-radius:12px;transform-origin:bottom right;background:rgba(8,12,8,.94)}
 .helpBody{padding:6px 10px 10px}
 .hRowH{display:flex;gap:10px;align-items:flex-start;padding:6px 0;font-size:12.5px;line-height:1.35;color:#dfe7ef;border-bottom:1px solid #151f29}
 .hRowH b{font:700 10.5px/1 system-ui,sans-serif;letter-spacing:.12em;color:#fff}
@@ -1155,7 +1159,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="list"] .trkList{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 .trkCard2[data-card="list"] .trkList>.hd,.trkCard2[data-card="list"] .trkList>.filt,.trkCard2[data-card="list"] .trkList>.safety{flex:none}
 .trkCard2[data-card="list"] .trkList .rows{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-.trkCards .cSide>.trkCard2{border:1.5px solid var(--hc,#5BE36B);background:rgba(8,12,8,.92)}
+.trkCards .cSide>.trkCard2{border:1.5px solid var(--chip-rim);background:rgba(8,12,8,.92)}
 /* ★ Stuart 19:xx ("the pop-up boxes need a full border"): ONE border for every card, all four sides, always. Where a card
  *  meets a screen edge (portrait / desktop) it sits its border's width PAST that edge, so the edge-side line is off screen
  *  and the joined-to-the-edge look is unchanged; short landscape's cards (inside the safe rectangle) show all four. */
