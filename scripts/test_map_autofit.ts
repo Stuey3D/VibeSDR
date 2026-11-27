@@ -269,10 +269,10 @@ console.log('── every map uses it ──');
   // ★ beta96 stage 6: the ADS-B page is retired (ADS-B's screen is the AIR & SEA map, whose ADS-B layer keeps its own AUTO / FIT)
   ok(/\$\{!isHfdl \? `<script>\$\{MAP_AUTOFIT_JS\}<\/script>` : ''\}/.test(app), 'the app\'s map page carries it for every kind but HFDL (SNAP follows a flight)');
   // ★ beta96 stage 8 on the AIR & SEA map the NDB beacons heard are among its points (one camera, one FIT key)
-  ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{var p=l\.points\(\);if\(KIND==='airsea'&&ndbLayer&&ndbLayer\.points\)\{var q=ndbLayer\.points\(\);if\(q\.length\)p=p\.concat\(q\);\}return p;\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:document\.getElementById\('snap'\)/.test(app),
-     'app: AIS · APRS · DSC · ISM · NAVTEX · sondes — the FIT key is the auto fit\'s, framing the items AND the receiver');
-  ok(/firstFit:\(KIND==='avdata'\|\|!window\.VibeAutoFit\)\?undefined:false/.test(app) && /isTrk && kind !== 'avdata' \?/.test(app),
-     'app: the aviation map keeps the ADS-B layer\'s own AUTO / FIT (no second key)');
+  ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{var p=l\.points\(\);if\(KIND==='airsea'&&ndbLayer&&ndbLayer\.points\)\{var q=ndbLayer\.points\(\);if\(q\.length\)p=p\.concat\(q\);\}return p;\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:null/.test(app) && /window\.__cardsCtl=function\(k\)\{[^]*?af\.set\(!st\.on\)/.test(app),
+     'app: AIS · APRS · DSC · ISM · NAVTEX · sondes — the auto fit frames the items AND the receiver; ★★★ beta97 its AUTO / FIT are the MAP card\'s keys (no key in the page)');
+  ok(/firstFit:\(KIND==='avdata'\|\|!window\.VibeAutoFit\)\?undefined:false/.test(app) && /VibeAdsbLayer\.create\(GLVM\?GLVM\.map:map,\{keys:false,/.test(app) && /if\(useAc\(\)\)A\.auto\(\)/.test(app),
+     'app: the aviation map keeps the ADS-B layer\'s own AUTO / FIT — ★★★ beta97 driven by the MAP card through layer.actions (keys:false: no key in the page)');
   ok(/digiFit=window\.VibeAutoFit\?VibeAutoFit\.attach\(map,\{/.test(app), 'app: digi / CW spots maps');
   // ★★ beta96 stage 8 NDB is a live state of the AIR & SEA map: no FIT chip of its own — the map's FIT frames the beacons
   ok(/autoFit:false,drawReceiver:false/.test(app) && !/__ndbFitKey|label="FIT"/.test(app + ndbList), 'app: NDB — on the AIR & SEA map, framed by its FIT (no second chip)');

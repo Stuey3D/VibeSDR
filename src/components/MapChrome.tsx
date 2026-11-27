@@ -24,6 +24,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, useNavRange, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
+import { scrollLane } from '../constants/popupTokens';
 import ModeIcon from './ModeIcon';
 import SectionIcon from './SectionIcon';
 import { SnrChip } from './SnrChip';
@@ -443,7 +444,7 @@ function Card({ title, at, onClose, children, faded }: { title: string; at: { x:
         <Text style={styles.cardTitle}>{title}</Text>
         <NavRow><ChipKey style={styles.cardX} words={`Close ${title.toLowerCase()}`} onPress={onClose}><Text style={styles.cardXTxt}>{'×'}</Text></ChipKey></NavRow>
       </View>
-      <ScrollView style={{ maxHeight: at.maxH - 40 }} contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+      <ScrollView style={{ maxHeight: at.maxH - 40 }} contentContainerStyle={[scrollLane, { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">{children}</ScrollView>
     </View>
   );
 }
@@ -739,7 +740,7 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
           {!!L.route && <NavRow><View style={styles.listBar}>
             <Key label={L.route.on ? 'HIDE ROUTE' : 'ROUTE'} on={L.route.on} words={`${L.route.on ? 'Hide' : 'Show'} the route ${L.route.name}'s message came by, hop by hop`} onPress={() => L.onRoute?.()} />
             <Text style={styles.status} numberOfLines={1}>{L.route.name}</Text></View></NavRow>}
-          <ScrollView ref={scrollRef} style={{ height: bodyH - (L.filter ? 30 : 0) - (L.route ? 30 : 0) - (L.safety?.length ?? 0) * 18 }} keyboardShouldPersistTaps="handled"
+          <ScrollView ref={scrollRef} style={{ height: bodyH - (L.filter ? 30 : 0) - (L.route ? 30 : 0) - (L.safety?.length ?? 0) * 18 }} contentContainerStyle={scrollLane} keyboardShouldPersistTaps="handled"
                       scrollEventThrottle={64}
                       onScroll={(e) => { const y = e.nativeEvent.contentOffset.y; if (y > 6 && !heldRef.current) setHeld(L.rows); else if (y <= 2 && heldRef.current) setHeld(null); }}>
             {L.extraRows}

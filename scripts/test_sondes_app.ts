@@ -62,7 +62,7 @@ ok(/if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\);\s*sdOnRe
    'SONDES opens into its map (the box only on the Apple TV, which has no maps)');
 ok(/if \(!sdOnRef\.current\) \{ (?:wholeMapYield\('sondes'\); )?sdOnRef\.current = true; if \(IS_APPLE_TV\) setSdBoxOpen\(true\); else setSdMapOpen\(true\); \}/.test(scr),
    '…and so does joining a receiver somebody else put on SONDES');
-ok(/shownMap === 'sondes' \? exitSondes\(\)/.test(scr) && /kind === 'sondes' \? '<button id="back"[^']*>EXIT SONDES<\/button>'/.test(map),
+ok(/shownMap === 'sondes' \? exitSondes\(\)/.test(scr) && /sondes: 'EXIT SONDES'/.test(map),
    "the map's key reads EXIT SONDES and leaves the mode");
 ok(/ranges: sondeRanges\(sdCap\?\.bands \?\? \[\]\)/.test(scr), 'the band keys are on the map');
 // ── ★★ V12 2026-11-19 the other types (docs/v12/SONDES-TYPES.md): the type leads the line; each type's own calibration ──
