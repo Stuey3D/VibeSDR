@@ -3,6 +3,7 @@
 // from it — minor frames whose ephemeris packets carry the bird's TRUE Earth-fixed position and GPS time, on a channel
 // moved by the bird's predicted Doppler — through vibeorb::Run exactly as the decoder host drives it.
 //
+// §1c (b97) a carrier is named only by the decoder's answer for that carrier; one bird on two carriers lists both.
 // §1 the run: packets decode; the carrier is NAMED by its own position report (the right catalogue number); a subscriber
 //    message is shown as "not decoded" with its raw bytes; housekeeping lines (downlink / uplink channels); the status
 //    JSON; the packet-line rate limit.
@@ -186,6 +187,83 @@ int main() {
         pick = 0;
         simNow += 2; run.feedIq(&x[0], B, fs, centre);
         CHECK(run.follow() == 0 && !run.pickEnded(), "no pick: no follow");
+    }
+
+    /* §1c ★★ b97 (Stuart, XCover beta96: the waterfall named TWO carriers "ORBCOMM FM116" while the card named one and listed
+     *  the other "not yet named"): a carrier is named only when the decoder named THAT carrier. Two carriers in one slice —
+     *  A = the bird (its own position reports), B = another spacecraft ID on another channel, no position report, its
+     *  frequency matching no bird's Doppler — the status's carriers[] names A (with how + catalogue number), never B. Then
+     *  B is the SAME bird (its spacecraft ID learnt from A): both carriers named, and the bird's row lists both (rfs). */
+    std::printf("§1c each carrier named only by the decoder's answer for THAT carrier\n");
+    {
+        auto signalFor = [&](int sc, int chn, bool eph, double extraHz, unsigned seed) {
+            std::vector<uint8_t> by;
+            for (int f = 0; f < seconds; f++) {
+                const double t = tStart + f;
+                std::vector<std::vector<uint8_t>> body;
+                if (eph && f % 4 == 1) {
+                    double re[3]; ecefKm(bird.sgp, t + 0.1, re);
+                    double re2[3]; ecefKm(bird.sgp, t + 1.1, re2);
+                    const double pos[3] = { re[0] * 1000, re[1] * 1000, re[2] * 1000 }, vel[3] = { (re2[0] - re[0]) * 1000, (re2[1] - re[1]) * 1000, (re2[2] - re[2]) * 1000 };
+                    const double gps = t + 0.1 - 315964800.0 + kOrbClockMinusUtc;
+                    body.push_back(tx::ephemerisPacket(sc, pos, vel, int(gps / 604800), int(std::fmod(gps, 604800))));
+                }
+                body.push_back(tx::packet(kUplink, { 0x10, 0x54, 0x35, 0xF2, 0x23 }));
+                auto fr = tx::minorFrame(sc, chn, f, body);
+                by.insert(by.end(), fr.begin(), fr.end());
+            }
+            const double e0 = L0.dopplerHz(downlinkHz(chn)), e1 = L1.dopplerHz(downlinkHz(chn));
+            tx::Signal g; g.fs = fs; g.offsetHz = downlinkHz(chn) - centre + e0 + extraHz; g.slopeHzS = (e1 - e0) / seconds; g.esn0Db = 16; g.clockPpm = 20; g.seed = seed;
+            return tx::modulate(by, g);
+        };
+        auto runPair = [&](const std::vector<std::complex<float>>& a, const std::vector<std::complex<float>>& b) {
+            std::vector<std::complex<float>> sum(std::max(a.size(), b.size()));
+            for (size_t i = 0; i < sum.size(); i++) sum[i] = (i < a.size() ? a[i] : 0.0f) + (i < b.size() ? b[i] : 0.0f);
+            std::vector<std::string> fj;
+            Run::Opts q = o;
+            q.json = [&](const std::string& j) { fj.push_back(j); };
+            q.text = nullptr; q.dots = nullptr; q.skyPng = nullptr; q.picture = nullptr;
+            Run run(q);
+            const int B = 5000;
+            for (size_t i = 0; i < sum.size(); i += B) {
+                const int n = int(std::min<size_t>(B, sum.size() - i));
+                simNow = tStart + double(i + size_t(n)) / fs;
+                run.feedIq(&sum[i], n, fs, centre);
+            }
+            for (auto it = fj.rbegin(); it != fj.rend(); ++it) if (it->find("orbcomm_status") != std::string::npos) return *it;
+            return std::string();
+        };
+        // the carriers[] array of a status, split into its entries
+        auto carriersOf = [](const std::string& st) {
+            std::vector<std::string> v;
+            size_t k = st.find("\"carriers\":[");
+            if (k == std::string::npos) return v;
+            k += 12;
+            const size_t end = st.find("],\"slice\"", k);
+            while (k < end) { const size_t c = st.find('}', k); if (c == std::string::npos || c > end) break; v.push_back(st.substr(k, c - k + 1)); k = c + 2; }
+            return v;
+        };
+        const int chB = ch + 16;   // 137.290 MHz, 40 kHz above A — inside the slice
+        const std::string named = "\"sat\":\"" + bird.name + "\",\"norad\":" + std::to_string(bird.norad);
+        {
+            const std::string st = runPair(signalFor(scId, ch, true, 0, 5), signalFor(0x11, chB, false, 4000, 9));
+            const auto cs = carriersOf(st);
+            int withBird = 0, withAny = 0;
+            for (auto& c : cs) { if (c.find(named) != std::string::npos) withBird++; if (c.find("\"sat\":") != std::string::npos) withAny++; }
+            CHECK(cs.size() >= 2, "two carriers open (%zu)", cs.size());
+            CHECK(withBird == 1 && withAny == 1, "only the identified carrier is named %s (named %d, any name %d): %s", bird.name.c_str(), withBird, withAny, st.substr(st.find("\"carriers\""), 400).c_str());
+            CHECK(st.find(named + ",\"how\":\"position\"") != std::string::npos, "…named with how it was named (position) — the clients' confirmed flag");
+            CHECK(st.find("ORBCOMM (not yet named)") != std::string::npos, "the other carrier's row reads not yet named");
+            CHECK(st.find("\"rfs\":") == std::string::npos, "one carrier for the bird: no carrier list on its row");
+        }
+        {
+            const std::string st = runPair(signalFor(scId, ch, true, 0, 5), signalFor(scId, chB, false, 0, 9));
+            const auto cs = carriersOf(st);
+            int withBird = 0;
+            for (auto& c : cs) if (c.find(named) != std::string::npos) withBird++;
+            CHECK(withBird == 2, "the same bird on two channels (its ID learnt): both carriers named %s (%d)", bird.name.c_str(), withBird);
+            CHECK(st.find("\"rfs\":[") != std::string::npos, "…and its row lists both carriers (rfs) — the card says so too");
+        }
     }
 
     std::printf("§2 the sky plot\n");
