@@ -43,8 +43,9 @@ export const LIST_FRAC = 0.22;
 export const LIST_CHIP_H = 40;
 /** The shared-tuner pill's height. */
 export const PILL_H = 30;
-/** The short layout's bottom-right row (scale bar ≤ 80 · [− +] 78 · ? 36 + its margins and gaps): what the pill keeps clear of. */
-export const BR_ROW_W = 216;
+/** The short layout's bottom-right row (scale bar ≤ 80 · [− +] 78 · ? 36 · (i) 36 + its margins and gaps): what the pill
+ *  keeps clear of. */
+export const BR_ROW_W = 258;
 
 /** The LIST drawer's width: a phone's full width, else clamp(420, 30 % of the window, 640) — the web's rule. */
 export function listWidthFor(w: number): number {

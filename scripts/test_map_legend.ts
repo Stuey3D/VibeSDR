@@ -42,10 +42,18 @@ ok((mo.match(/window\.__cardsKey=function\(on\)\{legOn=!!on;/g) ?? []).length ==
 ok((mo.match(/keyItems: (p\.)?legendItems, onKeyCheck:/g) ?? []).length === 3, 'every MAP card (the track maps incl. AIR & SEA, spots / CW / HFDL, AMATEUR) gets the items');
 ok(/\{m\.keyOn && <KeyFold items=\{m\.keyItems \?\? \[\]\}/.test(mc), 'the KEY fold sits inside the MAP card (its scroll)');
 ok(/function legItems\(roots\)/.test(LEGEND_READ_JS) && mo.includes('${LEGEND_READ_JS}'), 'the reader is in the page\'s shared script (every map)');
-console.log('── the credits fold to their (i) on every map ──');
-ok(/setTimeout\(fold,5000\)/.test(mo) && (mo.match(/setTimeout\(fold,5000\)/g) ?? []).length === 1 && mo.indexOf('setTimeout(fold,5000)') > mo.indexOf('${LEGEND_READ_JS}') - 50 && mo.indexOf('setTimeout(fold,5000)') < mo.indexOf('${LEGEND_READ_JS}') + 2500,
-   'one fold, in the shared script (not only the track host\'s)');
-ok(/l\.classList\.add\('att-fold'\)/.test(mo) && /\.leaflet-control-attribution\.att-fold\{/.test(mo), 'Leaflet\'s credits fold too (att-fold); a tap on the (i) opens them');
+console.log('── ★★★ the credits are the cards\' (i); no page zoom (Stuart, build 587) ──');
+const mc2 = mc;
+ok(!/L\.control\.zoom\(/.test(mo) && !/new [A-Za-z.]*NavigationControl/.test(mo), 'no map draws its own zoom control (L.control.zoom → MapLibre NavigationControl on the GPU map): the cards\' [− +] only');
+ok(/scale: false,   \/\/ ★★★ beta97 the scale is the cards'/.test(mo) && /scale:false\}\);/.test(mo), 'no page scale bar on either basemap (the cards draw it)');
+ok(/body:not\(\.credOn\) \.maplibregl-ctrl-attrib,body:not\(\.credOn\) \.leaflet-control-attribution\{display:none!important;\}/.test(mo) && /\.maplibregl-ctrl-attrib-button\{display:none!important;\}/.test(mo),
+   'folded, the page draws no credits and no (i) of its own (nothing under the native layer)');
+ok(/window\.__credits=function\(v\)/.test(mo) && /rnPost\(\{t:'credits',on:on\}\)/.test(mo) && /set\(true\);\n\s*setTimeout\(fold,5000\)/.test(mo), 'shown as the map opens, folded after 5 s / the first touch; React Native told the state');
+ok((mo.match(/credits: \{ on: (p\.)?creditsOn, onToggle: \(\) => (p\.)?pageCall\('__credits'\) \}/g) ?? []).length === 3, 'every card map (track maps incl. AIR & SEA, spots / CW / HFDL, AMATEUR) gets the (i)');
+ok(/\{!!credits && <ChipKey style=\{\[styles\.help, credits\.on && styles\.chipOpen\]\} words=\{credits\.on \? 'Hide the map credits' : 'Show the map credits'\} onPress=\{credits\.onToggle\}>/.test(mc2),
+   'the (i) is a chip of the native bottom-right group (scale · [− +] · ? · (i)), a pad / keyboard stop like its neighbours');
+ok((mo.match(/onBrTop=\{\(px\) => (p\.)?pageCall\('__cardsBr', px\)\}/g) ?? []).length === 3 && /onLayout=\{\(e\) => onTop\?\.\(Math\.round\(pos\.bottom \+ e\.nativeEvent\.layout\.height \+ 6\)\)\}/.test(mc2),
+   'shown, the credits open just ABOVE the measured group on every map — never under it');
 
 console.log(`test_map_legend: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

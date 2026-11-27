@@ -105,6 +105,8 @@ export interface MapChromeProps {
          keyOn: boolean; onKey: (on: boolean) => void; extra?: React.ReactNode; far?: string;
          /** ★★★ beta97 the KEY's fold: the page's own legend, read (mapLegend.ts) — drawn HERE, never as the page's panel */
          keyItems?: LegendItem[]; onKeyCheck?: (i: number) => void;
+         /** ★★★ beta97 the map's credits (attribution): the (i) in the bottom-right group shows / folds the page's own */
+         credits?: { on: boolean; onToggle: () => void };
          /** ★★★ AUTO here FOLLOWS THE LATEST (the HFDL map's SNAP), not a fit — its label and words say so */
          autoFollow?: boolean;
          /** ★★★ the receiver's place unknown: SET MY LOCATION (a row here — no map draws its own button) */
@@ -122,6 +124,8 @@ export interface MapChromeProps {
   onZoom: (dir: 1 | -1) => void;
   /** a tap on the map (the page told us): transient cards fold */
   mapTapSeq: number;
+  /** ★★★ beta97 the bottom-right group's top, from the window's foot (measured): the page opens its credits above it */
+  onBrTop?: (px: number) => void;
   /** LIST's footprint for the page (the attribution, the fit's obstacle). */
   onFootprint?: (w: number, h: number, side: boolean) => void;
   /** the cards / maximised list cover the map: AUTO pauses (and resumes without a glide). */
@@ -341,7 +345,7 @@ export default function MapChrome(p: MapChromeProps) {
                     onMax={(v) => { setListMax(v); keep(LIST_MAX_KEY, v); }} onPane={setPane} height={listH} />
 
         {/* ── bottom-right: ? · scale · [− +] ── */}
-        <BottomRight g={g} scale={p.scale} helpOpen={open('help')} onHelp={() => toggle('help')} onZoom={p.onZoom}
+        <BottomRight g={g} scale={p.scale} credits={p.map.credits} onTop={p.onBrTop} helpOpen={open('help')} onHelp={() => toggle('help')} onZoom={p.onZoom}
                      lift={!g.short && listShown && g.list.w >= p.winW - 60 ? listH : 0} hide={listMax && !g.short} />
       </View>
     </NavCtx.Provider>
@@ -788,13 +792,14 @@ function AutoGlyph({ state }: { state: 'on' | 'off' | 'paused' }) {
   );
 }
 
-function BottomRight({ g, scale, helpOpen, onHelp, onZoom, lift, hide }: { g: ReturnType<typeof chromeGeom>; scale: MapChromeProps['scale']; helpOpen: boolean; onHelp: () => void; onZoom: (d: 1 | -1) => void; lift: number; hide: boolean }) {
+function BottomRight({ g, scale, credits, onTop, helpOpen, onHelp, onZoom, lift, hide }: { g: ReturnType<typeof chromeGeom>; scale: MapChromeProps['scale']; credits?: { on: boolean; onToggle: () => void }; onTop?: (px: number) => void; helpOpen: boolean; onHelp: () => void; onZoom: (d: 1 | -1) => void; lift: number; hide: boolean }) {
   const styles = useStyles();
   if (hide) return null;
   const bar = scaleBar(scale, 80);
   const pos = { right: g.br.right, bottom: g.br.bottom + lift + (lift ? GAP : 0) };
   return (
-    <View style={[styles.br, pos, g.br.horizontal ? { flexDirection: 'row', alignItems: 'flex-end' } : { flexDirection: 'column', alignItems: 'flex-end' }]} pointerEvents="box-none">
+    <View style={[styles.br, pos, g.br.horizontal ? { flexDirection: 'row', alignItems: 'flex-end' } : { flexDirection: 'column', alignItems: 'flex-end' }]} pointerEvents="box-none"
+          onLayout={(e) => onTop?.(Math.round(pos.bottom + e.nativeEvent.layout.height + 6))}>
       {bar && (
         <View style={styles.scale} accessibilityLabel={`Scale: ${bar.label}`}>
           <Text style={styles.scaleTxt}>{bar.label}</Text>
@@ -809,6 +814,10 @@ function BottomRight({ g, scale, helpOpen, onHelp, onZoom, lift, hide }: { g: Re
         <ChipKey style={[styles.help, helpOpen && styles.chipOpen]} words="Help — what the chips and cards do" onPress={onHelp}>
           <Text style={[styles.helpTxt, helpOpen && { color: C.gold }]}>?</Text>
         </ChipKey>
+        {/* ★★★ beta97 the credits (i): part of this group, never a page element under it — the attribution is a licence term */}
+        {!!credits && <ChipKey style={[styles.help, credits.on && styles.chipOpen]} words={credits.on ? 'Hide the map credits' : 'Show the map credits'} onPress={credits.onToggle}>
+          <Text style={[styles.credTxt, credits.on && { color: C.gold }]}>i</Text>
+        </ChipKey>}
       </NavRow>
     </View>
   );
@@ -1090,6 +1099,7 @@ const RAW = {
   zoomBox: { flexDirection: 'row', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 10, overflow: 'hidden' },
   zoomKey: { width: 38, height: 36, alignItems: 'center', justifyContent: 'center' },
   zoomTxt: { color: C.ink, fontSize: 20 },
+  credTxt: { fontFamily: 'Georgia', fontStyle: 'italic', fontWeight: '700', fontSize: 16, color: C.ink },
   help: { width: 36, height: 36, borderRadius: 18, backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, alignItems: 'center', justifyContent: 'center', marginLeft: 6 },
   helpTxt: { color: C.ink, fontSize: 17, fontWeight: '700' },
   lChip: { position: 'absolute', flexDirection: 'row', alignItems: 'center', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 12, minHeight: LIST_CHIP_H },

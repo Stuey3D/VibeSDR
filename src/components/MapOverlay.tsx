@@ -660,9 +660,14 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #dleg,#legend{display:none!important;}
   .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{bottom:var(--cardsBrB,0px)!important;}
   ` : ''}
-  /* ★★★ beta97 THE CREDITS FOLD TO AN (i) on every map (Stuart): Leaflet has no compact credits of its own, so this is it */
-  .leaflet-control-attribution.att-fold{font-size:0!important;padding:0!important;width:22px;height:22px;border-radius:11px;cursor:pointer;overflow:hidden;}
-  .leaflet-control-attribution.att-fold::before{content:'i';display:block;width:22px;line-height:22px;text-align:center;font:italic 700 13px Georgia,serif;color:rgba(${T.x},0.6);}
+  /* ★★★ beta97 THE CREDITS ARE THE CARDS' (i) (Stuart, build 587: "the credits (i) is missing"): the native (i) in the
+     bottom-right group asks for them (__credits); shown, they open in full just above that group, folded they are gone from
+     the page entirely — no page (i) under the React Native layer. Open as the map opens, folded after 5 s / the first touch. */
+  body:not(.credOn) .maplibregl-ctrl-attrib,body:not(.credOn) .leaflet-control-attribution{display:none!important;}
+  .maplibregl-ctrl-attrib-button{display:none!important;}
+  body.credOn .maplibregl-ctrl-attrib{display:block!important;min-height:0!important;padding:3px 8px!important;border-radius:8px!important;margin:0 8px 6px 0!important;}
+  body.credOn .maplibregl-ctrl-attrib .maplibregl-ctrl-attrib-inner{display:block!important;}
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib,.leaflet-bottom.leaflet-right .leaflet-control-attribution{max-width:calc(100vw - 24px);white-space:normal;}
   ${isTrk ? `
   /* ★★★ beta97 THE MAP CARDS (MapChrome, React Native over this page) own every corner: LIST bottom-left, ? · scale · [− +]
      bottom-right, the ✕ and RATE on top. */
@@ -852,7 +857,9 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
 }
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true,preferCanvas:true})
   .setView([30,0],2);
-L.control.zoom({position:'bottomright'}).addTo(map);
+/* ★★★ beta97 NO PAGE ZOOM CONTROL (Stuart, build 587: "the old zoom controls seem to be still behind the ? and the zoom
+ *  keys") — every map here is a card map: the cards' [− +] (__cardsZoom) is the only zoom. Do not add L.control.zoom (on the
+ *  GPU map the compat layer turns it into MapLibre's NavigationControl). */
 /* ★★ THE MAC'S TRACKPAD PINCH (Stuart, 2026-11-02: "pinch to zoom not working on it … it appears to be a mac only
  *  issue", every map in the iPad app on a Mac; the +/- keys work). There a pinch reaches the web view as neither touches
  *  nor WebKit gesture events, so neither MapLibre nor vibemapgl's gesture handler ever saw it. The app catches the pinch
@@ -1090,7 +1097,7 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
     // ★ sea maps show PORTS, not airports (Stuart, 2026-11-01: "we need the ports instead, so felixstowe dover etc")
     : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots',
   // ★★ V12 beta90 the scale bar (vibemap.js attach) — NM under the km on the sea and air maps
-  scale: (KIND === 'hfdl' || KIND === 'ndb' || KIND === 'avdata' || KIND === 'vormap' || KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc' || KIND === 'airsea') ? 'nautical' : 'metric',
+  scale: false,   // ★★★ beta97 the scale is the cards' (React Native) on every map — as the GPU map's (scale:false)
   /* ★ beta91 (Stuart 11-22: "map scale is behind the aircraft list box") the bottom-left corner is the live list's
    *  (AdsbLiveList / NdbLiveList / TrackLiveList, React Native over this page): there the scale sits bottom-right with the
    *  zoom keys */
@@ -1107,17 +1114,17 @@ var cnt={textContent:''};   // ★★★ beta97 no bar: the count is the LIST ch
  *  window.__mapAuto ({state, toggle, fit}), window.__pageFocus(key) and tells React Native its rows (pageRowsTell). */
 function rnPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
 ${LEGEND_READ_JS}
-/* ★★★ beta97 THE CREDITS FOLD AWAY ON EVERY MAP (Stuart): open as the map opens, folded to their (i) after 5 s or at the first
- *  touch — one tap away. MapLibre's own compact (i); Leaflet's control folded by att-fold (a tap on the (i) opens it again). */
-(function(){var done=false;
-  function lf(){return document.querySelector('.leaflet-control-attribution');}
-  function fold(){if(done)return;done=true;try{var a=document.querySelector('.maplibregl-ctrl-attrib');
-      if(a){a.classList.remove('maplibregl-compact-show');a.classList.add('maplibregl-compact');}
-      var l=lf();if(l)l.classList.add('att-fold');}catch(e){}}
-  document.addEventListener('click',function(e){var l=lf();if(!l||!l.contains(e.target))return;
-    if(l.classList.contains('att-fold')){l.classList.remove('att-fold');e.preventDefault();e.stopPropagation();}
-    else if(!(e.target&&e.target.closest&&e.target.closest('a')))l.classList.add('att-fold');},true);
-  setTimeout(fold,5000);document.addEventListener('touchstart',fold,{once:true,passive:true});document.addEventListener('mousedown',fold,{once:true});})();
+/* ★★★ beta97 THE CREDITS ARE THE CARDS' (i) (Stuart, build 587): shown as the map opens, folded after 5 s or at the first
+ *  touch; React Native's (i) in the bottom-right group toggles them (__credits) and is told the state ({t:'credits'}); a tap on
+ *  the shown credits (not a link) folds them again. */
+(function(){var on=false,done=false;
+  function set(v){on=!!v;try{document.body.classList.toggle('credOn',on);}catch(e){}rnPost({t:'credits',on:on});}
+  window.__credits=function(v){done=true;set(v==null?!on:!!v);};
+  function fold(){if(done)return;done=true;set(false);}
+  set(true);
+  setTimeout(fold,5000);document.addEventListener('touchstart',fold,{once:true,passive:true});document.addEventListener('mousedown',fold,{once:true});
+  document.addEventListener('click',function(e){var t=e.target;if(!t||!t.closest)return;
+    if(t.closest('.maplibregl-ctrl-attrib,.leaflet-control-attribution')&&!t.closest('a'))set(false);},true);})();
 var pageRowsSig='',pageRowsT=null,pageRowsFn=null;
 function pageRowsTell(fn){pageRowsFn=fn;if(pageRowsT)return;pageRowsT=setTimeout(function(){pageRowsT=null;try{var rows=pageRowsFn?pageRowsFn():[];
   var sig=JSON.stringify(rows);if(sig!==pageRowsSig){pageRowsSig=sig;if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('{"t":"pageRows","rows":'+sig+'}');}}catch(e){}},700);}
@@ -2673,7 +2680,8 @@ export default function MapOverlay(
   const [cardsCtl, setCardsCtl] = useState<MapCtlState>({ auto: 'on', aircraft: false });
   const [cardsMpp, setCardsMpp] = useState(0);
   const [mapTapSeq, setMapTapSeq] = useState(0);
-  const [legendItems, setLegendItems] = useState<LegendItem[]>([]);   // ★★★ beta97 the KEY fold (the page's legend, read)
+  const [legendItems, setLegendItems] = useState<LegendItem[]>([]);
+  const [creditsOn, setCreditsOn] = useState(true);   // ★★★ beta97 the credits (the page shows them as the map opens)   // ★★★ beta97 the KEY fold (the page's legend, read)
   /** ★★★ beta97 the AMATEUR map's statistics, from the page (digiStats — the STATS card) */
   const [amStats, setAmStats] = useState<AmStatsIn | null>(null);
   useEffect(() => { if (!visible) setAmStats(null); }, [visible]);
@@ -2959,6 +2967,7 @@ export default function MapOverlay(
               return;
             }
             if (m && (m as any).t === 'mapTap') { setMapTapSeq((n) => n + 1); return; }
+            if (m && (m as any).t === 'credits') { setCreditsOn((m as any).on === true); return; }   // ★★★ beta97 the (i)
             if (m && (m as any).t === 'legend') { setLegendItems(legendClean((m as any).items)); return; }   // ★★★ beta97 the KEY fold's items
             if (m && (m as any).t === 'amStats') { setAmStats(amStatsClean(m)); return; }
             if (m && (m as any).t === 'cardsState' && (m as any).autoOk === false) { /* no camera key on this map */ }
@@ -3123,7 +3132,7 @@ export default function MapOverlay(
               stats={secs.length ? { sections: secs, onPick: (k) => { if (k) pageCall('__pageFocus', k.replace(/^spot:/, '')); } } : null}
               map={{ ctl: cardsCtl, onCtl: (k) => pageCall('__cardsCtl', k),
                      ranges: ages.length ? ages : undefined, range: spotAge || ages.find((a) => a.def)?.id, onRange: (id) => { setSpotAge(id); pageCall('__digiSet', 'age', id); },
-                     keyOn: spotKeyOn, onKey: (on) => { setSpotKeyOn(on); pageCall('__cardsKey', on); }, keyItems: legendItems, onKeyCheck: (i) => pageCall('__legCheck', i),
+                     keyOn: spotKeyOn, onKey: (on) => { setSpotKeyOn(on); pageCall('__cardsKey', on); }, keyItems: legendItems, onKeyCheck: (i) => pageCall('__legCheck', i), credits: { on: creditsOn, onToggle: () => pageCall('__credits') },
                      /* ★★★ HFDL: AUTO follows the latest flight (SNAP) — said so wherever it shows */
                      autoFollow: kind === 'hfdl',
                      /* ★★★ the receiver's place unknown (an on-device map at 0,0): SET MY LOCATION, here — never a button in the page */
@@ -3136,7 +3145,7 @@ export default function MapOverlay(
                       selected: null, onPick: (row) => pageCall('__pageFocus', row.key) }}
               scale={cardsMpp > 0 ? { mpp: cardsMpp, nm: kind === 'hfdl' } : null}
               onZoom={(d) => pageCall('__cardsZoom', d)}
-              mapTapSeq={mapTapSeq}
+              mapTapSeq={mapTapSeq} onBrTop={(px) => pageCall('__cardsBr', px)}
               onFootprint={(w, h) => pageCall('__amListWH', Math.round(w), Math.round(h), Math.round((safeInsets?.left ?? 0) + w))} />
           );
         })()}
@@ -3156,7 +3165,7 @@ export default function MapOverlay(
                    },
                    sources: amScope?.offered ? [{ id: 'others', name: OTHER_RADIOS_LABEL, what: OTHER_RADIOS_WORDS, on: amScope.others }] : undefined,
                    onSource: () => amScope?.onOthers(!amScope.others),
-                   keyOn: amKeyOn, onKey: (on) => { setAmKeyOn(on); pageCall('__cardsKey', on); }, keyItems: legendItems, onKeyCheck: (i) => pageCall('__legCheck', i),
+                   keyOn: amKeyOn, onKey: (on) => { setAmKeyOn(on); pageCall('__cardsKey', on); }, keyItems: legendItems, onKeyCheck: (i) => pageCall('__legCheck', i), credits: { on: creditsOn, onToggle: () => pageCall('__credits') },
                    setLocation: local && onPickCity && !(rxLat || rxLon) ? onPickCity : undefined,   // ★★★ SET MY LOCATION — the page draws no button of its own
                    extra: <AmFilters modes={spotsListModes(spotModes && spotModes.length ? spotModes : Object.keys(DIGI_MODE_STYLE))} radios={digiRadios ?? null}
                                      value={amFilter} onChange={(k, v) => { setAmFilter((cur) => ({ ...cur, [k]: v })); pageCall('__digiSet', k, v); }} /> }}
@@ -3168,7 +3177,7 @@ export default function MapOverlay(
                     onRoute: () => { if (amSel) pageCall('__amRoute', String(amSel).slice(0, 120)); } }}
             scale={cardsMpp > 0 ? { mpp: cardsMpp, nm: false } : null}
             onZoom={(d) => pageCall('__cardsZoom', d)}
-            mapTapSeq={mapTapSeq}
+            mapTapSeq={mapTapSeq} onBrTop={(px) => pageCall('__cardsBr', px)}
             onFootprint={(w, h) => pageCall('__amListWH', Math.round(w), Math.round(h), Math.round((safeInsets?.left ?? 0) + w))} />
         )}
         {/* ★★★ beta97 THE MAP CONTROL CARDS (MapChrome) — every track map's chrome: the ✕, SERVERS, TUNE, LAYERS, STATS,
@@ -3177,7 +3186,7 @@ export default function MapOverlay(
           <MapCardsHost kind={kind} trk={trk} cards={cards ?? null} only={only} shared={shared ?? null} tune={tune ?? null}
                         lockWhy={dialLock?.why ?? ''} onLocked={(why) => dialLock?.onDialLocked(why)} exitLocked={exitLocked} onExit={closeGuarded}
                         winW={winW} winH={winH} insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} ink={ink}
-                        ctl={cardsCtl} mpp={cardsMpp} mapTapSeq={mapTapSeq} legendItems={legendItems} pageCall={pageCall} onFootprint={trkFootprint}
+                        ctl={cardsCtl} mpp={cardsMpp} mapTapSeq={mapTapSeq} legendItems={legendItems} creditsOn={creditsOn} pageCall={pageCall} onFootprint={trkFootprint}
                         selected={trkSel} onFocus={trkFocus}
                         route={kind === 'ism' && trkSel && trk.items.some((it) => it.key === trkSel && !!(it as { _rt?: unknown })._rt)
                           ? { name: String(trk.items.find((it) => it.key === trkSel)?._lb ?? ''), on: trkRouteKey === trkSel } : null}
@@ -3232,7 +3241,7 @@ function MapCardsHost(p: {
   kind: MapKind; trk: NonNullable<MapOverlayProps['trk']>; cards: MapCardsIn | null; only?: string; shared: MapSharedProps | null; tune: MapTuneProps | null;
   lockWhy: string; onLocked: (why: string) => void; exitLocked: boolean; onExit: () => void;
   winW: number; winH: number; insets: { top: number; bottom: number; left: number; right: number }; ink: { x: string; k: string; kt: string };
-  ctl: MapCtlState; mpp: number; mapTapSeq: number; legendItems: LegendItem[]; pageCall: (fn: string, ...args: unknown[]) => void; onFootprint: (w: number, h: number) => void;
+  ctl: MapCtlState; mpp: number; mapTapSeq: number; legendItems: LegendItem[]; creditsOn: boolean; pageCall: (fn: string, ...args: unknown[]) => void; onFootprint: (w: number, h: number) => void;
   selected: string | null; onFocus: (key: string) => void;
   route: { name: string; on: boolean } | null; onRoute: () => void;
   adsb: AdsbBodyInput | null; adsbGain: MapOverlayProps['adsbGain'] | null; adsbCapture: { short: string; rest: string } | null;
@@ -3249,8 +3258,7 @@ function MapCardsHost(p: {
   const fit = useMemo(() => (p.kind === 'airsea' ? fitGroups(t.items as never, fitPick, fitMainOf(t.fitMode ?? ''), fitDefault) : null), [p.kind, t.items, fitPick, t.fitMode]);
   useEffect(() => { if (fit) p.pageCall('__cardsFitTo', fit.use); }, [fit?.use]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ★ the credits' (i) sits just above the bottom-right group (? · scale · [− +]): its height by the layout (mapChrome br)
-  const shortNow = p.winH < 480 && p.winW > p.winH;
-  useEffect(() => { p.pageCall('__cardsBr', p.insets.bottom + (shortNow ? 52 : 84)); }, [shortNow, p.insets.bottom]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta97 the credits sit just above the bottom-right group: MapChrome measures the group and tells the page (onBrTop) */
   const [note, setNote] = useState('');
   const noteT = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (noteT.current) clearTimeout(noteT.current); }, []);
@@ -3299,7 +3307,7 @@ function MapCardsHost(p: {
                fitTo: fit ? { groups: fit.groups, pick: fit.use, onPick: (id: string) => { setFitPick(id); AsyncStorage.setItem('lsv_map_fit_to', id).catch(() => {}); } } : undefined,
                onRange: t.onRange ? (id) => { t.onRange?.(id); setTimeout(() => p.pageCall('__trkFit'), 400); } : undefined,
                sources: p.cards?.sources, onSource: p.cards?.onSource,
-               keyOn, onKey: (on) => { setKeyOn(on); p.pageCall('__cardsKey', on); }, keyItems: p.legendItems, onKeyCheck: (i) => p.pageCall('__legCheck', i),
+               keyOn, onKey: (on) => { setKeyOn(on); p.pageCall('__cardsKey', on); }, keyItems: p.legendItems, onKeyCheck: (i) => p.pageCall('__legCheck', i), credits: { on: p.creditsOn, onToggle: () => p.pageCall('__credits') },
                extra: nb.head }}
         chat={p.shared ? { disabled: p.shared.chatDisabled, unread: p.shared.chatUnread, onOpen: p.shared.onChat } : null}
         rate={p.cards?.rate ?? []}
@@ -3313,7 +3321,7 @@ function MapCardsHost(p: {
         wf={p.cards?.wf ?? null}
         scale={p.mpp > 0 ? { mpp: p.mpp, nm: p.kind === 'airsea' || p.kind === 'avdata' || p.kind === 'vormap' || p.kind === 'ais' || p.kind === 'navtex' || p.kind === 'dsc' } : null}
         onZoom={(d) => p.pageCall('__cardsZoom', d)}
-        mapTapSeq={p.mapTapSeq}
+        mapTapSeq={p.mapTapSeq} onBrTop={(px) => p.pageCall('__cardsBr', px)}
         onFootprint={(w, h) => p.onFootprint(w, h)} />
       {nb.card}
       {nb.dialog}
