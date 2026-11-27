@@ -187,6 +187,14 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     ok(await p.until(`/msg\\/min/.test(${V}?.querySelector('.trkTop .rate')?.textContent || '')`, 30000), 'the datalink report came (the rate shows)');
     ok(await p.until(`(${SHOWN}).includes('sources')`, 20000), 'two sources (the feed and the radio): SOURCES is offered');
     for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'DATALINK', w, h, { radio: true, want: ['list', 'tune', 'view', 'map', 'key', 'sources'], not: [] }); }
+    // ── the listener's CONTROL COLOURS (the web's skins: background, button, font, transparency — controlColours.ts) never
+    //    reach the map's own chrome: the bar and the cards keep their palette, solid or glass ──
+    const look = `JSON.stringify([...${V}.querySelectorAll('.trkTop .cbtn, .trkTop .exit, .trkTop .rate')].slice(0, 4).map(e => { const c = getComputedStyle(e); return c.backgroundColor + '|' + c.color; }))`;
+    const look0 = await p.ev(look);
+    await p.ev(`(() => { const r = document.documentElement.style; for (const [k, v] of [['--btn-bg', 'rgb(250,250,250)'], ['--btn-text', 'rgb(0,0,255)'], ['--ctl-card-bg', 'rgb(255,255,255)'], ['--btn-border', 'rgb(255,0,0)'], ['--ov-chip', 'rgb(0,255,0)']]) r.setProperty(k, v); return 1; })()`);
+    await sleep(300);
+    ok(await p.ev(look) === look0, 'the control colours (any skin, solid or glass) leave the map\'s bar and cards as they are');
+    await p.ev(`(() => { const r = document.documentElement.style; for (const k of ['--btn-bg', '--btn-text', '--ctl-card-bg', '--btn-border', '--ov-chip']) r.removeProperty(k); return 1; })()`);
     // ── remembered per viewer: wide and narrow separately ──
     await p.size(1440, 900, false);
     await p.ev(`${BTN('map')}.click(); 1`); await sleep(300);
