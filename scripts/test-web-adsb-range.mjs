@@ -93,7 +93,8 @@ try {
   //   the layer's own rule, run here from the same file
   const mctx = { console, Math, Number, String, Set, Map, Array, Object, JSON, isFinite, setTimeout, clearTimeout }; mctx.globalThis = mctx;
   vm.createContext(mctx); vm.runInContext(fs.readFileSync(path.join(root, 'web/mapkit/adsblayer.js'), 'utf8'), mctx);
-  const lends = (a) => mctx.VibeAdsbLayer.maths.rangeShape(a).filter((v) => v > 0).length;
+  // ★ b96-rangefeed: one vertex per BOUNDARY between bins with either side heard (rangeRing)
+  const lends = (a) => { const v = mctx.VibeAdsbLayer.maths.rangeShape(a), n = v.length; let c = 0; for (let i = 0; i < n; i++) if (Math.max(v[i], v[(i - 1 + n) % n]) > 0) c++; return c; };
   const heard = lends(km), heardAll = lends(allKm);
 
   // an older server: no /adsb/range → no button, nothing drawn
@@ -115,6 +116,23 @@ try {
   ok(live && / NM at \d+°/.test(live.title) && /since this map opened/.test(live.title), `live: its title, in NM, since the map opened ("${live && live.title}")`);
   await ev(step(40.0, -20.0, 0)); await sleep(1800);
   ok(JSON.parse(await ev('JSON.stringify(layer.rangeShown())')).live === 1, 'live: a jump that is not flight (1 000 NM in a second) grows nothing');
+  // ★★ b96-rangefeed (Stuart 11-27): THE LIVE OUTLINE AS FAST AS THE DATA, ADS-B ONLY.
+  //   · a DATALINK position (sparse) never grows it, and is never the first of an ADS-B pair: an ADS-B fix after it waits
+  //     for its own second one;
+  //   · a position's own time counts, not the glide's (clamped at 60 s): an edge-of-range aircraft whose last fix was two
+  //     minutes old, then a fresh one 25 NM on, is flight (730 kt) — it grows the outline at once, not one fix later.
+  const row = (hex, b, nm, seenPos, sparse) => `(() => { const p = VibeAdsbLayer.maths.destination(52.29, -0.85, ${b}, ${nm}); layer.update([{hex:"${hex}",lat:p.lat,lon:p.lon,alt_baro:35000,seen:0,seen_pos:${seenPos}${sparse ? ',sparse:true' : ''}}]); return 1; })()`;
+  const liveN = async () => JSON.parse(await ev('JSON.stringify(layer.rangeShown())')).live;
+  const n0 = await liveN();
+  await ev(row('aa0001', 300.5, 150, 0, true)); await sleep(1000); await ev(row('aa0001', 300.5, 150.1, 0, true)); await sleep(1800);
+  ok((await liveN()) === n0, `live: a datalink (sparse) aircraft's two fixes grow nothing (${await liveN()} bearings)`);
+  await ev(row('aa0001', 300.5, 150.2, 0, false)); await sleep(1800);
+  ok((await liveN()) === n0, 'live: …and its ADS-B fix after a datalink one is a FIRST fix (no pair across the two)');
+  await ev(row('aa0001', 300.5, 150.3, 0, false)); await sleep(1800);
+  ok((await liveN()) === n0 + 1, `live: …its second ADS-B fix grows it (${await liveN()} bearings)`);
+  await ev(row('aa0002', 40.5, 120, 120, false)); await sleep(1100);
+  await ev(row('aa0002', 40.5, 145, 0, false)); await sleep(1800);
+  ok((await liveN()) === n0 + 2, `live: a fix two minutes old then a fresh one 25 NM on is flight, counted at once (${await liveN()} bearings)`);
   for (const theme of ['dark', 'light']) {
     await open(theme, {});
     let s = await shown();

@@ -223,15 +223,19 @@
   /* ★★ V12 beta94 THE RANGE OUTLINE (Stuart, 2026-11-25: "a jagged ring around the receiver showing the maximum range
    *  detected" — Virtual Radar Server's range plot). The server keeps the furthest believed position per 1° bearing
    *  (vibe_adsb_range.h); this turns its 360 distances (km, 0 = nothing heard that way) into a closed ring of [lon, lat],
-   *  each vertex on its bin's middle bearing. A bearing nothing was heard on is skipped — the line joins its neighbours
-   *  rather than diving to the receiver. Fewer than three bearings is not an outline: null. */
+   *  each vertex on a BOUNDARY between two bins, at the further of the two (b96-rangefeed, Stuart 11-27: aircraft sat just
+   *  outside the line). A vertex on each bin's middle bearing cut every bin's edges short by its lower neighbour — so the
+   *  very aircraft that set a bearing's range (the furthest, the ones anyone looks at) were drawn 0.5–4 km OUTSIDE it, a
+   *  whole icon at a regional zoom. On the boundaries, both ends of a bin's edge are at least its range: every position
+   *  that counted is on or inside the line, still one vertex per bearing (no staircase). A boundary with nothing heard on
+   *  either side is skipped — the line joins its neighbours rather than diving to the receiver. Fewer than three: null. */
   function rangeRing(lat, lon, km) {
     if (!isFinite(lat) || !isFinite(lon) || !Array.isArray(km)) return null;
-    const pts = [];
-    for (let i = 0; i < km.length; i++) {
-      const k = Number(km[i]);
+    const pts = [], n = km.length;
+    for (let i = 0; i < n; i++) {
+      const k = Math.max(Number(km[i]) || 0, Number(km[(i - 1 + n) % n]) || 0);   // bins i-1 and i meet at bearing i
       if (!(k > 0)) continue;
-      const d = destination(lat, lon, (i + 0.5) * 360 / km.length, k * 1000 / NM_M);
+      const d = destination(lat, lon, i * 360 / n, k * 1000 / NM_M);
       pts.push([d.lon, d.lat]);
     }
     if (pts.length < 3) return null;
@@ -1171,7 +1175,7 @@
     bCentre.addEventListener('click', () => { paused = false; az.reset(); paintCtl(); cameraStep(true); });
     /* ── ★★ V12 beta94 THE RANGE OUTLINE (vibe_adsb_range.h; ADSB.md "The range outline") ─────────────────────────────
      *  GET <imageBase>range — this radio's outline over the owner's window (7 / 30 / 90 days or all time), the all-time
-     *  one and the furthest catch ever. Fetched when the map opens, then every 5 minutes while it is shown and the page
+     *  one and the furthest catch ever. Fetched when the map opens, then every 15 minutes (RANGE_POLL_MS) while it is shown and the page
      *  is visible (it grows slowly; a poll is floored, never per report — memory: cloudflare_workers_limit_incident).
      *  ★★ BOLD, NOT CALM (Stuart, 11-25: "make the line thicker and a bolder colour too so its easier to see on the
      *  map"): a 3 px magenta edge — clear of the aircraft's green/amber/grey/red/blue tones and the amber rings, on both
@@ -1188,11 +1192,16 @@
     function serverCentre() { return rangeData && rangeData.lat != null && rangeData.lon != null ? { lat: rangeData.lat, lon: rangeData.lon } : null; }
     function liveCentre() { return rx || serverCentre(); }
     function drawCentre() { return serverCentre() || rx; }
-    /** One aircraft's new fix: counted only on its second consistent position in a row (the server's posOk). */
-    function liveRangeFix(s, fix, sparse) {
+    /** One aircraft's new fix: counted only on its second consistent position in a row (the server's posOk).
+     *  ★★ b96-rangefeed: posT is WHEN the position was made (now − seen_pos, NOT clamped: the glide's fix.t stops at 60 s,
+     *  so a position two minutes old followed by a fresh one looked like 25 NM in a minute — a "bad fix" — and the far
+     *  aircraft at the edge of range, whose positions come and go, waited one more fix to count). A datalink (sparse)
+     *  position is never the first of two ADS-B fixes: it clears the pair. */
+    function liveRangeFix(s, fix, sparse, posT) {
+      if (sparse) { s.rg = null; return false; }
       const prev = s.rg;
-      s.rg = { lat: fix.lat, lon: fix.lon, t: fix.t };
-      if (sparse || !rangeConsistent(prev, s.rg)) return false;
+      s.rg = { lat: fix.lat, lon: fix.lon, t: posT };
+      if (!rangeConsistent(prev, s.rg)) return false;
       const c = liveCentre();
       if (!c) return false;
       // ★ the receiver moved (a different site, the server's 5 km rule): the live bins start again around it
@@ -1295,7 +1304,7 @@
     }
     const onVis = () => { if (doc.visibilityState !== 'hidden') rangeTick(); };
     if (imageBase != null) {
-      rangeTimer = setInterval(rangeTick, 30000);   // ★ looks every 30 s; asks only when 5 min have passed
+      rangeTimer = setInterval(rangeTick, 30000);   // ★ looks every 30 s; asks only when RANGE_POLL_MS (15 min) has passed — the answer is MERGED with the live outline (rangeGeo), never replaces it
       doc.addEventListener('visibilitychange', onVis);
     }
     paintCtl();
@@ -1942,7 +1951,8 @@
           else fix.track = s.fix.track;
         }
         if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
-        if (liveRangeFix(s, fix, !!raw.sparse)) rangeGrew = true;     // ★ beta95 the outline grows live
+        // ★ beta95 the outline grows live (b96-rangefeed: the position's own time, not the glide's clamped one)
+        if (liveRangeFix(s, fix, !!raw.sparse, t - Math.max(0, Math.min(3600, num(raw.seen_pos) || 0)) * 1000)) rangeGrew = true;
         if (!s.tr) s.tr = [];
         if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
         if (!s.disp) {

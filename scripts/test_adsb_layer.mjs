@@ -304,18 +304,46 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   ok(capped.l <= 480 && capped.b <= 360, 'an inset never takes more than 60 % of the view');
 }
 
-// ── V12 beta94 THE RANGE OUTLINE's ring (rangeRing): one vertex per heard bearing, on its bin's middle, closed ──
+// ── V12 beta94 THE RANGE OUTLINE's ring (rangeRing), closed — ★ b96-rangefeed its vertices on the BOUNDARIES between bins,
+//    at the further of the two, so a bin's whole edge is at least its range (every counted position on or inside) ──
 {
   const km = new Array(360).fill(0);
   ok(M.rangeRing(52.29, -0.85, km) === null, 'range outline: nothing heard = no ring');
-  km[0] = 100; km[90] = 200;
-  ok(M.rangeRing(52.29, -0.85, km) === null, 'range outline: two bearings are not an outline');
-  km[180] = 300; km[270] = 50;
+  km[0] = 100;
+  ok(M.rangeRing(52.29, -0.85, km) === null, 'range outline: one bearing (two boundary vertices) is not an outline');
+  km[90] = 200; km[180] = 300; km[270] = 50;
   const r = M.rangeRing(52.29, -0.85, km);
-  ok(r && r.length === 5 && r[0][0] === r[4][0] && r[0][1] === r[4][1], 'range outline: four bearings → a closed ring of four');
-  near(M.distNm(52.29, -0.85, r[2][1], r[2][0]) * 1.852, 300, 0.5, 'range outline: bin 180 drawn at its 300 km');
-  near(M.bearingDeg(52.29, -0.85, r[1][1], r[1][0]), 90.5, 0.05, 'range outline: …on its bin\'s middle bearing');
+  ok(r && r.length === 9 && r[0][0] === r[8][0] && r[0][1] === r[8][1], 'range outline: four lone bearings → a closed ring of eight (both ends of each bin)');
+  near(M.distNm(52.29, -0.85, r[4][1], r[4][0]) * 1.852, 300, 0.5, 'range outline: bin 180 drawn at its 300 km…');
+  near(M.bearingDeg(52.29, -0.85, r[4][1], r[4][0]), 180, 0.05, '…from its lower boundary (180°)');
+  near(M.bearingDeg(52.29, -0.85, r[5][1], r[5][0]), 181, 0.05, '…to its upper one (181°)');
   ok(M.rangeRing(NaN, 0, km) === null && M.rangeRing(1, 1, null) === null, 'range outline: no centre or no bins = none');
+}
+// ── ★★ b96-rangefeed (Stuart 11-27, "range ring still too slow to update": the furthest aircraft sat outside the line).
+//    EVERY POSITION THAT COUNTED IS ON OR INSIDE THE LINE, wherever in its 1° bin it was — through the real shape rule.
+//    The old ring (a vertex on each bin's middle) drew a bin's range only at its middle: its edges were cut short by the
+//    lower neighbour, so the aircraft that set it, near a bin edge, was up to a few km outside. ──
+{
+  const C = [52.29, -0.85];
+  const inside = (ring, lat, lon) => { let c = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const [xi, yi] = ring[i], [xj, yj] = ring[j]; if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) c = !c; } return c; };
+  let seed = 11; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const km = new Array(360).fill(0), pts = [];
+  // a real-looking sky: 300 believed positions, 60–380 km, bearings anywhere in their bins (the live outline's own offer)
+  for (let k = 0; k < 300; k++) { const b = rnd() * 360, d = 60 + 320 * rnd(); const p = M.destination(C[0], C[1], b, d * 1000 / 1852); if (M.rangeOffer(km, C[0], C[1], p.lat, p.lon)) pts.push(p); }
+  const ring = M.rangeRing(C[0], C[1], M.rangeShape(km));
+  // the counted positions themselves, a hair (0.1 %) in — on the line counts as on it
+  let out = 0, worst = 0;
+  for (const p of pts) {
+    const b = M.bearingDeg(C[0], C[1], p.lat, p.lon), d = M.distNm(C[0], C[1], p.lat, p.lon);
+    const q = M.destination(C[0], C[1], b, d * 0.999);
+    if (!inside(ring, q.lat, q.lon)) { out++; worst = Math.max(worst, d * 1.852); }
+  }
+  ok(pts.length > 150 && out === 0, `range outline: every one of ${pts.length} counted positions is on or inside the line (${out} outside, furthest ${worst.toFixed(0)} km)`);
+  // the worst case for the old ring: a bin's furthest at its very edge beside a lower neighbour
+  const k2 = new Array(360).fill(100); k2[40] = 300;
+  const r2 = M.rangeRing(C[0], C[1], M.rangeShape(k2));
+  const edge = M.destination(C[0], C[1], 40.02, 300 * 0.999 * 1000 / 1852), edge2 = M.destination(C[0], C[1], 40.98, 300 * 0.999 * 1000 / 1852);
+  ok(inside(r2, edge.lat, edge.lon) && inside(r2, edge2.lat, edge2.lon), 'range outline: a 300 km catch at either edge of its bin is inside (the old ring left it ~4.5 km out)');
 }
 
 // ── V12 beta95 THE LIVE OUTLINE (rangeConsistent / rangeOffer / rangeMerge) and NO NEEDLES (rangeSmooth) ──
@@ -349,7 +377,7 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   const ss = M.rangeSmooth(spike);
   ok(ss[45] === 200 && ss[44] === 180 && ss[46] === 180 && ss[43] === 150 && ss[48] === 100, 'no needles: one far bearing in a full ring becomes a bump');
   const r = M.rangeRing(52.29, -0.85, sm);
-  ok(r && r.length === 4 * 5 + 1, 'no needles: the ring joins only heard (and lent) bearings — no dive to the receiver');
+  ok(r && r.length === 4 * 6 + 1, 'no needles: the ring joins only heard (and lent) bearings — no dive to the receiver');
 }
 
 // ── ★★★ beta96 THE OUTLINE'S SHAPE (rangeShape — Stuart 11-26: "still a STAR" on the Sony / Almere) ──
@@ -404,8 +432,8 @@ const VIEW = { w: 800, h: 600, pad: 48, tileSize: 512, minZoom: 1.5, maxZoom: 10
   km[10] = 100; km[100] = 140; km[200] = 320; km[300] = 90;
   const ring = M.rangeRing(52.29, -0.85, km);
   const p = M.rangeLabelPoint(52.29, -0.85, ring);
-  ok(p && Math.abs(M.distNm(52.29, -0.85, p[1], p[0]) - 320 * 1000 / 1852) < 0.5 && Math.abs(M.bearingDeg(52.29, -0.85, p[1], p[0]) - 200.5) < 0.5,
-     'the Leaflet label sits on the furthest vertex (320 km at 200.5°)');
+  ok(p && Math.abs(M.distNm(52.29, -0.85, p[1], p[0]) - 320 * 1000 / 1852) < 0.5 && Math.abs(M.bearingDeg(52.29, -0.85, p[1], p[0]) - 200.5) <= 0.55,
+     'the Leaflet label sits on the furthest vertex (320 km, bin 200\'s edge)');
   ok(M.rangeLabelPoint(52.29, -0.85, null) === null && M.rangeLabelPoint(NaN, 0, ring) === null, 'no outline or no centre: no label');
   // the GPU map: a symbol layer along the outline, in the map's own lettering, repeated so it shows at every zoom
   ok(/id: 'vsadsb-range-lbl', type: 'symbol', source: 'vsadsb-range', filter: \['==', \['get', 'k'\], 'l'\]/.test(src), 'GPU: the label layer reads the outline\'s label feature');
