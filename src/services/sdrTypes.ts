@@ -374,6 +374,9 @@ export async function resolveServerScheme(baseUrl: string, explicitScheme: boole
  *  and the user's conclusion is that our software does not work (Stuart, 2026-07-27). */
 export interface ServerOccupancy {
   busy: boolean;
+  /** ★★★ beta96 (Stuart 11-27, Almere) the listener's ONLY MODE as the radio says it before any socket ('' none) — absent on
+   *  an older server. A map mode means the app goes straight to the map (src/utils/mapExit.ts). */
+  onlyMode?: string;
   /** ★★★ The server KNOWS another program on that machine has the radio (inUseElsewhere). Absent on
    *  an older server and whenever it cannot prove it — read that as unknown, never as free. */
   inUseElsewhere?: boolean;
@@ -598,6 +601,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       landingLinkLabel: cleanText(j.landingLinkLabel, 80) || undefined,
       dab:       j.dab === true,
       adsb:      parseAdsbCapability(j),
+      onlyMode:  typeof j.onlyMode === 'string' && /^[a-z]{0,12}$/.test(j.onlyMode) ? j.onlyMode : undefined,   // ★★★ beta96
       cw:        j.cw === true,
       skim:      j.skim !== false,
       psk:       j.psk === true,

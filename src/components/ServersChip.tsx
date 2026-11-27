@@ -81,6 +81,12 @@ type Props = {
   compact?: boolean;
   /** The window's left safe-area inset: the tab sits on the physical edge and pads by it, as the edge tabs do. */
   edgeInset?: number;
+  /** ★★★ beta96 (Stuart 11-27, Almere) OTHER RADIOS ON THIS SERVER — back to the server's radio list. Absent ⇒ not drawn:
+   *  only where the server has another radio (mapExit.otherRadiosDoor), never as a dead row. */
+  onOtherRadios?: () => void;
+  /** ★ The pad highlight's id (ScreenNav). The copy over a full-screen map takes its own, so it never unregisters the
+   *  waterfall's chip under it. */
+  navId?: string;
 };
 
 // Amber pill, shrunk ~12% from the first mockup (which read a touch chunky).
@@ -97,6 +103,8 @@ export default function ServersChip({
   onChipWidth,
   compact = false,
   edgeInset = 0,
+  onOtherRadios,
+  navId = 'serversChip',
 }: Props) {
   const { theme: t } = useTheme();
   const [expanded, setExpanded] = useState(false);
@@ -150,6 +158,8 @@ export default function ServersChip({
   // ★ V12: both close as they fire — one leaves the screen, the other changes what is playing.
   const onSecondRow = useCallback(() => { setExpanded(false); onListenSecond?.(); }, [onListenSecond]);
   const onStopOtherRow = useCallback(() => { setExpanded(false); onStopOther?.(); }, [onStopOther]);
+  // ★ beta96: leaves this radio for the server's radio list — closes as it fires (it leaves the screen).
+  const onOtherRadiosRow = useCallback(() => { setExpanded(false); onOtherRadios?.(); }, [onOtherRadios]);
   /** ★ What "Listen to a 2nd server" does, said where it is chosen (also its spoken hint) — with VFO B on, that it
    *  closes B first (two servers OR VFO A/B, never both: dualMix.pairingStart). */
   const secondHint = secondServerHint(closesVfoB);
@@ -182,6 +192,7 @@ export default function ServersChip({
     const k: Record<string, number> = {};
     const add = (name: string, fn: () => void) => { k[name] = r.length; r.push(fn); };
     add('header', onHeader);
+    if (onOtherRadios) add('radios', onOtherRadiosRow);
     if (canFavourite) add('fav', onToggleFavourite);
     add('default', onSetDefault);
     if (onRefresh) add('refresh', onRefreshRow);
@@ -189,7 +200,7 @@ export default function ServersChip({
     if (onStopOther) add('stopOther', onStopOtherRow);
     add('collapse', collapse);
     return { rows: r, at: k };
-  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, onRefresh, onRefreshRow, onListenSecond, onSecondRow,
+  }, [canFavourite, onHeader, onOtherRadios, onOtherRadiosRow, onToggleFavourite, onSetDefault, onRefresh, onRefreshRow, onListenSecond, onSecondRow,
       onStopOther, onStopOtherRow, collapse]);
 
   // Idle-close: a stray key must not leave this sitting over the waterfall with the phone
@@ -221,7 +232,7 @@ export default function ServersChip({
             <Pressable
               /* ★ beta95: the tucked tab IS the Servers chip, so it keeps the chip's place in the pad's focus order
                *  (test_nav_coverage) — only one of the two is ever drawn. */
-              ref={screenNavRef('serversChip', () => setExpanded(true))}
+              ref={screenNavRef(navId, () => setExpanded(true))}
               onPress={() => setExpanded(true)}
               hitSlop={{ top: 6, bottom: 6, left: 4, right: 44 - EDGE_TAB_W - 4 }}
               accessibilityRole="button"
@@ -238,7 +249,7 @@ export default function ServersChip({
           // ── Collapsed chip ──────────────────────────────────────────────────
           <Animated.View style={{ opacity: fade }}>
           <Pressable
-            ref={screenNavRef('serversChip', () => setExpanded(true))}
+            ref={screenNavRef(navId, () => setExpanded(true))}
             onPress={() => setExpanded(true)}
             onLayout={onChipWidth ? (e) => onChipWidth(Math.ceil(e.nativeEvent.layout.width)) : undefined}
             hitSlop={8}
@@ -264,6 +275,15 @@ export default function ServersChip({
               <Text style={[styles.chevron, { color: amber, fontFamily: font }]}>‹</Text>
               <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Back to server list</Text>
             </Pressable>
+
+            {/* ★★★ beta96 (Stuart 11-27, Almere) the server's OTHER RADIOS — right under the exit: the two ways off this radio */}
+            {onOtherRadios && (
+              <Pressable onPress={onOtherRadiosRow} style={[styles.row, rowFocus(at.radios)]}
+                accessibilityRole="button" accessibilityLabel="Other radios on this server">
+                <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>⇄</Text>
+                <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Other radios on this server</Text>
+              </Pressable>
+            )}
 
             <View style={[styles.sep, { backgroundColor: sepStrong }]} />
 

@@ -59,6 +59,12 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 b96-2 2026-11-27 — THE WAY OFF A MAP (Stuart, Almere's ADS-B radio from the Mac app: "i'd be stuck and need to
+  //     force quit the app to exit the server"; src/utils/mapExit.ts). Locations checked against the code: the Servers tab on the
+  //     left edge of every full-screen map (MapOverlay renders ServersChip, compact); its menu's "Other radios on this server" row
+  //     (ServersChip onOtherRadios, only where the server has another radio); LEAVE SERVER in the map's top bar on a radio set to
+  //     one map mode (the page's #back key, SDRScreen exitLabel).
+  { v: 'V12 (experimental)', detail: 'YOU CAN ALWAYS LEAVE A MAP. Every full-screen map now has the Servers tab on its left edge \u2014 the same one as over the waterfall \u2014 so you can go back to the server list, or to another radio on the same server (\u201cOther radios on this server\u201d, where there is one), whatever the map\u2019s own EXIT says and even while you are waiting to ask before tuning: leaving a server never changes the radio. On a radio its owner has set up for one map mode (ADS-B only, say) there is no radio screen at all: you go straight to the map, its top-left key says LEAVE SERVER, and Back leaves the server. Before, CLOSE MAP dropped you on a waterfall you could do nothing with, and with the dial locked the map had no way out but closing the app.' },
   // ★★ V12 b96-2 2026-11-27 — NOT AT THIS SITE (docs/v12/RANGE-FEED.md; Stuart chose option 1). Locations checked against the
   //     code: the Setup page's SERVER tab, "Aircraft feeds from other receivers" → "+ Add aircraft feed" → the #feedOffsite tick
   //     above FIND, the "off-site" tag in #feedsList; the Android server screen's AIRCRAFT FEEDS FROM OTHER RECEIVERS

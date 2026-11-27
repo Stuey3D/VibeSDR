@@ -444,8 +444,9 @@ console.log('two servers OR VFO A/B, never both (Stuart, #57: "There will only b
   ok(/^VFO B will close/.test(secondServerHint(true)) && secondServerHint(true).endsWith(secondServerHint(false)),
      'with B on the row stays, and its hint says first that it will close B');
   const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
-  ok(/closesVfoB=\{abOn\}/.test(sdr), 'the Servers menu is told when B is on');
-  ok(/onListenSecond=\{dualMyId && !refusal && canListenSecond\(route\.params\) && dualShape\.phase === 'off'\s*\? onListenSecond : undefined\}/.test(sdr),
+  // ★ beta96: the chip's props are ONE object (serversChipProps) for the waterfall's chip and every map's (test_map_exit)
+  ok(/closesVfoB: abOn,/.test(sdr), 'the Servers menu is told when B is on');
+  ok(/onListenSecond: dualMyId && !refusal && canListenSecond\(route\.params\) && dualShape\.phase === 'off'\s*\? onListenSecond : undefined,/.test(sdr),
      '"Listen to a 2nd server" is NOT hidden by VFO B (the row stays available)');
   ok(/freqHz: abDoor\.frequency,/.test(sdr) && /mode: cardMode\(\{ mode: String\(abDoor\.mode\)/.test(sdr), 'the card is given VFO A\'s tuning — the channel that plays on');
   const chip = readFileSync('src/components/ServersChip.tsx', 'utf8');

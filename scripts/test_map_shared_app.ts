@@ -10,7 +10,8 @@ const mo = rd('src/components/MapOverlay.tsx'), st = rd('src/components/MapTopSt
 const bands = rd('src/utils/decoderBands.ts');
 
 console.log('── MapOverlay ──');
-ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo) && /onRequestClose=\{closeGuarded\}/.test(mo), 'EXIT (the page key) and Android back both go through closeGuarded');
+// ★ beta96: Android back is onBackPress (mapExit.mapBackAction — test_map_exit), whose ordinary case is closeGuarded
+ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo) && /onRequestClose=\{onBackPress\}/.test(mo) && /default: closeGuarded\(\);/.test(mo), 'EXIT (the page key) and Android back both go through closeGuarded');
 ok(/const exitLocked = !!dialLock\?\.why && dialLock\.exitMoves;/.test(mo) && /dialLock\.onDialLocked\(dialLock\.why\); return;/.test(mo), 'a locked EXIT that would leave the mode is refused with the reason');
 ok(/window\.__backLock=function\(on,why\)/.test(mo) && /__backLock&&window\.__backLock\(\$\{exitLocked\}/.test(mo), 'the page greys its EXIT key while locked (and on every load)');
 ok(/<MapTopStrip top=\{mapTop\}/.test(mo) && /t === 'mapTop'/.test(mo), 'the strip sits under the page\'s own top bar (mapTop)');
