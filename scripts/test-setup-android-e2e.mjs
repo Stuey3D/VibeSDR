@@ -116,6 +116,24 @@ ok(vis('ppm') && vis('androidTunerBw') && vis('adsb256') && !vis('ppb') && !vis(
   const rTo = doc.querySelector('#antRanges [data-f="to"]');
   if (rTo) { rTo.value = '138'; rTo.dispatchEvent(new w.Event('input', { bubbles: true })); }
 }
+// ★★★ b96-2 (Stuart 11-27: "why cant i schedule satellite passes on the xcover?"): UNATTENDED SATELLITE PASSES (#hwSatPass)
+//     were in no row of the phone's control table, so androidPrune hid the whole block — while the phone's server runs the
+//     passes (the shim's satPassTick, every platform) and its own screen offers them. The block, its switch, the elevation,
+//     the Meteor / ORBCOMM groups and the generated downlink ticks (#spBirds, no ids of their own) must be on the page, and a
+//     save must carry satPasses inside bgDecode to the phone's settings.
+{
+  const shown = (id) => vis(id) && !doc.getElementById(id).classList.contains('hide');
+  ok(shown('hwSatPass'), 'Unattended satellite passes: the block is on the phone\'s page');
+  ok(vis('spOn') && vis('spMinEl') && vis('spMeteor') && vis('spOrbcomm'), '…its switch, elevation and the Meteor / ORBCOMM groups');
+  const bird = doc.querySelector('#spBirds input[type="checkbox"]');
+  ok(!!bird && vis('spBirds'), `…and the other downlinks' ticks (generated in #spBirds, no ids) — tick ${!!bird}`);
+  const sp = doc.getElementById('spOn');
+  sp.checked = true; sp.dispatchEvent(new w.Event('change', { bubbles: true }));
+  const el = doc.getElementById('spMinEl');
+  el.value = '20'; el.dispatchEvent(new w.Event('change', { bubbles: true }));
+  const me = doc.getElementById('spMeteor');
+  me.checked = true; me.dispatchEvent(new w.Event('change', { bubbles: true }));
+}
 doc.getElementById('ppm').value = '-4';
 doc.getElementById('androidTunerBw').checked = false;
 doc.getElementById('androidDsFixed').value = '2';
@@ -157,6 +175,18 @@ if (posted) {
      && bm.includes('drm') && bm.includes('seen@' + genNow) && bm.includes('sat') && !bm.includes('wfm') && !bm.includes('am'),
      `untouched new settings come back as they were (blocked: "drm" kept, + the seen@${genNow} stamp and SATELLITE off as new — ${patch.blockedModes})`);
   ok(!('ppb' in patch) && !('rfNotch' in patch) && !('icomBaud' in patch), 'no other radio\'s settings');
+  {
+    let bg = null; try { bg = JSON.parse(patch.bgDecode || 'null'); } catch (e) { /* stays null */ }
+    const sp = bg && bg.satPasses;
+    ok(!!sp && sp.on === true && sp.minEl === 20 && sp.meteor === true,
+       `unattended satellite passes reach the phone's settings inside bgDecode (on, 20°, Meteor): ${JSON.stringify(patch.bgDecode)}`);
+    // ★ the phone's own reading of it: the page config hands the same pass settings back to the page
+    const raw2 = JSON.parse(raw); raw2.settings.bgDecode = patch.bgDecode;
+    const raw2File = path.join(tmp, 'raw2.json'); fs.writeFileSync(raw2File, JSON.stringify(raw2));
+    const cfg2 = JSON.parse(execFileSync(bin, ['--page', raw2File], { encoding: 'utf8' }));
+    let back = null; try { back = JSON.parse(cfg2.radios[0].bgDecode).satPasses; } catch (e) { /* stays null */ }
+    ok(!!back && back.on === true && back.minEl === 20 && back.meteor === true, '…and come back to the page as saved (the round trip)');
+  }
   ok(typeof patch.antennaRanges === 'string' && /137/.test(patch.antennaRanges) && /138/.test(patch.antennaRanges), `the range typed on the page reaches the phone's settings: ${JSON.stringify(patch.antennaRanges)}`);
 }
 fs.rmSync(tmp, { recursive: true, force: true });
