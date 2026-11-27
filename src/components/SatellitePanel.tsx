@@ -36,6 +36,10 @@ import TlmCharts from './TlmCharts';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../utils/tlmCharts';
 import { scrollLane } from '../constants/popupTokens';
 import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky plot
+import SatPassPreview, { PassPlayGlyph } from './SatPassPreview';   // ★★★ beta97 PASS PREVIEW
+import { passHistoryKinds, passLiveNow, passPreviewPress, passPreviewRow, passKey, passTrackFrom, passVerdict, previewId, skyHistory,
+         PASS_GRADE_CSS, PASS_LIVE_NOW, PASS_PREVIEW_HINT, PASS_PREVIEW_STOP, PASS_START_DELAY_MS, PASS_VERDICT_ROWS, type PassPreviewRow, type PassTrack, type SkyHistory } from '../services/satPreview';
+import { addKeyListener } from '../utils/hardwareKeys';
 import { SnrChip } from './SnrChip';   // ★ beta96 the colour-coded SNR per packet
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFollowText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
          type OrbFollow, type OrbView } from '../services/orbcomm';
@@ -53,7 +57,7 @@ import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeGlyph, 
          satSyncedText, satTxCreditText, satWhenText, txText, txUse,
          satCwTail, satDecView, satDecWord, satViewShown, satViewSwitch, satVfoBLine, satVfoBOffers, SAT_VFOB_KEY,
          satBeaconText, SAT_BEACON_EMPTY, type SatBeaconList, satPickTlm,
-         type SatInfo, type SatList, type SatPicked, type SatReadout, type SatVfoB,
+         type SatInfo, type SatList, type SatPicked, type SatReadout, type SatTrack, type SatVfoB,
          // ★★ beta94 SHOW — which satellites' passes the list shows (one set of rules with the web page)
          SAT_SHOW_GROUPS, SAT_SHOW_QS, satShowChoices, satShowCur, satShowEmptyText, satShowGroup, satShowGroupsOffered, satShowHiddenRemindText,
          satShowQ, satShowRows, satShowText, satShowToggle, satShowWithQ, type SatShow } from '../services/satellites';
@@ -168,6 +172,11 @@ export interface SatellitePanelProps {
   onShow?: (f: SatShow) => void;
   skyGet?: ((path: string) => Promise<string | null>) | null;
   skyRadio?: string;
+  /** ★★★ beta97 PASS PREVIEW: every pass track the server has sent (passKey → its reply; `tracksV` bumps when one arrives)
+   *  and the ask for one ({"type":"sat_list","op":"track"} — free, it changes nothing) */
+  tracks?: ReadonlyMap<string, SatTrack>;
+  tracksV?: number;
+  onTrack?: (norad: number, aos: number, los: number) => void;
   /** ★★ beta94 LOCAL HARDWARE's POSITION (this app's own engine only — absent on a server): `need` = the engine has none, the
    *  box shows the prompt instead of the timetable; `line` = which position is in use ("" = none); `entered` = typed by the
    *  user (CLEAR offered). Kept on this phone, never published (services/localPlace.ts). */
@@ -348,7 +357,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   /* ★ beta92 (Stuart 11-23: "in small mode when opening the satellite list the box needs to expand a little so you can see
    *  the list"): SMALL grows by about five rows while ALL SATELLITES is open under a pick — never past the space there is. */
   const LIST_EXTRA_H = 180;
-  const bodyH = Math.round(big ? bigH : Math.min(availH, smallFit + (listOpen && p.picked ? LIST_EXTRA_H : 0)));
+  const [pvRow, setPvRow] = useState<PassPreviewRow | null>(null);   // ★★★ beta97 the pass being previewed (null = the live view)
+  const bodyH = Math.round(big ? bigH : Math.min(availH, smallFit + ((listOpen && p.picked) || pvRow ? LIST_EXTRA_H : 0)));
   const setBigByHand = (on: boolean) => { handBig.current = on; sized.current = true; setBigPick(on); if (on) setMinimised(false); };
   // a new pick opens at the size last chosen by hand
   useEffect(() => { sized.current = false; setBigPick(handBig.current); }, [p.picked?.norad, p.picked?.tx]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -439,6 +449,84 @@ export default function SatellitePanel(p: SatellitePanelProps) {
   }, [orbStatus]);   // eslint-disable-line react-hooks/exhaustive-deps
   const skyNow = Math.floor(now / 10) * 10;   // ★ the live pass judged to 10 s (the heatmap is not re-laid every second)
   const ground = tk.window?.bg ?? tk.solidBg ?? '#070605';
+  /* ── ★★★ beta97 PASS PREVIEW (services/satPreview.ts — one set of rules with the web page) ─────────────────────────
+   *  ▶ on a future pass row: the box scrolls the preview into view, then (PASS_START_DELAY_MS later) it plays; one at a
+   *  time; the row's ▶ again, ✕ or back returns to the live view; a pass really happening on the pick takes priority. */
+  const [pvNote, setPvNote] = useState('');
+  const [pvStartAt, setPvStartAt] = useState(0);
+  const scrollRef = useRef<ScrollView | null>(null);
+  const pvY = useRef(0);
+  const pvLive = passLiveNow(p.picked, p.readout, p.list, now);
+  const pvId = pvRow ? previewId(pvRow) : null;
+  const pvPress = (r: PassPreviewRow) => {
+    const res = passPreviewPress(pvId, previewId(r), pvLive);
+    setPvRow(res.id ? r : null);
+    if (res.note) setPvNote(res.note);
+    if (res.id) {
+      setPvNote('');
+      setPvStartAt(Date.now() + PASS_START_DELAY_MS);
+      if (!p.tracks?.has(passKey(r.norad, r.aos))) p.onTrack?.(r.norad, r.aos, r.los);
+      // ★★ Stuart: the list may be far below the globe — bring the preview into view before it plays
+      requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: Math.max(0, pvY.current - 4), animated: false }));
+    }
+  };
+  useEffect(() => { if (pvRow && pvLive) { setPvRow(null); setPvNote(PASS_LIVE_NOW); } }, [pvRow, pvLive]);
+  useEffect(() => { if (!pvNote) return; const t = setTimeout(() => setPvNote(''), 8000); return () => clearTimeout(t); }, [pvNote]);
+  // back (a pad's back, Escape) stops the preview first — above the box's own keys
+  useEffect(() => {
+    if (!pvRow) return;
+    const sub = addKeyListener('down', (e) => { if (e.key === 'Back' && !e.typing) { setPvRow(null); return true; } return false; }, { priority: 1 });
+    return () => sub.remove();
+  }, [pvRow]);
+  // the station's history: the sky plot's cells, read once per kind (again after 10 min) — ?dots=0, the cells only
+  const histRef = useRef(new Map<string, { h: SkyHistory | null; at: number; busy: boolean }>());
+  const [histV, setHistV] = useState(0);
+  const histFor = (decoder: string | undefined): { kind: string; h: SkyHistory | null; ready: boolean } => {
+    const kinds = passHistoryKinds(decoder);
+    let ready = true;
+    for (const k of kinds) {
+      const e = histRef.current.get(k);
+      if (!e || (!e.busy && Date.now() - e.at > 600_000)) {
+        if (!skyGet) histRef.current.set(k, { h: null, at: Date.now(), busy: false });
+        else {
+          histRef.current.set(k, { h: e?.h ?? null, at: Date.now(), busy: true });
+          skyGet(skyPlotQuery(k, p.skyRadio ?? '', 0, 0, false, 'auto', true)).then((txt) => {
+            let h: SkyHistory | null = null;
+            try { h = txt ? skyHistory(parseSkyPlotJson(JSON.parse(txt))?.cells) : null; } catch { h = null; }
+            histRef.current.set(k, { h, at: Date.now(), busy: false });
+          }, () => histRef.current.set(k, { h: null, at: Date.now(), busy: false })).then(() => setHistV((n) => n + 1));
+        }
+      }
+      if (histRef.current.get(k)?.busy) ready = false;
+    }
+    for (const k of kinds) { const h = histRef.current.get(k)?.h; if (h && h.dots >= 30) return { kind: k, h, ready }; }
+    for (const k of kinds) { const h = histRef.current.get(k)?.h; if (h) return { kind: k, h, ready }; }
+    return { kind: kinds[kinds.length - 1], h: null, ready };
+  };
+  void histV;
+  const ptCache = useRef(new Map<string, { t: SatTrack; pt: PassTrack | null }>());
+  const ptFor = (r: PassPreviewRow): PassTrack | null | undefined => {
+    const k = passKey(r.norad, r.aos), t = p.tracks?.get(k);
+    if (!t || !p.rxPos) return undefined;
+    const c = ptCache.current.get(k);
+    if (c && c.t === t) return c.pt;
+    const pt = passTrackFrom(t, p.rxPos, { aos: r.aos, los: r.los });
+    ptCache.current.set(k, { t, pt });
+    if (ptCache.current.size > 40) ptCache.current.delete(ptCache.current.keys().next().value as string);
+    return pt;
+  };
+  // the first few hearable future passes' tracks, ONE a second (the panel's tick), for the rows' verdicts
+  const pvAsked = useRef(new Set<string>());
+  const pvRowsAll = rows.map((r) => passPreviewRow(r, !!p.rxPos)).filter((x): x is PassPreviewRow => !!x);
+  useEffect(() => {
+    if (!p.onTrack) return;
+    for (const r of pvRowsAll.slice(0, PASS_VERDICT_ROWS)) {
+      const k = passKey(r.norad, r.aos);
+      if (p.tracks?.has(k) || pvAsked.current.has(k)) continue;
+      pvAsked.current.add(k); histFor(r.decoder); p.onTrack(r.norad, r.aos, r.los);
+      return;
+    }
+  });
   // ★★★ beta92 OPEN IN VFO B — B's line and the line switch; with no B this is exactly the one-downlink box
   const vb = p.vfob && p.vfob.on && confirmed && p.vfob.norad === p.picked?.norad ? p.vfob : null;
   const [view, setView] = useState<'A' | 'B'>('A');
@@ -503,7 +591,7 @@ export default function SatellitePanel(p: SatellitePanelProps) {
         {/* ★ beta91 (Stuart 11-22, a screenshot: BIG with the list folded and nothing decoded yet, half the box empty) the box
              holds its full BIG height only while a picture is on show; otherwise it fits what is in it, up to that height */}
         {/* ★★ beta96 the body is OPAQUE behind its text (decoderTextBacking): the waterfall's labels no longer read through it */}
-        <ScrollView style={[big && showPic ? { height: bodyH } : { maxHeight: bodyH }, { backgroundColor: decoderTextBacking(tk), borderRadius: 6 }]}
+        <ScrollView ref={scrollRef} style={[big && showPic ? { height: bodyH } : { maxHeight: bodyH }, { backgroundColor: decoderTextBacking(tk), borderRadius: 6 }]}
                     contentContainerStyle={scrollLane} showsVerticalScrollIndicator>
           {/* ★★★ beta96 THE WATCH VIEW (single mode: satellites): the pass now / next with its countdown, what the radio does,
                the last pass + GALLERY, and this receiver's timetable — never a dead screen between passes */}
@@ -521,7 +609,15 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               {wv.plan.map((r) => <Text key={r.key} style={[s.detail, r.live && s.up]} numberOfLines={1}>{r.text}</Text>)}
             </View>
           )}
-          {!!sel && !!sat && !!tx && (
+          {/* ★★★ beta97 PASS PREVIEW: in the live box's place (the live box hides while it plays) */}
+          {!!pvNote && <Text style={[s.note, { color: tk.accent }]}>{pvNote}</Text>}
+          {!!pvRow && !!p.rxPos && (
+            <View onLayout={(e) => { pvY.current = e.nativeEvent.layout.y; }}>
+              <SatPassPreview row={pvRow} pt={ptFor(pvRow)} hist={histFor(pvRow.decoder)} rx={p.rxPos} rxName={p.rxName}
+                              ink={tk.value} beam={tk.accent} ground={ground} startAt={pvStartAt} onStop={() => setPvRow(null)} />
+            </View>
+          )}
+          {!pvRow && !!sel && !!sat && !!tx && (
             <View style={s.box}>
               <View style={[satReadoutLayout(roW, big, GLOBE_SMALL_W) === 'beside' ? s.roSmall : s.ro, mine?.state === 'COAST' && s.coast]}
                     onLayout={(e) => { const w = Math.round(e.nativeEvent.layout.width); if (w > 0 && Math.abs(w - roW) > 2) setRoW(w); }}
@@ -803,6 +899,8 @@ export default function SatellitePanel(p: SatellitePanelProps) {
               </View>
             );
           })()}
+          {/* ★★★ beta97 the help line: what a row's ▶ does */}
+          {listOpen && pvRowsAll.length > 0 && <Text style={[s.detail, s.schedLine]}>{PASS_PREVIEW_HINT}</Text>}
           {listOpen && (!p.list ? <Text style={s.note}>Asking the server…</Text>
             : !allRows.length ? <Text style={s.note}>{p.list.why || (p.list.source?.fetching ? 'The satellites appear once the orbit data has arrived' : 'No satellites are listed on this server')}</Text>
             : !rows.length ? <Text style={s.note}>{satShowEmptyText(show, allRows, (p.picked ?? p.pending)?.norad ?? null)}</Text>
@@ -815,6 +913,12 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                 const slot = se ? p.sched!.slot(se.key) : undefined;
                 const offer = pk === 'remind' && !!p.onRemind;
                 const held = offer && (!!p.remindHeld?.(r.sat.norad, r.i) || !!se);   // ★ a degraded schedule reads as a reminder
+                // ★★★ beta97 PASS PREVIEW: ▶ on a future pass this radio hears, and its verdict once the track is here
+                const pr = greyed ? null : passPreviewRow(r, !!p.rxPos);
+                const pvOn = !!pr && pvId === previewId(pr);
+                const ptR = pr ? ptFor(pr) : undefined;
+                const hR = pr && ptR ? histFor(pr.decoder) : null;
+                const vd = ptR && hR?.ready ? passVerdict(ptR, hR.h) : null;
                 return (
                   <View key={`${r.sat.norad}.${r.i}.${r.pass?.aos ?? 0}`} style={s.rw}>
                   <Pressable
@@ -833,7 +937,21 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                     {/* ★★★ beta96 a scheduled pass: when it tunes, and what an overlap did to it */}
                     {!!se && <Text style={[s.detail, slot?.state === 'skipped' ? undefined : s.up]}>
                       {p.sched!.degraded ? 'SCHEDULED · reminds you (another listener is on this dial)' : satSchedRowText(se, slot, p.sched!.all)}</Text>}
+                    {!!vd && (
+                      <View style={s.vdRow}>
+                        <View style={[s.vdDot, vd.grade !== 'none' && { backgroundColor: PASS_GRADE_CSS[vd.grade] }]} />
+                        <Text style={[s.detail, s.vdTxt]}>{vd.text}</Text>
+                      </View>
+                    )}
                   </Pressable>
+                  {!!pr && (
+                    <View style={s.remKey}>
+                      <DecoderKey active={pvOn} onPress={() => pvPress(pr)} testID={`satPassPlay-${previewId(pr)}`}
+                                  accessibilityLabel={pvOn ? `${name}: ${PASS_PREVIEW_STOP}` : `Preview the ${name} pass: play it out on the globe and the sky plot`}>
+                        <View style={s.pvGlyph}><PassPlayGlyph color={pvOn ? tk.accent : tk.value} /></View>
+                      </DecoderKey>
+                    </View>
+                  )}
                   {pk === 'schedule' && !!p.sched && !!r.next && (
                     <View style={[s.remKey, s.schedKeys]}>
                       <DecoderKey label={satSchedKeyText(!!se)} active={!!se} onPress={() => p.sched!.onToggle(r.sat.norad, r.i, r.next!.aos)}
@@ -929,6 +1047,11 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   tickMark:{ fontSize: 11, lineHeight: 13, color: T.accent, fontWeight: '700' },
   sum:     { fontFamily: F, fontSize: 12, letterSpacing: 1, color: T.value },
   rw:      { flexDirection: 'row', alignItems: 'center' },
+  // ★★★ beta97 PASS PREVIEW: the row's ▶ and its verdict line
+  pvGlyph: { paddingHorizontal: 4, paddingVertical: 4, alignItems: 'center', justifyContent: 'center' },
+  vdRow:   { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 },
+  vdDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: T.muted },
+  vdTxt:   { flex: 1 },
   remKey:  { paddingRight: 6 },
   schedKeys: { gap: 4 },                                  // ★★★ beta96 SCHEDULE over PRIORITISE
   schedLine: { paddingHorizontal: 10, paddingTop: 4 },

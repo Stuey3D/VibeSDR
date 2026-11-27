@@ -21,6 +21,9 @@
 import { plainEnglish } from '../../../src/utils/cwVocab';
 import { tlmLivePass, tlmLoadPasses, type TlmPass } from '../../../src/utils/tlmCharts';
 import { tlmChartsHtml, tlmEnsureCss } from './tlmChartsWeb';
+import { paintGlobe } from './globePaint';   // ★★★ beta97 the half-globe's painter (the pass preview paints with it too)
+import { PassPreviewView, PASS_PLAY_GLYPH, PREVIEW_CSS, previewId, type PassPreviewRow } from './satPreviewWeb';   // ★★★ beta97 PASS PREVIEW
+import { passLiveNow, passPreviewRow, PASS_PREVIEW_HINT, PASS_PREVIEW_WHAT, PASS_PREVIEW_STOP, PASS_GRADE_WORD } from '../../../src/services/satPreview';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per packet
 import {
   GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_KEY_TEXT, GLOBE_RX_DOT, globeArrowPath, globeGlyph, globeLayers, satReadoutLayout, globeLandInk, SatReminders, globeLabels, satMapOffered, satRemindEnds, satRemindKeyText, SAT_REMIND_FORGET_WHAT, SAT_REMIND_SET_WHAT, satRemindLead,
@@ -421,10 +424,12 @@ export class SatPanel {
   private skyMode: SkyMode = 'auto';
   private skySeq = 0;
   private oTxtKey = ''; private oSkyKey = ''; private oPkKey = '';
+  /** ★★★ beta97 PASS PREVIEW — ▶ on a future pass plays it out on the globe and a sky plot (satPreviewWeb.ts) */
+  readonly pv: PassPreviewView;
 
   constructor(private deps: SatPanelDeps) {
     if (!document.getElementById('satPanelCss')) {
-      const st = document.createElement('style'); st.id = 'satPanelCss'; st.textContent = CSS; document.head.appendChild(st);
+      const st = document.createElement('style'); st.id = 'satPanelCss'; st.textContent = CSS + PREVIEW_CSS; document.head.appendChild(st);
       tlmEnsureCss();   // ★★ beta91 TELEMETRY CHARTS
     }
     this.el = document.createElement('div');
@@ -469,6 +474,13 @@ export class SatPanel {
     this.sWatch = q('watch'); this.sOnly = q('only');
     this.oTxt = this.sOrb.querySelector('[data-o="txt"]') as HTMLElement; this.oSky = this.sOrb.querySelector('[data-o="sky"]') as HTMLElement;
     this.oPk = this.sOrb.querySelector('[data-o="pk"]') as HTMLElement;
+    // ★★★ beta97 PASS PREVIEW: its note and its own box where the live box sits (the live box hides while it plays)
+    this.pv = new PassPreviewView({
+      host: this.el, rxPos: () => this.deps.rxPos(), rxName: () => this.deps.rxName?.() || '',
+      track: this.deps.track, skyGet: this.deps.skyGet, skyRadio: this.deps.skyRadio,
+      changed: () => { if (this.open) this.render(); },
+    });
+    this.sBox.before(this.pv.note, this.pv.el);
     // ★ 1.6 the reminders' pop-ups — their own place at the top of the window (they fire with the mode off too)
     this.remEl = document.createElement('div');
     this.remEl.id = 'satRemind'; this.remEl.hidden = true; this.remEl.setAttribute('aria-live', 'polite');
@@ -531,6 +543,7 @@ export class SatPanel {
     if (this.watch && this.on && !force && this.cap) { this.refusal = SAT_SINGLE_WHY; if (this.open) this.render(); return; }
     const was = this.on;
     this.on = false;
+    this.pv.stop(undefined, true);   // ★★★ beta97
     this.el.hidden = true;
     if (this.timer) { clearInterval(this.timer); this.timer = 0; }
     if (was) this.deps.drop();
@@ -670,6 +683,7 @@ export class SatPanel {
   }
   /** ★ 1.7 the pass's path: its `geo` is the dotted orbit (an older server sends none — no line). */
   onTrack(t: SatTrack) {
+    this.pv.onTrack(t);   // ★★★ beta97 every pass's track is kept for the preview and the rows' verdicts
     if (!this.picked || t.norad !== this.boxNorad()) return;   // ★★★ beta94 the followed ORBCOMM bird's path too
     this.track = t;
     if (this.open) this.paintPick();
@@ -748,6 +762,7 @@ export class SatPanel {
 
   private tick() {
     if (!this.open) return;
+    this.pv.tick(this.pvLive());   // ★★★ beta97 a pass really happening on the pick takes priority over a preview
     this.askTrack();
     if (Date.now() - this.listAt > satListEveryMs(this.list)) { this.deps.list(); this.listAt = Date.now(); }
     this.render();
@@ -761,6 +776,9 @@ export class SatPanel {
     if (!b || b.disabled) return;
     const act = b.dataset.act;
     if (act === 'exit') { this.exit(); return; }
+    // ★★★ beta97 PASS PREVIEW: a row's ▶, and the preview's own keys
+    if (act === 'pv') { const r = this.pvRowOf(b); if (r) this.pv.start(r, this.pvLive()); return; }
+    if (act && act.startsWith('pv') && this.pv.onAct(act, b)) return;
     if ((act === 'remind' || act === 'sched' || act === 'prio') && this.watch) { this.refusal = SAT_SINGLE_WHY; this.render(); return; }
     if (act === 'min') { this.setMin(!this.min); return; }
     if (act === 'size') { this.setBig(!this.big, true); return; }
@@ -913,6 +931,7 @@ export class SatPanel {
     const srvK = this.srv();
     const sEntries = this.sched.all(srvK);
     const plan = satSchedPlan(sEntries);
+    const pvRows: PassPreviewRow[] = [];
     for (const r of rows.slice(0, 160)) {   // ★ 2026-11-24 every pass is a row now (was 40)
       const sel = !r.later && ((this.picked && this.picked.norad === r.sat.norad && this.picked.tx === r.i) || (this.pending && this.pending.norad === r.sat.norad && this.pending.tx === r.i));
       const name = r.sat.tx.length > 1 ? `${r.sat.name} · ${r.tx.label}` : r.sat.name;
@@ -926,12 +945,20 @@ export class SatPanel {
       anyRemind ||= offer;
       anySched ||= pk === 'schedule';
       const slot = se ? plan.get(se.key) : undefined;
+      // ★★★ beta97 PASS PREVIEW: ▶ on a future pass this radio can hear, and the verdict once its track is here
+      const pr = this.pvRow(r);
+      const pvOn = !!pr && this.pv.key === previewId(pr);
+      const vd = pr ? this.pv.verdictFor(pr) : null;
+      if (pr) pvRows.push(pr);
       h += `<div class="sat-rw"><button class="sat-row${r.grey ? ' grey' : ''}${r.up ? ' up' : ''}${sel ? ' on' : ''}" data-act="pick" data-norad="${r.sat.norad}" data-tx="${r.i}"`
         + (r.grey ? ` aria-disabled="true" data-why="${esc(r.why)}" title="${esc(r.why)}"` : ` title="${esc((r.tx.note || r.tx.label) + ' — tune there' + (this.autoDoppler ? ' and correct the Doppler' : ''))}"`)
         + `><span class="sat-n">${esc(name)}</span><span class="sat-w">\u0000${whens.push(satWhenText(r, now)) - 1}\u0000</span>`
         + `<span class="sat-f">${esc(satTxDetail(r.tx))}${inactive}${r.grey ? ' — ' + esc(r.why) : ''}${r.grey ? '' : qualityHtml(r.pass)}</span>`
+        + (vd ? `<span class="sat-vd" title="${esc(PASS_GRADE_WORD[vd.grade])}"><i class="g-${vd.grade}"></i>${esc(vd.text)}</span>` : '')
         + (se ? `<span class="sat-s${slot?.state === 'skipped' ? ' skip' : ''}">${esc(sess.kind === 'remind' ? 'SCHEDULED · reminds you (another listener is on this dial)' : satSchedRowText(se, slot, sEntries))}</span>` : '')
         + `</button>`
+        + (pr ? `<button class="sat-pvb${pvOn ? ' on' : ''}" data-act="pv" data-key="${esc(previewId(pr))}" data-norad="${pr.norad}" data-tx="${pr.tx}" data-aos="${pr.aos}" data-los="${pr.los}"`
+            + ` aria-pressed="${pvOn}" title="${esc(pvOn ? PASS_PREVIEW_STOP : PASS_PREVIEW_WHAT)}" aria-label="${esc(pvOn ? PASS_PREVIEW_STOP : 'Preview this pass')}">${PASS_PLAY_GLYPH}</button>` : '')
         + (offer ? `<button class="sat-rem${held ? ' on' : ''}" data-act="remind" data-norad="${r.sat.norad}" data-tx="${r.i}" aria-pressed="${!!held}"`
             + ` title="${esc(held ? SAT_REMIND_FORGET_WHAT : SAT_REMIND_SET_WHAT)}" aria-label="${esc(held ? SAT_REMIND_FORGET_WHAT : 'Remind me before this pass')}">${esc(satRemindKeyText(!!held))}</button>` : '')
         // ★★★ beta96 SCHEDULE / CANCEL, and PRIORITISE on a scheduled pass that overlaps another
@@ -941,6 +968,8 @@ export class SatPanel {
             + `</span>` : '')
         + `</div>`;
     }
+    this.pv.askRows(pvRows);   // ★★★ beta97 the first few rows' tracks, one a second, for their verdicts
+    if (pvRows.length) h = `<div class="sat-sline sat-dim" data-s="pvhint">${esc(PASS_PREVIEW_HINT)}</div>` + h;   // ★★★ beta97 the help line
     // ★★★ beta96 why it is SCHEDULE / REMIND here, the overlap rule, the degraded note, and the schedule's own state
     if (anySched || anyRemind) { const sl = satSessionLine(sess, 'web'); if (sl) h += `<div class="sat-sline sat-dim">${esc(sl)}</div>`; }
     if (sess.kind === 'schedule' && sEntries.some((e) => (plan.get(e.key)?.over.length ?? 0) > 0)) h += `<div class="sat-sline sat-dim">${esc(SAT_SCHED_OVERLAP_RULE)}</div>`;
@@ -1383,6 +1412,19 @@ export class SatPanel {
     if (prev.hz > 0) this.deps.back?.(prev.hz, prev.mode);
   }
 
+  // ── ★★★ beta97 PASS PREVIEW ───────────────────────────────────────────────────────────────────────────────────────
+  /** A row's preview: a future pass (not up now) on a downlink this radio hears. null = no ▶. */
+  private pvRow(r: ReturnType<typeof satModeRows>[number]): PassPreviewRow | null {
+    return passPreviewRow(r, !!this.deps.rxPos());
+  }
+  private pvRowOf(b: HTMLButtonElement): PassPreviewRow | null {
+    const norad = Number(b.dataset.norad), tx = Number(b.dataset.tx), aos = Number(b.dataset.aos);
+    const r = satModeRows(this.list, this.now()).find((x) => x.sat.norad === norad && x.i === tx && x.next?.aos === aos);
+    return r ? this.pvRow(r) : null;
+  }
+  /** a pass really happening on the pick (it takes priority over a preview) */
+  private pvLive(): boolean { return passLiveNow(this.picked, this.readout(), this.list, this.now()); }
+
   /** ★ The half-globe: a 2D canvas (no WebGL, no tiles) — the dome, a 30° graticule (fainter than the land), the pass's
    *  orbit DOTTED with its highest point ticked (1.7), the receiver's GREEN dot and the drawn bird with its beam (1.8), both
    *  labelled; BIG adds a one-line key under it. */
@@ -1412,66 +1454,10 @@ export class SatPanel {
     const amber = css.getPropertyValue('--amber').trim() || '#ffb000';
     const ground = css.backgroundColor || 'rgba(8,6,2,.96)';
     ctx.clearRect(0, 0, W, H);
-    ctx.save();
-    ctx.beginPath(); ctx.rect(0, 0, W, g.cy); ctx.clip();
-    ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, Math.PI, 2 * Math.PI);
-    ctx.globalAlpha = 0.12; ctx.fillStyle = ink; ctx.fill();
-    ctx.globalAlpha = 0.55; ctx.strokeStyle = ink; ctx.lineWidth = 2; ctx.stroke();
-    if (g.grid) { ctx.globalAlpha = 0.12; ctx.lineWidth = 1; ctx.stroke(new Path2D(g.grid)); }   // ★ fainter than the land
-    // ★ rough land (globeCoast.ts) — beta91 neutral, never the faceplate's hue, so it reads through the beam (globeLandInk)
-    if (g.coast) { ctx.globalAlpha = 0.7; ctx.lineWidth = 1; ctx.strokeStyle = globeLandInk(ground); ctx.stroke(new Path2D(g.coast)); ctx.strokeStyle = ink; }
-    if (g.foot) { ctx.globalAlpha = 0.28; ctx.fillStyle = amber; ctx.fill(new Path2D(g.foot)); }
-    if (ly.beam && g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
-    // ★ 1.7 the orbit, dotted, and its highest point
-    if (g.orbit) {
-      ctx.globalAlpha = 0.85; ctx.strokeStyle = amber; ctx.lineWidth = 1.5 * sc; ctx.lineCap = 'round';
-      ctx.setLineDash([1.5 * sc, 4 * sc]); ctx.stroke(new Path2D(g.orbit)); ctx.setLineDash([]);
-      if (ly.tick && g.tcaTick) { ctx.lineWidth = 1.5 * sc; ctx.stroke(new Path2D(g.tcaTick)); }
-      // ★ beta91 which way it travels: open chevrons along increasing time, haloed in the ground so they read over the land
-      if (ly.arrows && g.arrows.length) {
-        const ar = new Path2D(globeArrowPath(g.arrows, GLOBE_ARROW_PX * sc));
-        ctx.lineJoin = 'round';
-        ctx.globalAlpha = 0.8; ctx.strokeStyle = ground; ctx.lineWidth = 3.6 * sc; ctx.stroke(ar);
-        ctx.globalAlpha = 1; ctx.strokeStyle = amber; ctx.lineWidth = 1.6 * sc; ctx.stroke(ar);
-      }
-    }
-    ctx.globalAlpha = 1;
-    // ★ the receiver: green with a dark ring on every faceplate (never the dome's ink)
-    if (g.rx) {
-      ctx.beginPath(); ctx.arc(g.rx.x, g.rx.y, GLOBE_RX_DOT.r * sc, 0, 2 * Math.PI);
-      ctx.fillStyle = GLOBE_RX_DOT.fill; ctx.fill();
-      ctx.lineWidth = GLOBE_RX_DOT.ringW * sc; ctx.strokeStyle = GLOBE_RX_DOT.ring; ctx.stroke();
-    }
-    // ★ 1.8 the bird: tube, dish towards the Earth, panels along its heading (cells ruled)
-    // ★★ beta96 SMALL: the satellite as a glyph — a square body, a line either side, on the BIG bird's heading, whole pixels
-    if (ly.glyph && g.bird && g.sat) {
-      const gl = globeGlyph(g.sat, g.bird.u, sc), bird = globeLandInk(ground);
-      ctx.globalAlpha = 1; ctx.lineCap = 'butt'; ctx.strokeStyle = bird; ctx.lineWidth = GLOBE_GLYPH.line * sc; ctx.stroke(new Path2D(gl.panels));
-      ctx.fillStyle = bird; ctx.fill(new Path2D(gl.body));
-    }
-    if (ly.bird && g.bird) {
-      const b = g.bird;
-      const bird = globeLandInk(ground);   // ★ beta91 the bird is neutral too, so it stands off the beam (Stuart 11-22)
-      ctx.lineJoin = 'round';
-      ctx.globalAlpha = 0.45; ctx.fillStyle = bird; ctx.fill(new Path2D(b.panels));
-      ctx.globalAlpha = 1; ctx.strokeStyle = bird; ctx.lineWidth = 1.2 * sc; ctx.stroke(new Path2D(b.panels));
-      ctx.lineWidth = 0.8 * sc; ctx.globalAlpha = 0.9; ctx.stroke(new Path2D(b.cells));
-      ctx.globalAlpha = 1; ctx.lineWidth = 1.6 * sc; ctx.stroke(new Path2D(b.boom));
-      ctx.fillStyle = bird; ctx.fill(new Path2D(b.body));
-      ctx.lineWidth = 1 * sc; ctx.strokeStyle = ground; ctx.stroke(new Path2D(b.body));
-      ctx.fillStyle = bird; ctx.fill(new Path2D(b.dish));
-    }
     // ★ the labels: the receiver (the server's name, else RECEIVER) and the bird's name, kept off each other
     const font = 10 * sc;
     const L = ly.labels ? globeLabels(g, this.deps.rxName?.() || '', sat.name, font) : { rx: null, sat: null };
-    ctx.font = `${font.toFixed(1)}px system-ui,sans-serif`; ctx.textBaseline = 'alphabetic';
-    for (const lb of [L.rx, L.sat]) {
-      if (!lb) continue;
-      ctx.textAlign = lb.anchor === 'start' ? 'left' : lb.anchor === 'end' ? 'right' : 'center';
-      ctx.globalAlpha = 0.9; ctx.lineWidth = 3 * sc; ctx.strokeStyle = ground; ctx.strokeText(lb.text, lb.x, lb.y);
-      ctx.globalAlpha = 1; ctx.fillStyle = ink; ctx.fillText(lb.text, lb.x, lb.y);
-    }
-    ctx.restore();
+    paintGlobe(ctx, g, { sc, ink, amber, ground, ly, labels: L, font }, 'all');
     // ★ BIG: the one-line key (the dotted half only when there is an orbit to see)
     const key = this.big ? (g.orbit ? GLOBE_KEY_TEXT : GLOBE_KEY_TEXT.replace(/^.*· /, '')) : '';
     this.sKey.hidden = !key; if (this.sKey.textContent !== key) this.sKey.textContent = key;

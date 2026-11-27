@@ -31634,7 +31634,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         } else if (reqLine.rfind("GET /vibeserver/skyplot.json", 0) == 0 || reqLine.rfind("GET /vibeserver/skyplot.png", 0) == 0) {
             /* ★★ V12 2026-11-24 THE SKY PLOT (vibe_skyplot.h, docs/v12/SKY-PLOT.md): where this machine's aerials hear
              *  satellites — one dot per satellite per 5 s of decodes (ORBCOMM first), at its az/el, coloured by SNR; grey =
-             *  tracked, nothing decoded. ?kind=orbcomm|meteor|aprs|funcube (default orbcomm) · ?radio=<id> (the logs'
+             *  tracked, nothing decoded. ?kind=orbcomm|meteor|aprs|funcube (default orbcomm) · ?dots=0 (beta97: the cells only) · ?radio=<id> (the logs'
              *  filter: a sky plot is about an AERIAL) · ?days=N (default all kept) · ?norad=N. .json for the clients'
              *  own drawing, .png the server's picture (the same one the gallery keeps). Satellite positions and SNRs only;
              *  the gallery's privacy applies. */
@@ -31670,8 +31670,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 f.norad = std::max(0LL, std::atoll(qv("norad").c_str()));
                 std::map<std::string, uint64_t> radios;
                 const auto dots = vibe::skyplot::shared().read(f, vibe::skyplot::kMaxOut + 1, &radios);
-                const bool trunc = dots.size() > vibe::skyplot::kMaxOut;
-                std::vector<vibe::skyplot::Dot> v(dots.begin(), dots.begin() + (long)std::min(dots.size(), vibe::skyplot::kMaxOut));
+                // ★★★ beta97 PASS PREVIEW: ?dots=0 = the cells only (the preview's verdict reads the heat map, not 20,000 dots)
+                const bool noDots = qv("dots") == "0";
+                const bool trunc = !noDots && dots.size() > vibe::skyplot::kMaxOut;
+                std::vector<vibe::skyplot::Dot> v(dots.begin(), dots.begin() + (long)(noDots ? 0 : std::min(dots.size(), vibe::skyplot::kMaxOut)));
                 // ★★★ beta94 the cells (storage by sky position — 30 days, whatever the dot log still holds): ?mode=auto|tracks|heatmap for the PNG
                 const vibe::skyplot::cells::Map cm = vibe::skyplot::shared().readCells(f.kind, f.radio, days > 0 ? (int)std::min(days, 3650LL) : vibe::skyplot::cells::kWindowDays);
                 const std::string md = qv("mode");

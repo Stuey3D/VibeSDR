@@ -89,7 +89,7 @@ import { SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, 
          type SatSchedPrev, type SatSchedRun } from '../services/satSchedule';   // ★★★ V12 the SATELLITE mode's box (timetable, pick box, half-globe, AUTO DOPPLER)
 import { SatStepKeeper, satClickDialHz, satPassbandOf } from '../services/satTune';   // ★★★ beta97 tuning inside a pass
 import { satDopplerBadge, satMarkerShiftHz, satListEveryMs, satPacketBaud, satMapOffered, satModeRows, satRemindLead, satRemindWhy,
-         SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTx, type SatVfoB } from '../services/satellites';
+         SatReminders, SAT_REMIND_LEAD_DEFAULT, SAT_SHOW_KEY, satShowParse, satShowStore, type SatShow, satTelemetryMerge, satMapOverlay, satAltKm, satTextAppend, SAT_BEACON_SKIM_HZ, SAT_BEACON_AUDIO_HALF_HZ, satDecoderKey, satDecLineShown, txTuneHz, type GeoPt, type SatList, type SatPicked, type SatReadout, type SatTelemetry, type SatTrack, type SatTx, type SatVfoB } from '../services/satellites';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
@@ -298,6 +298,7 @@ import { orbFollowChoice, orbViewMerge, type OrbView } from '../services/orbcomm
 import { orbOverlayFrom } from '../utils/orbcommView';
 import { xpdrListen, xpdrOverlayFrom, type XpdrStatus } from '../services/xpdr';   // ★★★ beta94 the transponder finder   // ★★ 2026-11-24 its slice and carriers on the waterfall
 import { skyRadioFromBase } from '../utils/skyPlot';
+import { passKey } from '../services/satPreview';   // ★★★ beta97 PASS PREVIEW
 import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
 import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
@@ -2848,6 +2849,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  when the next pass begins; 1.3 the pick's telemetry (fctlm) */
   const [satOrbit, setSatOrbit] = useState<{ geo: GeoPt[]; tcaIdx?: number } | null>(null);
   const satTrackAsk = useRef<{ norad: number; aos: number } | null>(null);
+  /** ★★★ beta97 PASS PREVIEW: every pass track the server sends, by pass (bounded), and a bump when one arrives */
+  const satTracksRef = useRef(new Map<string, SatTrack>());
+  const [satTracksV, setSatTracksV] = useState(0);
   const [satTlm, setSatTlm] = useState<SatTelemetry | null>(null);
   /* ★★ 2026-11-24 ORBCOMM (services/orbcomm.ts): the pick's decoder state + recent packets, and the manual fallback under
    *  AUTO — carriers at most (0 = AUTO), this app session only (a later pick re-attaches with it). */
@@ -8540,7 +8544,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (satSchedRef.current.all(satSrvKeyRef.current).length) { satSchedRef.current.refresh(satSrvKeyRef.current, l); satSchedSave(); }   // ★★★ beta96 … and a scheduled pass
       },
       /* ★ 1.7 the pick's pass path — its geo is the dotted orbit (an older server sends none: no line) */
-      onSatTrack: (t) => { if (!destroyed.current && satPickedRef.current && satBoxNoradRef.current === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null); },
+      onSatTrack: (t) => {
+        if (destroyed.current) return;
+        // ★★★ beta97 PASS PREVIEW: kept by pass for the preview and the rows' verdicts
+        const m = satTracksRef.current; m.set(passKey(t.norad, t.aos), t);
+        if (m.size > 32) m.delete(m.keys().next().value as string);
+        setSatTracksV((n) => n + 1);
+        if (satPickedRef.current && satBoxNoradRef.current === t.norad) setSatOrbit(t.geo ? { geo: t.geo, tcaIdx: t.tcaIdx } : null);
+      },
       onSat: (r) => {
         if (destroyed.current) return;
         // ★ an ending or a refusal says why in the SATELLITE box (a refused pick clears its "Tuning…") — no toast, no flashing
@@ -17460,6 +17471,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           }}
           skyGet={satGalleryGet}
           skyRadio={skyRadioFromBase(connectBase)}
+          tracks={satTracksRef.current} tracksV={satTracksV}
+          onTrack={(n, a, l) => (client.current as unknown as { satTrack?: (n: number, a: number, l: number) => void } | null)?.satTrack?.(n, a, l)}
           galleryGet={satGalleryGet}
           remindHeld={(n, t) => !!satRemRef.current.find(satSrvKey, n, t)}
           passKind={satKeyKind(satSess)}
