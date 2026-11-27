@@ -2596,8 +2596,11 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             <option value="10">10&deg;</option><option value="20">20&deg;</option><option value="30">30&deg;</option>
             <option value="45">45&deg;</option></select>
           and nobody is listening, the radio follows it &mdash; tuned, Doppler-corrected and decoding &mdash; and what it
-          decodes goes to the gallery (Server tab). Background decoding pauses for the pass and carries on when the
-          satellite has set. The moment anybody connects, the pass is given up and the radio is theirs.</p>
+          decodes goes to the gallery (Server tab). A pass waits until nobody has been connected for a while (the same
+          wait a listener whose connection drops is given &mdash; up to a minute, or the time their place is kept), so a
+          blink in somebody's WiFi never loses them the radio. Background decoding, or a mode kept running, pauses for the
+          pass and carries on when the satellite has set. The moment anybody connects, the pass is given up, a mode it
+          paused comes straight back, and the radio is theirs.</p>
         <!-- ★★★ beta94 THE TWO GROUPS + THEIR PRIORITY (Stuart 11-25: "group meteor and orbcomm then allow the user to choose a
              priority. so meteor first for images and orbcomm 2nd for antenna plotting"). Meteor = every Meteor-M pass;
              ORBCOMM = sky-plot monitoring whenever a bird is up. Where one capture holds both (spBothNote) they run TOGETHER

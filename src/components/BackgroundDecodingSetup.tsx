@@ -390,8 +390,11 @@ export default function BackgroundDecodingSetup(p: Props) {
             <React.Fragment key={e}>{key(e + '\u00b0', () => set((m) => { m.sat.minEl = e; }), model.sat.minEl === e, !model.sat.on)}</React.Fragment>)}
         </View>
         <Text style={hint}>and nobody is listening, the radio follows it {'—'} tuned, Doppler-corrected and decoding {'—'} and what it
-          decodes goes to the gallery. Background decoding pauses for the pass and carries on when the satellite has set. The
-          moment anybody connects, the pass is given up and the radio is theirs.</Text>
+          decodes goes to the gallery. A pass waits until nobody has been connected for a while (the same wait a listener whose
+          connection drops is given {'—'} up to a minute, or the time their place is kept), so a blink in somebody{'’'}s WiFi
+          never loses them the radio. Background decoding, or a mode kept running, pauses for the pass and carries on when the
+          satellite has set. The moment anybody connects, the pass is given up, a mode it paused comes straight back, and the
+          radio is theirs.</Text>
         {/* ★★ beta95 WARN, DON'T BLOCK (Stuart 11-25): ADS-B kept running and the passes both run — the server pauses ADS-B
              for a pass and resumes it at LOS (the Setup page's spKeepNote, the same words). */}
         {!!p.keepSat && model.sat.on && (
