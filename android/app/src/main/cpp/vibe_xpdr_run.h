@@ -94,6 +94,13 @@ public:
          *  sat_tlm / fctlm_status / gallery — vibefc::Run::Out; its trimNow / trimTo are this run's own, set here). */
         double tlmHz = 0;
         vibefc::Run::Out tlmOut;
+        /** ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER (decoders/sat_skim.h, wired by the host): every block of the TURNED
+         *  stream — 0 Hz = the span's satellite-frame centre, the Doppler already out — with its capture time and whether
+         *  the model's Doppler is live (`locked`; false = the stream is not corrected and must not be skimmed). One mixer
+         *  for the whole passband, reused: nothing is turned twice. Null = no skimmer. */
+        std::function<void(const cf32* x, int n, double rate, double captureUtc, bool locked)> turned;
+        /** ★★★ beta97 more of the status object ("\"skim\":{…}" — no leading comma; "" = nothing), asked once a second. */
+        std::function<std::string()> statusExtra;
     };
     explicit Run(Opts o) : o_(std::move(o)) {
         if (o_.tlmHz > 0) {
@@ -108,7 +115,8 @@ public:
     }
 
     /** One IQ block from the host (decode thread): `rate`, centred on `centreRfHz` (the fixed slice, clamped into the capture). */
-    void feedIq(const cf32* x, int n, double rate, double centreRfHz) {
+    /** ★★★ beta97 `captureUtc`: the block's last sample's capture time (the skimmer cuts UTC slots by it); NaN = now. */
+    void feedIq(const cf32* x, int n, double rate, double centreRfHz, double captureUtc = NAN) {
         if (n <= 0 || !(rate > 0)) return;
         const double dop = o_.dopplerHz ? o_.dopplerHz(o_.centreHz) : 0.0;
         dop_ = std::isfinite(dop) ? dop : 0.0;
@@ -130,6 +138,10 @@ public:
             x = mix_.data();
         }
         if (!sk_ || std::fabs(rate - rate_) > 0.5) build_(rate);
+        // ★★★ beta97 the digital-mode skimmer reads this same turned stream — only while the model's Doppler is in it
+        //   (no lock: 0 Hz is the slice's centre with the Doppler still on every signal — nothing it could decode)
+        skimLocked_ = turned && dop_ != 0.0;
+        if (o_.turned) o_.turned(x, n, rate, captureUtc, skimLocked_);
         sk_->feedIq(x, n);
         vf_->feed(x, n);
         if (tone_) tone_->feed(x, n);
@@ -346,6 +358,7 @@ private:
         }
         j += "]";
         if (!fid_.empty()) j += ",\"follow\":{\"id\":\"" + fid_ + "\",\"src\":\"" + fSrc_ + "\",\"off\":" + num_(fActive_ ? fOff_ : 0.0, 0) + "}";
+        if (o_.statusExtra) { const std::string x = o_.statusExtra(); if (!x.empty()) j += "," + x; }   // ★★★ beta97 "skim"
         j += "}}";
         last_ = j;
         if (o_.json) o_.json(j);
@@ -361,6 +374,7 @@ private:
     std::complex<double> mixPh_{1, 0};
     double rate_ = 0, lo_ = 0, hi_ = 0, dop_ = 0, t_ = 0, statusAt_ = 0, followAt_ = 0;
     bool firstLogged_ = false;
+    bool skimLocked_ = false;                   // ★★★ beta97 the last block was Doppler-corrected (the skimmer may read it)
     // the follow
     std::string fid_, fSrc_;
     int fKind_ = 0;

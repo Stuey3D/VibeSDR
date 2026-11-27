@@ -343,6 +343,13 @@ public:
      *  ("<...>"); a resolved hash ("<PJ4/K1ABC>") loses its brackets. Nothing with a '<' or '>' is ever spotted —
      *  the host's whitelist turned "<...>" into "" and the map got an EMPTY-callsign spot (audit 2026-10-04). */
     static bool spotCallsign(const char* deField, std::string& out);
+    /** ★★★ beta97 (the satellite skimmer, decoders/sat_skim.h, shares these with runDecode — one set of rules): the options a
+     *  live slot decode runs with at ladder `depth` (0 full … 5 the minimum), `loadedAtStart` = the server loaded, up to
+     *  `maxPasses`, with `book` (null = no a-priori). The caller adds abort / mayRunPass. */
+    static Ft8SlotOptions liveOptions(FtxMode mode, int depth, bool loadedAtStart, int maxPasses, FtxApBook* book);
+    /** ★★★ beta97 One result → what a spot carries: the sender's call (false = no spot: unresolved, empty, not standard), the
+     *  grid ("" unless a real 4-character locator) and the message as WSJT-X prints it; `to` = the to-field, if wanted. */
+    static bool spotFields(const Ft8Result& r, std::string& deCall, std::string& grid, std::string& text, std::string* to = nullptr);
 
     // call_to, call_de, grid (any may be empty), snr dB, audio offset Hz.
     std::function<void(const std::string& callTo, const std::string& callDe,

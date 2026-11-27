@@ -29,7 +29,7 @@ for f in $C/ft8_lib/ft8/*.c $C/ft8_lib/fft/kiss_fft.c $C/ft8_lib/fft/kiss_fftr.c
   arm-linux-gnueabihf-gcc $F -c -I $C/ft8_lib -o $O/obj/$(basename $f .c).o $f
 done
 arm-linux-gnueabihf-g++ -std=c++17 $F -static -I $C -I $C/ft8_lib -I $C/vibedsp -o $O/band_bench /w/src/tools/band-bench/band_bench.cpp \
-  $C/decoders/digi_modes.cpp $C/decoders/digi_tuner.cpp $C/decoders/digi_spotter.cpp $C/decoders/ft8_decoder.cpp \
+  $C/decoders/digi_modes.cpp $C/decoders/digi_tuner.cpp $C/decoders/digi_spotter.cpp $C/decoders/sat_skim.cpp $C/decoders/ft8_decoder.cpp \
   $C/decoders/jtty_decoder.cpp $C/decoders/psk_skimmer.cpp $C/decoders/cw_skimmer.cpp $C/decoders/digimodes/*.cpp \
   $C/vibedsp/ddc.cpp $O/obj/*.o -lpthread
 ls -la $O/band_bench

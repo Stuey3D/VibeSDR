@@ -337,6 +337,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/digi_modes.cpp"
     "${CPP_DIR}/decoders/digi_tuner.cpp"
     "${CPP_DIR}/decoders/digi_spotter.cpp"
+    "${CPP_DIR}/decoders/sat_skim.cpp"   # ★★★ beta97 the satellite digital-mode skimmer (decoders/sat_skim.h)
     ${DIGIMODE_SRC}
     ${FT8_SRC})
 target_include_directories(vibeserver_core PUBLIC

@@ -175,6 +175,7 @@ add_library(vibelocalsdr SHARED
     decoders/digi_modes.cpp
     decoders/digi_tuner.cpp
     decoders/digi_spotter.cpp
+    decoders/sat_skim.cpp   # ★★★ beta97 the satellite digital-mode skimmer
     ${DIGIMODE_SRC}
     ${FT8_LIB_SRC})
 set_target_properties(vibelocalsdr PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

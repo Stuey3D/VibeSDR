@@ -1395,13 +1395,12 @@ void Ft8Decoder::advance(int count, double captureUtc) {
     }
 }
 
-void Ft8Decoder::runDecode() {
-    const auto t0 = std::chrono::steady_clock::now();
-    // ★ How late this decode starts after its window was complete (a queue that ran behind, a busy core).
-    const double lagMs = std::max(0.0, std::min(slotPeriod * 1000.0, (vibe::vibeUtcNow() - workSlotEnd_) * 1000.0));
+/* ★★★ beta97 ONE SET OF RULES FOR EVERY LIVE FT8 / FT4 DECODE — this decoder's worker and the satellite skimmer's
+ *  (decoders/sat_skim.cpp, which decodes many windows' slots from a shared queue and cannot own an Ft8Decoder each).
+ *  Pulled out of runDecode unchanged. */
+Ft8SlotOptions Ft8Decoder::liveOptions(FtxMode mode, int depth, bool loadedAtStart, int maxPasses, FtxApBook* book) {
     Ft8SlotOptions o;
-    o.maxPasses = std::max(1, std::min(3, maxPasses.load()));
-    o.abort = &abortDecode;
+    o.maxPasses = std::max(1, std::min(3, maxPasses));
     /* ★★ OSD only on spare CPU, like the passes: a loaded box decodes exactly as before (2026-10-05). 24 hard
      *  errors: on the real hour 30 let one garbage message through ("7Z1OSX ZF7IZT R QM53") and 36 two; 24
      *  none, for +1.7 % of jt9's decodes at +2 ms a slot on a Mac.
@@ -1412,18 +1411,18 @@ void Ft8Decoder::runDecode() {
      *  CPU is. */
     /* ★★★ beta94 THE LOAD LADDER (digi_load_ladder.h — Stuart: "the depth drops before dropping entire bands"): the
      *  existing knobs, one more at each step, before Band pauses a whole mode. */
-    const int depth = depthProbe ? std::max(0, std::min(5, depthProbe())) : 0;
+    depth = std::max(0, std::min(5, depth));
     if (depth >= 3) o.maxPasses = 1;
     if (depth >= 4) o.maxCandidates = std::min(o.maxCandidates, 70);   // ★ digi::LoadLadder::kFewerCandsN
     if (depth >= 5) o.minScore = std::max(o.minScore, 14);           // ★ digi::LoadLadder::kStrictMinScore
-    const bool loadedAtStart = (loadProbe ? loadProbe() : false) || depth >= 3;
+    loadedAtStart = loadedAtStart || depth >= 3;
     const bool deep = !loadedAtStart && o.maxPasses >= 2 && depth < 2;
     o.fine = 1;
     o.bpStall = kBpStall;
     o.onlyChanged = true;
-    o.osdMaxErrors = deep && mode_ != FtxMode::FT2 ? kOsdMaxErrors : 0;   // ★ FT2: none (docs/v12/JS8-FT2.md)
+    o.osdMaxErrors = deep && mode != FtxMode::FT2 ? kOsdMaxErrors : 0;   // ★ FT2: none (docs/v12/JS8-FT2.md)
     o.osdPairSpan = deep ? kOsdPairSpan : 0;
-    o.ap = &apBook_;
+    o.ap = book;
     o.apTry = deep;
     /* ★★ V12 beta91 THE DEEP TIER — the owner's "Dig deeper" (deepTier(), set from Setup; the benchmark ticks it on a
      *  fresh setup only where it measured green). Only ever on top of full depth: a loaded slot, or one the pass gate
@@ -1434,8 +1433,46 @@ void Ft8Decoder::runDecode() {
     if (deep && deepOn && depth < 1) {
         o.apRepeat = true;
         o.apMaxCands = kDeepApCands;
-        if (mode_ == FtxMode::FT8) o.fineMinSync = kDeepFineMinSync;   // ★ FT8 only: FT4's 8 of 16 doubled its CPU for +1 %
+        if (mode == FtxMode::FT8) o.fineMinSync = kDeepFineMinSync;   // ★ FT8 only: FT4's 8 of 16 doubled its CPU for +1 %
     }
+    return o;
+}
+
+bool Ft8Decoder::spotFields(const Ft8Result& r, std::string& deCall, std::string& grid, std::string& text, std::string* to) {
+    char callTo[24] = {}, callDe[24] = {}, g[24] = {};
+    ftx_field_t fields[FTX_MAX_MESSAGE_FIELDS];
+    ftx_message_rc_t rc = ftx_message_decode_std(&r.msg, &g_hashIf, callTo, callDe, g, fields);
+    if (rc != FTX_MESSAGE_RC_OK) return false;
+    if (!spotCallsign(callDe, deCall)) return false;   // ★ empty or an unresolved "<...>": not a spot
+    /* ★★ beta94 THE MESSAGE AS SENT (WSJT-X's text: to, de, then the grid OR report — "CQ IW2FAC JN45",
+     *  "ZL1RKO W9DHI -16") — built BEFORE the grid field is cleared below, so a report or an RR73 shows as sent. */
+    text.clear();
+    for (const char* f : {(const char*)callTo, (const char*)callDe, (const char*)g}) {
+        if (!f[0]) continue;
+        if (!text.empty()) text.push_back(' ');
+        text += f;
+    }
+    // ★★ ft8_lib's third field is "grid OR report": "IO92", but also "-12", "R-12", "73", "RRR" and
+    //    "RR73". Only a real 4-character locator is a grid (B10: the map warned about ~40 "unparseable
+    //    grids" on every update, and every RR73 sign-off — a VALID-LOOKING square near the North Pole —
+    //    was plotted in the Arctic). Anything else is sent as no grid at all.
+    const bool realGrid = std::strlen(g) == 4
+        && g[0] >= 'A' && g[0] <= 'R' && g[1] >= 'A' && g[1] <= 'R'
+        && g[2] >= '0' && g[2] <= '9' && g[3] >= '0' && g[3] <= '9'
+        && std::strcmp(g, "RR73") != 0;
+    grid = realGrid ? std::string(g) : std::string();
+    if (to) *to = callTo;
+    return true;
+}
+
+void Ft8Decoder::runDecode() {
+    const auto t0 = std::chrono::steady_clock::now();
+    // ★ How late this decode starts after its window was complete (a queue that ran behind, a busy core).
+    const double lagMs = std::max(0.0, std::min(slotPeriod * 1000.0, (vibe::vibeUtcNow() - workSlotEnd_) * 1000.0));
+    const int depth = depthProbe ? std::max(0, std::min(5, depthProbe())) : 0;
+    const bool loadedAtStart = (loadProbe ? loadProbe() : false) || depth >= 3;
+    Ft8SlotOptions o = liveOptions(mode_, depth, loadedAtStart, maxPasses.load(), &apBook_);
+    o.abort = &abortDecode;
     o.mayRunPass = [&](int, double elapsedMs, double lastMs) {
         const bool loaded = (loadProbe ? loadProbe() : false) || depth >= 3;
         return passAllowed(slotPeriod * 1000.0, lagMs, elapsedMs, lastMs, loaded);
@@ -1457,31 +1494,10 @@ void Ft8Decoder::runDecode() {
     }
 
     for (const Ft8Result& r : res) {
-        char callTo[24] = {}, callDe[24] = {}, grid[24] = {};
-        ftx_field_t fields[FTX_MAX_MESSAGE_FIELDS];
-        ftx_message_rc_t rc = ftx_message_decode_std(&r.msg, &g_hashIf, callTo, callDe, grid, fields);
-        if (rc != FTX_MESSAGE_RC_OK) continue;
-        std::string deCall;
-        if (!spotCallsign(callDe, deCall)) continue;   // ★ empty or an unresolved "<...>": not a spot
-        /* ★★ beta94 THE MESSAGE AS SENT (WSJT-X's text: to, de, then the grid OR report — "CQ IW2FAC JN45",
-         *  "ZL1RKO W9DHI -16") — built BEFORE the grid field is cleared below, so a report or an RR73 shows as sent. */
-        curText_.clear();
-        for (const char* f : {(const char*)callTo, (const char*)callDe, (const char*)grid}) {
-            if (!f[0]) continue;
-            if (!curText_.empty()) curText_.push_back(' ');
-            curText_ += f;
-        }
-        // ★★ ft8_lib's third field is "grid OR report": "IO92", but also "-12", "R-12", "73", "RRR" and
-        //    "RR73". Only a real 4-character locator is a grid (B10: the map warned about ~40 "unparseable
-        //    grids" on every update, and every RR73 sign-off — a VALID-LOOKING square near the North Pole —
-        //    was plotted in the Arctic). Anything else is sent as no grid at all.
-        const bool realGrid = std::strlen(grid) == 4
-            && grid[0] >= 'A' && grid[0] <= 'R' && grid[1] >= 'A' && grid[1] <= 'R'
-            && grid[2] >= '0' && grid[2] <= '9' && grid[3] >= '0' && grid[3] <= '9'
-            && std::strcmp(grid, "RR73") != 0;
-        if (!realGrid) grid[0] = 0;
+        std::string deCall, grid, to;
+        if (!spotFields(r, deCall, grid, curText_, &to)) continue;
         curDt_ = (float)(r.dt + workHunt_);   // ★ the lead the window was cut at is part of the signal's DT
-        if (onSpot) onSpot(callTo, deCall, grid, r.snr, r.hz);
+        if (onSpot) onSpot(to, deCall, grid, r.snr, r.hz);
     }
 }
 
