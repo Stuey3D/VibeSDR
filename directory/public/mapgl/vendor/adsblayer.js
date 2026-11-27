@@ -1055,6 +1055,11 @@
 
     let rx = opts.receiver && isFinite(opts.receiver.lat) && isFinite(opts.receiver.lon) ? { lat: +opts.receiver.lat, lon: +opts.receiver.lon } : null;
     if (rx && rx.lat === 0 && rx.lon === 0) rx = null;      // ★ Null Island is "unknown", as on the HFDL map
+    /* ★★ b96-rangefeed (Stuart 11-27: "i cant activate the range rings either" — RINGS / FIT greyed on a server set up with
+     *  only a locator, opened from the front door): the receiver is the host's (its lat/lon, else its locator square's
+     *  centre — rxPosition.ts — with its approx words), ELSE the range outline's centre once GET range answers (the server's
+     *  own location: the locator's centre there too). rxNote: the words the controls' titles add for a position not exact. */
+    let rxNote = rx && opts.receiver && typeof opts.receiver.approx === 'string' ? opts.receiver.approx : '', rxFromRange = false;
     const prefs = Object.assign({ autoZoom: true, fit: true, rings: true, labels: true, range: true, rangeAll: false }, opts.prefs || {});
     /* ★ opts.imageBase: where this server serves the OWNER's logos and silhouettes ("…/adsb/"), or absent = none —
      *   and (beta94) this radio's range outline and the trails.
@@ -1153,9 +1158,10 @@
       bRange.title = rangeTitle();
       // ★ A control that cannot do anything is shown disabled with the reason, never left inert (AGENTS.md).
       bFit.disabled = !rx; bRings.disabled = !rx;
-      if (!rx) { bFit.title = bRings.title = 'The receiver’s position is not known on this server'; }
-      else { bFit.title = prefs.fit ? 'Fit to aircraft — tap to keep the receiver in the middle' : 'Receiver centred — tap to fit the view to the aircraft instead';
-             bRings.title = 'Range rings in nautical miles around the receiver'; }
+      if (!rx) { bFit.title = bRings.title = 'Not available: this server has not given its receiver position (no latitude/longitude or locator, and no ADS-B range outline yet)'; }
+      else { const n = rxNote ? ' (the receiver position is ' + rxNote + ')' : '';
+             bFit.title = (prefs.fit ? 'Fit to aircraft — tap to keep the receiver in the middle' : 'Receiver centred — tap to fit the view to the aircraft instead') + n;
+             bRings.title = 'Range rings in nautical miles around the receiver' + n; }
     }
     function setPref(k, v) {
       if (prefs[k] === v) return;
@@ -1289,6 +1295,12 @@
           if (destroyed || !j || !j.ok || !Array.isArray(j.km)) return;
           rangeData = { window: Number(j.window) || 0, lat: j.lat == null ? null : Number(j.lat), lon: j.lon == null ? null : Number(j.lon),
                         km: j.km, allKm: Array.isArray(j.allKm) ? j.allKm : [], far: j.far || null, record: j.record || null, days: j.days };
+          // ★★ b96-rangefeed the LAST fallback for the receiver: the outline's centre (RINGS, FIT and the house then work)
+          const sc = serverCentre();
+          if (!rx && sc && isFinite(sc.lat) && isFinite(sc.lon) && !(sc.lat === 0 && sc.lon === 0)) {
+            rx = { lat: sc.lat, lon: sc.lon }; rxFromRange = true; rxNote = 'approximate — the centre of the server\u2019s ADS-B range outline';
+            drawRx(); drawRings(); az.reset(); if (prefs.autoZoom && !paused) cameraStep(true);
+          }
           paintCtl(); paintRangeKey(); drawRange();
         })
         .catch(() => { rangeBusy = false; });   // ★ an older server (404) or no network: no outline, no button
@@ -2151,9 +2163,10 @@
         for (const s of ac.values()) if (s.disp && !s.goneAt) out.push({ hex: s.hex, lat: s.disp.lat, lon: s.disp.lon, hdg: s.hdg, track: s.fix ? s.fix.track : null, gliding: !!s.corr, sparse: !!(s.a && s.a.sparse) });
         return out;
       },
-      setReceiver(lat, lon) {
+      setReceiver(lat, lon, approx) {
         const la = Number(lat), lo = Number(lon);
         rx = isFinite(la) && isFinite(lo) && !(la === 0 && lo === 0) && lat != null && lon != null ? { lat: la, lon: lo } : null;
+        rxNote = rx && typeof approx === 'string' ? approx : ''; rxFromRange = false;   // ★ b96-rangefeed the host's own position wins
         paintCtl(); drawRx(); drawRings(); az.reset();
         if (prefs.autoZoom && !paused) cameraStep(true);
       },
@@ -2223,6 +2236,8 @@
       },
       /** ★ beta94 what the range outline draws (a test's view): null until the server has answered or (beta95) the map
        *  has grown one live. live = the bearings grown from this map's own positions; liveFar its furthest. */
+      /** ★ b96-rangefeed the receiver the map uses: {lat, lon, from: 'host' | 'range', note} | null (tests, the host) */
+      receiverNow() { return rx ? { lat: rx.lat, lon: rx.lon, from: rxFromRange ? 'range' : 'host', note: rxNote } : null; },
       rangeShown() {
         if (!rangeData && !liveHas()) return null;
         const g = rangeGeo();

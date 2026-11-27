@@ -23,7 +23,8 @@ import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the 
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
 
-export type LatLon = { lat: number; lon: number };
+/** ★★ b96-rangefeed `approx`: words for a position that is not exact (the locator square's centre — rxPosition.ts) */
+export type LatLon = { lat: number; lon: number; approx?: string };
 
 // ── the report shapes (vibe_ais_service.h / vibe_aprs_run.h) ──────────────────────────────────────────────────────
 export interface AisVessel {
@@ -1723,7 +1724,7 @@ export class TrackView {
   update(items: any[], rowsHtml: string, status: string, count: number, rx: LatLon | null, safety = '') {
     if (rx && (!this.rx || rx.lat !== this.rx.lat || rx.lon !== this.rx.lon)) {
       this.rx = rx;
-      try { this.layer?.setReceiver(rx.lat, rx.lon); this.acLayer?.setReceiver(rx.lat, rx.lon); } catch (e) { console.error('[tracks] rx', e); }
+      try { this.layer?.setReceiver(rx.lat, rx.lon); this.acLayer?.setReceiver(rx.lat, rx.lon, rx.approx || ''); } catch (e) { console.error('[tracks] rx', e); }
     }
     if (this.layer) {
       try { this.feed(items); } catch (e) { console.error('[tracks] layer.update', e); }
