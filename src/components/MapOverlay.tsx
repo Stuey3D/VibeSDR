@@ -1147,18 +1147,10 @@ function distKm(lat,lon){if(!RX_LAT&&!RX_LON)return null;var R=6371,r=Math.PI/18
 var RX_SVG='<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,1 21,10 17,10 17,21 13,21 13,15 9,15 9,21 5,21 5,10 1,10" fill="rgba(255,200,60,0.85)" stroke="rgba(0,0,0,0.5)" stroke-width="1"/></svg>';
 function addRx(){if(RX_LAT||RX_LON){L.marker([RX_LAT,RX_LON],{icon:L.divIcon({html:RX_SVG,className:'',iconSize:[22,22],iconAnchor:[11,22]}),zIndexOffset:1000}).addTo(map).bindPopup('<div style="font-size:13px;letter-spacing:1px;">&#127968; Your receiver</div>');map.setView([RX_LAT,RX_LON],KIND==='hfdl'?4:3);}}
 
-// Local/Kiwi (on-device decoder): RX position is injected (no /api/description).
-// 0,0 = Null Island = unknown → offer a "set location" button that asks RN for a
-// city so distances are at least roughly meaningful.
-function showSetLoc(){
-  var b=document.createElement('button');
-  b.textContent='\\uD83D\\uDCCD SET LOCATION';
-  b.style.cssText='position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:900;background:rgba(6,9,6,0.92);color:rgba('+'${T.x}'+',0.95);border:1px solid rgba('+'${T.k}'+',0.5);border-radius:8px;padding:9px 16px;font-family:inherit;font-size:14px;letter-spacing:1px;';
-  b.addEventListener('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('pickCity');});
-  document.getElementById('map').appendChild(b);
-}
+// Local/Kiwi (on-device decoder): RX position is injected (no /api/description). 0,0 = Null Island = unknown →
+// ★★★ beta97 MAP CONTROLS offers SET MY LOCATION (React Native asks for a city) — the page draws no button of its own.
 if(LOCAL){
-  if(RX_LAT||RX_LON)addRx(); else showSetLoc();
+  if(RX_LAT||RX_LON)addRx();
 }else if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIND==='sondes'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea'){
   /* ★ V12 AIS / APRS: the server's /location, injected; the track layer draws the receiver's house itself (setReceiver). */
   if(RX_LAT||RX_LON)map.setView([RX_LAT,RX_LON],8);
@@ -3117,6 +3109,10 @@ export default function MapOverlay(
               map={{ ctl: cardsCtl, onCtl: (k) => pageCall('__cardsCtl', k),
                      ranges: ages.length ? ages : undefined, range: spotAge || ages.find((a) => a.def)?.id, onRange: (id) => { setSpotAge(id); pageCall('__digiSet', 'age', id); },
                      keyOn: spotKeyOn, onKey: (on) => { setSpotKeyOn(on); pageCall('__cardsKey', on, (safeInsets?.top ?? 0) + 64, (safeInsets?.left ?? 0) + 64); },
+                     /* ★★★ HFDL: AUTO follows the latest flight (SNAP) — said so wherever it shows */
+                     autoFollow: kind === 'hfdl',
+                     /* ★★★ the receiver's place unknown (an on-device map at 0,0): SET MY LOCATION, here — never a button in the page */
+                     setLocation: local && onPickCity && !(rxLat || rxLon) ? onPickCity : undefined,
                      extra: spotsKind ? <AmFilters modes={kind === 'digi' ? spotsListModes(spotModes && spotModes.length ? spotModes : Object.keys(DIGI_MODE_STYLE)) : null} radios={null}
                                                    value={spotFilter} onChange={(k, v) => { setSpotFilter((cur) => ({ ...cur, [k]: v })); pageCall('__digiSet', k, v); }} /> : undefined }}
               rate={spotsKind && perMin > 0 ? rateRows({ mine: { name: kind === 'cw' ? 'CW SPOTS' : 'SPOTS', perMin, words: 'Spots a minute' } }) : []}
@@ -3146,6 +3142,7 @@ export default function MapOverlay(
                    sources: amScope?.offered ? [{ id: 'others', name: OTHER_RADIOS_LABEL, what: OTHER_RADIOS_WORDS, on: amScope.others }] : undefined,
                    onSource: () => amScope?.onOthers(!amScope.others),
                    keyOn: amKeyOn, onKey: (on) => { setAmKeyOn(on); pageCall('__cardsKey', on, (safeInsets?.top ?? 0) + 64, (safeInsets?.left ?? 0) + 64); },
+                   setLocation: local && onPickCity && !(rxLat || rxLon) ? onPickCity : undefined,   // ★★★ SET MY LOCATION — the page draws no button of its own
                    extra: <AmFilters modes={spotsListModes(spotModes && spotModes.length ? spotModes : Object.keys(DIGI_MODE_STYLE))} radios={digiRadios ?? null}
                                      value={amFilter} onChange={(k, v) => { setAmFilter((cur) => ({ ...cur, [k]: v })); pageCall('__digiSet', k, v); }} /> }}
             rate={amRate}

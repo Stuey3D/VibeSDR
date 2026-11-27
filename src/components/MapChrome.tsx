@@ -101,7 +101,11 @@ export interface MapChromeProps {
          ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void;
          fitTo?: { groups: Array<{ id: string; label: string; n: number }>; pick: string; onPick: (id: string) => void };
          sources?: Array<{ id: string; name: string; what: string; on: boolean }>; onSource?: (id: string, on: boolean) => void;
-         keyOn: boolean; onKey: (on: boolean) => void; extra?: React.ReactNode; far?: string };
+         keyOn: boolean; onKey: (on: boolean) => void; extra?: React.ReactNode; far?: string;
+         /** ★★★ AUTO here FOLLOWS THE LATEST (the HFDL map's SNAP), not a fit — its label and words say so */
+         autoFollow?: boolean;
+         /** ★★★ the receiver's place unknown: SET MY LOCATION (a row here — no map draws its own button) */
+         setLocation?: () => void };
   chat: { disabled: boolean; unread: boolean; onOpen: () => void } | null;
   rate: RateRow[];
   health: { colour: string; content: React.ReactNode } | null;
@@ -287,6 +291,7 @@ export default function MapChrome(p: MapChromeProps) {
               <Text key={h.id} style={s.helpLine}><Text style={s.helpName}>{h.name}  </Text>{h.words}</Text>
             ))}
             {MAP_HELP_NOTES.map((n, i) => <Text key={i} style={s.helpNote}>{n}</Text>)}
+            {p.map.autoFollow && <Text style={s.helpNote}>{`${AUTO_FOLLOW_LABEL} (MAP): on this map the camera goes to the newest flight as it is heard; press it again to stop following.`}</Text>}
           </Card>
         )}
 
@@ -617,8 +622,8 @@ function MapCard({ at, m, onClose }: { at: { x: number; y: number; w: number; ma
         </View></NavRow>
       )}
       <NavRow><View style={styles.keyRow}>
-        <ChipKey style={[styles.key, c.auto === 'on' && styles.keyOn]} words={c.auto === 'off' ? 'Auto fit is off — press to keep everything in view' : c.auto === 'paused' ? 'Auto fit is paused — press to resume' : 'Auto fit is on — press to turn it off'}
-                 onPress={() => m.onCtl('auto')}><AutoGlyph state={c.auto} /></ChipKey>
+        <ChipKey style={[styles.key, c.auto === 'on' && styles.keyOn, m.autoFollow && styles.keyWide]} words={autoWords(c.auto, !!m.autoFollow)}
+                 onPress={() => m.onCtl('auto')}><AutoGlyph state={c.auto} />{m.autoFollow && <Text style={[styles.keyTxt, c.auto === 'on' && { color: '#111' }]}>{AUTO_FOLLOW_LABEL}</Text>}</ChipKey>
         <Key label="FIT" words={m.far ? `Frame it now. ${m.far}` : 'Frame it now'} onPress={() => m.onCtl('fit')} />
         {!!m.fitTo && m.fitTo.groups.length > 1 && <Key label="FIT TO ⌄" on={fitOpen} words="Choose which layer FIT frames" onPress={() => setFitOpen((v) => !v)} />}
         {c.aircraft && <Key label="RINGS" on={!!c.rings} words="Range rings around the receiver" onPress={() => m.onCtl('rings')} />}
@@ -635,9 +640,16 @@ function MapCard({ at, m, onClose }: { at: { x: number; y: number; w: number; ma
           {m.sources.map((x) => <RowKey key={`${x.id}:${x.name}`} label={x.name} sub={x.what} on={x.on} onPress={() => m.onSource?.(x.id, !x.on)} />)}
         </>
       )}
+      {!!m.setLocation && <RowKey label="SET MY LOCATION" sub="Where this receiver is, so the distances mean something" onPress={() => { onClose(); m.setLocation?.(); }} />}
       <RowKey label={m.keyOn ? 'KEY ⌃  (hide)' : 'KEY ⌄'} sub="What the colours and symbols mean" on={m.keyOn} onPress={() => m.onKey(!m.keyOn)} />
     </Card>
   );
+}
+/** ★★★ AUTO's words: a fit (frame everything shown) — or, on the HFDL map, FOLLOW LATEST (the camera goes to the newest flight). */
+export const AUTO_FOLLOW_LABEL = 'AUTO \u00b7 follow latest';
+export function autoWords(state: 'on' | 'off' | 'paused', follow: boolean): string {
+  if (follow) return state === 'off' ? `${AUTO_FOLLOW_LABEL} is off \u2014 press to follow the newest flight` : `${AUTO_FOLLOW_LABEL} is on \u2014 press to stop following`;
+  return state === 'off' ? 'Auto fit is off \u2014 press to keep everything in view' : state === 'paused' ? 'Auto fit is paused \u2014 press to resume' : 'Auto fit is on \u2014 press to turn it off';
 }
 /** AUTO: the magnifier with an A; off = a red slash, paused = an amber pause. */
 function AutoGlyph({ state }: { state: 'on' | 'off' | 'paused' }) {
@@ -846,6 +858,7 @@ const styles = StyleSheet.create({
   rowKeySub: { fontFamily: F, fontSize: 10.5, color: C.dim },
   key: { minWidth: 34, height: 30, paddingHorizontal: 8, borderRadius: 7, borderWidth: 1, borderColor: C.rim, alignItems: 'center', justifyContent: 'center' },
   keyOn: { backgroundColor: C.gold, borderColor: C.gold },
+  keyWide: { flexDirection: 'row', gap: 5, paddingHorizontal: 8 },
   keyTxt: { fontFamily: F, fontSize: 10.5, letterSpacing: 0.6, color: C.ink },
   keyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, paddingVertical: 4 },
   gainRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 40, paddingHorizontal: 4 },

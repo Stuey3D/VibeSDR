@@ -55,5 +55,17 @@ ok(/amStatsTell\(st,ak\);/.test(mo) && /button:null,what:'station shown'/.test(m
   ok(amSortRows(tr, 'nearest')[0].key === 'G4ABC|20m|FT8', 'nearest first sorts by the row\u2019s distance');
 }
 
+// ── HFDL's AUTO follows the latest flight; SET MY LOCATION is a MAP CONTROLS row (no map draws its own control) ──
+{
+  const mc = readFileSync('src/components/MapChrome.tsx', 'utf8');
+  ok(/export const AUTO_FOLLOW_LABEL = 'AUTO \\u00b7 follow latest';/.test(mc) && /words=\{autoWords\(c\.auto, !!m\.autoFollow\)\}/.test(mc) && /\{m\.autoFollow && <Text style=\{\[styles\.keyTxt/.test(mc),
+     'AUTO · follow latest: the card’s label and its spoken words (the controller’s hint) when AUTO follows');
+  ok(/\{p\.map\.autoFollow && <Text style=\{s\.helpNote\}>/.test(mc), 'HELP says AUTO follows the newest flight on that map');
+  ok(/autoFollow: kind === 'hfdl'/.test(mo), 'the HFDL map’s AUTO is the follow-latest one (SNAP)');
+  ok(/\{!!m\.setLocation && <RowKey label="SET MY LOCATION"/.test(mc) && (mo.match(/setLocation: local && onPickCity && !\(rxLat \|\| rxLon\) \? onPickCity : undefined/g) || []).length === 2,
+     'SET MY LOCATION: a MAP CONTROLS row when the receiver’s place is unknown (the spots and AMATEUR maps)');
+  ok(!/showSetLoc|SET LOCATION'|getElementById\('map'\)\.appendChild\(b\)/.test(mo), 'the page’s own SET LOCATION button DELETED');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
