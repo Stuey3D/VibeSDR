@@ -184,25 +184,28 @@ export function chromeGeom(p: ChromeIn): ChromeGeom {
 /** Where a transient card goes: beside its chip (tall) or dropped from the row (short), inside the window, with the most
  *  height it may take. A phone-width window gives it the width left beside the chip. */
 export const CARD_MAX_W = 340;
-export function cardBox(g: ChromeGeom, id: ChipId, w: number, h: number): { x: number; y: number; w: number; maxH: number } {
+/** ★★ yMin: how high a side card may RISE when its content is taller than the room below its chip (the web's: a long card
+ *  slides up beside its chip column rather than opening a short window at the screen's foot) — under the ✕ corner. */
+export function cardBox(g: ChromeGeom, id: ChipId, w: number, h: number): { x: number; y: number; w: number; maxH: number; yMin: number } {
   const b = g.boxes[id];
-  if (!b) return { x: GAP, y: GAP, w: Math.min(CARD_MAX_W, w - 2 * GAP), maxH: h - 2 * GAP };
+  if (!b) return { x: GAP, y: GAP, w: Math.min(CARD_MAX_W, w - 2 * GAP), maxH: h - 2 * GAP, yMin: GAP };
   const from = g.cardFrom[id] ?? 'L';
   if (from === 'D') {
     const cw = Math.min(CARD_MAX_W, g.safe.r - g.safe.l - 2 * GAP);
     const x = Math.max(g.safe.l, Math.min(b.x, g.safe.r - cw));
     const y = b.y + b.h + GAP;
-    return { x, y, w: cw, maxH: Math.max(80, g.safe.b - y - GAP) };
+    return { x, y, w: cw, maxH: Math.max(80, g.safe.b - y - GAP), yMin: y };
   }
   const y = b.y;
   const maxH = Math.max(80, g.safe.b - y - GAP - (g.list.side ? 0 : LIST_CHIP_H + GAP));
+  const yMin = Math.min(y, (g.boxes.exit ? g.boxes.exit.y + g.boxes.exit.h : g.safe.t) + GAP);
   if (from === 'L') {
     const x = b.x + b.w + GAP;
-    return { x, y, w: Math.max(160, Math.min(CARD_MAX_W, w - x - GAP)), maxH };
+    return { x, y, w: Math.max(160, Math.min(CARD_MAX_W, w - x - GAP)), maxH, yMin };
   }
   const right = w - b.x + GAP;
   const cw = Math.max(160, Math.min(CARD_MAX_W, w - right - GAP));
-  return { x: w - right - cw, y, w: cw, maxH };
+  return { x: w - right - cw, y, w: cw, maxH, yMin: Math.min(y, (g.boxes.rate ? g.boxes.rate.y + g.boxes.rate.h : g.safe.t) + GAP) };
 }
 
 /** ★★ THE LIVE BADGES in LAYERS (Stuart 15:31 / 15:33, the web's setToggles): filled LIVE = THIS radio decodes it;
@@ -594,7 +597,15 @@ export function chromeGeomAt(p: ChromeIn, k: number): { g: ChromeGeom; g0: Chrom
   return { g, g0, k: kk };
 }
 /** A card's box at scale k (cardBox on the unscaled layout, times k). */
-export function cardBoxAt(at: { g0: ChromeGeom; k: number }, id: ChipId, w: number, h: number): { x: number; y: number; w: number; maxH: number } {
+export function cardBoxAt(at: { g0: ChromeGeom; k: number }, id: ChipId, w: number, h: number): { x: number; y: number; w: number; maxH: number; yMin: number } {
   const c = cardBox(at.g0, id, w / at.k, h / at.k);
-  return { x: c.x * at.k, y: c.y * at.k, w: c.w * at.k, maxH: c.maxH * at.k };
+  return { x: c.x * at.k, y: c.y * at.k, w: c.w * at.k, maxH: c.maxH * at.k, yMin: c.yMin * at.k };
+}
+/** ★★ The card's top for its content: beside its chip when it fits below, else risen (never above yMin) so the most shows;
+ *  its bottom stays where it was allowed to reach. */
+export function cardRise(at: { y: number; maxH: number; yMin?: number }, wantH: number): { top: number; maxH: number } {
+  const bottom = at.y + at.maxH, yMin = Math.min(at.y, at.yMin ?? at.y);
+  if (!(wantH > at.maxH)) return { top: at.y, maxH: at.maxH };
+  const top = Math.max(yMin, bottom - wantH);
+  return { top, maxH: bottom - top };
 }

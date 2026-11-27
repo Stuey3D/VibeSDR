@@ -21,7 +21,8 @@ import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path, Circle, SvgXml } from 'react-native-svg';
+import type { LegendItem } from '../utils/mapLegend';
 import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, useNavRange, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
@@ -32,7 +33,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -102,6 +103,8 @@ export interface MapChromeProps {
          fitTo?: { groups: Array<{ id: string; label: string; n: number }>; pick: string; onPick: (id: string) => void };
          sources?: Array<{ id: string; name: string; what: string; on: boolean }>; onSource?: (id: string, on: boolean) => void;
          keyOn: boolean; onKey: (on: boolean) => void; extra?: React.ReactNode; far?: string;
+         /** ★★★ beta97 the KEY's fold: the page's own legend, read (mapLegend.ts) — drawn HERE, never as the page's panel */
+         keyItems?: LegendItem[]; onKeyCheck?: (i: number) => void;
          /** ★★★ AUTO here FOLLOWS THE LATEST (the HFDL map's SNAP), not a fit — its label and words say so */
          autoFollow?: boolean;
          /** ★★★ the receiver's place unknown: SET MY LOCATION (a row here — no map draws its own button) */
@@ -500,8 +503,14 @@ function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: Retu
     </PulseWrap>
   );
 }
-function Card({ title, at, onClose, children, faded }: { title: string; at: { x: number; y: number; w: number; maxH: number }; onClose: () => void; children: React.ReactNode; faded?: boolean }) {
+/** ★★ A card's own scroll, for what is inside it (the KEY fold scrolls itself into view when it opens). */
+const CardScrollCtx = React.createContext<((y: () => number) => void) | null>(null);
+function Card({ title, at, onClose, children, faded }: { title: string; at: { x: number; y: number; w: number; maxH: number; yMin?: number }; onClose: () => void; children: React.ReactNode; faded?: boolean }) {
   const styles = useStyles();
+  const headH = StyleSheet.flatten(styles.cardHead).height as number;
+  const [contentH, setContentH] = useState(0);
+  const box = cardRise(at, contentH + headH);   // ★★ a long card rises beside its column rather than opening a short window
+  const scrollTo = React.useCallback((y: () => number) => { setTimeout(() => (scope.scrollRef.current as any)?.scrollTo?.({ y: Math.max(0, y()), animated: true }), 120); }, []);   // y read when it runs: after the first layout   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ THE OPEN CARD IS THE PAD'S SCOPE (the web's rule): its keys walk, the highlighted one is scrolled into view (its own
    *  ScrollView carries the scope's scrollProps), and BACK — a pad's back, Escape or Backspace — shuts it; the chip that opened it
    *  is still the highlight in the chrome's own walk beneath. The × is a full 44-point target (Stuart, build 586: "can't close an
@@ -509,14 +518,19 @@ function Card({ title, at, onClose, children, faded }: { title: string; at: { x:
   const scope = usePanelNav(true, { flat: true, onBack: () => { onClose(); return true; } });
   return (
     <NavCtx.Provider value={scope.navCtx}>
-      <View style={[styles.card, { left: at.x, top: at.y, width: at.w, maxHeight: at.maxH }, faded && { opacity: 0.6 }]} accessibilityViewIsModal={false}>
+      <CardScrollCtx.Provider value={scrollTo}>
+      <View style={[styles.card, { left: at.x, top: box.top, width: at.w, maxHeight: box.maxH }, faded && { opacity: 0.6 }]} accessibilityViewIsModal={false}>
         <View style={styles.cardHead}>
           <Text style={styles.cardTitle}>{title}</Text>
           <NavRow><ChipKey style={styles.cardX} words={`Close ${title.toLowerCase()}`} onPress={onClose} hitSlop={8}><Text style={styles.cardXTxt}>{'\u00d7'}</Text></ChipKey></NavRow>
         </View>
-        <ScrollView {...scope.scrollProps} style={{ maxHeight: at.maxH - 46 * (StyleSheet.flatten(styles.cardHead).height as number) / 46 }}
-                    contentContainerStyle={[scrollLane, { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+        <ScrollView {...scope.scrollProps} style={{ maxHeight: box.maxH - headH }}
+                    contentContainerStyle={[scrollLane, { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">
+          {/* ★★ the content's own height (its wrapper's layout — the scroller's content-size report lagged on the web build) */}
+          <View onLayout={(e) => setContentH(e.nativeEvent.layout.height + 8 + 6)}>{children}</View>
+        </ScrollView>
       </View>
+      </CardScrollCtx.Provider>
     </NavCtx.Provider>
   );
 }
@@ -676,7 +690,7 @@ function StatsCard({ at, st, onClose }: { at: { x: number; y: number; w: number;
     </Card>
   );
 }
-function MapCard({ at, m, onClose }: { at: { x: number; y: number; w: number; maxH: number }; m: MapChromeProps['map']; onClose: () => void }) {
+function MapCard({ at, m, onClose }: { at: { x: number; y: number; w: number; maxH: number; yMin?: number }; m: MapChromeProps['map']; onClose: () => void }) {
   const styles = useStyles();
   const [fitOpen, setFitOpen] = useState(false);
   const c = m.ctl;
@@ -707,8 +721,52 @@ function MapCard({ at, m, onClose }: { at: { x: number; y: number; w: number; ma
         </>
       )}
       {!!m.setLocation && <RowKey label="SET MY LOCATION" sub="Where this receiver is, so the distances mean something" onPress={() => { onClose(); m.setLocation?.(); }} />}
-      <RowKey label={m.keyOn ? 'KEY ⌃  (hide)' : 'KEY ⌄'} sub="What the colours and symbols mean" on={m.keyOn} onPress={() => m.onKey(!m.keyOn)} />
+      <KeyRow on={m.keyOn} onPress={() => m.onKey(!m.keyOn)} />
+      {m.keyOn && <KeyFold items={m.keyItems ?? []} onCheck={m.onKeyCheck} />}
     </Card>
+  );
+}
+/** ★★ The KEY row: opened, its card scrolls so the row sits at the top with the fold below it (a short card — a Mac window,
+ *  a landscape phone — would otherwise open it out of sight); once per opening, when its place is known. */
+function KeyRow({ on, onPress }: { on: boolean; onPress: () => void }) {
+  const scrollTo = useContext(CardScrollCtx);
+  const y = useRef<number | null>(null), done = useRef(false);
+  const go = () => { if (on && !done.current && y.current != null) { done.current = true; scrollTo?.(() => (y.current ?? 0) - 4); } };
+  useEffect(() => { if (!on) done.current = false; else go(); }, [on]);   // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <View onLayout={(e) => { y.current = e.nativeEvent.layout.y; go(); }}>
+      <RowKey label={on ? 'KEY ⌃  (hide)' : 'KEY ⌄'} sub="What the colours and symbols mean" on={on} onPress={onPress} />
+    </View>
+  );
+}
+/** ★★★ beta97 THE KEY FOLD (the web's KEY fold in MAP CONTROLS): headings, swatch rows (a dot, a lettered mark, a glyph or the
+ *  page's own SVG icon), the altitude bar and its axis, a switch row pressed back to the page. Inside the card's scroll. */
+function KeyFold({ items, onCheck }: { items: LegendItem[]; onCheck?: (i: number) => void }) {
+  const styles = useStyles();
+  const k = useK();
+  if (!items.length) return <Text style={styles.facts}>Reading the key…</Text>;
+  return (
+    <View style={styles.keyFold} accessibilityLabel="Key">
+      {items.map((it, i) => {
+        if (it.k === 'h') return <Text key={i} style={styles.grp}>{it.text}</Text>;
+        if (it.k === 'bar') return <View key={i} style={styles.keyBar}>{it.stops.map((c, j) => <View key={j} style={{ flex: 1, backgroundColor: c }} />)}</View>;
+        if (it.k === 'axis') return <View key={i} style={styles.keyAxis}>{it.labels.map((l, j) => <Text key={j} style={styles.keyAxisTxt}>{l}</Text>)}</View>;
+        if (it.k === 'check') return <RowKey key={i} label={it.text} on={it.on} onPress={() => onCheck?.(it.i)} />;
+        const sz = (it.size ?? 11) * k;
+        return (
+          <View key={i} style={styles.legRow} accessible accessibilityLabel={`${it.text}${it.n ? ', ' + it.n : ''}`}>
+            <View style={styles.keySw}>
+              {it.svg ? <SvgXml xml={it.svg} width={18 * k} height={18 * k} color={it.gc} />
+                : it.dot ? <View style={{ width: sz, height: sz, borderRadius: it.sq ? 3 * k : sz / 2, backgroundColor: it.dot, alignItems: 'center', justifyContent: 'center' }}>
+                    {!!it.letter && <Text style={[styles.keyLetter, { color: it.ink ?? '#000' }]}>{it.letter}</Text>}</View>
+                : it.glyph ? <Text style={[styles.keyGlyph, !!it.gc && { color: it.gc }]}>{it.glyph}</Text> : null}
+            </View>
+            <Text style={styles.legTxt}>{it.text}</Text>
+            {!!it.n && <Text style={styles.keyN}>{it.n}</Text>}
+          </View>
+        );
+      })}
+    </View>
   );
 }
 /** ★★★ AUTO's words: a fit (frame everything shown) — or, on the HFDL map, FOLLOW LATEST (the camera goes to the newest flight). */
@@ -1029,6 +1087,16 @@ const RAW = {
   lChipSep: { width: 1, height: 22, backgroundColor: C.rim },
   lChipN: { fontFamily: F, fontSize: 12.5, color: C.ink },
   lChipChev: { fontFamily: F, fontSize: 12, color: C.dim },
+  keyFold: { paddingHorizontal: 4, paddingBottom: 6 },
+  legRow: { flexDirection: 'row', alignItems: 'center', minHeight: 24, gap: 8 },
+  keySw: { width: 22, alignItems: 'center', justifyContent: 'center' },
+  keyLetter: { fontFamily: F, fontSize: 9, fontWeight: '700' },
+  keyGlyph: { fontSize: 14, color: C.ink },
+  legTxt: { flex: 1, fontSize: 12.5, color: C.ink },
+  keyN: { fontFamily: F, fontSize: 11, color: C.dim },
+  keyBar: { flexDirection: 'row', height: 8, borderRadius: 4, overflow: 'hidden', marginTop: 6, marginHorizontal: 4 },
+  keyAxis: { flexDirection: 'row', justifyContent: 'space-between', marginHorizontal: 4, marginTop: 2, marginBottom: 4 },
+  keyAxisTxt: { fontFamily: F, fontSize: 9.5, color: C.dim },
   drawer: { position: 'absolute', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 12 },
   sideTabs: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, height: 38, paddingHorizontal: 6, borderBottomWidth: 1, borderBottomColor: C.rim },
   drawerIn: { borderColor: '#ffd34d' },
@@ -1050,8 +1118,8 @@ const RAW = {
   lrowTop: { flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 0 },
   sw: { width: 8, height: 8, borderRadius: 4 },
   flag: { fontSize: 11 },
-  lname: { fontFamily: F, fontSize: 12.5, color: C.ink, flexShrink: 1 },
-  tag: { fontFamily: F, fontSize: 8.5, fontWeight: '700', paddingHorizontal: 3, borderRadius: 3, overflow: 'hidden' },
+  lname: { fontFamily: F, fontSize: 12.5, color: C.ink, flexShrink: 0.15 },   // ★ the facts (kv) give way first; the name last
+  tag: { fontFamily: F, fontSize: 8.5, fontWeight: '700', paddingHorizontal: 3, borderRadius: 3, overflow: 'hidden', flexShrink: 0 },   // ★ a badge never wraps ('EMER/G')
   tagMil: { backgroundColor: '#3d5a2a', color: '#d9f2c4' },
   tagEm: { backgroundColor: '#c0392b', color: '#fff' },
   kv: { fontFamily: F, fontSize: 10, color: C.dim, flexShrink: 1, marginLeft: 4 },

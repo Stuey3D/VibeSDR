@@ -4,7 +4,7 @@
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -167,6 +167,18 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const mac = chromeGeom({ w: 993, h: 621, insets: { top: 28, bottom: 0, left: 0, right: 0 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
   const line = 'Shared VFO: Ask before changing mode or exiting 2/5';
   ok(Math.floor((mac.pill.w - 24) / 7.2) >= line.length, 'a Mac window: the whole shared-tuner line fits its band');
+}
+
+// ── ★★ a long card RISES beside its column (cardRise) rather than opening a short window at the foot ──
+{
+  ok(cardRise({ y: 400, maxH: 300, yMin: 80 }, 200).top === 400, 'fits below its chip: stays beside it');
+  const r1 = cardRise({ y: 400, maxH: 300, yMin: 80 }, 500);
+  ok(r1.top === 200 && r1.maxH === 500, `taller: rises until it fits (top ${r1.top}), its foot where it was`);
+  const r2 = cardRise({ y: 400, maxH: 300, yMin: 80 }, 2000);
+  ok(r2.top === 80 && r2.maxH === 620, 'very tall: rises no higher than under the corner, then scrolls');
+  const g = chromeGeom({ w: 993, h: 621, insets: { top: 28, bottom: 0, left: 0, right: 0 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
+  const cb = cardBox(g, 'map', 993, 621);
+  ok(cb.yMin <= cb.y && cb.yMin >= g.boxes.exit!.y + g.boxes.exit!.h, 'a side card may rise to just under the ✕ corner, never over it');
 }
 
 // ── the pill's words ──
