@@ -268,7 +268,9 @@ int main(int argc, char** argv) {
         Fake sbsSrv([](int fd) { serveSbs(fd, 2.5); });
         Fake silent([](int fd) { const double e = nowS() + 5; while (nowS() < e) { char b[256]; pollfd p{fd, POLLIN, 0}; if (::poll(&p, 1, 100) > 0 && ::recv(fd, b, sizeof b, 0) <= 0) return; } });
         const int dead = closedPort();
-        probe::Opts D = O; D.candidates = {beastSrv.port, sbsSrv.port, uber.port, dead, silent.port};
+        // ★ a second port on the same UberSDR (live: 8080 and 80 both answer) — one find, not two
+        Fake uber2([&](int fd) { readHead(fd); sendAll(fd, "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body); });
+        probe::Opts D = O; D.candidates = {beastSrv.port, sbsSrv.port, uber.port, dead, silent.port, uber2.port};
         const int uberBefore = uber.conns.load();
         const double t0 = nowS();
         auto d = probe::detect("127.0.0.1", 0, D, never);
@@ -278,7 +280,8 @@ int main(int argc, char** argv) {
               && d.hits[1].cfg.fmt == "uberhfdl" && d.hits[1].name == "UberSDR HFDL", "Beast + UberSDR found (BaseStation dropped: the same aircraft as Beast) — %s", d.line.c_str());
         CHECK(d.line.rfind("Found: PiAware ADS-B (Beast, port " + std::to_string(beastSrv.port) + ") \xe2\x80\x94 2 aircraft", 0) == 0 && has(d.line, "also UberSDR HFDL (port"), "the line: %s", d.line.c_str());
         CHECK(uber.conns.load() - uberBefore == 1, "ONE request to the UberSDR's port per press (%d)", uber.conns.load() - uberBefore);
-        CHECK(d.tried.size() == 5 && d.tried[3] == std::to_string(dead) + ": nothing listening" && d.tried[4] == std::to_string(silent.port) + ": connected, but silent", "tried: %s · %s", d.tried.size() > 3 ? d.tried[3].c_str() : "", d.tried.size() > 4 ? d.tried[4].c_str() : "");
+        CHECK(d.tried.size() == 6 && d.tried[5] == std::to_string(uber2.port) + ": UberSDR HFDL", "the second UberSDR port is tried, not listed twice");
+        CHECK(d.tried.size() == 6 && d.tried[3] == std::to_string(dead) + ": nothing listening" && d.tried[4] == std::to_string(silent.port) + ": connected, but silent", "tried: %s · %s", d.tried.size() > 3 ? d.tried[3].c_str() : "", d.tried.size() > 4 ? d.tried[4].c_str() : "");
         const std::string dj = probe::toJson(d);
         CHECK(has(dj, "\"found\":true") && has(dj, "{\"src\":{\"fmt\":\"beast\",\"dir\":\"connect\",\"host\":\"127.0.0.1\",\"port\":" + std::to_string(beastSrv.port) + ",\"label\":\"adsb\",\"name\":\"PiAware\"}"), "the JSON carries a ready-to-add source: %s", dj.substr(0, 200).c_str());
         probe::Opts D2 = O; D2.candidates = {sbsSrv.port, dead};
@@ -328,7 +331,7 @@ int main(int argc, char** argv) {
             size_t withPos = 0; for (auto& x : out) if (x.hasPos) ++withPos;
             CHECK(withPos >= 240 && withPos <= 243, "the fresh positions only (%zu)", withPos);
             const std::string st = src.statusJson(true);
-            CHECK(has(st, "\"state\":\"connected\"") && has(st, "aircraft (24") && has(st, "\"fmt\":\"uberhfdl\"") && has(st, "\"label\":\"HFDL\""), "status: %s", st.substr(0, 300).c_str());
+            CHECK(has(st, "\"state\":\"connected\"") && has(st, "with positions \u00b7 253 aircraft") && has(st, "\"fmt\":\"uberhfdl\"") && has(st, "\"label\":\"HFDL\""), "status: %s", st.substr(0, 300).c_str());
             double ds; CHECK(!src.down(ds), "not down");
             sleepMs(1000);
             const int polls = uber.conns.load() - before;

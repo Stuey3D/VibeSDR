@@ -470,12 +470,14 @@ inline Detected detect(const std::string& hostIn, int given, const Opts& o, cons
     for (size_t i = 0; i < ports.size(); ++i)
         th.emplace_back([&, i] { vibeNetThread("vibe-feedfind"); probePort(host, ports[i], addrs, 1.5, 1.2, 1.8, cancelled, hits[i], tried[i]); });
     for (auto& t : th) t.join();
-    bool beastHit = false;
+    bool beastHit = false, uberKept = false;
     for (auto& v : hits) for (auto& h : v) if (h.cfg.fmt == "beast") beastHit = true;
     for (size_t i = 0; i < ports.size(); ++i) {
         d.tried.push_back(tried[i]);
         for (auto& h : hits[i]) {
             if (h.cfg.fmt == "sbs" && h.cfg.label == "adsb" && beastHit) continue;   // ★ the same aircraft: Beast is the better copy
+            // ★ one UberSDR answers on 8080 AND 80 (seen live, 11-27): the same aircraft — keep the first port asked
+            if (h.cfg.fmt == "uberhfdl") { if (uberKept) continue; uberKept = true; }
             d.hits.push_back(h);
         }
     }

@@ -378,7 +378,7 @@ int main(int argc, char** argv) {
             {"maxRadiosPerIp","maxRadiosPerIp"},{"decoderMax","decoderMax"},{"rttySkimWorkers","rttySkimWorkers"},{"galleryMb","galleryMb"},
             {"galleryPublic","galleryPublic"},{"gallerySaveLive","gallerySaveLive"},{"communityMap","communityMap"},{"communityModes","communityOff"},{"batteryPauseAt","batteryPauseAt"},
             // ★★ V12 beta96 the standalone AIR & SEA map's limits and the server-level aircraft feed sources
-            {"mapViewers","mapViewers"},{"mapTimeMin","mapTimeMin"},{"feedFmt","aircraftFeeds"},{"feedDir","aircraftFeeds"},{"feedAddr","aircraftFeeds"},
+            {"mapViewers","mapViewers"},{"mapTimeMin","mapTimeMin"},{"feedFind","aircraftFeeds"},{"feedFmt","aircraftFeeds"},{"feedDir","aircraftFeeds"},{"feedAddr","aircraftFeeds"},
             {"feedPort","aircraftFeeds"},{"feedLabel","aircraftFeeds"},{"feedName","aircraftFeeds"},
             // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup
             {"pskrOn","pskrOn"},{"pskrCall","pskrCall"},{"pskrAntenna","pskrAntenna"},{"wsprnetOn","wsprnetOn"},{"wsprnetCall","wsprnetCall"},{"dmrIdLookup","dmrIdLookup"},

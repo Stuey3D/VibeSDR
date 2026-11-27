@@ -324,7 +324,7 @@ private:
                 ++polls_;
                 if (why.empty()) {
                     state_ = "connected"; okMono_ = feednet::mono(); err_.clear(); rowsIn_ += p.msgs.size();
-                    line_ = "UberSDR HFDL at " + where + ": " + std::to_string(p.withIcao) + " aircraft (" + std::to_string(p.withPos) + " with positions)";
+                    line_ = "reading " + where + " every " + std::to_string(int(every)) + " s, " + std::to_string(p.withPos) + " with positions";   // ★ the Source adds "· N aircraft"
                 } else { state_ = "error"; err_ = why; line_ = why; }
             }
             if (why.empty() && sink) sink(p);
