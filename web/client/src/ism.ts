@@ -7,8 +7,8 @@
  * ★ The server's `line` is metric with PSI for tyres. A listener who picks mph or kPa/bar gets the line rebuilt here from
  *   the numeric fields (ismLine) — one rule, the same order as the server's readable(). */
 
-import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml,
-         type MeshKnown, type MeshRoute } from '../../../src/utils/meshRoute';
+import { meshName, meshPlausible, meshKm, meshDist, meshRelays, meshRoute, meshFurthest, meshFarText, meshHopsForRule, meshRouteButtonHtml, meshSortRows,
+         type MeshKnown, type MeshRoute, type MeshSort } from '../../../src/utils/meshRoute';
 
 export interface IsmDevice {
   key: string; kind: string; make: string; model: string; name: string; line: string;
@@ -794,12 +794,12 @@ export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null
     + `${escM(ismNetName(d.kind))} ${escM(t)} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
     + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div>';
 }
-/** The map's list: nearest first when the receiver's position is known, else newest first. */
-export function ismMapRows(r: IsmReport, rx: { lat: number; lon: number } | null, miles = false): string {
+/** The map's list: NEAREST or LATEST first (the list's sort key, meshSortRows); with no receiver position, newest first. */
+export function ismMapRows(r: IsmReport, rx: { lat: number; lon: number } | null, miles = false, sort: MeshSort = 'nearest'): string {
   const items = r.devices.filter((d) => ismPlotted(d, rx));
   if (!items.length) return `<div class="trkEmpty">Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.</div>`;
   const withKm = items.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
-  if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
+  meshSortRows(withKm, sort, rx);   // ★★ beta96 NEAREST | LATEST (meshRoute.ts)
   return withKm.map(({ d, k }) => {
     const second = [`${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, d.hops !== undefined ? (d.hops === 0 ? 'first-hand' : `${d.hops} hop${d.hops === 1 ? '' : 's'}${d.direct === 1 ? ' (also first-hand)' : ''}`) : '',
                     d.battPct !== undefined && d.battPct <= 100 ? `${d.battPct} %` : '', `${d.snr.toFixed(0)} dB`].filter(Boolean).join(' · ');
@@ -900,11 +900,11 @@ export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | nul
     + lines.map(escM).join('<br>') + (route ? meshRouteButtonHtml('data-rtk', escM(d.key)) : '') + '</div>';
 }
 const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
-export function ismGalRows(nodes0: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false): string {
+export function ismGalRows(nodes0: IsmGalNode[], rx: { lat: number; lon: number } | null, miles = false, sort: MeshSort = 'nearest'): string {
   const nodes = nodes0.filter((d) => ismPlotted(d, rx));
   if (!nodes.length) return `<div class="trkEmpty">This card holds no node with a position.</div>`;
   const withKm = nodes.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
-  if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
+  meshSortRows(withKm, sort, rx);   // ★★ beta96 NEAREST | LATEST (meshRoute.ts)
   return withKm.map(({ d, k }) => trkRowHtml(d, [ORIGIN_TAG[d.origin] || '', `${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, `${d.count}×`,
                                                    `${hhmm(d.first)}–${hhmm(d.last)} UTC`].filter(Boolean).join(' · '), k, hhmm(d.last), miles)).join('');
 }

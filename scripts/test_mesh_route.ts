@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import * as web from '../web/client/src/ism.ts';
 import * as app from '../src/services/ism.ts';
 import { meshName, meshPlausible, meshKm, meshDist, meshFurthest, meshFarText, meshRelays, meshRoute, MESH_ROUTE_JS,
-         type MeshKnown } from '../src/utils/meshRoute.ts';
+         meshSortRows, meshSortOffered, meshSortParse, type MeshKnown } from '../src/utils/meshRoute.ts';
 import { amMeshPoints, amListRows } from '../src/utils/amateurMap.ts';
 
 let pass = 0, fail = 0;
@@ -301,6 +301,49 @@ eq('meshDist', [meshDist(16.09), meshDist(16.09, true), meshDist(5), meshDist(5,
   ok('AMATEUR: a chosen node holds the auto fit; the card closing (or the empty map) clears the route and resumes it',
      /function amCardClosed\(\)\{if\(Date\.now\(\)-AM_SEL_AT<400\)return;if\(AM_RT\)amRouteShow\(null\);amRelease\(\);\}/.test(am) && /map\.on\('popupclose',amCardClosed\)/.test(am));
   ok('app: the maps follow the ISM list\'s units', readFileSync(new URL('../src/components/IsmPanel.tsx', import.meta.url), 'utf8').includes('ismMilesSet(u.mph)'));
+}
+
+// ── 9. THE NODES LIST's ORDER — NEAREST | LATEST (Stuart 11-26: "meshcore list needs to filter by nearest first and latest
+//       first"). Ties: nearest then latest. No receiver position: LATEST, and no key (never a NEAREST that does nothing). ──
+{
+  const A = { ...nise, key: 'A', seen: 300 };                     // 16 km, heard 5 min ago
+  const B = { ...relayedOnce, key: 'B', seen: 30 };               //  6 km, 30 s
+  const C = { ...t1, key: 'C', seen: 5 };                         // 334 km, 5 s
+  const D = { ...nise, key: 'D', name: 'N-Ise twin', long: 'N-Ise twin', seen: 10 };   // 16 km (A's spot), 10 s
+  const E = { ...t1, key: 'E', name: 't::2', long: 't::2', seen: 30 };                // 334 km (C's spot), 30 s (B's age)
+  const r = { band: '868', devices: [A, B, C, D, E] } as unknown as app.IsmReport;
+  const keys = (rows: { key: string }[]) => rows.map((x) => x.key);
+  const webKeys = (h: string) => Array.from(h.matchAll(/data-key="([^"]+)"/g)).map((m) => m[1]);
+  const NEAR = ['B', 'D', 'A', 'C', 'E'], LATE = ['C', 'D', 'B', 'E', 'A'];
+  eq('NEAREST (the default): by distance; a tie on distance → the most recently heard first', keys(app.ismMapRows(r, RX)), NEAR);
+  eq('…asked for by name the same', keys(app.ismMapRows(r, RX, false, 'nearest')), NEAR);
+  eq('LATEST: the most recently heard first; a tie on age → the nearest first', keys(app.ismMapRows(r, RX, false, 'latest')), LATE);
+  eq('web NEAREST = app', webKeys(web.ismMapRows(r as unknown as web.IsmReport, RX)), NEAR);
+  eq('web LATEST = app', webKeys(web.ismMapRows(r as unknown as web.IsmReport, RX, false, 'latest')), LATE);
+  eq('no receiver position: LATEST whatever is picked (app)', [keys(app.ismMapRows(r, null, false, 'nearest')), keys(app.ismMapRows(r, null, false, 'latest'))], [['C', 'D', 'B', 'E', 'A'], ['C', 'D', 'B', 'E', 'A']]);
+  eq('…web the same', webKeys(web.ismMapRows(r as unknown as web.IsmReport, null, false, 'nearest')), ['C', 'D', 'B', 'E', 'A']);
+  eq('…no distance shown', app.ismMapRows(r, null).every((x) => x.range === ''), true);
+  eq('the key: offered with a position, the pick kept', [meshSortOffered('nearest', RX), meshSortOffered('latest', RX)], ['nearest', 'latest']);
+  eq('the key: NOT offered without one (no dead NEAREST)', [meshSortOffered('nearest', null), meshSortOffered('latest', undefined)], [null, null]);
+  eq('stored value: only "latest" changes it; anything else is NEAREST', [meshSortParse('latest'), meshSortParse('nearest'), meshSortParse(null), meshSortParse('furthest')], ['latest', 'nearest', 'nearest', 'nearest']);
+  eq('the order never changes what is on the map: same rows, same status', [keys(app.ismMapRows(r, RX, false, 'latest')).sort(), app.ismMapStatus(r, RX)], [NEAR.slice().sort(), app.ismMapStatus(r, RX)]);
+  eq('…nor the map items (their own order)', keys(app.ismMapItems(r, RX)), ['A', 'B', 'C', 'D', 'E']);
+  // a range unknown in a row (never in the lists — a plotted node has a position — but the rule is total): last in NEAREST
+  eq('meshSortRows: a row with no range sorts last under NEAREST', meshSortRows([{ d: { seen: 1 }, k: null, n: 'x' }, { d: { seen: 9 }, k: { km: 5 }, n: 'y' }], 'nearest', RX).map((x) => x.n), ['y', 'x']);
+  // THE GALLERY's map (its nodes carry seen = now − last heard)
+  const g = [A, B, C, D, E].map((d) => ({ ...d, first: 0, last: 0, origin: 'live' })) as unknown as app.IsmGalNode[];
+  eq('gallery NEAREST (app)', keys(app.ismGalRows(g, RX)), NEAR);
+  eq('gallery LATEST (app)', keys(app.ismGalRows(g, RX, false, 'latest')), LATE);
+  eq('gallery web = app (both orders)', [webKeys(web.ismGalRows(g as unknown as web.IsmGalNode[], RX)), webKeys(web.ismGalRows(g as unknown as web.IsmGalNode[], RX, false, 'latest'))], [NEAR, LATE]);
+  eq('gallery without a position: LATEST', keys(app.ismGalRows(g, null, false, 'nearest')), ['C', 'D', 'B', 'E', 'A']);
+  // the wiring (source): the web's maps give the key (the AIR & SEA chip) only with a position, remembered per viewer
+  const mt = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  const tk = readFileSync(new URL('../web/client/src/tracks.ts', import.meta.url), 'utf8');
+  ok('web live map: the key + its order', mt.includes("ismMapView.setSort(meshSortOffered(meshSort, myPos()), (v) => meshSortSet(v, ismMapRender), 'nodes');") && mt.includes('ismMapRows(r, myPos(), mi, meshSort)'));
+  ok('web gallery map: the key + its order', mt.includes("ismGalView?.setSort(meshSortOffered(meshSort, rx), (v) => meshSortSet(v, draw), 'nodes');") && mt.includes('ismGalRows(nodes, rx, mi, meshSort)'));
+  ok('web: remembered in localStorage (lsGet / lsSet — try/catch)', mt.includes('let meshSort: MeshSort = meshSortParse(lsGet(MESH_SORT_KEY));') && mt.includes('lsSet(MESH_SORT_KEY, meshSort)'));
+  ok('web: the chip names its rows for a screen reader', tk.includes("setSort(sort: string | null, onSort: (s: string) => void, what = 'aircraft')") && tk.includes('host.setAttribute(\'aria-label\', `Sort the ${what}`);'));
+  ok('web AIR & SEA keeps its chip (aircraft)', /v\.setSort\(tab === 'aircraft' && !adsbOn \? asSort : null, /.test(mt));
 }
 
 console.log(`test_mesh_route: ${pass} passed, ${fail} failed`);

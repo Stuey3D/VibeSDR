@@ -10,6 +10,7 @@ import { dabOnlyFrom } from './dabOnly';
 import { onlyModeFrom, onlyModeNote, onlyModeWhy } from './onlyMode';   // ★★ V12 the only mode — any whole-radio mode (the app reads the same)   // ★★ V12 DAB only — the rule (the app's src/services/dabOnly.ts reads the same)
 import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { landingMarkupHtml } from '../../../src/utils/landingMarkup';
+import { meshSortParse, meshSortOffered, MESH_SORT_KEY, type MeshSort } from '../../../src/utils/meshRoute';   // ★★ beta96 the NODES list's order
 // ★ V12 METEOR LRPT's MAP OUTLINE (the rule: src/utils/lrptOutline.ts; the drawing: lrptOutlineDom.ts)
 import { parseOutline, parseLiveOutline, outlineOfItem, isOutlineItem, outlineKeyLabel, outlineKeyA11y, outlineWhyLine, outlineDownloadUrl, type Outline } from '../../../src/utils/lrptOutline';
 import { drawOutline, outlineOn, setOutlineOn } from './lrptOutlineDom';
@@ -10053,6 +10054,10 @@ const ISM_RANGE_LIVE_KEY = 'vibesdr.ismMapRange', ISM_RANGE_GAL_KEY = 'vibesdr.i
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
 let ismMapRange = ismRangeOf(lsGet(ISM_RANGE_LIVE_KEY), true);
+/* ★★ beta96 the NODES list's order (Stuart 11-26): NEAREST | LATEST, per viewer, remembered — the live map and the gallery's
+ *  (meshRoute.ts meshSortRows); the key is offered only while the receiver's position is known. */
+let meshSort: MeshSort = meshSortParse(lsGet(MESH_SORT_KEY));
+function meshSortSet(v: string, redraw: () => void) { meshSort = meshSortParse(v); lsSet(MESH_SORT_KEY, meshSort); redraw(); }
 /** ★ `key`: a node's position link in the list (Stuart, 2026-11-01: "make the coordinates clickable") — the map opens on
  *  it, selected, pulsing, its card open. Empty = the MAP key: every node, fitted. */
 function ismMapOpen(key = '') {
@@ -10413,7 +10418,8 @@ async function ismGalMapOpen(it0: GalleryItem) {
     const nodes = ismInRange(all, range).filter((d) => ismPlotted(d, rx));
     shown = nodes;
     const mi = ismMilesPref();
-    ismGalView?.update(nodes, ismGalRows(nodes, rx, mi), per.size ? `${ismGalStatus(nodes, rx, mi)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
+    ismGalView?.setSort(meshSortOffered(meshSort, rx), (v) => meshSortSet(v, draw), 'nodes');   // ★★ beta96 NEAREST | LATEST
+    ismGalView?.update(nodes, ismGalRows(nodes, rx, mi, meshSort), per.size ? `${ismGalStatus(nodes, rx, mi)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
   };
   ismGalRedraw = draw;
   ismGalView?.destroy();
@@ -10472,7 +10478,8 @@ function ismMapRender() {
   const items = r ? r.devices.filter((d) => ismPlotted(d, myPos())) : [];   // ★★ beta96 an implausible fix is never drawn
   ismMapDevs = items;
   const mi = ismMilesPref();
-  ismMapView.update(items, r ? ismMapRows(r, myPos(), mi) : '', ismMapStatus(r, myPos(), mi), items.length, myPos());
+  ismMapView.setSort(meshSortOffered(meshSort, myPos()), (v) => meshSortSet(v, ismMapRender), 'nodes');   // ★★ beta96 NEAREST | LATEST
+  ismMapView.update(items, r ? ismMapRows(r, myPos(), mi, meshSort) : '', ismMapStatus(r, myPos(), mi), items.length, myPos());
   // ★★★ beta96 TUNE (Stuart 11-26): ISM's bands move the radio — labelled, live one pressed, under the ask / lock rules
   const ib = ismCap?.bands ?? [];
   const ismRows = ismOn && spec && (window as any).__vibeMapStandalone !== true && ib.length > 1

@@ -215,6 +215,8 @@ interface MapOverlayProps {
           /** ★★ beta96 the list's tabs, the AIRCRAFT sort, the MESSAGES filter (TrackLiveList) */
           tabs?: Array<{ id: string; label: string; n: number }>; tab?: string; onTab?: (id: string) => void;
           sort?: string | null; onSort?: (s: string) => void; filter?: string; onFilterClear?: () => void;
+          /** ★★ beta96 what the sort key orders, for a screen reader ('aircraft' when absent; the mesh maps' 'nodes') */
+          sortWhat?: string;
           /** ★ beta96 a row chosen (an aircraft → MESSAGES filtered to it) */
           onPick?: (key: string) => string | void } | null;
   /** ★★★ beta96 (Stuart 11-26) THE SHARED TUNER line + CHAT over a full-screen map that holds the radio (MapTopStrip) — null =
@@ -3154,7 +3156,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList tabs={trk.tabs} tab={trk.tab} onTab={trk.onTab} sort={trk.sort} onSort={trk.onSort} filter={trk.filter} onFilterClear={trk.onFilterClear}
+          <TrackLiveList tabs={trk.tabs} tab={trk.tab} onTab={trk.onTab} sort={trk.sort} onSort={trk.onSort} sortWhat={trk.sortWhat} filter={trk.filter} onFilterClear={trk.onFilterClear}
                          title={kind === 'airsea' ? 'AIRCRAFT' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : kind === 'vormap' ? 'NAVAIDS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty} credit={!!trk.credit}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}

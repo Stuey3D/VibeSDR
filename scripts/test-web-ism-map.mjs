@@ -180,6 +180,26 @@ try {
   await ev(`${view}.querySelector('[data-rng="24h"]').click()`);
   await sleep(1200);
 
+  /* ★★ beta96 (Stuart 11-26: "meshcore list needs to filter by nearest first and latest first") NEAREST | LATEST */
+  console.log('── beta96: the NODES list, NEAREST | LATEST ──');
+  const srt = JSON.parse(await ev(`JSON.stringify((() => { const h = ${view}.querySelector('.hd .srt'); return { hidden: h.hidden, aria: h.getAttribute('aria-label'),
+    keys: [...h.querySelectorAll('[data-srt]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')) }; })())`));
+  ok(!srt.hidden && srt.aria === 'Sort the nodes' && srt.keys.join(' ') === 'NEAREST:true LATEST:false', `the list header's key (the AIR & SEA chip): ${srt.keys.join(' ')}, "${srt.aria}"`);
+  const kmOrder = `JSON.stringify([...${view}.querySelectorAll('.trkRow')].map(r => parseFloat((r.querySelector('.rg')?.textContent || '').replace(',', ''))).filter(n => isFinite(n)))`;
+  const fakeOrder = `JSON.stringify([...${view}.querySelectorAll('.trkRow')].map(r => r.dataset.key).filter(k => /^f\\d+$/.test(k)))`;
+  const kms = JSON.parse(await ev(kmOrder));
+  ok(kms.length >= 9 && kms.every((k, i) => i === 0 || k >= kms[i - 1]), `NEAREST (the default): distances never go down: ${kms.join(', ')}`);
+  await ev(`${view}.querySelector('[data-srt="latest"]').click()`);
+  const LATE = ['f1', 'f6', 'f11', 'f3', 'f8', 'f2', 'f7', 'f4', 'f5', 'f9'];   // their seen: 40 60 90 120 200 300 600 900 1800 72000
+  ok(await until(`${fakeOrder} === ${JSON.stringify(JSON.stringify(LATE))}`, 4000), `LATEST: the most recently heard first: ${await ev(fakeOrder)}`);
+  ok(await ev(`${view}.querySelector('[data-srt="latest"]').getAttribute('aria-pressed') === 'true' && localStorage.getItem('vibesdr.meshListSort') === 'latest'`), '…pressed, and remembered for this viewer');
+  ok(/\d+ on the map · \d+ repeaters/.test(await ev(`${view}.querySelector('.st').textContent`)) && await ev(`document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length`) === n24,
+     'the order changes nothing on the map: the same markers, the same status');
+  await ev(`${view}.querySelector('[data-srt="nearest"]').focus()`);
+  await key('Enter', 'Enter');   // ★ by keyboard
+  ok(await until(`(() => { const k = ${kmOrder}; const a = JSON.parse(k); return a.length >= 9 && a.every((x, i) => i === 0 || x >= a[i - 1]); })()`, 4000)
+     && await ev(`localStorage.getItem('vibesdr.meshListSort') === 'nearest'`), 'NEAREST again (by keyboard), remembered');
+
   console.log('── LIVE: a node heard while the map is open ──');
   await ev(`window.__fakeAdd(${JSON.stringify(node('f10', 'meshcore', 'Newcomer Rptr', 'repeater', 'repeater', 52.0500, -0.7000, 3, 1))})`);
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(m => /Newcomer Rptr/.test(m.textContent) && m.classList.contains('vtl-pulse'))`, 12000),
@@ -321,6 +341,14 @@ try {
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the gallery map offers all five ranges, ALL chosen');
   console.log('   screenshot', await shot('ismmap-gallery.png'));
+  // ★★ beta96 the gallery's map: the same key, the same remembered pick (NEAREST, set on the live map)
+  ok(await ev(`(() => { const h = ${view}.querySelector('.hd .srt'); return !h.hidden && [...h.querySelectorAll('[data-srt]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')).join(' ') === 'NEAREST:true LATEST:false'; })()`),
+     'the gallery map\'s list has NEAREST | LATEST, the viewer\'s pick kept');
+  await ev(`${view}.querySelector('[data-srt="latest"]').click()`);
+  const galLast = `JSON.stringify([...${view}.querySelectorAll('.trkRow .ag')].map(a => a.textContent))`;
+  ok(await until(`(() => { const a = JSON.parse(${galLast}); return a.length >= 10 && a.every((x, i) => i === 0 || x <= a[i - 1]); })()`, 4000), `gallery LATEST: last heard, newest first: ${await ev(galLast)}`);
+  await ev(`${view}.querySelector('[data-srt="nearest"]').click()`);
+
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Benson/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2000);
   const gcard = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
