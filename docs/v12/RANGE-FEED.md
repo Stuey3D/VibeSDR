@@ -20,8 +20,8 @@ touched. The only access to the Lenovo was read-only GETs.
 - **Not done / open:**
   - The setup page (`admin.ts renderAdsbRange`) and the app's server screen draw their own outline preview. They still
     put a vertex on each bin's middle bearing. That is cosmetic in a small preview.
-  - A feed at a **different site** would stretch this server's outline toward it. Every feed is assumed to be at this
-    site. A per-feed "at this site" flag in the feed's settings would fix that (open decision for Stuart).
+  - ~~A feed at a **different site** would stretch this server's outline toward it.~~ **Done in b96-2** (Stuart chose
+    option 1): the per-feed **Not at this site** tick — see the section below.
   - `test-web-avmap.mjs` was not run (it needs a VDL2 clip, and this Mac has none).
   - Nobody has looked at the Lenovo after a deploy yet. The coordinator should open the AIR & SEA viewer from the door
     and check: RANGE appears, RINGS/FIT are enabled with an "approximate — locator square IO92NH" title, and `GET
@@ -80,8 +80,8 @@ ingest tags their rows "feed" too.
   reads the whole table every 2 s.
 
 **Decision taken:** feeds count **always**, not only when the radio has no ADS-B of its own. The outline is a maximum,
-so a repeat is harmless, and the live outline on the page counts the same aircraft. ⚠ A feed is assumed to be at this
-site (see the open item above).
+so a repeat is harmless, and the live outline on the page counts the same aircraft. A feed is at this site unless the
+owner ticks **Not at this site** (b96-2, below).
 
 ### Page: `web/mapkit/adsblayer.js`, the one ADS-B layer for the web and the app
 
@@ -130,6 +130,47 @@ site (see the open item above).
 | `scripts/test_aviation_map.ts`: feed / other-radio / "last seen" ADS-B not sparse; VDL2 and ADS-C sparse | 98/0 | the "last seen" case failed |
 | `scripts/test_rx_position.ts` (new) | 17/0 | — |
 | Related suites still passing: `test-adsb-range` 55/0, `test-aircraft-delta` 39/39, `test-server-aircraft-delta` 20/0, `test_live_maps` 65/0, `test_aircraft_feeds_app` 15/0, `test-web-adsb-list-width` 122/0 | | |
+
+## "Not at this site" (b96-2, 2026-11-27 — Stuart chose option 1)
+
+**RESUME HERE (b96-2):** on branch `b96-2-integrate`, not pushed, no server touched. Server, web page, Setup page and the
+phone's card are done and tested; nobody has ticked it on a real server yet.
+
+**What the owner sees.** Setup page, SERVER tab, "Aircraft feeds from other receivers" → "+ Add aircraft feed": a tick
+**Not at this site — its aircraft are shown but not counted in this server's range outline**, above FIND. It applies to the
+feed added next (FIND's ADD or Advanced's ADD) and clears after each add. The list shows a small **off-site** tag on that
+feed. The phone's AIRCRAFT FEEDS FROM OTHER RECEIVERS card (Android server / Lite) has the same tick and tag. To change an
+existing feed: REMOVE it and add it again with the tick (the list has no edit, as before).
+
+**Stored as** `"offsite":true` on the source in `ServerConfig::aircraftFeeds` (`vibe_feeds.h SourceCfg::offsite`). Absent =
+at this site, so every older config reads as before and is written back unchanged. Only an **ADS-B** feed carries it (the
+forms' `feedsWithSite` / `feedWithSite`): the outline is ADS-B only, so on HFDL / VDL2 / ACARS it would change nothing.
+
+**How it travels.**
+- The feed's updates to the shared table carry `Update::offsite`. The record gains `Rec::siteMs` (in what was padding: an
+  older build's record reads 0), the last time a source **at this site** (a radio here, or a feed not ticked) heard the
+  aircraft, and `Rec::flags` bit 32, "this position came from an off-site feed".
+- `vibeavshare::offsiteOnly(row)`: the position came from an off-site feed **and** nothing at this site heard the aircraft
+  within `kAdsbNowSec` (60 s) of that fix. An aircraft also heard here counts. An older row (neither written) counts.
+- The radio's follower (`vibe_adsb_range_feed.h`) skips `offsiteOnly` rows, so the stored outline never sees them.
+- `aircraft.json` and the delta's dynamic half carry `"offsite":1` on those rows. `aviationMap.ts` reads it (only the exact
+  `1`, only with a position; it goes with the position in `avMerge`) and hands `offsite: true` to the ADS-B layer. The
+  layer's live outline treats it like a datalink fix: drawn, never offered, never the first of a pair.
+
+**Not changed (open for Stuart, one line each):**
+- An off-site feed's aircraft are still forwarded to flight-tracking sites and the Beast output like any other feed's
+  (the hub knows nothing of the tick). A site would get positions this receiver did not hear.
+- The aircraft card does not say "from an off-site feed"; it shows the source as before.
+
+**Tests (each fails before, passes after):**
+| Suite | After | Before |
+|---|---|---|
+| `test-adsb-range-feed` §3 (end to end: fake dump1090 → FeedSet ticked off-site → table → follower) and §4 (the rule on the merge) | 49/49 | §3: 4 of 40 failed (the tick dropped, 31 positions offered, no "offsite" in aircraft.json or the delta); §4 does not compile without `Update::offsite` |
+| `test-web-adsb-range` (headless Edge): an `offsite` row's fixes grow nothing, its card still opens, its next unmarked fix is a first fix | 51/0 | 2 failed |
+| `test_aviation_map`: `"offsite":1` read, drawn, passed to the layer; junk is not a mark; the mark goes with the position in a merge | 103/0 | 3 failed |
+| `test-setup-feed-test` (real page + binary): the tick, its words, the ADS-B feed marked and tagged (not the HFDL one), saved to config.json, shown again when the page is opened again | 25/0 | 7 failed |
+| `test_aircraft_feeds_app` / `test_aircraft_feeds_setup` (the phone's card) | 30/0, 28/0 | the helpers missing / no tick |
+| Still passing: `test-aircraft-share` 67/0, `test-aircraft-delta` 39/39, `test-aircraft-feeds` 82/82, `test-feed-test` 63/0, `test_adsb_layer` 242/0, `test_airsea_viewer` 44/0, `check-android-settings-parity` 222/0, `test-setup-adsb-feed` 68/0 | | |
 
 ## What Stuart will see (after a deploy)
 

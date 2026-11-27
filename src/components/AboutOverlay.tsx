@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★ V12 b96-2 2026-11-27 — NOT AT THIS SITE (docs/v12/RANGE-FEED.md; Stuart chose option 1). Locations checked against the
+  //     code: the Setup page's SERVER tab, "Aircraft feeds from other receivers" → "+ Add aircraft feed" → the #feedOffsite tick
+  //     above FIND, the "off-site" tag in #feedsList; the Android server screen's AIRCRAFT FEEDS FROM OTHER RECEIVERS
+  //     (AircraftFeedsSetup: the tick under "+ Add aircraft feed", the tag on the row).
+  { v: 'V12 (experimental)', detail: 'SERVER OWNERS: AN AIRCRAFT FEED FROM SOMEWHERE ELSE NO LONGER STRETCHES YOUR RANGE OUTLINE. The ADS-B RANGE outline counts every ADS-B aircraft this server holds, its feeds\u2019 too \u2014 right for a PiAware in the same house, wrong for a friend\u2019s across town. On the Setup page, SERVER tab, \u201cAircraft feeds from other receivers\u201d \u2192 \u201c+ Add aircraft feed\u201d, tick \u201cNot at this site\u201d before you press ADD: that feed\u2019s aircraft are still shown on every map, but never counted in this server\u2019s range outline, the stored one or the one the map grows as you watch. The list tags it \u201coff-site\u201d. An aircraft this server also hears itself (a radio here, or a feed at this site) still counts. It applies to ADS-B feeds (only ADS-B draws the outline). To change a feed you already have, REMOVE it and add it again. The same on the Android server screen\u2019s AIRCRAFT FEEDS FROM OTHER RECEIVERS. Needs a VibeServer updated to this beta.' },
   // ★★★ V12 beta96 follow-up 2026-11-27 — FIND, TEST BEFORE SAVING, THE UBERSDR HFDL FEED (docs/v12/FEED-TEST.md; Stuart: "we need
   //     to test the connection before saving", "the easiest way possible please"). Locations checked against the code: the Setup
   //     page's SERVER tab, "Aircraft feeds from other receivers" → "+ Add aircraft feed" (#feedFind + FIND, #feedFound's ADD,

@@ -201,6 +201,14 @@ A radio's own replies reach the hub while ADS-B runs on it. To feed all day from
   `aircraft.json` has labels and states only.
 - **Live**: a save re-applies at once; a source whose settings did not change keeps its connection and aircraft.
 
+
+### Not at this site (b96-2)
+
+A feed source may carry `"offsite":true` (the **Not at this site** tick on the Setup page and the phone's card; ADS-B feeds
+only; absent = at this site). Its aircraft go on every map as before, but its positions are never counted in this
+server's ADS-B range outline — neither the stored one (the radio's table follower) nor the page's live one. An aircraft
+also heard by a radio here or by an at-site feed (within 60 s of the fix) still counts. `aircraft.json` and the delta mark
+such rows `"offsite":1`. Details, the rule and the tests: docs/v12/RANGE-FEED.md "Not at this site".
 ## The former ADS-B Beast feed radio
 
 A radio entry with `driver: "beast"` (from `b96-adsbfeed`) is migrated on load into a source (Beast, connect, its
