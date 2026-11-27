@@ -81,7 +81,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel, satSchedStored } from './satellites';
-import { SatStepKeeper, satClickDialHz, satPassbandOf, type SatPassband } from '../../../src/services/satTune';   // ★★★ beta97 tuning inside a pass
+import { SatStepKeeper, satClickDialHz, satPassbandOf, spotBandCell, spotViaText, type SatPassband } from '../../../src/services/satTune';   // ★★★ beta97 tuning inside a pass
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
@@ -19087,7 +19087,8 @@ function renderSpotsRowsInto(host: HTMLElement) {
       `<span class="t">${fmtSpotTime(sp.timestamp)}</span>` +
       // ★ V12: the MODE, in its map colour and letter (src/utils/digiModes.ts) — Band mode lists several at once.
       `<span class="mode" style="color:${ms.colour}"><i style="background:${ms.colour};color:${ms.ink}">${escapeHtml(ms.letter)}</i>${escapeHtml(sp.mode)}</span>` +
-      `<span class="band">${escapeHtml(sp.band)}</span>` +
+      // ★★★ beta97 a spot via a satellite: the BIRD in the band column ("2m" would claim a terrestrial reception)
+      `<span class="band"${sp.via ? ` title="${escapeHtml(spotViaText(sp.via))}"` : ''}>${escapeHtml(spotBandCell(sp.band, sp.via))}</span>` +
       // ★ beta96 FT8/FT4/FT2/JS8/WSPR/JTTY: the shared chip, coloured by the margin over THAT mode's threshold (−15 is a
       //   healthy FT8 decode); CW/PSK/RTTY keep the plain number (no threshold sourced on their scales yet)
       (spotSnrMode(sp.mode) && Number.isFinite(Number(sp.snr)) ? `<span class="snr">${snrChipHtml(spotSnrMode(sp.mode), Number(sp.snr), true)}</span>`
@@ -19104,7 +19105,7 @@ function renderSpotsRowsInto(host: HTMLElement) {
         // older server sends none and the line is simply not there. ★★ beta92: a CW / RTTY spot's text comes from the
         // band_skim frame (its signal's last 120 characters), drawn the same way — the skim text wins when both exist.
         ? `<span class="sdetail">${escapeHtml([
-            sp.mode, sp.grid,
+            spotViaText(sp.via), sp.mode, sp.grid,
             bearing != null ? `${Math.round(bearing)}°` : '',
             fmtSpotTimeSec(sp.timestamp),
             skimSig ? `${(skimSig.hz / 1e3).toFixed(2)} kHz` : '',
@@ -19113,7 +19114,7 @@ function renderSpotsRowsInto(host: HTMLElement) {
         : '');
     wireQrz(row);   // ★ V12: the callsign opens its QRZ.COM page — its own click, not the row's tune
     padListRow(row);   // ★★★ beta92 one pad stop: enter tunes (padList.ts)
-    row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
+    row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz${sp.via ? ' · ' + spotViaText(sp.via) : ''}`;
     row.onclick = () => {
       spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true, retarget: true });
       renderFreq();

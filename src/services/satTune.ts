@@ -63,3 +63,20 @@ export function satClickDialHz(rawRfHz: number, markerShiftHz: number, step: num
   return hz;
 }
 
+/* ★★★ beta97 SPOTS VIA A SATELLITE (vibe_decoder_host.h setSatVia): a digital spot decoded on a channel with a live Doppler
+ *  lock carries "via" (the bird's catalogue id, "JO-97") and "norad". The band column shows the BIRD instead of the
+ *  downlink's band ("2m" would claim a terrestrial reception), and the detail line says "via JO-97". The server holds these
+ *  spots back from PSK Reporter. */
+/** The bird a spot was heard through, off the wire: printable, short, '' = none (an ordinary spot or an older server). */
+export function parseSpotVia(v: unknown): string {
+  return typeof v === 'string' ? v.replace(/[^0-9A-Za-z ()/+-]/g, '').trim().slice(0, 24) : '';
+}
+/** "via JO-97", or '' for an ordinary spot. */
+export function spotViaText(via: string | undefined | null): string {
+  return via ? `via ${via}` : '';
+}
+/** What a spot row's band column shows: the bird for a spot via a satellite, else the band. */
+export function spotBandCell(band: string, via: string | undefined | null): string {
+  return via ? via : band;
+}
+

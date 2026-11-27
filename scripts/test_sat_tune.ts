@@ -4,7 +4,7 @@
 // passband). The model end to end: tune +12.3 kHz into RS-44's passband mid-pass, the Doppler moves −3 kHz, the channel
 // (dial + shift) stays on the signal. The server's half (a mode change keeps the lock) is scripts/test-server-sat.mjs.
 // Silent. Run: npx tsx scripts/test_sat_tune.ts
-import { SAT_STEP_HZ, SatStepKeeper, satClickDialHz, satPassbandOf } from '../src/services/satTune';
+import { SAT_STEP_HZ, SatStepKeeper, satClickDialHz, satPassbandOf, parseSpotVia, spotViaText, spotBandCell } from '../src/services/satTune';
 import { satMarkerShiftHz, type SatReadout } from '../src/services/satellites';
 
 let fail = 0, pass = 0;
@@ -78,6 +78,15 @@ ok(satPassbandOf({ hz: 437800000 }) === null && satPassbandOf({ hz: 435605000, h
   const ro: SatReadout = { state: 'TRACK', offset: -4600, follow: 400 } as SatReadout;
   ok(satMarkerShiftHz(ro) === -5000, 'with a follow the shift taken off is offset − follow');
   ok(satMarkerShiftHz({ state: 'OFF', offset: -5000 } as SatReadout) === 0, 'no live lock: no shift');
+}
+
+console.log('── spots via a satellite ──');
+{
+  ok(parseSpotVia('JO-97') === 'JO-97' && parseSpotVia(undefined) === '' && parseSpotVia(42) === '', 'via parsed: a name, else nothing');
+  ok(parseSpotVia('JO-97"<script>') === 'JO-97script', 'off the wire: no quotes or angle brackets');
+  ok(parseSpotVia('X'.repeat(80)).length === 24, '…and bounded');
+  ok(spotViaText('JO-97') === 'via JO-97' && spotViaText('') === '' && spotViaText(undefined) === '', '"via JO-97", else nothing');
+  ok(spotBandCell('2m', 'JO-97') === 'JO-97' && spotBandCell('2m', undefined) === '2m', 'the band column shows the bird, not "2m"');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

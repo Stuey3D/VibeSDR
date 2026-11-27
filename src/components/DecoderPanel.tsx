@@ -11,6 +11,7 @@
  * Matches VibeSDR_Mockup_SAVE.html #lsv-decoder-panel exactly.
  */
 
+import { spotBandCell, spotViaText } from '../services/satTune';   // ★★★ beta97 spots via a satellite
 import { plainEnglish } from '../utils/cwVocab';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { spotRowKey, skimWaitKey, spotsNavKey, spotsNavFollow, type SpotsZone } from '../utils/spotsNav';
@@ -246,7 +247,8 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         </Text>
         {/* ★ V12: the callsign opens its QRZ.COM page (CwView CallLink) — its own tap, not the row's tune. */}
         <CallLink call={s.call} style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]} />
-        <Text style={[dp.spotCell, dp.spotBand, compact && dp.spotBandCompact, { fontFamily: font }]}>{s.band}</Text>
+        {/* ★★★ beta97 a spot via a satellite: the BIRD in the band column ("2m" would claim a terrestrial reception) */}
+        <Text style={[dp.spotCell, dp.spotBand, compact && dp.spotBandCompact, { fontFamily: font }]} numberOfLines={1}>{spotBandCell(s.band, s.via)}</Text>
         {/* ★ V12: the mode in ITS colour — the same as its map marker (src/utils/digiModes.ts). */}
         <Text style={[dp.spotCell, dp.spotMode, compact && dp.spotModeCompact, { fontFamily: font }, !isCW && { color: digiModeStyle(s.mode).colour }]}>
           {isCW ? (s.wpm ? Math.round(s.wpm) + 'w' : 'CW') : s.mode}
@@ -282,6 +284,7 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         // locator, so the row must not leave a gap where the grid would have been.
         <Text style={[dp.spotDetail, { fontFamily: font }]} numberOfLines={1}>
           {spotDetailLine([
+            spotViaText(s.via) || undefined,
             compact ? abbrCountry(s.country) : undefined,
             s.grid,
             s.bearing != null ? `${Math.round(s.bearing)}°` : undefined,

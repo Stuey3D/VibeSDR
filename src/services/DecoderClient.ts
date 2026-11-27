@@ -44,6 +44,7 @@
  *                [{ completed, text }, …] — append completed segment text
  */
 
+import { parseSpotVia } from './satTune';   // ★★★ beta97 spots via a satellite
 import { noteDecision } from './protocolLog';
 import { USER_AGENT } from '../constants/version';
 import { rttyFraming, RTTY_WEATHER } from '../utils/rttySpec';
@@ -192,6 +193,9 @@ export interface SpotRow {
    *  distinguishes a CQ from a signal report from a completed QSO. UberSDR has always sent this
    *  and we discarded it. ★★ beta94 a VibeServer sends it too (`msg`, the slotted modes) — utils/spotMessage.ts. */
   msg?:     string;
+  /** ★★★ beta97 the satellite it was heard through ("JO-97") — a VibeServer spot from a channel with a live Doppler lock
+   *  (satTune.ts spotViaText); absent otherwise. */
+  via?:     string;
   /** Degrees from the receiver. Server-supplied on UberSDR; derived from `grid` on-device. */
   bearing?: number;
   /** ★ V12 beta92 a VibeServer's stored station: the radio id(s) that heard it (src/utils/logRadio.ts); none = unknown. */
@@ -775,6 +779,7 @@ export class DecoderClient {
               // ★★ beta94 a VibeServer sends `msg` (the slotted modes' decoded text) — cleaned and bounded
               // there (utils/spotMessage.ts): it came off the air.
               msg: spotMsgOf(d),
+              ...(parseSpotVia(d.via) ? { via: parseSpotVia(d.via) } : {}),   // ★★★ beta97 via a satellite
               bearing: spotNum(d.bearing ?? d.bearing_deg ?? d.azimuth),
             });
           } else if ((m.type === 'aprs_list' || m.type === 'aprs_packet' || m.type === 'aprs_frame') && m.data) {

@@ -81,6 +81,7 @@
  * frames can only be parsed against the decoder currently attached. Never sniff.
  */
 
+import { parseSpotVia } from '../../../src/services/satTune';   // ★★★ beta97 spots via a satellite
 import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
@@ -128,6 +129,9 @@ export interface Spot {
    *  "ZL1RKO W9DHI -16", WSPR's "K1ABC FN42 37", a JS8 frame. Absent from an older server and from the skimmers (CW / RTTY
    *  read theirs from band_skim). Display only: the expanded row's message line. */
   msg?: string;
+  /** ★★★ beta97 the satellite it was heard through ("JO-97") — set while the channel had a live Doppler lock; absent
+   *  otherwise (src/services/satTune.ts spotViaText). The server holds such spots back from PSK Reporter. */
+  via?: string;
 }
 
 /** ★★ V12 (R36S handheld "Set clock from <station>"): one time-station minute that passed its parity AND agreed with the
@@ -659,6 +663,7 @@ export class DecoderClient {
         ...(typeof d.dt === 'number' && Number.isFinite(d.dt) ? { dt: d.dt } : {}),
         // ★★ beta94 off the air: printable ASCII, bounded (the server cuts at 48; 64 here leaves room, never trusts it)
         ...(typeof d.msg === 'string' && d.msg.replace(/[^ -~]/g, '').trim() ? { msg: d.msg.replace(/[^ -~]/g, '').trim().slice(0, 64) } : {}),
+        ...(parseSpotVia(d.via) ? { via: parseSpotVia(d.via) } : {}),   // ★★★ beta97 via a satellite
       });
     }
     if (msg.type === 'time_sync' && msg.data) {
