@@ -87,7 +87,16 @@ menus are standard type.
   synthetic Beast feed + a fake-RTL VDL2 radio (two sources) and a single radio (one source). Needs `VIBESERVER_BIN`
   (built with this page) and `VIBE_VDL2_CLIP` (`test-vdl2 --write-clip v.cu8 2400000`).
 - Selectors moved in: test-web-avmap, test-web-map-scope, test-web-map-shared, test-web-ndb, test-web-adsb-list-width,
-  test-web-ais-aprs.
+  test-web-ais-aprs, test-web-navtex-map (opens MAP before keying the time filter), test-web-shipping-map (FIT TO NAVTEX
+  STATIONS before its sea-area sweep — FIT frames the ships by default now, close in).
+- Results 11-27 (this branch's server, headless Edge): test-web-map-cards 203/0 · test_map_cards 29/0 · test-web-avmap
+  88/0 · test-web-adsb-list-width 122/0 · test-web-navtex-map 48/0 · test-web-shipping-map 44/0 · test-web-map-shared
+  36/0 · test-web-airsea-standalone 19/0 · test-web-gamepad, test_nav_coverage, test_gamepad_nav pass ·
+  test-web-map-scope 22/1 — "OFF: the ships follow" fails identically on the base 567de0bd4 (pre-existing, not this work).
+  Not run here (clips not made): test-web-ndb, test-web-ais-aprs, test-web-ism-map, test-web-lora — their selector edits
+  are in; the coordinator's full run covers them.
+- Screenshots (before / after, 390 / 820 / 1440, the viewer and the DATALINK map): the session scratchpad `mapcards/`
+  (`before-*`, `after-*`, `after-mapcard-*` with the MAP card open).
 
 ## The app port (after Stuart has seen the web page)
 
