@@ -2876,6 +2876,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 
 # ★★★ beta96 SUITES THE BRANCHES' DOCS NAME BUT NOBODY REGISTERED (beta96 prep, 11-26) — each runs alone as its doc says;
 #     exit 3 = not run (no VIBESERVER_BIN / no Edge / no CMake target built).
+printf '\n\033[1m── beta96: the GALLERY on the landing + a server PIN over the landing viewers (LANDING-GALLERY.md) ──\033[0m\n'
+npx tsx scripts/test_gallery_offer.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-landing-pin.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-landing-gallery.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: the standalone AIR & SEA map + aircraft deltas, clients (test_airsea_viewer, ADSB-FEED.md) ──\033[0m\n'
 npx tsx scripts/test_airsea_viewer.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
