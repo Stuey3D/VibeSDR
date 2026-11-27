@@ -358,6 +358,10 @@ try {
   await shot('community-10-receivers-clustered.png');
   await js(`gl.jumpTo({ center: [-1.2, 51.9], zoom: 8 }); true`); await sleep(1200);
   ok(await js(`gl.queryRenderedFeatures({ layers: ['cm-dense-pts'] }).length`) > 0, 'zoomed in, full markers');
+  // ★ Stuart 11-27: "it drops to the grouped numbers quicker than i expected" — a county-to-region view (zoom 6, SE England
+  //   in his recording) shows every aircraft; grouping is for the country/continent view only (clusterMaxZoom 5, radius 22).
+  await js(`gl.jumpTo({ center: [0.5, 51.8], zoom: 6.0 }); true`); await sleep(1200);
+  ok(await js(`gl.queryRenderedFeatures({ layers: ['cm-clusters'] }).length`) === 0, 'zoom 6 (a region, e.g. SE England): no grouped numbers, every aircraft drawn');
   ok(Object.entries(hits).every(([k, n]) => n === want(k)), `each of ${N} receivers asked once (per radio) (${Object.values(hits).join(',')})`);
   console.log(`   (largest answer per receiver, bytes: ${JSON.stringify(sizes)})`);
   ok(errors.length === 0, `no script errors (${errors.slice(0, 3).join(' | ')})`);

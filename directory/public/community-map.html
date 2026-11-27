@@ -359,7 +359,7 @@ function ensureLayers() {
   if (!gl || layersReady || !gl.isStyleLoaded()) return layersReady;
   const empty = { type: 'FeatureCollection', features: [] };
   gl.addSource('cm-shapes', { type: 'geojson', data: empty });
-  gl.addSource('cm-dense', { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 6, clusterRadius: 40 });
+  gl.addSource('cm-dense', { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 5, clusterRadius: 22 });
   gl.addSource('cm-pts', { type: 'geojson', data: empty });
   gl.addSource('cm-rx', { type: 'geojson', data: empty });
   gl.addLayer({ id: 'cm-area', type: 'fill', source: 'cm-shapes', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.16 } });
