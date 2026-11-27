@@ -466,12 +466,20 @@ export const avCreditHtml = adsbCreditHtml;
 export function avShowsData(planes: AvPlane[]): boolean {
   return planes.some((p) => !!p.type || !!(p.info && Object.keys(p.info).length));
 }
-/** ★★ ONE COMPOSITION for both clients: the items, the list's rows (sections when several layers), the status line. */
-export function avCompose(live: AvReport | null, shared: SharedAircraft | null, focus: AvFocus, layers: AvLayers, rx: LatLon | null, wrap: 'web' | 'app' = 'web') {
+/** ★★★ V12 11-27 WHAT THE MAP DRAWS NOW — the one filter behind avCompose AND the landing's AIR & SEA button
+ *  (airSeaViewer.ts airSeaOffer), so the two can never disagree again (Stuart: "lies on the landing screen" — the button
+ *  counted every aircraft of the table's HOUR, 243, the map it opened said 72). The now-rule (ADS-B only while heard in the
+ *  last minute and a radio decodes it; the datalink for the table's hour), then the layers that are present and on. */
+export function avShown(live: AvReport | null, shared: SharedAircraft | null, focus: AvFocus, layers: AvLayers) {
   const { planes, adsbGone } = avNowRule(avMerge(live, shared), shared);   // ★ beta88 ADS-B only while heard
   const stations = shared?.stations ?? [];
   const present = avLayersPresent(avHave(planes, stations), focus);
   const shown = planes.filter((p) => avVisible(p, present, layers));
+  return { planes, adsbGone, stations, present, shown };
+}
+/** ★★ ONE COMPOSITION for both clients: the items, the list's rows (sections when several layers), the status line. */
+export function avCompose(live: AvReport | null, shared: SharedAircraft | null, focus: AvFocus, layers: AvLayers, rx: LatLon | null, wrap: 'web' | 'app' = 'web') {
+  const { planes, adsbGone, stations, present, shown } = avShown(live, shared, focus, layers);
   const items: TrackItem[] = [...avPlaneItems(shown, rx, wrap)];
   if (avOn('stations', present, layers)) items.push(...avStationItems(stations, wrap));
   const note = avAdsbNote(planes, shared?.adsb, adsbGone, focus);

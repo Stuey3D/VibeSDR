@@ -10,12 +10,15 @@
  *                  whole aircraft.json every poll.
  */
 import { AircraftDeltaStore } from './aircraftDelta';
+import { avShown, avLayersOf, sharedSanitise } from './aviationMap';
+import { SHIP_KEEP_SEC } from './shippingMap';
+import { STORED_SPEC } from './storedLayers';
 
 export type AirSeaTab = 'aircraft' | 'ships' | 'sondes' | 'navaids';
 export interface AirSeaOffer {
   show: boolean;
   tab: AirSeaTab;
-  /** what there is, for the button's line ("34 aircraft · 12 ships") */
+  /** what there is, for the button's line ("34 aircraft now · 12 ships") — aircraft = what the map draws NOW (avShown) */
   counts: { aircraft: number; ships: number; sondes: number; vor: number; feeds: number };
   /** the one feed label when every aircraft comes from feeds of one kind ("HFDL"), else '' */
   label: string;
@@ -25,24 +28,27 @@ export interface AirSeaOffer {
 export type Getter = (path: string) => Promise<any | null>;
 
 const n0 = (v: unknown) => (typeof v === 'number' && isFinite(v) && v > 0 ? Math.floor(v) : 0);
-const STORED_WINDOW: Record<'sondes' | 'vormap', number> = { sondes: 24 * 3600, vormap: 7 * 24 * 3600 };
 
 /** ★★ THE LANDING BUTTON'S GATE (AGENTS.md: no dead controls) — four small reads, once when the landing draws, never polled.
  *  `get(path)` returns parsed JSON or null. A server that says nothing anywhere: no button. */
 export async function airSeaOffer(get: Getter, nowSec = Math.floor(Date.now() / 1000)): Promise<AirSeaOffer> {
   const [ac, sh, sd, vm] = await Promise.all([
-    get('/vibeserver/aircraft.json?since=3600').catch(() => null),
-    get('/vibeserver/gallery/ais-ships.json?since=21600&limit=1').catch(() => null),
+    get('/vibeserver/aircraft.json?since=3600').catch(() => null),   // ★ the table's whole hour — filtered below exactly as the map filters it
+    get(`/vibeserver/gallery/ais-ships.json?since=${SHIP_KEEP_SEC}&limit=1`).catch(() => null),   // ★ "total" = heard in the map's ship window
     get('/vibeserver/gallery.json?kind=sondes&limit=4').catch(() => null),
     get('/vibeserver/gallery.json?kind=vormap&limit=4').catch(() => null),
   ]);
-  const aircraftList: any[] = ac && !ac.off && Array.isArray(ac.aircraft) ? ac.aircraft : [];
+  /* ★★★ V12 11-27 THE AIRCRAFT THE MAP WILL DRAW WHEN IT OPENS, not the hour's table (Stuart: "lies on the landing
+   *  screen" — the Sony's button said 243 aircraft, the map 72): the standalone map's own filter (aviationMap.ts avShown,
+   *  as airSeaStandalone.ts / the web's asRender compose it — no live report, the ADS-B focus, every layer on). */
+  const shared = ac && !ac.off ? sharedSanitise(ac) : null;
+  const aircraftList = shared ? avShown(null, shared, 'adsb', avLayersOf(null)).shown : [];
   const feeds: any[] = ac && Array.isArray(ac.feeds) ? ac.feeds : [];
   const ships = sh && !sh.off ? (n0(sh.total) || n0(sh.count) || (Array.isArray(sh.vessels) ? sh.vessels.length : 0)) : 0;
   const stored = (j: any, kind: 'sondes' | 'vormap') => {
     const items: any[] = j && Array.isArray(j.items) ? j.items : [];
-    // ★ a day card younger than the layer's keep (sondes 24 h, VOR stations 7 days) — what the map would draw
-    return items.filter((it) => typeof it?.t === 'number' && nowSec - it.t <= STORED_WINDOW[kind]).length;
+    // ★ a day card younger than the layer's keep (storedLayers.ts STORED_SPEC: sondes 24 h, VOR stations 7 days) — what the map would draw
+    return items.filter((it) => typeof it?.t === 'number' && nowSec - it.t <= STORED_SPEC[kind].keepSec).length;
   };
   const counts = { aircraft: aircraftList.length, ships, sondes: stored(sd, 'sondes'), vor: stored(vm, 'vormap'), feeds: feeds.length };
   const show = counts.aircraft > 0 || counts.ships > 0 || counts.sondes > 0 || counts.vor > 0 || counts.feeds > 0;
@@ -60,7 +66,7 @@ export async function airSeaOffer(get: Getter, nowSec = Math.floor(Date.now() / 
     else if (!aircraftList.length) label = srcName;
   }
   const bits: string[] = [];
-  if (counts.aircraft) bits.push(`${counts.aircraft} ${label && label !== 'ADS-B' ? label + ' ' : ''}aircraft`);
+  if (counts.aircraft) bits.push(`${counts.aircraft} ${label && label !== 'ADS-B' ? label + ' ' : ''}aircraft now`);
   if (counts.ships) bits.push(`${counts.ships} ship${counts.ships === 1 ? '' : 's'}`);
   if (counts.sondes) bits.push(`radiosondes`);
   if (counts.vor) bits.push(`VOR stations`);
