@@ -1865,6 +1865,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetAircraftFeeds(JNIEnv* env, jobject, j
     vibe::LocalSdrShim::setAircraftFeeds(jstr(env, json), err, false);
     return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the running sources stay)
 }
+/* ★★ beta96 follow-up TEST / FIND AN AIRCRAFT FEED BEFORE SAVING (vibe_feed_test.h; docs/v12/FEED-TEST.md): {"src":{…}} or
+ *  {"find":"host[:port]"} → JSON. Blocks ~5 s: the module calls it on a worker thread, never the UI or audio thread. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeFeedTest(JNIEnv* env, jobject, jstring json) {
+    const std::string out = vibe::LocalSdrShim::feedTestJson(jstr(env, json));
+    return env->NewStringUTF(out.c_str());
+}
 /* ★★ V12 beta96 the standalone AIR & SEA map's limits (vibe_airsea_viewers.h). */
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetAirSeaViewers(JNIEnv*, jobject, jint maxViewers, jint minutes) {

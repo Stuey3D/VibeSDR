@@ -68,6 +68,8 @@ object VibeServerOps {
         "bookmarks.clear"  -> { VibeLocalSDR.clearBookmarks(); ok() }
         "mdnsHostname"     -> ok().put("host", VibeLocalSDR.mdnsHostname())
         "radioCaps"        -> ok().put("json", try { VibeLocalSDR.radioCaps() } catch (_: Throwable) { "" })
+        // ★★ beta96 follow-up: in the SERVER's process, which owns the feeds (a listen test knows its own ports)
+        "feedTest"         -> ok().put("json", try { VibeLocalSDR.feedTest(a.optString("json")) } catch (_: Throwable) { "" })
         "icomFacts"        -> ok().put("json", VibeIcom.facts(ctx).toString())
         "icomServing"      -> ok().put("serving", VibeIcom.serving())
         "icomMicGranted"   -> { RtlTcpServerService.wantMicrophone(ctx); IcomAudio.startIfPossible(ctx); ok() }

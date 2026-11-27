@@ -202,6 +202,9 @@ flags_for() {
     #    labels (HFDL never ADS-B), a LISTEN source, two sources merged in the shared table, the banner, and the hub as a
     #    middle man (each reply once, byte-faithful, HFDL never forwarded, the loop guard, own-only). 127.0.0.1 only. ~12 s.
     test-aircraft-feeds)   echo "-O2 -pthread" ;;
+    # ★★ beta96 follow-up: TEST A FEED BEFORE SAVING, AUTO-DETECT and the UberSDR HFDL source (vibe_feed_test.h, vibe_uberhfdl.h;
+    #    docs/v12/FEED-TEST.md): fake Beast / BaseStation / UberSDR servers on 127.0.0.1, the captured fixture. ~25 s.
+    test-feed-test)        echo "-O2 -pthread" ;;
     # ★★ V12 beta96 THE SHARED AIRCRAFT TABLE AS DELTAS (vibe_aircraft_delta.h) + the standalone map's viewer tickets
     #    (vibe_airsea_viewers.h): rows rebuilt field for field, cursors, the 150-aircraft bytes (full / gzip / delta), the gate.
     test-aircraft-delta)   echo "-O2 -pthread" ;;
@@ -1662,6 +1665,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★ …and the setup page keeps an SDRplay's gain in ONE place, under its AGC rows (real page, headless MUTED Edge).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-setup-rsp-gain-home.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 follow-up (docs/v12/FEED-TEST.md): the feeds card FINDS a fake UberSDR, ADD tests first (pass → added; a closed
+#    port → why + ADD ANYWAY), TEST beside a source, Save → config.json, the UberSDR's aircraft on the map. Headless MUTED Edge.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-setup-feed-test.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ …and the web page's RADIO section on an SDRplay (a page shim dresses the fake radio as an RSP1A): the AGC row for
 #    the owner and for a listener, and what IF AGC / RF AGC / AGC TARGET say per mode. Needs Edge; silent.
@@ -1717,6 +1724,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    aircraft.json, the banner, the hub forwarding byte-faithfully (never HFDL), the loop guard. Local sockets only. ~40 s.
 printf '\n\033[1m── server-level aircraft feeds (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-aircraft-feeds.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ beta96 follow-up (docs/v12/FEED-TEST.md, the Lenovo 11-27): feeds saved through a RADIO's process reach the FRONT DOOR
+#    that owns them (its config.json watch) within ~2 s; an unrelated save re-applies nothing. ~25 s.
+printf '\n\033[1m── aircraft feeds saved through a radio reach the front door (test-feeds-door-watch) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-feeds-door-watch.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: the aircraft table as deltas + the standalone map\x27s tickets, real binary (test-server-aircraft-delta, ADSB-FEED.md) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" npx tsx scripts/test-server-aircraft-delta.mts; rc=$?
@@ -2865,6 +2877,9 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 npx tsx scripts/test_airsea_standalone.ts; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 npx tsx scripts/test_aircraft_feeds_app.ts; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96 follow-up: the phone\x27s feeds card — FIND, ADD tests first, ADD ANYWAY, no dead buttons (FEED-TEST.md) ──\033[0m\n'
+node scripts/test_aircraft_feeds_setup.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: the two live maps\x27 rules (test_live_maps, ONE-MAP.md) ──\033[0m\n'
 npx tsx scripts/test_live_maps.ts; rc=$?

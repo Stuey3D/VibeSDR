@@ -214,6 +214,7 @@ static const char* const kSatShared = vibe::sat::kSharedKey;   // ★ the shared
 #include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
 #include "vibe_beast.h"             // ★★ V12 beta96: share ADS-B with flight trackers (Beast server + push feeds)
 #include "vibe_feeds.h"             // ★★ V12 beta96: server-level aircraft feed sources (Beast / BaseStation, connect / listen)
+#include "vibe_feed_test.h"         // ★★ beta96 follow-up: test / auto-detect a feed before it is saved (docs/v12/FEED-TEST.md)
 static std::atomic<bool> g_feedsOwner{false};   // ★★ beta96 this process owns the server-level aircraft feeds (setAircraftFeeds)
 /** ★ The feeds for anyone (labels and states, no addresses) and the banner — this process's own, or the owner's file. */
 static void feedsPublic(std::string& feedsJson, std::string& warn) {
@@ -30447,6 +30448,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 reply(200, "OK", j);
                 return;
             }
+            /* ★★ beta96 follow-up TEST / FIND A FEED BEFORE SAVING (docs/v12/FEED-TEST.md): POST {"src":{…}} or {"find":"host"}.
+             *  Admin-gated like every setup endpoint (above). Answered by whichever process the page asked — the door owns
+             *  the feeds, so a listen test there knows its own ports. Bounded (~5 s); this connection thread waits for it. */
+            if (isPost && what == "feedtest") {
+                reply(200, "OK", LocalSdrShim::feedTestJson(body));
+                return;
+            }
             if (what == "adsbrange") {
                 if (frontDoorOnly || decoderOnly) { reply(200, "OK", "{\"none\":true}"); return; }
                 const int64_t utc = (int64_t)time(nullptr);
@@ -45836,6 +45844,41 @@ void LocalSdrShim::setAdsbIngest(const std::string& dir) {
         }
     }).detach();
 }
+std::string LocalSdrShim::feedTestJson(const std::string& body) {
+    namespace pr = vibe::feeds::probe;
+    vibe::antswitch::Json j;
+    if (!vibe::antswitch::parseJson(body, j) || j.kind != vibe::antswitch::Json::Obj)
+        return "{\"ok\":false,\"verdict\":\"invalid\",\"line\":\"the request is not a JSON object\"}";
+    pr::Opts o;
+    o.lanIp = primaryIpv4();
+    o.ownedListen = [](int port, std::string& t, std::string& f, std::string& line, bool& in) {
+        return g_feedsOwner.load() && vibe::feeds::FeedSet::shared().ownedListen(port, t, f, line, in);
+    };
+    if (const auto* fd = j.get("find"); fd && fd->kind == vibe::antswitch::Json::Str) {
+        pr::Detected d;
+        pr::Tester::shared().find(fd->s.substr(0, 260), 0, o, d);
+        LOGI("[aircraft feeds] find %s: %s", fd->s.substr(0, 80).c_str(), d.line.c_str());
+        return pr::toJson(d);
+    }
+    const auto* src = j.get("src");
+    if (!src || src->kind != vibe::antswitch::Json::Obj)
+        return "{\"ok\":false,\"verdict\":\"invalid\",\"line\":\"give {\\\"src\\\":{…}} or {\\\"find\\\":\\\"host\\\"}\"}";
+    // ★ the SAVE's parser: re-serialise the object and read it as a list of one
+    std::string one = "{";
+    for (const auto& kv : src->o) {
+        if (one.size() > 1) one += ",";
+        one += "\"" + vibe::beast::jsonEsc(kv.first) + "\":";
+        if (kv.second.kind == vibe::antswitch::Json::Num) { char b[32]; std::snprintf(b, sizeof b, "%.17g", kv.second.n); one += b; }
+        else if (kv.second.kind == vibe::antswitch::Json::Str) one += "\"" + vibe::beast::jsonEsc(kv.second.s) + "\"";
+        else one += "null";
+    }
+    one += "}";
+    vibe::feeds::SourceCfg c; std::string err;
+    if (!pr::parseOne(one, c, err)) return "{\"ok\":false,\"verdict\":\"invalid\",\"line\":\"" + vibe::beast::jsonEsc(err) + "\"}";
+    const pr::Result r = pr::Tester::shared().test(c, o);
+    LOGI("[aircraft feeds] test %s %s: %s", c.fmt.c_str(), c.dir == "listen" ? ("port " + std::to_string(c.port)).c_str() : vibe::beast::hostPortText(c.host, c.port).c_str(), r.line.c_str());
+    return pr::toJson(r);
+}
 std::string LocalSdrShim::aircraftFeedsStatusJson() {
     if (g_feedsOwner.load()) return vibe::feeds::FeedSet::shared().statusJson();
     return "[]";
@@ -50702,6 +50745,8 @@ void LocalSdrShim::stopLocked() {
     // ★ Leave no stale socket behind: the next process to start would bind() onto a file nothing
     //   is listening on, and every hand-off to it would fail with "connection refused".
     if (!impl->handoffPath.empty()) ::unlink(impl->handoffPath.c_str());
+    // ★★ beta96 follow-up: a feed test a connection thread is waiting on ends now (vibe_feed_test.h Tester), not in ~5 s
+    vibe::feeds::probe::Tester::shared().cancel();
     STOP_STAGE("the connection threads");
     {
         std::vector<Impl::ConnThread> conns;

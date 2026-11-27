@@ -193,6 +193,23 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         }.start()
     }
 
+    /** ★★ beta96 follow-up TEST / FIND AN AIRCRAFT FEED BEFORE SAVING (components/AircraftFeedsSetup): {"src":{…}} or
+     *  {"find":"host[:port]"}. Asked of the running server's process (it owns the feeds, so a listen test knows the ports it
+     *  already holds); with no server running, tested here. ~5 s, on a worker thread; resolves with the JSON ("" = failed). */
+    @ReactMethod
+    fun feedTest(json: String, promise: Promise) {
+        askWork.execute {
+            try {
+                if (VibeProcess.serverIsSeparate(reactContext) && VibeProcess.serverProcessAlive(reactContext)) {
+                    val r = VibeServerLink.call(reactContext, "feedTest", JSONObject().put("json", json), waitMs = 15_000)
+                    val j = r.optString("json", "")
+                    if (j.isNotEmpty()) { promise.resolve(j); return@execute }
+                }
+                promise.resolve(VibeLocalSDR.feedTest(json))
+            } catch (t: Throwable) { promise.resolve("") }
+        }
+    }
+
     /** ★ What the aerial covers / filters fitted, applied NOW on a running server. */
     @ReactMethod
     fun setAntennaBands(ranges: String, filters: String) {

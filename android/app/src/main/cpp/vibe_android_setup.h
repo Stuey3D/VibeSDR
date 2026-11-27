@@ -283,7 +283,7 @@ inline const std::vector<Control>& controlTable() {
         // ★★ V12 beta96 the standalone AIR & SEA map's limits and the server-level aircraft feed sources (vibe_feeds.h) — every
         //    radio: nothing is tuned
         { "mapViewers mapTimeMin",                       D_ANY,   0 },
-        { "feedFmt feedDir feedAddr feedPort feedLabel feedName", D_ANY, 0 },
+        { "feedFind feedFmt feedDir feedAddr feedPort feedLabel feedName", D_ANY, 0 },   // ★ beta96 follow-up: + FIND (auto-detect)
         // ★ V12 beta90 PSK Reporter + WSPRnet (every radio's digital spots); the DMR ID lookup only where DV ID can run
         { "pskrOn pskrCall pskrAntenna wsprnetOn wsprnetCall", D_ANY, 0 },
         { "dmrIdLookup",                                 D_RADIO, 0 },

@@ -3877,9 +3877,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /* ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEEDS (docs/v12/ADSB-FEED.md) — the Setup page's card, the same words. Every radio,
    *  no driver gate: nothing is tuned (AGENTS.md: a feed does not depend on the radio). Saved on the next Start. */
   const onFeeds = (l: FeedSource[]) => { setFeeds(l); void AsyncStorage.setItem(K.aircraftFeeds, feedsBlob(l)); };
+  /* ★★ beta96 follow-up TEST / FIND before saving (docs/v12/FEED-TEST.md): the engine's feed test, in the running server's
+   *  process when there is one (it owns the feeds), else in the app's own. Only where the engine has it — no dead buttons. */
+  const feedTestNative = (NativeModules as any).VibeLocalSDR?.feedTest as ((json: string) => Promise<string>) | undefined;
+  const feedTest = feedTestNative
+    ? async (body: object) => { const t = await feedTestNative(JSON.stringify(body)); try { return t ? JSON.parse(t) : null; } catch { return null; } }
+    : undefined;
   const secBody_aircraftFeeds = (<>
                 <View style={[styles.card, { borderColor: C.border }]}>
-                  <AircraftFeedsSetup C={C} F={F} list={feeds} onChange={onFeeds} status={feedLines} error="" />
+                  <AircraftFeedsSetup C={C} F={F} list={feeds} onChange={onFeeds} status={feedLines} error="" test={feedTest} />
                 </View>
   </>);
   /* ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's LIMITS — the Setup page's "Air & sea map" card, the same words. */

@@ -51,7 +51,7 @@ const TABLE = [
   //    no hardware beside it is a desktop server's (Stuart 11-26 — the Lenovo reading a PiAware Pi on the LAN)
   // ★★ V12 beta96 SERVER-LEVEL AIRCRAFT FEED SOURCES (vibe_feeds.h) — the screen's AIRCRAFT FEEDS card (components/AircraftFeedsSetup),
   //    VibeServerBoot's setAircraftFeeds; the Beast output's own-only switch rides the phone's one adsbFeed blob
-  P(['feedFmt', 'feedDir', 'feedAddr', 'feedPort', 'feedLabel', 'feedName'], 'Add aircraft feed', 'aircraftFeeds'),
+  P(['feedFind', 'feedFmt', 'feedDir', 'feedAddr', 'feedPort', 'feedLabel', 'feedName'], 'Add aircraft feed', 'aircraftFeeds'),
   N(['afServeOwn'], 'the "only this server\'s own radios" switches (Beast output and each site) are not on the phone\'s card yet: with feed sources on the phone, its Beast output and pushes send its radio\'s aircraft AND its ADS-B feeds\' (beta96, docs/v12/ADSB-FEED.md RESUME HERE)'),
   // ★★ V12 beta96 the standalone AIR & SEA map's limits — the screen's AIR & SEA MAP card (AirSeaMapLimits), setAirSeaViewers
   P(['mapViewers', 'mapTimeMin'], 'Map viewers', 'mapViewers'),

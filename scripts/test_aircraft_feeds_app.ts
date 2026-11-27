@@ -1,6 +1,6 @@
 /* test_aircraft_feeds_app.ts — ★★ V12 beta96 the phone's AIRCRAFT FEEDS card rules (src/utils/aircraftFeeds.ts, the Setup page's
  * feedsFromForm / feedsTitle / beastAddrWhy) and the AIR & SEA MAP limits' words. Silent, no network. */
-import { feedFromForm, feedsBlob, parseFeeds, feedTitle, feedAddrWhy, feedDefaults, feedStatusLines, mapViewersOf, mapTimeMinOf, mapCostLine, mapViewersLine } from '../src/utils/aircraftFeeds';
+import { feedFromForm, feedsBlob, parseFeeds, feedTitle, feedAddrWhy, feedDefaults, feedStatusLines, mapViewersOf, mapTimeMinOf, mapCostLine, mapViewersLine, feedFmtWord, feedTestWords, feedFindWords, feedKey } from '../src/utils/aircraftFeeds';
 let pass = 0, fail = 0;
 const ok = (c: boolean, w: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${w}`); };
 console.log('── the phone\'s aircraft feeds card ──');
@@ -23,5 +23,20 @@ ok(feedStatusLines({ sources: [{ title: 'PiAware', label: 'ADS-B', line: 'connec
 ok(mapViewersOf('') === 20 && mapViewersOf('0') === 0 && mapViewersOf('5000') === 1000 && mapTimeMinOf('x') === 0 && mapTimeMinOf('30') === 30, 'the map limits: 20 by default, 0 = none, clamped');
 ok(/At 20 viewers that is about 38 KB\/s/.test(mapCostLine(20)) && /no limit/.test(mapCostLine(0)), `the cost line ("${mapCostLine(20).slice(0, 90)}…")`);
 ok(mapViewersLine({ mapViewers: { now: 2, max: 20 } }) === '2 viewers on the map now of 20' && mapViewersLine({}) === '', 'the viewers-now line');
+console.log('── ★★ beta96 follow-up: the UberSDR HFDL format, TEST and FIND (the engine\'s answers, vibe_feed_test.h toJson) ──');
+const ub = feedFromForm('uberhfdl', 'listen', '192.168.86.11', '', 'adsb', 'UberSDR HFDL', []);
+ok(!!ub.src && ub.src.dir === 'connect' && ub.src.port === 8080 && ub.src.label === 'hfdl' && ub.src.host === '192.168.86.11', `an UberSDR: always connect, 8080, HFDL (${JSON.stringify(ub.src)})`);
+ok(parseFeeds('[{"fmt":"uberhfdl","dir":"listen","host":"u","port":8080,"label":"adsb"}]')[0]?.dir === 'connect' && parseFeeds('[{"fmt":"uberhfdl","host":"u","port":8080}]')[0]?.label === 'hfdl', 'stored: read back as connect + HFDL whatever it says');
+ok(feedFmtWord('uberhfdl') === 'UberSDR HFDL' && feedFmtWord('sbs') === 'BaseStation' && feedFmtWord('beast') === 'Beast', 'the format words (the Setup page\'s)');
+ok(feedTestWords({ ok: true, verdict: 'ok', line: 'Connected — UberSDR HFDL, 23 aircraft (14 with positions)', hint: '' }).text === '✓ Connected — UberSDR HFDL, 23 aircraft (14 with positions)', 'a passing test');
+ok(feedTestWords({ ok: false, verdict: 'refused', line: 'Nothing is listening on 192.168.86.13:32010', hint: 'That address is this server.' }).text === '✗ Nothing is listening on 192.168.86.13:32010 — That address is this server.', 'a failing test, with its hint');
+ok(!feedTestWords(null).ok && /did not answer/.test(feedTestWords(null).text), 'no answer: said, never a pass');
+const found = feedFindWords({ found: true, line: 'Found: PiAware ADS-B (Beast, port 30005) — 112 aircraft', hits: [
+  { src: { fmt: 'beast', dir: 'connect', host: '192.168.86.12', port: 30005, label: 'adsb', name: 'PiAware' }, name: 'PiAware', line: 'PiAware ADS-B (Beast, port 30005) — 112 aircraft' },
+  { src: { fmt: 'beast', dir: 'connect', port: 30005 }, name: 'junk', line: 'a connect without a host' }], tried: [] });
+ok(found.hits.length === 1 && found.hits[0].src.host === '192.168.86.12' && found.hits[0].name === 'PiAware' && found.text.startsWith('Found: PiAware'), 'FIND: a ready-to-add source (junk dropped by the same parser)');
+const none = feedFindWords({ found: false, line: 'Nothing found on 192.168.86.13 — tried 30005: nothing listening', hint: 'Is it on?', hits: [] });
+ok(none.hits.length === 0 && none.text === 'Nothing found on 192.168.86.13 — tried 30005: nothing listening Is it on?', 'nothing found: what was tried, and the hint');
+ok(feedKey(pi.src!) === 'beast|connect|192.168.86.12|30005|adsb', 'the key a TEST result is kept under');
 console.log(`\ntest_aircraft_feeds_app: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

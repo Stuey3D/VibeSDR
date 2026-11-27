@@ -14,6 +14,9 @@ Stuart, 2026-11-26, in steps:
 
 ## RESUME HERE
 
+- ★★ **11-27 follow-up on `b96-feedtest` — see `docs/v12/FEED-TEST.md`:** the front door now watches config.json (feeds
+  saved through a radio's process reach it within ~2 s — the Lenovo bug); a third format **`uberhfdl`** (an UberSDR's HFDL
+  add-on read over HTTP, §UberSDR HFDL add-on below); TEST before saving, and FIND (auto-detect from an address).
 - **Built, tested, committed on `b96-sbsfeed` (the 11-26 evening's work is marked ★ evening):**
   - `vibe_sbs.h`: the BaseStation parser (MSG 1–8; junk, partial lines, over-long lines, binary bytes), a per-source
     table tagged by label, positions absolute, the fix's own time, impossible jumps refused.
@@ -242,6 +245,35 @@ core** on Stuart's M5 Pro, with peak RSS about 4 MB for the whole test process.
 
 A Pi 3 core is very roughly 8–15× slower, so we expect about 2–3 % of a Pi 3 core. **This has not been measured on a
 Pi 3.**
+
+## UberSDR HFDL add-on (fmt `uberhfdl`, 11-27 follow-up)
+
+Stuart's UberSDR is headless and he cannot edit its docker-compose, so dumphfdl's BaseStation push (below) is not open to
+him. The UberSDR already serves its HFDL add-on's aircraft as JSON over plain HTTP, so we read that:
+
+```
+GET http://<ubersdr>:8080/addon/hfdl/aircraft
+[{"key":"4521BF","icao":"4521BF","reg":"LZ-LAN","flight":"H60252","lat":39.19998,"lon":15.135412,"freq_khz":8942,
+  "gs_id":7,"msg_count":18,"sig_level":-42.4,"last_seen":1795769725,"bearing":289.06,"aircraft_time":"08:55:16 UTC",
+  "tracked_km":2609.3, …}, …]
+```
+
+(One live response, 261 rows, is the fixture `test/fixtures/uberhfdl/aircraft-2026-11-27.json`. Fields seen across the
+rows: key, icao (253 of 261 — the rest are keyed by flight or registration), reg, flight, lat, lon, freq_khz, gs_id,
+msg_count, sig_level, last_seen, bearing, aircraft_time, tracked_km, mpdu_*, error_rate, current_link, available_links,
+alt_ft + alt_valid (2 rows). A missing path answers `404 page not found`.)
+
+- `vibe_uberhfdl.h`: `{"fmt":"uberhfdl","dir":"connect","host":"192.168.86.11","port":8080,"label":"hfdl"}` — connect
+  only, always HFDL, port 8080 by default. One GET every **5 s (a floor; never faster)** on the source's own thread,
+  HTTP/1.0, `Connection: close`, `Accept-Encoding: identity`, User-Agent `VibeServer (aircraft feed; +https://vibesdr.net)`,
+  a 4 s deadline for the whole request, the body capped at 2 MB, the list split element by element (never one 2 MB tree),
+  at most 2,000 rows.
+- Each row becomes a `vibe_sbs.h` Msg into the source's own HFDL table — exactly as an SBS HFDL source: icao, flight,
+  reg (now carried to the shared table's `reg`), `freq_khz` as the channel (`HFDL 8942`), `alt_ft` when `alt_valid`,
+  `last_seen` as the fix's own time. Skipped: no ICAO address, 0,0, a fix older than the 30-minute datalink window.
+  `sig_level`, `gs_id` and the link fields have no place in the shared table and are not used.
+- Never sent to an ADS-B aggregator (only Beast reaches the hub). Down after 90 s without a good answer; the status line
+  is `reading host:port every 5 s, M with positions · N aircraft` or the reason; one log line per change, never per poll.
 
 ## BaseStation / HFDL from UberSDR (dumphfdl)
 
