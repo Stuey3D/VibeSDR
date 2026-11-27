@@ -1,14 +1,14 @@
 // test_map_scope_app.ts — beta96 (Stuart 11-26 via the coordinator) the app's half of THE MAPS' SCOPE: OTHER RADIOS ON THIS
 // SERVER and THIS SESSION on the AIR & SEA map, the ISM mesh map and the AMATEUR map; the SHOW counts + colour dots on the
-// chips (TrackLiveList, DigiMapKeys); AIR & SEA LIVE pressed while lit reopens the map. Source checks — the rules themselves
+// chips (★★★ beta97: the MAP CARDS — TrackLiveList / DigiMapKeys DELETED); AIR & SEA LIVE pressed while lit reopens the map. Source checks — the rules themselves
 // are test_map_scope.ts (pure), the pad order test_nav_coverage.
 //   npx tsx scripts/test_map_scope_app.ts
 import { readFileSync } from 'node:fs';
 let pass = 0, fail = 0;
 const ok = (c: unknown, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const rd = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-const sc = rd('src/screens/SDRScreen.tsx'), mo = rd('src/components/MapOverlay.tsx'), tl = rd('src/components/TrackLiveList.tsx');
-const dk = rd('src/components/DigiMapKeys.tsx'), ty = rd('src/services/sdrTypes.ts'), lm = rd('src/services/liveMaps.ts');
+const sc = rd('src/screens/SDRScreen.tsx'), mo = rd('src/components/MapOverlay.tsx');   // ★★★ beta97 TrackLiveList / DigiMapKeys DELETED (the map cards)
+const ty = rd('src/services/sdrTypes.ts'), lm = rd('src/services/liveMaps.ts');
 
 console.log('── the server\'s answer ──');
 ok(/radioId:\s+typeof j\.radioId === 'string' && \/\^\[0-9a-z\]\{1,16\}\$\/\.test\(j\.radioId\)/.test(ty) && /radioCount: typeof j\.radioCount === 'number'/.test(ty),
@@ -57,15 +57,15 @@ ok(/ranges: withSession\(ISM_LIVE_RANGES, true\)/.test(ism) && /toggles: othersO
 ok(/const ri = radiosOf\(c\.ri\);   \/\/ ★★★ beta96 the card's radios on its nodes/.test(sc), 'the stored nodes carry their card\'s radios');
 
 console.log('── the AMATEUR map ──');
-ok(/session\?: \{ on: boolean; words: string; onPress: \(\) => void \}/.test(dk) && /label="THIS SESSION"/.test(dk), 'DigiMapKeys: THIS SESSION beside the window keys');
-ok(/show\?: Array<\{ id: string; label: string; n: number; colour: string; on: boolean; live: boolean \}>/.test(dk) && />SHOW<\/Text>/.test(dk) && /dot=\{x\.colour\}/.test(dk),
-   'DigiMapKeys: SHOW chips with counts and colour dots (pad keys)');
-ok(/scope\?: \{ label: string; words: string; on: boolean; onPress: \(\) => void \}/.test(dk), 'DigiMapKeys: the OTHER RADIOS key');
+// ★★★ beta97 the AMATEUR map is on the MAP CARDS (DigiMapKeys DELETED): THIS SESSION in TIME, the layers in LAYERS, OTHER RADIOS in SOURCES
+ok(/ranges: \[\.\.\.DIGI_WINDOWS, \.\.\.\(amateur \? \[SESSION_RANGE\] : \[\]\)\], range: amSess \? SESSION_ID : digiWinShown/.test(mo), 'MAP CONTROLS: THIS SESSION beside the window keys');
+ok(/const amLayers: MapLayerRow\[\] = amateur && amCounts/.test(mo) && /n: amCounts\[id\], colour: AM_LAYER_COLOUR\[id\], live: amateur\.live === id/.test(mo), 'LAYERS: SPOTS / APRS / MESH / BEACONS with counts, colour dots and LIVE (pad keys)');
+ok(/sources: amScope\?\.offered \? \[\{ id: 'others', name: OTHER_RADIOS_LABEL, what: OTHER_RADIOS_WORDS, on: amScope\.others \}\] : undefined/.test(mo), 'SOURCES: the OTHER RADIOS key');
 ok(/const amData = useMemo\(/.test(mo) && /const d = \{ spots: amData\.spots, aprs: amData\.aprs, mesh: amData\.mesh, beacons: amData\.beacons \};/.test(mo), 'the list, its tabs and the counts come through the scope');
 ok(/window\.__amScope=function\(json\)/.test(mo) && /if\(!spotsOn\|\|!amScR\(s\.radios\)\|\|\(amSc\.t0&&!amSesOk\(sf\)\)\)return false;/.test(mo), 'the page draws through the same rule (spots, APRS, MESH, BEACONS)');
-ok(/kb\.hidden=rnShow\|\|/.test(mo) && /mk\.hidden=rnShow\|\|/.test(mo) && /bk\.hidden=rnShow\|\|/.test(mo), 'the page\'s own APRS / MESH / BEACONS keys give way to React Native\'s SHOW');
+ok(!/getElementById\('f(Aprs|Mesh|Bcn)'\)/.test(mo), 'the page\'s own APRS / MESH / BEACONS keys DELETED (LAYERS is React Native\'s)');
 ok(/amScope=\{shownMap === 'digi' \? \{ mine: mapRadio\.mine, others: mapOthers, onOthers: mapOthersSet,/.test(sc), 'SDRScreen hands the switch to the AMATEUR map (one remembered state)');
-ok(!/TUNE/.test(dk.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').replace(/nothing here tunes the radio/g, '')), 'no TUNE on the AMATEUR map: nothing there retunes the radio');
+ok(/servers=\{null\} tune=\{null\} chat=\{null\} shared=\{null\}/.test(mo), 'no TUNE on the AMATEUR map: nothing there retunes the radio');
 
 console.log(`test_map_scope_app: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

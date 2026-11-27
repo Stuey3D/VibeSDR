@@ -2,10 +2,9 @@
  * MapOverlay — full-screen Leaflet maps for HFDL / Digital spots / CW spots.
  * Ported from skin v6.3.2 (lsv-hfdl / lsv-digmap / lsv-cwmap overlays).
  *
- * Architecture: react-native-webview running a self-contained HTML document.
- * ALL chrome lives inside the WebView (skin layout parity) — one slim topbar
- * `← SDR | TITLE | (SNAP) | count` padded by env(safe-area-inset-*), so
- * landscape wastes no vertical space. The back button posts 'close' to RN.
+ * Architecture: react-native-webview running a self-contained HTML document for the MAP; ★★★ beta97 every map's CHROME is the
+ * MAP CONTROL CARDS (MapChrome, React Native over the page — the ✕, the chips, cards and LIST; docs/v12/MAP-CONTROL-CARDS.md):
+ * the page draws no bar, filter row, panels or keys of its own on any map.
  *
  * The WebView talks to the UberSDR server directly:
  *   HFDL  — polls {base}/addon/hfdl/aircraft (5s) + /groundstations (piggy-backed)
@@ -37,7 +36,7 @@ import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
 import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
 import AircraftDataCredit from './AircraftDataCredit';
 import { adsbGainRow, layerFamilies, fitGroupOf, fitGroups, fitMainOf, rateRows, type GainRow } from '../utils/mapChrome';
-import { amStatsClean, amStatsSections, amSortRows, type AmStatsIn } from '../utils/amCards';
+import { amStatsClean, amStatsSections, amSortRows, pageRowsClean, pageRowsAsTrack, type AmStatsIn, type PageRow } from '../utils/amCards';
 import { fitDefault } from '../utils/mapCards';
 import type { ModeIconName } from '../utils/modeIcons';
 import { NavCard, CardKey } from './NavCard';
@@ -90,19 +89,17 @@ import { TRACK_CARD_CSS, AIS_COLOURS, type TrackItem, type TrackRow } from '../s
 import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
 import { langName } from '../services/transcriber';
 import { NAV_HAZARDS, NAV_HAZARD_COLOURS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../services/navtexIcons';
-import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';
-import { MAP_TITLE } from '../services/liveMaps';
+import { shipLegendRows, windLegendRows } from '../services/shippingMap';
 import { STORED_SONDE_ICON, STORED_VOR_ICON } from '../services/storedLayers';   // ★★★ beta96 maps2 the remembered sondes / VOR stations' KEY rows   // ★★★ beta96 the AIR & SEA map   // ★ V12 2026-11-02 the SHIPPING MAP
 import { seaLegendRows, seaAttributionAll } from '../services/seaAreas';   // ★ beta95 every source: the areas are drawn worldwide   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';
 import { DIGI_FIT_JS, DIGI_FIT_MAX_ZOOM, DIGI_WINDOWS } from '../utils/digiMapShared';   // ★ beta92 the digi map's FIT key
-import { DIGI_STATS_JS, DIGI_WIDE_PX, digiPanelsOf, type DigiPanelsShown } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
+import { DIGI_STATS_JS, DIGI_WIDE_PX } from '../utils/digiMapStats';   // ★ beta92 the web's stats / legend / summary
 import { MESH_ROUTE_JS } from '../utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop (ISM and AMATEUR maps)
 import { AMATEUR_JS, AM_TAB_LABEL, AM_LAYER_COLOUR, amTabs, amTabNow, amCountsOf, amListRows, amEmptyWords, type AmAprsIn, type AmMeshPoint, type AmBeaconPoint, type AmLayer } from '../utils/amateurMap';
 import { FirstSeen, scopeList, scopeSessionOk, sessionWindow, OTHER_RADIOS_LABEL, OTHER_RADIOS_WORDS, SESSION_ID, SESSION_RANGE, type MapScope } from '../services/mapScope';   // ★★★ beta96 the maps' scope   // ★★★ beta96 stage 7 THE AMATEUR MAP
-import DigiMapKeys from './DigiMapKeys';
 import type { DigiTotals } from '../services/digiStations';   // ★ beta92 the window and panel keys (the pad reaches them)
 /* ★★★ beta92 ONE AUTO FIT FOR EVERY MAP (Stuart 11-23: "all maps to have an auto fit that gently glides the zoom in and out
  *  like the adsb maps") — the ADS-B map's camera, shared: src/utils/mapAutoFit.ts. Every kind but HFDL (its SNAP follows
@@ -288,9 +285,7 @@ function buildHtml(
           only?: string;
           /** ★★ V12 beta90 kind 'digi': the server keeps stations — its windows in the age filter. */
           storeWindows?: boolean;
-          /** ★★★ beta97 THE AMATEUR MAP ON THE MAP CARDS (kind 'digi', a server that keeps stations): the page draws no bar, no
-           *  filter row, no STATS / SUMMARY panels and no FIT key of its own — MapChrome (React Native) holds them. */
-          cards?: boolean },
+ },
   /** ★★ The user's colours as rgb TRIPLETS (2026-10-12): `x` text (lifted for contrast), `k` controls, `kt` controls as
    *  a legend. The page is rebuilt when they change — and they can only change from the menus, after leaving this
    *  screen (Stuart: "to change the colour of the map means youd have to exit its screen anyway"). */
@@ -302,7 +297,10 @@ function buildHtml(
   const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
   const legendModes: string[] = spotsListModes(opts?.spotModes && opts.spotModes.length ? opts.spotModes : Object.keys(DIGI_MODE_STYLE));   // ★ beta91: not PSKW
   const storeWindows = !!opts?.storeWindows;
-  const CARDS = kind === 'digi' && !!opts?.cards;
+  /* ★★★ beta97 EVERY MAP IS ON THE MAP CARDS (Stuart: "ALL maps on the cards, no old map chrome left"): the track maps (their
+   *  own host), the AMATEUR map, the on-device FT8 map and an UberSDR's HFDL / spots / CW maps — none has a bar, a filter
+   *  row, statistics panels or keys of its own in this page; MapChrome (React Native) holds them all. */
+  const CARDS = !(kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex' || kind === 'sondes' || kind === 'avdata' || kind === 'vormap' || kind === 'airsea');   // = !isTrk (below)
   /* ★★★ THE GPU MAP (vibemapgl.js, route B): MapLibre GL JS in this same WebView, drawing our own
    *  tiles from <documents>/mapgl/. The page's HFDL / spots code is unchanged — vibemapgl-compat.js
    *  answers its Leaflet calls with the GPU map underneath. Off (gl false) = today's Leaflet page. */
@@ -345,14 +343,6 @@ function buildHtml(
    *  signal-strength dots, the band colours, the aircraft's yellow selection ring and its signal meter. The
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
-  // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
-  const TITLE = isHfdl ? 'HFDL MAP' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'sondes' ? 'RADIOSONDES' : kind === 'avdata' ? 'AVIATION MAP' : kind === 'airsea' ? MAP_TITLE.airsea : kind === 'vormap' ? 'VOR / ILS MAP' : kind === 'digi' ? (opts?.storeWindows ? 'AMATEUR MAP' : 'DIGITAL SPOTS MAP') : 'CW SPOTS MAP';
-  const CNT_ICON = kind === 'ais' || kind === 'dsc' ? '&#9875;' : kind === 'aprs' || kind === 'ism' || kind === 'navtex' ? '&#128225;' : kind === 'sondes' ? '&#127880;' : kind === 'vormap' ? '&#11041;' : aero || kind === 'avdata' || kind === 'airsea'
-    ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 26 26" style="vertical-align:middle;opacity:0.75"><path d="M13,1 L15,8 L23,11 L23,13 L15,11 L16,20 L19,21 L19,23 L13,21 L7,23 L7,21 L10,20 L11,11 L3,13 L3,11 L11,8 Z" fill="rgba(255,190,40,0.9)"/></svg>`
-    : kind === 'cw'
-    ? `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="11" viewBox="0 0 13 11" style="vertical-align:middle;margin-right:2px;opacity:0.8;color:rgba(${T.x},0.9)"><rect x="1" y="1" width="11" height="4" rx="1" fill="currentColor" opacity="0.9"/><line x1="6.5" y1="5" x2="6.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="8" width="7" height="2" rx="1" fill="currentColor" opacity="0.7"/></svg>`
-    : '&#128225;';
 
   /* ★★ the page's ⓘ legend sections — shared by their own maps and (beta96) the AIR & SEA map, which shows the aviation and
    *  maritime ones always and NDB / VOR / SONDES only while that mode is live (__legLive) */
@@ -451,18 +441,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none;}
   select{-webkit-user-select:auto;user-select:auto;}
   body{display:flex;flex-direction:column;font-family:'Courier New',monospace;}
-  /* ── topbar — skin lsv-hfdl-topbar / lsv-smap-topbar (single slim row) ── */
-  #topbar{display:flex;align-items:center;gap:8px;padding:6px 10px;
-    padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
-    padding-top:max(8px,env(safe-area-inset-top));
-    background:rgba(${aero ? '9,6,2' : '6,9,6'},0.97);border-bottom:1px solid rgba(${T.k},0.18);flex-shrink:0;z-index:2;}
-  #back{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
-    color:rgba(${T.kt},0.85);font-family:inherit;font-size:14px;letter-spacing:1px;padding:5px 10px;
-    cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
-  #back:active{background:rgba(${T.k},0.18);}
-  #title{font-size:15px;letter-spacing:2px;color:rgba(${T.x},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.x},0.60);flex-shrink:0;}
-  #cnt{color:rgba(${T.x},0.90);font-size:16px;}
   /* ★★ The feed warning (AdsbReport.feedWarn): red-edged, at the top of the map, wraps; × hides it until it changes. */
   #feedwarn{position:absolute;left:10px;right:10px;top:8px;z-index:900;max-width:640px;margin:0 auto;display:flex;gap:10px;align-items:flex-start;
     padding:8px 10px 8px 12px;border-radius:8px;background:rgba(8,6,2,0.96);border:1px solid #ff6b5e;font-size:12px;letter-spacing:0.3px;
@@ -472,20 +450,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #feedwarn button{flex:0 0 auto;background:none;border:0;color:rgba(${T.x},0.6);font-size:18px;line-height:1;padding:0 2px;font-family:inherit;}
   @media (max-width:1000px){#feedwarn{top:100px;}}
   @media (max-width:520px){#feedwarn{flex-wrap:wrap;}#feedwarn b{flex:1 0 auto;order:0;}#feedwarn button{order:1;}#feedwarn span{order:2;flex-basis:100%;}}
-  #snap{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
-    color:rgba(${T.kt},0.60);font-size:12px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
-    font-family:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation;line-height:1.2;text-align:center;flex-shrink:0;}
-  #snap.on{border-color:rgba(${T.k},0.60);color:rgba(${T.kt},1);background:rgba(${T.k},0.14);}
-  /* ── filters row (digi/cw) — skin lsv-smap-filters ── */
-  #filters{display:flex;align-items:center;gap:6px;padding:4px 10px;
-    padding-left:max(10px,env(safe-area-inset-left));padding-right:max(10px,env(safe-area-inset-right));
-    background:rgba(6,9,6,0.97);border-bottom:1px solid rgba(${T.k},0.10);flex-shrink:0;flex-wrap:wrap;}
-  select{background:rgba(${T.k},0.06);border:1px solid rgba(${T.k},0.25);border-radius:6px;
-    color:rgba(${T.kt},0.85);font-family:inherit;font-size:12px;letter-spacing:0.5px;padding:4px 20px 4px 7px;cursor:pointer;
-    appearance:none;-webkit-appearance:none;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='rgba(${T.k},0.6)' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
-    background-repeat:no-repeat;background-position:right 6px center;}
-  .flabel{font-size:11px;letter-spacing:1px;color:rgba(${T.x},0.35);}
   #map{flex:1;position:relative;overflow:hidden;background:${T.bg};}
   /* ★★★ THE MAP'S BACKDROP IS THE BASEMAP'S COLOUR, NOT THE APP'S. This was ${T.bg} — near
      black — behind a LIGHT basemap, so every tile that had not arrived yet showed as a black
@@ -592,11 +556,7 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   /* ── legend — skin lsv-smap-legend / lsv-hfdl-legend ── */
   #legend{position:absolute;bottom:max(44px,calc(env(safe-area-inset-bottom) + 34px));left:max(10px,env(safe-area-inset-left));
     z-index:1000;font-size:12px;letter-spacing:0.8px;color:rgba(${T.x},0.80);pointer-events:auto;}
-  #legbtn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;
-    background:rgba(${aero ? '9,6,2' : '6,9,6'},0.88);border:1px solid rgba(${T.k},0.30);border-radius:8px;cursor:pointer;
-    font-size:16px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.kt},0.80);}
-  #legbtn:active{background:rgba(${T.k},0.15);}
-  #legbody{display:none;position:absolute;bottom:0;left:34px;background:rgba(${aero ? '9,6,2' : '6,9,6'},0.92);
+  #legbody{display:none;position:absolute;bottom:0;left:0;background:rgba(${aero ? '9,6,2' : '6,9,6'},0.92);
     border:1px solid rgba(${T.k},0.18);border-radius:8px;padding:7px 9px;white-space:nowrap;
     max-height:min(320px,calc(100vh - 200px));overflow-y:scroll;overflow-x:hidden;
     -webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;}
@@ -662,11 +622,8 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .st-bf{height:3px;background:rgba(${T.x},0.65);border-radius:2px;transition:width 0.4s;}
   ${isTrk ? TRACK_CARD_CSS : ''}
   ${kind === 'digi' ? `
-  /* ★★★ beta92 THE DIGI MODES MAP's PANELS — the web's STATS / LEGEND / SUMMARY (src/utils/digiMapStats.ts writes them; the web's
-     class names, styled here in the map's colours). LAYOUT FOLLOWS THE WINDOW (body.dwide at ${DIGI_WIDE_PX} px and over): wide =
-     beside the map as the web's (stats down the left, legend top-right, summary along the bottom); narrow = the stats a sheet
-     over the bottom half (the map stays above it), the legend a corner card, the summary a strip — each behind its key
-     (DigiMapKeys, React Native, top-left; --dkh is its height). */
+  /* ★★★ beta92 / beta97 THE DIGI MODES MAP's KEY (the legend panel — src/utils/digiMapStats.ts writes it, the web's class names,
+     styled here in the map's colours), opened from MAP CONTROLS → KEY. The STATS and SUMMARY panels went to the STATS card. */
   #legend.dgoff{display:none;}
   .dpan{position:absolute;z-index:1100;display:none;box-sizing:border-box;background:rgba(6,9,6,0.92);border:1px solid rgba(${T.k},0.30);
     border-radius:8px;color:rgba(${T.x},0.85);font-size:12px;letter-spacing:0.4px;overflow-y:auto;overflow-x:hidden;
@@ -693,37 +650,14 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .dpan .sw.mk{width:15px;height:15px;flex:0 0 15px;box-shadow:0 0 0 1.2px ${DIGI_MARKER_RIM};font:bold 9px/15px monospace;text-align:center;}
   .dpan .asym{display:inline-flex;width:16px;height:16px;flex:0 0 16px;}
   .dpan .asym svg{width:16px;height:16px;}
-  #dsum .dc{display:flex;gap:22px;white-space:nowrap;}
-  #dsum .k{color:rgba(${T.x},0.50);font-size:10px;letter-spacing:1px;}
-  #dsum .v{color:rgba(${T.x},1);}
-  .dx{position:sticky;top:0;float:right;margin:0 0 4px 8px;background:rgba(${T.k},0.12);border:1px solid rgba(${T.k},0.35);border-radius:8px;
-    color:rgba(${T.kt},0.85);font-family:inherit;font-size:12px;letter-spacing:1px;padding:3px 9px;cursor:pointer;z-index:2;
-    -webkit-tap-highlight-color:transparent;touch-action:manipulation;}
-  body.dwide .dx{display:none;}
-  body.dwide #dstats{top:calc(var(--dkh,40px) + 16px);left:max(10px,env(safe-area-inset-left));bottom:max(10px,env(safe-area-inset-bottom));width:280px;padding:10px 12px;}
-  body.dwide #dleg{top:10px;right:max(10px,env(safe-area-inset-right));max-height:calc(100% - 190px);padding:8px 10px;}
-  body.dwide #dsum{bottom:max(10px,env(safe-area-inset-bottom));left:10px;right:56px;margin:0 auto;width:fit-content;max-width:calc(100% - 76px);padding:8px 14px;overflow-x:auto;}
-  body.dwide.dstOn #dsum{left:302px;max-width:calc(100% - 368px);}
-  body.dwide.dstOn .maplibregl-ctrl-bottom-left,body.dwide.dstOn .leaflet-bottom.leaflet-left{left:292px;}
-  body:not(.dwide) #dstats{left:0;right:0;bottom:0;height:50%;border-radius:12px 12px 0 0;border-bottom:none;background:rgba(6,9,6,0.97);
-    padding:10px max(14px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));}
-  body:not(.dwide) #dleg{top:calc(var(--dkh,40px) + 16px);right:max(8px,env(safe-area-inset-right));max-height:calc(50% - var(--dkh,40px) - 28px);padding:8px 10px;}
-  body:not(.dwide) #dsum{left:max(8px,env(safe-area-inset-left));right:calc(52px + env(safe-area-inset-right));bottom:max(8px,env(safe-area-inset-bottom));padding:7px 10px;}
-  body:not(.dwide) #dsum .dc{flex-wrap:wrap;gap:6px 16px;white-space:normal;}
-  body:not(.dwide).dstOn #dsum{bottom:calc(50% + 6px);}
-  body.dsumOn #toast{bottom:calc(var(--dsh,0px) + 6px);}
-  body.dsumOn:not(.dwide) .maplibregl-ctrl-bottom-left,body.dsumOn:not(.dwide) .leaflet-bottom.leaflet-left{bottom:var(--dsh,0px);}
-  /* ★★★ beta96 maps2 THE AMATEUR MAP's LIST (TrackLiveList, React Native, bottom-left as every map's list — __amListWH gives its
-     height and right edge): narrow, the summary strip, the toast and the scale sit ABOVE it; wide, the summary starts right of it. */
-  body.amL:not(.dwide) #dsum{bottom:calc(max(8px,env(safe-area-inset-bottom)) + var(--amH,0px) + 8px);}
-  body.amL:not(.dwide) #toast{bottom:calc(var(--amH,0px) + var(--dsh,0px) + 18px);}
-  body.amL:not(.dwide) .maplibregl-ctrl-bottom-left,body.amL:not(.dwide) .leaflet-bottom.leaflet-left{bottom:calc(var(--amH,0px) + var(--dsh,0px) + 10px);}
-  body.amL.dwide #dsum{left:calc(var(--amX,0px) + 12px);right:56px;margin:0;width:auto;max-width:none;}
-  body.amL.dwide .maplibregl-ctrl-bottom-left,body.amL.dwide .leaflet-bottom.leaflet-left{bottom:calc(var(--amH,0px) + 18px);}
+  /* ★ the toast stands clear of the cards' LIST drawer (its footprint: __amListWH) */
+  body.amL #toast{bottom:calc(var(--amH,0px) + 18px);}
   ` : ''}
   ${CARDS ? `
-  /* ★★★ beta97 THE AMATEUR MAP ON THE CARDS: the KEY (the legend panel) where React Native says, the credits above its group */
-  #dleg{top:var(--keyTop,64px)!important;left:var(--keyLeft,64px)!important;bottom:auto!important;right:auto!important;}
+  /* ★★★ beta97 THE CARDS: the KEY (the legend) where React Native says, the credits above its group */
+  #dleg,#legend{top:var(--keyTop,64px)!important;left:var(--keyLeft,64px)!important;bottom:auto!important;right:auto!important;}
+  #dleg{max-height:calc(100% - var(--keyTop,64px) - 24px);padding:8px 10px;}
+  #legend #legbody{top:0;bottom:auto;max-height:calc(100vh - var(--keyTop,64px) - 24px);}
   .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{bottom:var(--cardsBrB,0px)!important;}
   ` : ''}
   ${isTrk ? `
@@ -740,40 +674,13 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     max-width:calc(100vw - var(--adsbListW,0px) - 40px - env(safe-area-inset-left) - env(safe-area-inset-right));white-space:normal;}` : ''}
 </style>
 </head><body>
-${/* ★★★ beta97 THE MAP CARDS (MapChrome): the track maps have NO top bar — the ✕, the title, FIT and the count are the
-     cards' (React Native). Only the HFDL / spots / CW maps keep this bar. */ ''}
-${isTrk || CARDS ? '' : `<div id="topbar">
-  ${opts?.only
-    ? `<button id="back" aria-label="Close the map — ${esc(opts.only)}, and the mode carries on">CLOSE MAP</button>`   /* ★★ V12 the only mode: no EXIT */
-    : '<button id="back">&#8592; SDR</button>'}
-  <div id="title">${TITLE}${opts?.only ? `<br><span style="font-size:10px;letter-spacing:1px;opacity:0.75">${esc(opts.only)}</span>` : ''}</div>
-  ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
-  ${isSpots ? '<button id="snap" class="digifit" title="Auto fit: every station the filters show and the receiver">FIT</button>' : ''}
-  <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
-</div>`}
-${isSpots && !CARDS ? `
-<div id="filters">
-  <span class="flabel">FILTER</span>
-  ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${legendModes.map((m) => `<option>${esc(m)}</option>`).join('')}</select>` : ''}
-  ${kind === 'digi' ? '<button type="button" id="fAprs" class="fkey" hidden title="APRS stations from the APRS decoder — tap to show or hide">APRS</button>' : ''}
-  ${kind === 'digi' ? '<button type="button" id="fMesh" class="fkey" hidden title="MeshCore and Meshtastic nodes (ISM) — tap to show or hide">MESH</button>' : ''}
-  ${kind === 'digi' ? '<button type="button" id="fBcn" class="fkey" hidden title="NCDXF / IARU beacons heard — tap to show or hide">BEACONS</button>' : ''}
-  ${kind === 'digi' ? '<select id="fRadio" hidden aria-label="Radio" title="Which of this server\'s radios heard it"></select>' : ''}
-  <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'].map((b) => `<option>${b}</option>`).join('')}</select>
-  <select id="fAge">${kind === 'digi' && storeWindows
-    /* ★★ V12 beta90 THE DIGI MODES MAP: this server keeps every station (background decoding and every listener) — the
-     *  window is the server's (stations.json), asked for by React Native when it changes (digiWindow) */
-    ? `<option value="2m">2 min</option><option value="15m">15 min</option><option value="1h">1 hour</option><option value="24h" selected>24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="ALL">All kept</option>`
-    : kind === 'digi'
-    ? `<option value="ALL">All</option><option value="2m" selected>2 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option>`
-    : `<option value="ALL">All</option><option value="15m" selected>15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="3h">3 hours</option>`}</select>
-</div>` : ''}
+${/* ★★★ beta97 THE MAP CARDS: no map has a top bar or a filter row any more — the ✕, the count, SNAP / FIT and the filters
+     are the cards' (React Native: MapChrome). */ ''}
 <div id="map">
   <div id="lmap"></div>
  ${/* ★★ beta96 stage 6: ADS-B mode's screen is the AIR & SEA map — its capture and antenna warnings live there */ ''}
   ${kind === 'airsea' ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
   <div id="legend"${kind === 'digi' ? ' class="dgoff"' : ''}>
-    ${isTrk ? '' : '<div id="legbtn" title="Legend">&#9432;</div>'}
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
       ${kind === 'airsea' ? airSeaLegend() : kind === 'aprs' ? `
@@ -844,9 +751,7 @@ ${legShip}
     </div>
   </div>
   ${kind === 'digi' ? `
-  ${CARDS ? '' : '<div class="dpan" id="dstats"><button type="button" class="dx" data-p="stats" aria-label="Hide the statistics">&#10005;</button><div class="dc"></div></div>'}
-  <div class="dpan" id="dleg"><button type="button" class="dx" data-p="legend" aria-label="Hide the legend">&#10005;</button><div class="dc"></div></div>
-  ${CARDS ? '' : '<div class="dpan" id="dsum"><div class="dc"></div></div>'}` : ''}
+  <div class="dpan" id="dleg"><div class="dc"></div></div>` : ''}
   ${kind === 'cw' ? `
   <div id="statsbtnwrap"><div id="statsbtn" title="Stats">&#128202;</div></div>
   <div id="stsheet">
@@ -933,7 +838,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       profile:((KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
       /* ★★★ beta97 the map cards: on the track maps the scale is React Native's (MapChrome, bottom-right) — none here */
-      scale:${isTrk || CARDS ? 'false' : `(KIND==='hfdl'||KIND==='ndb')?'nautical':'metric'`},scalePosition:'bottom-left'});
+      scale:false});   // ★★★ beta97 the scale is the cards' (React Native) on every map
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -1195,12 +1100,15 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
  *  us look like an app bulk-fetching a free service, which their policy forbids and which got
  *  our tiles refused. The gaps are now invisible because #lmap is the basemap's own colour.
  *  ✗ Do not reintroduce prefetching against somebody else's tile server. */
-var cnt=document.getElementById('cnt')||{textContent:''};   // ★★★ beta97 no bar on the cards' maps: the count is the LIST chip's
+var cnt={textContent:''};   // ★★★ beta97 no bar: the count is the LIST chip's (a holder the old code still writes)
+/* ★★★ beta97 THE CARDS' BRIDGE, ONE FOR EVERY MAP OFF THE TRACK HOST (HFDL, spots, CW, the AMATEUR map): each kind sets
+ *  window.__mapAuto ({state, toggle, fit}), window.__pageFocus(key) and tells React Native its rows (pageRowsTell). */
+function rnPost(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));}
+var pageRowsSig='',pageRowsT=null,pageRowsFn=null;
+function pageRowsTell(fn){pageRowsFn=fn;if(pageRowsT)return;pageRowsT=setTimeout(function(){pageRowsT=null;try{var rows=pageRowsFn?pageRowsFn():[];
+  var sig=JSON.stringify(rows);if(sig!==pageRowsSig){pageRowsSig=sig;if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('{"t":"pageRows","rows":'+sig+'}');}}catch(e){}},700);}
 var toast=document.getElementById('toast');
 
-(function(){var bk=document.getElementById('back');if(bk)bk.addEventListener('click',function(){
-  if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('close');
-});})();
 
 // Legend toggle + scroll arrows (skin lsvScrollArrows)
 var legEl=document.getElementById('legend'), legBody=document.getElementById('legbody');
@@ -1213,11 +1121,7 @@ function updArrows(el,upId,dnId){
 legBody.addEventListener('scroll',function(){updArrows(legBody,'arr-up','arr-dn');},{passive:true});
 legBody.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
 legBody.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});
-(function(){var lb=document.getElementById('legbtn');if(lb)lb.addEventListener('click',function(e){
-  e.stopPropagation();
-  legEl.classList.toggle('open');
-  if(legEl.classList.contains('open'))setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);
-});})();
+
 
 // Marker glide must not fight Leaflet's zoom repositioning
 /* ★★★ PAST THIS MANY AIRCRAFT, STOP PRETENDING TO ANIMATE. A 2.2 s transition on 600 markers
@@ -1271,11 +1175,13 @@ if(KIND==='hfdl'){
   var gsM={}, acM={}, gsNames={};
   var glowGS=null, glowAC=null, lastFlight=null, pendingFit=null;
   var ageTimer=null;
-  var snapBtn=document.getElementById('snap');
   var snapOn=(function(){try{var v=localStorage.getItem('lsv_hfdl_snap');return v===null?true:v==='1';}catch(e){return true;}})();
-  function updSnap(){snapBtn.classList.toggle('on',snapOn);}
-  updSnap();
-  snapBtn.addEventListener('click',function(){snapOn=!snapOn;try{localStorage.setItem('lsv_hfdl_snap',snapOn?'1':'0');}catch(e){}updSnap();});
+  /* ★★★ beta97 SNAP (follow the latest flight) is the MAP card's AUTO; FIT frames every aircraft placed */
+  window.__mapAuto={state:function(){return {on:snapOn,paused:false};},
+    toggle:function(){snapOn=!snapOn;try{localStorage.setItem('lsv_hfdl_snap',snapOn?'1':'0');}catch(e){}},
+    fit:function(){var ll=Object.keys(acM).map(function(k){return acM[k].getLatLng();});if(RX_LAT||RX_LON)ll.push(L.latLng(RX_LAT,RX_LON));
+      if(ll.length)map.fitBounds(L.latLngBounds(ll),{padding:[40,40],maxZoom:7});}};
+  window.__pageFocus=function(k){k=String(k||'');var m=acM[k];if(!m)return;map.setView(m.getLatLng(),Math.max(map.getZoom(),5));try{m.openPopup();}catch(e){}};
 
   /* ★★ ONE COLOUR PER MARKER, glowing or not — the pulse no longer swaps in yellow (see .pglow).
    *  Tones return the rgb triple separately so the pulse and ring can use it at their own alpha. */
@@ -1613,6 +1519,10 @@ if(KIND==='hfdl'){
     hostFetch('/addon/hfdl/aircraft').then(function(data){ if(!data) throw 0; return data; }).then(function(data){
       var ac=Array.isArray(data)?data:[];
       cnt.textContent=ac.length;
+      // ★★★ beta97 the LIST's rows (React Native): newest first
+      pageRowsTell(function(){return ac.filter(function(a){return a&&a.lat!=null&&a.lon!=null;}).sort(function(a,b){return (b.last_seen||0)-(a.last_seen||0);}).slice(0,200).map(function(a){
+        var d=distKm(Number(a.lat),Number(a.lon));return {key:String(a.key||a.flight||a.reg||''),name:String(a.flight||a.reg||a.key||'aircraft').slice(0,16),
+          second:[a.reg&&a.reg!==a.flight?String(a.reg):'',a.type?String(a.type):'','HFDL'].filter(Boolean).join(' \u00b7 ').slice(0,60),t:(Number(a.last_seen)||0)*1000,km:d==null?null:d};});});
       /* ★ Decide whether gliding is honest at this many aircraft BEFORE moving any of them, so
        *  the class is already right for this pass rather than one poll behind. */
       var _moved=0;
@@ -1981,13 +1891,12 @@ if(KIND==='digi'||KIND==='cw'){
    *  the number of distinct stations heard, not with time, and the markers are GPU circles. */
   var spots=[], byKey={}, markers={};
   var digiFit=null;   // ★ beta92 the shared auto fit (attached below, beside the FIT key)
-  /* ★★★ beta97 THE CARDS (the AMATEUR map): no filter row — MODE / BAND / RADIO / the window are plain values the MAP card sets
+  /* ★★★ beta97 THE CARDS (every spots map): no filter row — MODE / BAND / RADIO / the window are plain values the MAP card sets
    *  (__digiSet / __digiWin); the code below reads .value either way */
   function stSel(v,opts){var o={value:v,hidden:true,innerHTML:'',options:(opts||[]).map(function(x){return{value:x};}),_l:[],
     addEventListener:function(t,f){o._l.push(f);},fire:function(){o._l.forEach(function(f){try{f();}catch(e){}});}};return o;}
-  var CARDS=${CARDS};
-  var fMode=CARDS?stSel('ALL'):document.getElementById('fMode'), fBand=CARDS?stSel('ALL'):document.getElementById('fBand'),
-      fAge=CARDS?stSel('24h',['2m','15m','1h','24h','7d','30d','ALL']):document.getElementById('fAge'), fRadio=CARDS?stSel(''):document.getElementById('fRadio');
+  var fMode=stSel('ALL'), fBand=stSel('ALL'), fRadio=stSel(''),
+      fAge=${kind === 'digi' && storeWindows ? "stSel('24h',['2m','15m','1h','24h','7d','30d','ALL'])" : kind === 'digi' ? "stSel('2m',['ALL','2m','5m','15m','30m','1h'])" : "stSel('15m',['ALL','15m','30m','1h','3h'])"};
 
   // skin BAND_COLOUR — markers coloured by band, sized by SNR
   var BAND_COLOUR={'2200m':'#9b30d9','630m':'#c71585','160m':'#e8001e','80m':'#ff5500','60m':'#ff8c00',
@@ -2074,7 +1983,11 @@ if(KIND==='digi'||KIND==='cw'){
     if(markers[k]){markers[k].setStyle(style(s)).setLatLng([s.plat,s.plon]);markers[k].setPopupContent(popup(s));}
     else{markers[k]=L.circleMarker([s.plat,s.plon],style(s)).bindPopup(popup(s),{maxWidth:200}).addTo(map);}
   }
-  function updateCount(){cnt.textContent=Object.keys(markers).length;}
+  function updateCount(){cnt.textContent=Object.keys(markers).length;
+    // ★★★ beta97 the LIST's rows (React Native): the spots the filters show, newest first
+    pageRowsTell(function(){return spots.filter(function(s){return passes(s)&&!!markers[key(s)];}).sort(function(a,b){return (b.t||0)-(a.t||0);}).slice(0,200).map(function(s){
+      return {key:key(s),name:String(s.call||'').slice(0,16),second:[s.mode,spotBand(s),s.country,(typeof s.snr==='number'&&isFinite(s.snr))?(s.snr+' dB'):''].filter(Boolean).join(' \u00b7 ').slice(0,60),
+        t:s.t||0,km:(s.distKm==null||!isFinite(s.distKm))?null:Math.round(s.distKm),mode:s.mode};});});}
   /* ★★ THE LETTER ON THE LEAFLET FALLBACK (2026-10-27, as the web client's drawMarkers): Leaflet's canvas circles carry
    *  no text, so with no GPU map the newest 200 shown spots get a small non-interactive letter above them — a mode is
    *  never told by colour alone, whichever renderer drew the map. Capped, because each is a DOM node on the phone
@@ -2128,7 +2041,6 @@ if(KIND==='digi'||KIND==='cw'){
   function aprsDraw(){
     aprsGroup.clearLayers();
     var aIn=aprsPts.filter(function(a){var f=amFirstAt('aprs:'+a.key,null);return amSc.t0?amSesOk(f):amKeep(a.age,amWin());});   // ★★★ beta96 the scope
-    var kb=document.getElementById('fAprs'),na=aIn.length;if(kb){kb.hidden=rnShow||(!na&&amLive!=='aprs');kb.textContent=(amLive==='aprs'?'\u25CF ':'')+'APRS '+na;kb.classList.toggle('on',aprsOn);}
     if(!aprsOn)return;
     aIn.forEach(function(a){   // ★★ beta96 stage 7 the HEARD IN window, as the spots
       if(a.trail&&a.trail.length>=2)L.polyline(a.trail,{color:'#88CCEE',weight:1.5,opacity:0.7}).addTo(aprsGroup);
@@ -2153,8 +2065,6 @@ if(KIND==='digi'||KIND==='cw'){
         trail:Array.isArray(x.trail)?x.trail.filter(function(p){return Array.isArray(p)&&isFinite(Number(p[0]))&&isFinite(Number(p[1]));}).slice(-200):[]};});
     if(focus){aprsWant=String(focus).slice(0,40);aprsOn=true;}
     aprsDraw();}catch(e){console.error('aprs push',e);}};
-  var aprsKey=document.getElementById('fAprs');
-  if(aprsKey)aprsKey.addEventListener('click',function(){aprsOn=!aprsOn;aprsDraw();});
   /* ★★★ beta96 STAGE 7 THE AMATEUR MAP (src/utils/amateurMap.ts AMATEUR_JS): MESH (MeshCore / Meshtastic, ISM's live report
    *  and the server's remembered nodes) and BEACONS (NCDXF), pushed by React Native (__amPush); every layer follows the
    *  HEARD IN window (the age keys — Stuart's rule: background decoding's and every listener's alike); the LIVE layer's key
@@ -2164,7 +2074,6 @@ if(KIND==='digi'||KIND==='cw'){
   amRouteBind();   // ★★ beta96 a tap on the empty map clears a mesh route
   function amWin(){var v=fAge?String(fAge.value):'ALL';return v==='ALL'?'all':v;}
   function amDraw(){
-    var mk=document.getElementById('fMesh'),bk=document.getElementById('fBcn');
     // ★★★ beta96 the scope (amSc): another radio's remembered node hidden when OTHER RADIOS is off; THIS SESSION by first heard
     var nowS=Math.round(Date.now()/1000),w0=amSc.t0?'ALL':amWin();
     var mL=amMesh.filter(function(x){var f=amFirstAt(x.key,x.fa!=null?nowS-x.fa:null);return amScR(x.radios)&&(!amSc.t0||amSesOk(f));});
@@ -2172,8 +2081,6 @@ if(KIND==='digi'||KIND==='cw'){
     var mIn=meshOn?amDrawMesh(meshGroup,mL,w0,amLive==='mesh'):(meshGroup.clearLayers(),[]);
     var bIn=bcnOn?amDrawBeacons(bcnGroup,bL,w0,amLive==='beacons',(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null):(bcnGroup.clearLayers(),[]);
     var nm=mL.filter(function(x){return amKeep(x.age,w0);}).length,nb=bL.filter(function(x){return amKeep(x.age,w0);}).length;
-    if(mk){mk.hidden=rnShow||(!nm&&amLive!=='mesh');mk.textContent=(amLive==='mesh'?'\u25CF ':'')+'MESH '+nm;mk.classList.toggle('on',meshOn);}
-    if(bk){bk.hidden=rnShow||(!nb&&amLive!=='beacons');bk.textContent=(amLive==='beacons'?'\u25CF ':'')+'BEACONS '+nb;bk.classList.toggle('on',bcnOn);}
     if(digiFit)digiFit.poke();
   }
   window.__amPush=function(json){try{var o=JSON.parse(json);if(!o||typeof o!=='object')return;
@@ -2187,12 +2094,9 @@ if(KIND==='digi'||KIND==='cw'){
       bands:Array.isArray(x.bands)?x.bands.slice(0,5).map(function(b){return String(b).slice(0,8);}):[],best:Math.max(0,Math.min(4,Math.round(Number(x.best)||0)))};});
     amLive=['spots','aprs','mesh','beacons'].indexOf(o.live)>=0?o.live:'';
     amDraw();aprsDraw();}catch(e){console.error('amateur push',e);}};
-  var meshKey=document.getElementById('fMesh'),bcnKey=document.getElementById('fBcn');
-  if(meshKey)meshKey.addEventListener('click',function(){meshOn=!meshOn;amDraw();});
-  if(bcnKey)bcnKey.addEventListener('click',function(){bcnOn=!bcnOn;amDraw();});
   if(fAge)fAge.addEventListener('change',function(){aprsDraw();amDraw();});
   if(window.__pendingAm){window.__amPush(window.__pendingAm);window.__pendingAm=null;}
-  /* ★★★ beta96 the scope and SHOW from React Native (DigiMapKeys): the page draws through them */
+  /* ★★★ beta96 the scope and SHOW from React Native (beta97: the cards' SOURCES and LAYERS): the page draws through them */
   window.__amScope=function(json){try{var o=JSON.parse(json);if(!o||typeof o!=='object')return;
     amSc={mine:String(o.mine||'').slice(0,16),others:o.others!==false,t0:Number(o.t0)||0};
     if(o.show&&typeof o.show==='object'){rnShow=true;spotsOn=o.show.spots!==false;aprsOn=o.show.aprs!==false;meshOn=o.show.mesh!==false;bcnOn=o.show.beacons!==false;}
@@ -2226,27 +2130,17 @@ if(KIND==='digi'||KIND==='cw'){
       .concat(meshOn?amMesh.filter(function(x){return amKeep(x.age,amWin());}).map(function(x){return [x.lat,x.lon];}):[])
       .concat(bcnOn?amBcn.filter(function(x){return amKeep(x.age,amWin());}).map(function(x){return [x.lat,x.lon];}):[]);},
     receiver:function(){return (RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null;},
-    button:CARDS?null:document.getElementById('snap'),what:'station shown',maxZoom:${DIGI_FIT_MAX_ZOOM}}):null;
-  /* ★★★ beta97 THE CARDS' BRIDGE (the AMATEUR map): MAP CONTROLS' AUTO / FIT / ⌖, MODE / BAND / RADIO, zoom, the scale, a map tap */
-  if(CARDS){
-    var dPost=function(o){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify(o));};
-    var dCardsSig='';
-    var dTell=function(force){try{var st=digiFit?digiFit.state():{on:false,paused:false};var c=map.getCenter(),z=map.getZoom(),gl=!!(map.getCanvas||window.__GL);
-      var o={t:'cardsState',auto:st.on?(st.paused?'paused':'on'):'off',aircraft:false,mpp:Math.round(40075016.686*Math.cos((c.lat||0)*Math.PI/180)/((gl?512:256)*Math.pow(2,z))*100)/100};
-      var sig=JSON.stringify(o);if(!force&&sig===dCardsSig)return;dCardsSig=sig;dPost(o);}catch(e){}};
-    window.__cardsCtl=function(k){try{
-      if(k==='auto'&&digiFit){var st=digiFit.state();if(st.on&&st.paused)digiFit.resume();else digiFit.set(!st.on);}
-      else if(k==='fit'&&digiFit)digiFit.fitNow();
-      else if(k==='centre'&&(RX_LAT||RX_LON))map.setView([RX_LAT,RX_LON],Math.max(map.getZoom(),5));
-    }catch(e){}dTell(true);};
-    window.__cardsZoom=function(d){try{if(d>0)map.zoomIn();else map.zoomOut();}catch(e){}};
-    window.__digiSet=function(k,v){v=String(v==null?'':v).slice(0,20);if(k==='mode')fMode.value=v||'ALL';else if(k==='band')fBand.value=v||'ALL';else if(k==='radio')fRadio.value=v;else return;rebuild();dQueue();};
-    window.__cardsKey=function(on,top,left){document.documentElement.style.setProperty('--keyTop',(Number(top)||64)+'px');document.documentElement.style.setProperty('--keyLeft',(Number(left)||64)+'px');dPan={stats:false,summary:false,legend:!!on};dRender();};
-    window.__cardsBr=function(px){document.documentElement.style.setProperty('--cardsBrB',(Math.max(0,Number(px)||0))+'px');};
-    setInterval(function(){if(document.visibilityState!=='hidden')dTell(false);},1000);
-    try{map.on('moveend',function(){dTell(false);});map.on('click',function(){dPost({t:'mapTap'});});}catch(e){}
-    setTimeout(dQueue,300);
-  }
+    button:null,what:'station shown',maxZoom:${DIGI_FIT_MAX_ZOOM}}):null;   // ★★★ beta97 its AUTO / FIT are MAP CONTROLS' (no key in the page)
+  /* ★★★ beta97 THE CARDS (every spots map): AUTO / FIT = the shared auto fit; a LIST row centres its station; MODE / BAND / RADIO /
+   *  the window from MAP CONTROLS (plain values: __digiSet) */
+  window.__mapAuto={state:function(){return digiFit?digiFit.state():{on:false,paused:false};},
+    toggle:function(){if(!digiFit)return;var st=digiFit.state();if(st.on&&st.paused)digiFit.resume();else digiFit.set(!st.on);},
+    fit:function(){if(digiFit)digiFit.fitNow();}};
+  window.__pageFocus=function(k){k=String(k||'');var m=markers[k];if(!m)return;if(digiFit)digiFit.pause();
+    map.flyTo(m.getLatLng(),Math.max(map.getZoom(),5),{animate:true,duration:0.8});setTimeout(function(){try{m.openPopup();}catch(e){}},850);};
+  window.__digiSet=function(k,v){v=String(v==null?'':v).slice(0,20);if(k==='mode')fMode.value=v||'ALL';else if(k==='band')fBand.value=v||'ALL';else if(k==='radio')fRadio.value=v;
+    else if(k==='age'){fAge.value=v||'ALL';fAge.fire();}else return;rebuild();if(typeof amDraw==='function'){aprsDraw();amDraw();}dQueue();};
+  setTimeout(dQueue,300);
   if(window.__pendingAprs){window.__aprsPush(window.__pendingAprs[0],window.__pendingAprs[1]);window.__pendingAprs=null;}
   /* ★★ beta90 a caller's OVERLAY (openDigiModesMap's — a satellite pass: its ground track, footprint and points), already
    *  cleaned by digiMapShared.ts digiOverlayClean; numbers and short labels only, checked again here. */
@@ -2318,7 +2212,7 @@ if(KIND==='digi'||KIND==='cw'){
   }
 
   /* ★★★ beta92 THE DIGI MODES MAP's STATS / LEGEND / SUMMARY — src/utils/digiMapStats.ts, the web's own code (the numbers
-   *  AND the words), over the stations the filters SHOW. Which panels are shown is React Native's (DigiMapKeys, __digiPanels);
+   *  AND the words), over the stations the filters SHOW. The KEY (the legend panel) opens from MAP CONTROLS (__digiKey); the numbers go to the STATS card (amStatsTell);
    *  the store's counts come in as __digiTotals; redrawn at most every 0.4 s, never per spot. */
   ${kind === 'digi' ? DIGI_STATS_JS : ''}
   var dPan={stats:false,summary:false,legend:false},dTot=null,dT=null,dOverlay=null;
@@ -2349,11 +2243,10 @@ if(KIND==='digi'||KIND==='cw'){
   function dRender(){
     dT=null;
     if(isCW||!dEls.legend)return;
-    if(!CARDS&&!dPan.stats&&!dPan.legend&&!dPan.summary){dLayout();return;}
     try{
       var st=digiStats(dItems(),(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null);
       var ak=aprsOn?aprsPts.filter(function(a){return a.km!=null&&isFinite(a.km);}).sort(function(a,b){return b.km-a.km;}):[];
-      if(CARDS)amStatsTell(st,ak);
+      amStatsTell(st,ak);
       var t=dTot||{}, pick=fRadio&&!fRadio.hidden?fRadio.value:'', u=t.unplaced||{};
       var un=pick?((u.by&&u.by[pick])||0)+(u.none||0):(u.all||0);
       var pan=digiStatsHtml(st,{modes:MODES_LEG,modeColour:function(m){return modeStyle(m).colour;},
@@ -2369,24 +2262,19 @@ if(KIND==='digi'||KIND==='cw'){
     dLayout();
   }
   function dQueue(){if(!isCW&&!dT)dT=setTimeout(dRender,400);}
-  window.__digiPanels=function(json){try{var o=JSON.parse(json);dPan={stats:!!o.stats,summary:!!o.summary,legend:!!o.legend};}catch(e){}dRender();};
+  /* ★★★ beta97 the KEY (MAP CONTROLS → KEY) opens the legend panel — the digi map's own key */
+  if(KIND==='digi')window.__digiKey=function(on){dPan={stats:false,summary:false,legend:!!on};dRender();};
   window.__digiTotals=function(json){try{dTot=JSON.parse(json);}catch(e){dTot=null;}dQueue();};
-  window.__digiKeysH=function(h){document.body.style.setProperty('--dkh',(Number(h)||0)+'px');};
-  /* the window keys (DigiMapKeys): the age filter follows (the server's answer comes in through the spots) */
+  /* the time window (MAP CONTROLS → TIME): the age filter follows (the server's answer comes in through the spots) */
   window.__digiWin=function(w){if(!fAge)return;var v=String(w)==='all'?'ALL':String(w);
     for(var i=0;i<fAge.options.length;i++)if(fAge.options[i].value===v){if(fAge.value!==v){fAge.value=v;rebuild();if(typeof amDraw==='function'){aprsDraw();amDraw();}}return;}};
   if(!isCW){
-    if(fAge&&STORE_WIN)fAge.hidden=true;   // ★ the 1H · 24H · 7D · 30D · ALL keys replace it
     Object.keys(dEls).forEach(function(k){var el=dEls[k];if(!el)return;
       el.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
       el.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});});
-    Array.prototype.forEach.call(document.querySelectorAll('.dx'),function(b){b.addEventListener('click',function(e){
-      e.stopPropagation();var k=b.getAttribute('data-p');dPan[k]=false;dLayout();
-      if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'digiPanel',id:k,on:false}));});});
-    var dTop=function(){var m=document.getElementById('map');if(m&&window.ReactNativeWebView)
-      window.ReactNativeWebView.postMessage(JSON.stringify({t:'digiTop',y:Math.round(m.getBoundingClientRect().top)}));};
-    window.addEventListener('resize',function(){dWide();dTop();dQueue();});
-    dWide();setTimeout(dTop,50);
+
+    window.addEventListener('resize',function(){dWide();dQueue();});
+    dWide();
   }
 
   /* ★★ SPREAD ACROSS THE SQUARE (as the web map's placeIn, Stuart 2026-11-22: "too neat and gridlike"): a 4-character
@@ -2489,6 +2377,25 @@ if(KIND==='digi'||KIND==='cw'){
     connect();
   }
 }
+${CARDS ? `
+/* ★★★ beta97 THE CARDS' BRIDGE (every map off the track host): MAP CONTROLS' AUTO / FIT / ⌖, the KEY, zoom, the scale, the
+ *  credits' place, a map tap — through each kind's __mapAuto / __pageFocus / __digiKey */
+(function(){
+  var sig='';
+  function tell(force){try{var a=window.__mapAuto,st=a?a.state():{on:false,paused:false};var c=map.getCenter(),z=map.getZoom(),gl=!!window.__GL;
+    var o={t:'cardsState',auto:st.on?(st.paused?'paused':'on'):'off',aircraft:false,autoOk:!!a,mpp:Math.round(40075016.686*Math.cos((c.lat||0)*Math.PI/180)/((gl?512:256)*Math.pow(2,z))*100)/100};
+    var s2=JSON.stringify(o);if(!force&&s2===sig)return;sig=s2;rnPost(o);}catch(e){}}
+  window.__cardsCtl=function(k){try{var a=window.__mapAuto;
+    if(k==='auto'&&a)a.toggle();else if(k==='fit'&&a)a.fit();
+    else if(k==='centre'&&(RX_LAT||RX_LON))map.setView([RX_LAT,RX_LON],Math.max(map.getZoom(),5));}catch(e){}tell(true);};
+  window.__cardsZoom=function(d){try{if(d>0)map.zoomIn();else map.zoomOut();}catch(e){}};
+  window.__cardsKey=function(on,top,left){document.documentElement.style.setProperty('--keyTop',(Number(top)||64)+'px');document.documentElement.style.setProperty('--keyLeft',(Number(left)||64)+'px');
+    if(window.__digiKey){window.__digiKey(!!on);return;}
+    legEl.classList.toggle('open',!!on);if(on)setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);};
+  window.__cardsBr=function(px){document.documentElement.style.setProperty('--cardsBrB',(Math.max(0,Number(px)||0))+'px');};
+  setInterval(function(){if(document.visibilityState!=='hidden')tell(false);},1000);
+  try{map.on('moveend',function(){tell(false);});map.on('click',function(){rnPost({t:'mapTap'});});}catch(e){}
+})();` : ''}
 </script>
 </body></html>`;
 }
@@ -2595,8 +2502,7 @@ export default function MapOverlay(
   const html = useMemo(
     () => (kind && glOk !== null && (kind !== 'airsea' || (adsbPrefsReady && ndbPrefsReady)) ? buildHtml(kind, baseUrl, sessionUuid,
       { local, wsBase: wsBaseOverride, rxLat, rxLon, gl: glOk, detail: glOk && detailInstalled(), glBase,
-        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, storeWindows,
-        cards: kind === 'digi' && !!storeWindows }, ink) : ''),
+        adsbPrefs: adsbPrefsRef.current ?? undefined, radioUrl, ndbPrefs: ndbPrefsAtBuild.current ?? undefined, spotModes, only, storeWindows }, ink) : ''),
     // ★ adsbPrefsRef / ndbPrefsAtBuild are read at build time only (see above) — deliberately not dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [kind, baseUrl, radioUrl, sessionUuid, local, wsBaseOverride, rxLat, rxLon, glOk, glBase, ink, adsbPrefsReady, ndbPrefsReady, spotModes?.join(','), only, storeWindows],
@@ -2696,29 +2602,6 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`(window.__digiOverlay?window.__digiOverlay(${lit}):(window.__pendingOverlay=${lit}));true;`);
   };
   useEffect(() => { if (visible) pushOverlay(); }, [visible, digiOverlay]); // eslint-disable-line react-hooks/exhaustive-deps
-  /* ★★★ beta92 THE DIGI MODES MAP's PANELS (STATS · SUMMARY · LEGEND) and its WINDOW KEYS — DigiMapKeys draws the keys (the pad
-   *  reaches them), the page draws the panels (digiMapStats.ts, the web's code). LAYOUT FOLLOWS THE WINDOW: wide (≥ DIGI_WIDE_PX)
-   *  opens with all three beside the map as the web's; narrow with the summary strip only. Remembered per device, for each. */
-  const digiWide = winW >= DIGI_WIDE_PX;
-  const panelsKey = digiWide ? 'lsv_digi_panels_wide' : 'lsv_digi_panels_narrow';
-  const [digiPanels, setDigiPanels] = useState<DigiPanelsShown>(() => digiPanelsOf(null, digiWide));
-  useEffect(() => {
-    if (kind !== 'digi') return;
-    let dead = false;
-    setDigiPanels(digiPanelsOf(null, digiWide));
-    AsyncStorage.getItem(panelsKey).then((v) => { if (!dead) setDigiPanels(digiPanelsOf(v, digiWide)); }).catch(() => {});
-    return () => { dead = true; };
-  }, [kind, panelsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const setDigiPanel = (id: keyof DigiPanelsShown, on: boolean) => setDigiPanels((p0) => {
-    const n = { ...p0, [id]: on };
-    AsyncStorage.setItem(panelsKey, JSON.stringify(n)).catch(() => {});
-    return n;
-  });
-  const pushPanels = () => {
-    if (kind !== 'digi') return;
-    webRef.current?.injectJavaScript(`window.__digiPanels&&window.__digiPanels(${JSON.stringify(JSON.stringify(digiPanels))});true;`);
-  };
-  useEffect(() => { if (visible) pushPanels(); }, [visible, digiPanels]); // eslint-disable-line react-hooks/exhaustive-deps
   const totalsKey = JSON.stringify(digiTotals ?? null);
   const pushTotals = () => {
     if (kind !== 'digi') return;
@@ -2732,9 +2615,6 @@ export default function MapOverlay(
     webRef.current?.injectJavaScript(`window.__digiWin&&window.__digiWin(${JSON.stringify(w)});true;`);
   };
   useEffect(() => { if (visible) pushWin(digiWinShown); }, [visible, digiWinShown, storeWindows]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [digiMapTop, setDigiMapTop] = useState(0);
-  const [digiKeysH, setDigiKeysH] = useState(0);
-  useEffect(() => { if (visible && kind === 'digi') webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }, [visible, kind, digiKeysH]);
 
   /* ★★★ beta96 stage 6: ADS-B mode's map is the AIR & SEA map. Its aircraft are that map's `_adsb` items (SDRScreen
    *  airSeaTrk → pushTrk, the same double-encoded literal); only its warnings and its list's body are ADS-B's own here. */
@@ -2791,6 +2671,14 @@ export default function MapOverlay(
   /** ★★★ beta97 the AMATEUR map's statistics, from the page (digiStats — the STATS card) */
   const [amStats, setAmStats] = useState<AmStatsIn | null>(null);
   useEffect(() => { if (!visible) setAmStats(null); }, [visible]);
+  /** ★★★ beta97 the LIST of the maps off the track host (HFDL, spots, CW): the page's own rows (pageRowsTell) */
+  const [pageRows, setPageRows] = useState<PageRow[]>([]);
+  useEffect(() => { if (!visible) setPageRows([]); }, [visible, kind]);
+  const [spotSort, setSpotSort] = useState<'latest' | 'nearest'>('latest');
+  const [spotFilter, setSpotFilter] = useState<AmFilterValue>({ mode: 'ALL', band: 'ALL', radio: '' });
+  const [spotAge, setSpotAge] = useState('');
+  const [spotKeyOn, setSpotKeyOn] = useState(false);
+  useEffect(() => { if (!visible) { setSpotFilter({ mode: 'ALL', band: 'ALL', radio: '' }); setSpotAge(''); setSpotKeyOn(false); } }, [visible, kind]);
   useEffect(() => { if (!visible) { setCardsCtl({ auto: 'on', aircraft: false }); setCardsMpp(0); } }, [visible]);
   const trkRef = useRef(trk); trkRef.current = trk;
   /* ★★ V12 2026-11-01 THE NAVTEX CARDS' TEXT AND TRANSLATE: the page asks for a card's gallery file (only one of the
@@ -3034,8 +2922,7 @@ export default function MapOverlay(
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
           onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushFeedWarn(); pushNdb();
-                             if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
-                                                    webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
+                             if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); }
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
                                               if (trkRef.current?.focus) trkFocus(trkRef.current.focus); } }}
           onMessage={(e) => {
@@ -3057,11 +2944,6 @@ export default function MapOverlay(
               return;
             }
             // ★ beta90 the DIGI MODES MAP's window changed (its age filter): React Native asks the station store for it
-            if (m && (m as any).t === 'digiPanel') {   // ★ beta92 a panel's ✕ (narrow windows)
-              const id = String((m as any).id ?? '');
-              if (id === 'stats' || id === 'summary' || id === 'legend') setDigiPanel(id, (m as any).on === true);
-              return;
-            }
             if (m && (m as any).t === 'cardsState') {   // ★★★ beta97 the MAP card's keys, read back (checked, never trusted)
               const q = m as any;
               const auto = q.auto === 'paused' ? 'paused' : q.auto === 'off' ? 'off' : 'on';
@@ -3072,11 +2954,8 @@ export default function MapOverlay(
             }
             if (m && (m as any).t === 'mapTap') { setMapTapSeq((n) => n + 1); return; }
             if (m && (m as any).t === 'amStats') { setAmStats(amStatsClean(m)); return; }
-            if (m && (m as any).t === 'digiTop') {
-              const y = Number((m as any).y);
-              if (Number.isFinite(y) && y >= 0 && y < 400) setDigiMapTop(Math.round(y));
-              return;
-            }
+            if (m && (m as any).t === 'cardsState' && (m as any).autoOk === false) { /* no camera key on this map */ }
+            if (m && (m as any).t === 'pageRows') { setPageRows(pageRowsClean((m as any).rows)); return; }   // ★★★ beta97 the LIST of the maps off the track host
             if (m && (m as any).t === 'digiWindow') {
               const w = String((m as any).w ?? '');
               if (/^(1h|24h|7d|30d|all)$/.test(w)) onDigiWindow?.(w);
@@ -3215,10 +3094,41 @@ export default function MapOverlay(
         />
         </MacPinch>
         )}
-        {/* ★★ beta92 THE DIGI MODES MAP's keys — the window and the panels, over the map's top-left (DigiMapKeys). */}
-        {kind === 'digi' && !amCards && !!pageUri && !packError && digiMapTop > 0 && (
-          <DigiMapKeys top={digiMapTop} left={safeInsets?.left ?? 0} shown={digiPanels} onPanel={setDigiPanel} onHeight={setDigiKeysH} ink={ink} />
-        )}
+        {/* ★★★ beta97 THE OTHER MAPS ON THE MAP CARDS — the on-device FT8 map, an UberSDR's spots / CW / HFDL maps: the ✕, LAYERS
+            (SPOTS · APRS where both), STATS (the spots' numbers), MAP CONTROLS (TIME, MODE, BAND, AUTO / FIT — HFDL's AUTO is
+            SNAP —, ⌖, the KEY), the LIST (the page's rows), RATE (spots a minute). No SERVERS / TUNE / CHAT / waterfall: none of
+            them holds the radio. */}
+        {!isTrkKind && !amCards && !!pageUri && !packError && (kind === 'digi' || kind === 'cw' || kind === 'hfdl') && (() => {
+          const spotsKind = kind === 'digi' || kind === 'cw';
+          const aprsN = kind === 'digi' ? (aprsPoints ?? []).length : 0;
+          const layers: MapLayerRow[] = kind === 'digi' && aprsN > 0 ? [
+            { id: 'spots', label: 'SPOTS', words: 'Spots on the map', n: pageRows.length, colour: AM_LAYER_COLOUR.spots },
+            { id: 'aprs', label: 'APRS', words: 'APRS stations on the map', n: aprsN, colour: AM_LAYER_COLOUR.aprs }] : [];
+          const ages = kind === 'digi' ? SPOT_AGES_DIGI : kind === 'cw' ? SPOT_AGES_CW : [];
+          const now = Date.now();
+          const perMin = spotsKind ? pageRows.filter((x) => now - x.t < 60_000).length : 0;
+          const secs = kind === 'digi' ? amStatsSections(amStats) : [];
+          return (
+            <MapChrome visible winW={winW} winH={winH} insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }}
+              exit={{ label: 'CLOSE MAP', words: only ? `Close the map \u2014 ${only}, and the mode carries on` : 'Close the map', locked: false, onPress: closeGuarded }}
+              servers={null} tune={null} chat={null} shared={null} lockWhy="" onLocked={() => {}} health={null} time={null} wf={null}
+              layers={layers.length ? { rows: layers, toggled: amShow as unknown as Record<string, boolean>, onToggle: (id, on) => setAmShow((cur) => ({ ...cur, [id as AmLayer]: on })), fam: [] } : null}
+              stats={secs.length ? { sections: secs, onPick: (k) => { if (k) pageCall('__pageFocus', k.replace(/^spot:/, '')); } } : null}
+              map={{ ctl: cardsCtl, onCtl: (k) => pageCall('__cardsCtl', k),
+                     ranges: ages.length ? ages : undefined, range: spotAge || ages.find((a) => a.def)?.id, onRange: (id) => { setSpotAge(id); pageCall('__digiSet', 'age', id); },
+                     keyOn: spotKeyOn, onKey: (on) => { setSpotKeyOn(on); pageCall('__cardsKey', on, (safeInsets?.top ?? 0) + 64, (safeInsets?.left ?? 0) + 64); },
+                     extra: spotsKind ? <AmFilters modes={kind === 'digi' ? spotsListModes(spotModes && spotModes.length ? spotModes : Object.keys(DIGI_MODE_STYLE)) : null} radios={null}
+                                                   value={spotFilter} onChange={(k, v) => { setSpotFilter((cur) => ({ ...cur, [k]: v })); pageCall('__digiSet', k, v); }} /> : undefined }}
+              rate={spotsKind && perMin > 0 ? rateRows({ mine: { name: kind === 'cw' ? 'CW SPOTS' : 'SPOTS', perMin, words: 'Spots a minute' } }) : []}
+              list={{ rows: amSortRows(pageRowsAsTrack(pageRows), spotSort), empty: kind === 'hfdl' ? 'Waiting for aircraft with a position\u2026' : 'Waiting for spots\u2026',
+                      sort: spotSort, onSort: (x) => setSpotSort(x === 'nearest' ? 'nearest' : 'latest'),
+                      selected: null, onPick: (row) => pageCall('__pageFocus', row.key) }}
+              scale={cardsMpp > 0 ? { mpp: cardsMpp, nm: kind === 'hfdl' } : null}
+              onZoom={(d) => pageCall('__cardsZoom', d)}
+              mapTapSeq={mapTapSeq}
+              onFootprint={(w, h) => pageCall('__amListWH', Math.round(w), Math.round(h), Math.round((safeInsets?.left ?? 0) + w))} />
+          );
+        })()}
         {/* ★★★ beta97 THE AMATEUR MAP ON THE MAP CARDS (the web's b97-maps-port): LAYERS · STATS · MAP CONTROLS · LIST · RATE · ✕ */}
         {amCards && !!amList && !!pageUri && !packError && (
           <MapChrome visible winW={winW} winH={winH} insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }}
@@ -3402,8 +3312,14 @@ function MapCardsHost(p: {
 /* ★★★ beta97 the AMATEUR map's own filters in MAP CONTROLS: MODE (this server's modes), BAND, RADIO (2+ radios) — this
  *  viewer's view, never sent (the page filters what it draws: __digiSet). */
 type AmFilterValue = { mode: string; band: string; radio: string };
+/** ★★★ beta97 the page's own age filter on the maps off the store (the on-device FT8 / UberSDR spots, CW): MAP CONTROLS' TIME */
+const SPOT_AGES_DIGI = [{ id: 'ALL', label: 'ALL', words: 'Every spot this map holds' }, { id: '2m', label: '2 MIN', words: 'Spots in the last 2 minutes', def: true },
+  { id: '5m', label: '5 MIN', words: 'the last 5 minutes' }, { id: '15m', label: '15 MIN', words: 'the last 15 minutes' }, { id: '30m', label: '30 MIN', words: 'the last 30 minutes' },
+  { id: '1h', label: '1 H', words: 'the last hour' }];
+const SPOT_AGES_CW = [{ id: 'ALL', label: 'ALL', words: 'Every spot this map holds' }, { id: '15m', label: '15 MIN', words: 'Spots in the last 15 minutes', def: true },
+  { id: '30m', label: '30 MIN', words: 'the last 30 minutes' }, { id: '1h', label: '1 H', words: 'the last hour' }, { id: '3h', label: '3 H', words: 'the last 3 hours' }];
 const AM_BANDS = ['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'];
-function AmFilters({ modes, radios, value, onChange }: { modes: string[]; radios: LogRadio[] | null; value: AmFilterValue; onChange: (k: keyof AmFilterValue, v: string) => void }) {
+function AmFilters({ modes, radios, value, onChange }: { modes: string[] | null; radios: LogRadio[] | null; value: AmFilterValue; onChange: (k: keyof AmFilterValue, v: string) => void }) {
   const row = (k: keyof AmFilterValue, title: string, opts: Array<{ id: string; label: string }>) => (
     <View style={{ paddingVertical: 4 }}>
       <Text style={mo.amFiltTitle}>{title}</Text>
@@ -3416,7 +3332,7 @@ function AmFilters({ modes, radios, value, onChange }: { modes: string[]; radios
   );
   return (
     <>
-      {row('mode', 'MODE', [{ id: 'ALL', label: 'ALL' }, ...modes.map((m) => ({ id: m, label: m }))])}
+      {!!modes && row('mode', 'MODE', [{ id: 'ALL', label: 'ALL' }, ...modes.map((m) => ({ id: m, label: m }))])}
       {row('band', 'BAND', [{ id: 'ALL', label: 'ALL' }, ...AM_BANDS.map((b) => ({ id: b, label: b }))])}
       {radios && radios.length >= 2 && row('radio', 'RADIO', [{ id: '', label: 'ALL' }, ...radios.map((x) => ({ id: x.id, label: x.name || x.id }))])}
     </>

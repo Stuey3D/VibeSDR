@@ -64,3 +64,26 @@ export function amSortRows<T extends { range: string }>(rows: T[], sort: 'latest
   const d = (r: T) => { const m = /([\d.,]+)\s*(km|mi|NM)?/i.exec(r.range || ''); return m ? parseFloat(m[1].replace(/,/g, '')) : Infinity; };
   return rows.map((r, i) => ({ r, i, k: d(r) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.r);
 }
+
+/** ★★★ beta97 THE LIST of the maps off the track host (the on-device FT8 map, an UberSDR's spots / CW / HFDL maps): the page's own
+ *  rows (pageRowsTell), trusted for nothing, and drawn as the cards' LIST rows. */
+export interface PageRow { key: string; name: string; second: string; t: number; km: number | null; mode?: string }
+export function pageRowsClean(v: unknown): PageRow[] {
+  return (Array.isArray(v) ? v : []).slice(0, 300).flatMap((x) => {
+    if (!x || typeof x !== 'object') return [];
+    const o = x as Record<string, unknown>;
+    const key = str(o.key, 120); if (!key) return [];
+    const km = o.km == null ? null : num(o.km, NaN);
+    return [{ key, name: str(o.name, 20) || key.slice(0, 16), second: str(o.second, 80), t: Math.max(0, num(o.t)), km: km != null && Number.isFinite(km) && km >= 0 ? km : null,
+              ...(typeof o.mode === 'string' ? { mode: str(o.mode, 12) } : {}) }];
+  });
+}
+/** "3 min" / "2 h" / "now" — a row's age. */
+export function ageShort(ms: number, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  return s < 45 ? 'now' : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`;
+}
+export function pageRowsAsTrack(rows: PageRow[], now = Date.now(), colourOf: (mode?: string) => string = () => '#ffb000') {
+  return rows.map((r) => ({ key: r.key, colour: colourOf(r.mode), flag: '', name: r.name, second: r.second, sp: '', trend: 0 as const,
+                            range: r.km != null ? `${Math.round(r.km).toLocaleString('en-GB')} km` : '', brg: '', noPos: false, age: r.t ? ageShort(r.t, now) : '', em: false }));
+}

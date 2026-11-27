@@ -292,8 +292,8 @@ eq('meshDist', [meshDist(16.09), meshDist(16.09, true), meshDist(5), meshDist(5,
      mo.includes("if(KIND==='ism'){if(trkRtKey&&String(k)!==trkRtKey)trkRoute(null);") && mo.includes("if(k!=null)setTimeout(function(){try{if(trkLayer)trkLayer.focus(String(k));}catch(e){}},0);}"));
   ok('app ISM page: the card\'s ROUTE key toggles it', mo.includes("rb.addEventListener('click',function(ev){ev.stopPropagation();trkRoute(rb.getAttribute('data-rtk'));});"));
   ok('app: the pad\'s ROUTE key in the list, only for a node with a route', /route=\{kind === 'ism' && trkSel && trk\.items\.some\(\(it\) => it\.key === trkSel && !!\(it as \{ _rt\?: unknown \}\)\._rt\)/.test(mo)
-     && readFileSync(new URL('../src/components/TrackLiveList.tsx', import.meta.url), 'utf8').includes("{open && !!p.route && ("));
-  ok('app AMATEUR: the pad\'s ROUTE key for a chosen mesh node with a route', mo.includes('route={amSel && amateur?.mesh.some((x) => x.key === amSel && !!x.rt)'));
+     && readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8').includes("{!!L.route && <NavRow>"));   // ★★★ beta97 the cards' LIST drawer
+  ok('app AMATEUR: the pad\'s ROUTE key for a chosen mesh node with a route', mo.includes('route: amSel && amateur?.mesh.some((x) => x.key === amSel && !!x.rt)'));
   ok('app ISM page: each item\'s _rt kept by key', /trkRt\[String\(a\[r0\]\.key\)\]=a\[r0\]\._rt/.test(mo));
   ok('AMATEUR pages: MESH_ROUTE_JS rides with AMATEUR_JS', /export const AMATEUR_JS = MESH_ROUTE_JS \+/.test(am));
   ok('AMATEUR pages: a mesh marker tap opens its card and zooms in (amMeshPick) — no route yet', am.includes("AM_MK[n.key].on('click',function(){amMeshPick(n);})") && mo.includes('amRouteBind();'));

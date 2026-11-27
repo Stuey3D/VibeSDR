@@ -10,7 +10,7 @@
 // ★ The audit's SHOULD list is not done yet, so each file has a BASELINE of known unregistered touchables. The test fails
 //   when a file goes ABOVE its baseline (a new silent skip) or when a new nav file appears with any; when a file drops
 //   BELOW its baseline it says so, so the number is lowered and cannot creep back.
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 let fails = 0;
@@ -149,12 +149,12 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
 //    TrackLiveList's (RangeKey / Row — useNavButton + NavRing, counted above).
 {
   const mo = readFileSync(path.join(root, 'src/components/MapOverlay.tsx'), 'utf8');
-  const dk = readFileSync(path.join(root, 'src/components/DigiMapKeys.tsx'), 'utf8');
   // ★★★ beta97 the AMATEUR map is on the MAP CARDS: ONE pad order (MapChrome's) over its chips, cards and LIST — the old list
   //     (TrackLiveList, DELETED) and the window keys' shared order are gone
   ok(/\{amCards && !!amList && !!pageUri && !packError && \(\s*<MapChrome /.test(mo) && !/amNav|amKeysNav/.test(mo), 'AMATEUR: the MAP CARDS own its one pad order (no second owner)');
   ok(/tabs: amList\.tabs, tab: amList\.tab, onTab: \(id\) => setAmPick\(id as AmLayer\)/.test(mo), 'AMATEUR: the tabs and rows are the LIST drawer\'s (pad keys)');
-  ok(/usePanelNav\(true, \{ flat: true \}\)/.test(dk) && /function Key[^]*?useNavButton\(onPress\)/.test(dk), 'DigiMapKeys (the maps off the cards): its panel keys are pad keys');
+  ok(!existsSync(path.join(root, 'src/components/DigiMapKeys.tsx')) && /\{!isTrkKind && !amCards && !!pageUri && !packError && \(kind === 'digi' \|\| kind === 'cw' \|\| kind === 'hfdl'\) && \(\(\) => \{/.test(mo),
+     'every other map (on-device FT8, UberSDR spots / CW / HFDL) on the MAP CARDS too — DigiMapKeys DELETED');
   ok(/route: amSel && amateur\?\.mesh\.some/.test(mo) && /function ListDrawer/.test(readFileSync(path.join(root, 'src/components/MapChrome.tsx'), 'utf8')), 'the mesh ROUTE key is a pad key in the LIST drawer (ISM and AMATEUR maps)');
   // ★★ beta96 (Stuart 11-26) the NODES list's NEAREST | LATEST key: RangeKeys in the tabs' NavRow, handed through by MapOverlay,
   //    given by the ISM live map and the gallery's map

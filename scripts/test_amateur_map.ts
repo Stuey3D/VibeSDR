@@ -201,7 +201,7 @@ const meshDone = (async () => {
   ok(/const d = \{ spots: amData\.spots, aprs: amData\.aprs,/.test(mo) && /amCountsOf\(d, win, now\)/.test(mo) && /const now = Date\.now\(\), win = amSc\.t0 \? 'all' : digiWinShown;/.test(mo), 'app: the rows follow the HEARD IN window (the window keys)');
   ok(/window\.__amFocus=function\(k\)/.test(mo) && /onPick: \(row\) => amFocus\(row\.key\)/.test(mo), 'app: a row centres its station (__amFocus)');
   ok(!/amNav|amKeysNav/.test(mo), 'app: ONE pad order — the cards\' (the window keys and the old list\'s shared order deleted)');
-  ok(/window\.__amListWH=function/.test(mo) && /body\.amL:not\(\.dwide\) #dsum/.test(mo), 'app: the summary strip and the scale stand clear of the list');
+  ok(/window\.__amListWH=function/.test(mo) && /body\.amL #toast\{bottom:calc\(var\(--amH,0px\) \+ 18px\);\}/.test(mo), 'app: the toast stands clear of the cards\u2019 LIST drawer (the summary strip went to STATS)');
   ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored,/.test(main) && /savePref\('digiMapWindow', digiWindowOf\(ev\.data\.window\)\);\n  amMeshRefresh\(\);/.test(main),
      'web: MESH remembers every band (amMeshLoader), and follows the window');
   const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');

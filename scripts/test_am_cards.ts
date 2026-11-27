@@ -31,17 +31,17 @@ ok(amSortRows(rows, 'latest').map((r) => r.key).join() === 'a,b,c', 'LATEST: the
 ok(amSortRows(rows, 'nearest').map((r) => r.key).join() === 'c,a,b', 'NEAREST: by distance, none last');
 
 // ── the source: the AMATEUR map is on the cards; its old chrome is gone ──
-const mo = readFileSync('src/components/MapOverlay.tsx', 'utf8'), dk = readFileSync('src/components/DigiMapKeys.tsx', 'utf8');
+const mo = readFileSync('src/components/MapOverlay.tsx', 'utf8');
 ok(!existsSync('src/components/TrackLiveList.tsx') && !/TrackLiveList/.test(mo.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')), 'TrackLiveList DELETED (its last user was the AMATEUR map)');
-ok(!/session\?:|show\?:|scope\?:|windows: boolean/.test(dk), 'DigiMapKeys: the AMATEUR map’s window keys, THIS SESSION, SHOW and OTHER RADIOS DELETED (panels only, off the cards)');
+ok(!existsSync('src/components/DigiMapKeys.tsx') && !/DigiMapKeys|__digiPanels|__digiKeysH|digiTop|digiPanel'/.test(mo), 'DigiMapKeys DELETED with its panels’ keys and reporters (every map is on the cards)');
+ok(!/<div id="topbar">|<div id="filters">|id="legbtn"|id="dstats"|id="dsum"|getElementById\('snap'\)|getElementById\('back'\)/.test(mo), 'no map page has a bar, a filter row, the legend’s (i), STATS / SUMMARY panels, SNAP / FIT or back keys');
+ok(/const CARDS = !\(kind === 'ais'/.test(mo) && /window\.__mapAuto=\{state:function\(\)\{return \{on:snapOn,paused:false\};\}/.test(mo) && /function pageRowsTell\(fn\)/.test(mo),
+   'HFDL: SNAP is MAP CONTROLS\u2019 AUTO; every map off the track host tells React Native its LIST rows');
 ok(/\{amCards && !!amList && !!pageUri && !packError && \(\s*<MapChrome /.test(mo) && /servers=\{null\} tune=\{null\} chat=\{null\} shared=\{null\}/.test(mo),
    'the AMATEUR map draws MapChrome — no SERVERS, TUNE, CHAT or waterfall');
 ok(/ranges: \[\.\.\.DIGI_WINDOWS, \.\.\.\(amateur \? \[SESSION_RANGE\] : \[\]\)\]/.test(mo) && /extra: <AmFilters /.test(mo) && /pageCall\('__digiSet', k, v\)/.test(mo), 'MAP CONTROLS: TIME (windows + THIS SESSION), MODE / BAND / RADIO');
-ok(/const CARDS = kind === 'digi' && !!opts\?\.cards;/.test(mo) && /\$\{isTrk \|\| CARDS \? '' : `<div id="topbar">/.test(mo) && /\$\{isSpots && !CARDS \? `\s*<div id="filters">/.test(mo),
-   'the page on the cards: no top bar, no filter row');
-ok(/\$\{CARDS \? '' : '<div class="dpan" id="dstats">/.test(mo) && /\$\{CARDS \? '' : '<div class="dpan" id="dsum">/.test(mo) && /if\(CARDS\)amStatsTell\(st,ak\);/.test(mo),
-   'no STATS / SUMMARY panels on the cards: the numbers go to the STATS card');
-ok(/button:CARDS\?null:document\.getElementById\('snap'\)/.test(mo) && /window\.__cardsCtl=function\(k\)\{try\{\s*if\(k==='auto'&&digiFit\)/.test(mo), 'AUTO / FIT: the shared auto fit, from MAP CONTROLS (no key in the page)');
+ok(/amStatsTell\(st,ak\);/.test(mo) && /button:null,what:'station shown'/.test(mo) && /window\.__mapAuto=\{state:function\(\)\{return digiFit\?digiFit\.state\(\)/.test(mo),
+   'the spots maps: the numbers go to the STATS card; AUTO / FIT = the shared auto fit from MAP CONTROLS (no key in the page)');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
