@@ -210,8 +210,12 @@ async function sizeChecks(p, tag, w, h, o) {
         return isRed(cs.borderBottomColor) && cs.borderBottomWidth !== '0px' || /#?ff[0-9a-f]{2}[0-9a-f]{2}|rgb\(2[0-5]\d, \d{1,2}, /.test(cs.boxShadow) && /inset/.test(cs.boxShadow) || (bf.content !== 'none' && isRed(bf.backgroundColor)); }).map(b => b.dataset.tgl).join(',')`);
       ok(!red, `${tag} ${w}: LAYERS rows carry no red mark${red ? ' — ' + red : ''}`);
       const lv = JSON.parse(await p.ev(`JSON.stringify((() => { const rows = [...${V}.querySelectorAll('.trkCard2[data-card="layers"] [data-tgl]')]; const live = rows.filter(b => b.classList.contains('live')), mixed = live.length > 0 && live.length < rows.length;
-        return { mixed, ok: rows.every(b => !!b.querySelector('.lv') === (mixed && b.classList.contains('live'))), tagged: rows.filter(b => b.querySelector('.lv')).map(b => b.dataset.tgl) }; })())`));
-      ok(lv.ok, `${tag} ${w}: LIVE only on the layers this radio decodes, and only when stored ones sit beside them (${lv.mixed ? lv.tagged.join(',') : 'none needed'})`);
+        const any = rows.some(b => b.querySelector('.lv'));
+        const okMine = rows.every(b => !b.querySelector('.lv:not(.o)') || b.classList.contains('live')) && (!any || live.every(b => !!b.querySelector('.lv:not(.o)')));
+        const okOther = rows.every(b => !b.querySelector('.lv.o') || !b.classList.contains('live'));
+        const small = [...document.querySelectorAll('.trkView:not([hidden]) .trkCard2[data-card="layers"] .lv')].every(e => e.getBoundingClientRect().width <= 48 && e.getBoundingClientRect().height <= 18);
+        return { mixed, ok: okMine && okOther && small, tagged: rows.filter(b => b.querySelector('.lv')).map(b => b.dataset.tgl + (b.querySelector('.lv.o') ? '(other)' : '')) }; })())`));
+      ok(lv.ok, `${tag} ${w}: LIVE filled only on this radio's layers, outlined only on another source's, all small (${lv.tagged.join(',') || 'none needed'})`);
     }
     if (id === 'layers' || id === 'map') {
       // ★ Stuart 12:00: the ON / OFF tags in one column — every row's count column (just before its tag, a fixed width) ends at one edge

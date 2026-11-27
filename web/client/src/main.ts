@@ -11306,7 +11306,23 @@ function asRender() {
   const tog = asToggled.areas !== undefined ? asToggled : { ...asToggled, areas: coastal && present.some((id) => SEA_ID_SET.has(id)) };
   const on = (id: LiveLayerId) => liveLayerOn(id, present, tog, live);
   // ★★★ beta96 SHOW (Stuart 11-26): the layer chips carry their counts and colours, as the community map's
-  v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id] })),
+  /* ★★ Stuart 15:31: which layers are live on ANOTHER of this server's radios or its feeds (the same table SOURCES and
+   *  RATE read — no fetch): an aircraft heard in the last minute, by a radio that is not this one, on that layer's mode */
+  const others = new Map<string, Set<string>>();
+  { const SRC_LAYER: Record<string, string> = { 'ADS-B': 'adsb', VDL2: 'vdl2', ACARS: 'acars', HFDL: 'hfdl', 'ADS-C': 'adsc' };
+    const feedName = (avShared?.feeds ?? []).map((f) => f.title).filter(Boolean)[0] || 'FEED';
+    for (const p of avShared?.aircraft ?? []) {
+      if (!(p.age < 60)) continue;
+      const rs: string[] = Array.isArray((p as any).radios) ? (p as any).radios : [];
+      for (const r of rs) {
+        if (r === mapMine && asOnRadio()) continue;
+        const name = r === 'feed' ? feedName : asRadioNames?.get(r) ?? 'SDR';
+        for (const s of p.src) { const id = SRC_LAYER[s]; if (!id) continue; (others.get(id) ?? others.set(id, new Set()).get(id)!).add(name); }
+      }
+    }
+  }
+  v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id],
+                                                    others: others.has(c.id) ? [...others.get(c.id)!] : undefined })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
   // ★★★ beta96 OTHER RADIOS ON THIS SERVER: a SHOW chip of its own (only with 2+ sources, only on a radio)
   v.setScope(null, () => { /* ★ tweak 3: SOURCES in MAP CONTROLS (asCardsSync) */ });

@@ -610,7 +610,8 @@ const CSS = `
 .trkCard2 .btn.chip .n:empty{display:none}
 /* ★ Stuart 15:24 ("what is the red here all about … it looks like an error"): a layer this radio is decoding NOW wears the
  *  small LIVE tag — the TUNE card's own, in the house green, still. No red on anything that is not an error. */
-.trkCard2 .btn.chip .lv,.tunePop .tpRow .lv{flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#08140b;background:#5BE36B;border-radius:3px;padding:3px 4px;margin-left:6px}
+.trkCard2 .btn.chip .lv,.tunePop .tpRow .lv{flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#08140b;background:#5BE36B;border:1px solid #5BE36B;border-radius:3px;padding:2px 4px;margin-left:6px;max-width:5.5em;overflow:hidden;white-space:nowrap}
+.trkCard2 .btn.chip .lv.o{background:transparent;color:#8fd79a;border-color:#4f8f5a}
 .trkCard2 .tunePop{position:static;max-height:none;box-shadow:none;border:0;border-radius:0;background:none;padding:4px}
 .trkCard2 .tunePop[hidden]{display:block}
 .trkCard2 .slot-tune:empty{display:none}
@@ -2096,7 +2097,7 @@ export class TrackView {
   }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string; others?: string[] }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
     // ★★★ beta96 SHOW (Stuart 11-26): the counts change every second — written in place (below), never a redraw, so a poll
     //   cannot steal a focused chip
@@ -2108,7 +2109,7 @@ export class TrackView {
         if (n.textContent !== t) n.textContent = t;
       }
     };
-    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '']), toggles.map((x) => toggled[x.id] !== false)]);
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|')]), toggles.map((x) => toggled[x.id] !== false)]);
     if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` }))); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
@@ -2117,12 +2118,23 @@ export class TrackView {
     //   layer's (what the receiver is doing now). ★★★ SHOW (Stuart 11-26): THIS viewer's own filter, labelled, the community
     //   map's chips — a colour dot, the name, its count; nothing here is ever sent to the server.
     // ★ Stuart 15:27: LIVE tells the live layers from the stored / other radios' ones — only when the card shows both
-    const liveMixed = toggles.some((x) => x.live) && toggles.some((x) => !x.live);
+    /* ★★ Stuart 15:31 / 15:33: three states, as small as the TUNE card's tag — LIVE filled = THIS radio decodes it; LIVE
+     *  outlined = another radio or feed here does (its name in the title, or the name itself when ≤ 5 letters); nothing
+     *  = stored. Shown only when the rows differ — all alike, there is nothing to tell apart. */
+    const stateOf = (x: { live?: boolean; others?: string[] }) => (x.live ? 'mine' : x.others?.length ? 'other' : 'stored');
+    const liveMixed = new Set(toggles.map(stateOf)).size > 1;
+    const badge = (x: { live?: boolean; others?: string[] }) => {
+      if (!liveMixed) return '';
+      if (x.live) return '<span class="lv" title="This radio is decoding it now">LIVE</span>';
+      if (!x.others?.length) return '';
+      const one = x.others.length === 1 && x.others[0].length <= 5 ? x.others[0].toUpperCase() : 'LIVE';
+      return `<span class="lv o" title="Live on ${esc(x.others.join(', '))} — another of this server's sources">${esc(one)}</span>`;
+    };
     host.innerHTML = (toggles.length ? '<span class="lbl" title="What this map shows you — your own view, nothing changes on the radio">SHOW</span>' : '')
       + toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
       + `<button class="btn chip${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">`
       + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
-      + `${esc(x.label)}${x.live && liveMixed ? '<span class="lv" title="This radio is decoding it now">LIVE</span>' : ''}<span class="n"></span></button>`).join('');
+      + `${esc(x.label)}${badge(x)}<span class="n"></span></button>`).join('');
     counts();
     if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` })));
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
