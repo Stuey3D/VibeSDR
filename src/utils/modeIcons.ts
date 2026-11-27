@@ -30,7 +30,7 @@
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
   | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
-  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest' | 'stats' | 'statsLine' | 'waterfall';
+  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest' | 'stats' | 'statsLine' | 'waterfall' | 'waterfallLine';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -82,9 +82,21 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
   ],
   /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
   /* ★★ V12 the map drawer's LIVE WATERFALL (Stuart 11-27): a spectrum trace over the waterfall's falling lines */
+  /* ★★ redrawn to Stuart's design (11-27 evening): the TRACE on top — a noise floor with three peaks of different heights;
+   *  below it a SOLID block (the waterfall) cut by dark lines of different widths, each straight under its peak: the
+   *  signals running down the waterfall. Single colour: the lines are the gaps between the block's filled columns. */
   waterfall: [
-    { d: 'M3 10l3-2.5 2 1.5 3-5 2.5 4.5 2.5-2 2 1.5L21 7' },
-    { d: 'M3 14h18M3 17.5h18M3 21h18', w: 1.5 },
+    { d: 'M3 10.5H6.5L8 3.5L9.5 10.5H12L13.5 6.5L15 10.5H17L18 8.5L19 10.5H21' },
+    { d: 'M4.5 13H7v8H4.5A1.5 1.5 0 0 1 3 19.5v-5A1.5 1.5 0 0 1 4.5 13Z', fill: true },
+    { r: [9, 13, 3.8, 8, 0], fill: true },
+    { r: [14.2, 13, 3.3, 8, 0], fill: true },
+    { d: 'M18.6 13H19.5A1.5 1.5 0 0 1 21 14.5v5A1.5 1.5 0 0 1 19.5 21H18.6Z', fill: true },
+  ],
+  /* B: the same trace, the waterfall OUTLINED with its signals as solid lines (the positive of A) */
+  waterfallLine: [
+    { d: 'M3 10.5H6.5L8 3.5L9.5 10.5H12L13.5 6.5L15 10.5H17L18 8.5L19 10.5H21' },
+    { r: [3.9, 13.9, 16.2, 7.2, 1.5], w: 1.6 },
+    { d: 'M8 14v6', w: 2 }, { d: 'M13.5 14v6', w: 1.4 }, { d: 'M18 14v6', w: 0.9 },
   ],
   list: [
     { d: 'M9 6h11M9 12h11M9 18h11' },
