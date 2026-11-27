@@ -32,7 +32,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, PILL_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -487,10 +487,12 @@ function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: Retu
   const k = useK();
   const words = pillWords(text, Math.floor((g.pill.w - 24 * k) / (7.2 * k))   /* 11 pt mono ≈ 0.6 em + 0.5 spacing = 7.1 pt a character (6.4 let it ellipsise through the count) */);
   const w = Math.min(g.pill.w, Math.max(80 * k, (words.length * 7.2 + 26) * k));
+  // ★★★ attached to its edge (the web's): the inset is padding inside it, so its words sit clear of the notch / home bar
+  const edgePad = g.pill.at === 'top' ? { paddingTop: g.pill.pad } : { paddingBottom: g.pill.pad };
   return (
-    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: g.pill.x + (g.pill.w - w) / 2, width: w, height: PILL_H * k }}>
+    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: g.pill.x + (g.pill.w - w) / 2, width: w, height: g.pill.h }}>
       <NavRow>
-        <ChipKey style={[styles.pill, locked && styles.pillLocked, g.pill.at === 'top' ? styles.pillTop : styles.pillBottom, { width: '100%', height: '100%' }]}
+        <ChipKey style={[styles.pill, locked && styles.pillLocked, g.pill.at === 'top' ? styles.pillTop : styles.pillBottom, edgePad, { width: '100%', height: '100%' }]}
                  words={`${text} — ${disabled ? 'chat is not available here' : 'open the chat'}`} onPress={() => { if (!disabled) onPress(); }}>
           <Text style={[styles.pillTxt, locked && { color: '#ff9d8a' }]} numberOfLines={1}>{words}</Text>
         </ChipKey>
@@ -813,9 +815,11 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
     );
   }
   const w = g.list.w;
-  const pos = g.list.side ? { left: g.list.x, top: g.list.top, height: max ? g.list.maxH : Math.min(g.list.maxH, height) }
+  const sideTabs = g.list.side && pane === 'list' && (L.tabs?.length ?? 0) >= 2;
+  /* ★★★ short landscape: the LIST is the LEFT SIDE PANEL, the full height under the top row (the web's) — never a short drawer */
+  const pos = g.list.side ? { left: g.list.x, top: g.list.top, height: g.list.maxH }
     : { left: 0, bottom: 0, height: height + p.insets.bottom, paddingBottom: p.insets.bottom };
-  const bodyH = (pos.height as number) - (g.list.side ? 0 : p.insets.bottom) - 34 * k;
+  const bodyH = (pos.height as number) - (g.list.side ? 0 : p.insets.bottom) - 34 * k - (sideTabs ? 38 * k : 0);
   const pickRow = (r: TrackRow) => { L.onPick(r); };
   const enterRow = (r: TrackRow) => { L.onPick(r); setItem(r); };
   return (
@@ -831,6 +835,10 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
         {!g.list.side && <ChipKey style={[styles.ftab, { right: 8 * k, top: -26 * k }]} words={max ? 'Restore the list' : 'Maximise the list'} onPress={() => onMax(!max)}>
           <Text style={styles.ftabTxt}>{max ? '⌄' : '⌃'}</Text></ChipKey>}
       </NavRow>
+      {/* ★★ the side panel's tabs: their own row at its head, wrapping — the foot bar is too narrow for them beside the keys */}
+      {sideTabs && <NavRow><View style={styles.sideTabs}>
+        {L.tabs!.map((t) => <Key key={t.id} label={`${t.label} ${t.n}`} on={L.tab === t.id} words={`${t.label}: ${t.n}`} onPress={() => L.onTab?.(t.id)} />)}
+      </View></NavRow>}
       {pane === 'wf' && p.wf ? (
         <View style={{ height: bodyH }}>
           <MapMiniWaterfall width={w - 2} height={bodyH} screenW={winW} screenH={winH} model={p.wf.model} colormap={p.wf.colormap} store={p.wf.store} sinkRef={p.wf.sinkRef} />
@@ -862,7 +870,7 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
             <ModeIcon name="list" size={16 * k} color={C.ink} /><Text style={styles.lChipN}>{count}</Text><Text style={styles.lChipChev}>{'⌄'}</Text>
           </ChipKey>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ alignItems: 'center', gap: 4 }} keyboardShouldPersistTaps="handled">
-            {pane === 'list' && (L.tabs?.length ?? 0) >= 2 && L.tabs!.map((t) => <Key key={t.id} label={`${t.label} ${t.n}`} on={L.tab === t.id} words={`${t.label}: ${t.n}`} onPress={() => L.onTab?.(t.id)} />)}
+            {pane === 'list' && !g.list.side && (L.tabs?.length ?? 0) >= 2 && L.tabs!.map((t) => <Key key={t.id} label={`${t.label} ${t.n}`} on={L.tab === t.id} words={`${t.label}: ${t.n}`} onPress={() => L.onTab?.(t.id)} />)}
             {pane === 'wf' && !!p.wf?.model && <Text style={styles.status} numberOfLines={1}>{p.wf.model.info}</Text>}
           </ScrollView>
           {pane === 'list' && !!held && <Key label={`‖ +${newN}`} words={`Paused while you scroll — ${newN} new. Press to resume`} onPress={() => { setHeld(null); scrollRef.current?.scrollTo({ y: 0, animated: true }); }} />}
@@ -969,9 +977,9 @@ const RAW = {
   famN: { fontFamily: F, fontSize: 11.5, color: C.ink },
   badge: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff6b5a' },
   pulseRing: { borderRadius: 14, borderWidth: 2, borderColor: '#ffcf7a' },
-  pill: { backgroundColor: 'rgba(40,30,12,0.96)', borderWidth: 1, borderColor: 'rgba(255,190,80,0.5)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
-  pillTop: { borderRadius: 15 },
-  pillBottom: { borderRadius: 15 },
+  pill: { backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  pillTop: { borderTopWidth: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0, borderBottomLeftRadius: 12, borderBottomRightRadius: 12 },
+  pillBottom: { borderBottomWidth: 0, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderTopLeftRadius: 12, borderTopRightRadius: 12 },
   pillLocked: { borderColor: 'rgba(255,120,100,0.6)', backgroundColor: 'rgba(58,20,16,0.96)' },
   pillTxt: { fontFamily: F, fontSize: 11, letterSpacing: 0.5, color: '#ffcf7a' },
   card: { position: 'absolute', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 12, paddingHorizontal: 8, paddingTop: 4, zIndex: 40 },
@@ -1022,6 +1030,7 @@ const RAW = {
   lChipN: { fontFamily: F, fontSize: 12.5, color: C.ink },
   lChipChev: { fontFamily: F, fontSize: 12, color: C.dim },
   drawer: { position: 'absolute', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 12 },
+  sideTabs: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, height: 38, paddingHorizontal: 6, borderBottomWidth: 1, borderBottomColor: C.rim },
   drawerIn: { borderColor: '#ffd34d' },
   itemCard: { zIndex: 60, paddingBottom: 8 },
   mapState: { position: 'absolute', right: -7, bottom: -6, backgroundColor: 'rgba(12,14,12,0.95)', borderRadius: 7 },

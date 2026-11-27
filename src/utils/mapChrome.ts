@@ -43,6 +43,8 @@ export const LIST_FRAC = 0.22;
 export const LIST_CHIP_H = 40;
 /** The shared-tuner pill's height. */
 export const PILL_H = 30;
+/** The short layout's bottom-right row (scale bar ≤ 80 · [− +] 78 · ? 36 + its margins and gaps): what the pill keeps clear of. */
+export const BR_ROW_W = 216;
 
 /** The LIST drawer's width: a phone's full width, else clamp(420, 30 % of the window, 640) — the web's rule. */
 export function listWidthFor(w: number): number {
@@ -89,8 +91,10 @@ export interface ChromeGeom {
   /** The LIST drawer: left edge, bottom distance, width, normal rows, the tallest it may grow (maximised), and whether it is
    *  the short layout's side panel (top = under the row). */
   list: { x: number; bottom: number; w: number; rows: number; maxH: number; side: boolean; top: number };
-  /** The pill: its centre band (x, w) and its top y. */
-  pill: { x: number; w: number; y: number; at: 'top' | 'bottom' };
+  /** The pill: its centre band (x, w), its top y, its whole height and the inset it pads its words in by. ★★★ ATTACHED as the
+   *  web's (coordinator, beta97): tall = flush to the TOP edge (flat top, rounded bottom), short = flush to the BOTTOM edge
+   *  (flat bottom, rounded top) — the deck's material, never a floating capsule. */
+  pill: { x: number; w: number; y: number; at: 'top' | 'bottom'; h: number; pad: number };
   /** The bottom-right group (? scale [− +] (i)): distance from the right and the bottom screen edges. */
   br: { right: number; bottom: number; horizontal: boolean };
   /** The map's own zoom control top (tall layout: under the right column). */
@@ -133,14 +137,15 @@ export function chromeGeom(p: ChromeIn): ChromeGeom {
     const top = TAB_H + GAP;
     const listW = Math.min(sidePanelWidthFor(safe.r - safe.l), Math.max(0, safe.r - safe.l));
     const listMaxH = Math.max(LIST_CHIP_H, safe.b - top - GAP);
-    // the bottom-right group: from the safe right, above the bottom inset; the pill between the panel and the group
-    const brW = 150;
+    // the bottom-right group: from the safe right, above the bottom inset; the pill between the panel and the group —
+    // ★★ the group's REAL width (scale ≤ 80 + zoom 78 + ? 42 + gaps), so the pill never runs over the scale bar
+    const brW = BR_ROW_W;
     const pillL = safe.l + listW + GAP, pillR = safe.r - brW - GAP;
     const pw = Math.max(0, pillR - pillL);
     return {
       short, oneSide: false, famCompact, safe, boxes, cardFrom,
       list: { x: safe.l, bottom: ins.bottom + GAP, w: listW, rows: listRowsFor(h), maxH: listMaxH, side: true, top },
-      pill: { x: pillL, w: pw, y: safe.b - PILL_H - 6, at: 'bottom' },
+      pill: { x: pillL, w: pw, y: h - PILL_H - ins.bottom, at: 'bottom', h: PILL_H + ins.bottom, pad: ins.bottom },
       br: { right: ins.right + GAP, bottom: ins.bottom + 6, horizontal: true },
       zoomTop: top,
     };
@@ -170,7 +175,7 @@ export function chromeGeom(p: ChromeIn): ChromeGeom {
   return {
     short, oneSide: one, famCompact: false, safe, boxes, cardFrom,
     list: { x: 0, bottom: 0, w: listWidthFor(w), rows: listRowsFor(h), maxH: Math.max(LIST_CHIP_H, h - leftFoot - GAP), side: false, top: 0 },
-    pill: { x: exitR, w: Math.max(0, rateL - exitR), y: ins.top + 8, at: 'top' },
+    pill: { x: exitR, w: Math.max(0, rateL - exitR), y: 0, at: 'top', h: PILL_H + ins.top, pad: ins.top },
     br: { right: ins.right + GAP, bottom: ins.bottom + GAP, horizontal: false },
     zoomTop: ry,
   };
@@ -585,7 +590,7 @@ export function chromeGeomAt(p: ChromeIn, k: number): { g: ChromeGeom; g0: Chrom
   for (const id of Object.keys(g0.boxes) as ChipId[]) boxes[id] = bx(g0.boxes[id]!);
   const g: ChromeGeom = { ...g0, boxes, safe: { l: m(g0.safe.l), r: m(g0.safe.r), t: m(g0.safe.t), b: m(g0.safe.b) },
     list: { ...g0.list, x: m(g0.list.x), bottom: m(g0.list.bottom), w: m(g0.list.w), maxH: m(g0.list.maxH), top: m(g0.list.top) },
-    pill: { ...g0.pill, x: m(g0.pill.x), w: m(g0.pill.w), y: m(g0.pill.y) }, br: { ...g0.br, right: m(g0.br.right), bottom: m(g0.br.bottom) }, zoomTop: m(g0.zoomTop) };
+    pill: { ...g0.pill, x: m(g0.pill.x), w: m(g0.pill.w), y: m(g0.pill.y), h: m(g0.pill.h), pad: m(g0.pill.pad) }, br: { ...g0.br, right: m(g0.br.right), bottom: m(g0.br.bottom) }, zoomTop: m(g0.zoomTop) };
   return { g, g0, k: kk };
 }
 /** A card's box at scale k (cardBox on the unscaled layout, times k). */

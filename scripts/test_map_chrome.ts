@@ -4,7 +4,7 @@
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -156,6 +156,19 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(xs.every((x) => x != null && x > 0 && x < 1) && vdl.marks[0].label === 'Ch1 136.700', 'a labelled marker per decoder channel, inside the span');
   ok(mwfX(1, 2, 3) === null, 'a marker outside the span is not drawn');
 }
+// ── ★★★ beta97 the pill ATTACHED (the web's) and the short layout's bottom row ──
+{
+  const t = chromeGeom({ w: 402, h: 874, insets: { top: 62, bottom: 34, left: 0, right: 0 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
+  ok(t.pill.at === 'top' && t.pill.y === 0 && t.pill.pad === 62 && t.pill.h === 30 + 62, 'tall: the pill flush to the TOP edge, padded below the notch');
+  const s2 = chromeGeom({ w: 956, h: 376, insets: { top: 0, bottom: 20, left: 62, right: 62 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
+  ok(s2.pill.at === 'bottom' && s2.pill.y + s2.pill.h === 376 && s2.pill.pad === 20, 'short: the pill flush to the BOTTOM edge, padded above the home bar');
+  ok(s2.pill.x + s2.pill.w <= s2.safe.r - BR_ROW_W, 'short: the pill\'s band ends before the bottom-right row (scale · zoom · ?) — never over the scale bar');
+  ok(s2.list.side && s2.list.top >= TAB_H && s2.list.top + s2.list.maxH >= s2.safe.b - 2 * GAP, 'short: LIST is the left side panel, the full height under the top row');
+  const mac = chromeGeom({ w: 993, h: 621, insets: { top: 28, bottom: 0, left: 0, right: 0 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
+  const line = 'Shared VFO: Ask before changing mode or exiting 2/5';
+  ok(Math.floor((mac.pill.w - 24) / 7.2) >= line.length, 'a Mac window: the whole shared-tuner line fits its band');
+}
+
 // ── the pill's words ──
 {
   const t = 'Shared VFO: Ask before changing mode or exiting 2/5';
