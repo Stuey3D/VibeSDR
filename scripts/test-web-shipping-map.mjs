@@ -160,6 +160,10 @@ try {
   ok(/Sea area tinted red: a gale/.test(key) && /Sea areas: Met Office definitions/.test(key), 'the KEY: the sea-area outline, amber and red rows, and the sources');
   console.log('   screenshot', await shot('shipping-map.png'));
   console.log('── the sea areas ──');
+  // ★★★ beta96 map cards: FIT frames ONE layer now (the ships by default on this map — three in the Solent, close in);
+  //     the sea-area sweep below wants the old wide view, so FIT TO the NAVTEX stations (they span the coasts)
+  ok(await ev(`(() => { const b = ${view}.querySelector('.fitSel [data-fit="navst"]'); if (!b) return false; b.click(); return true; })()`), 'MAP card: FIT TO NAVTEX STATIONS');
+  await sleep(3000);
   const aria = (re) => `[...document.querySelectorAll('.vtl-mk')].filter(e => ${re}.test(e.getAttribute('aria-label') || ''))`;
   ok(Number(await ev(`${aria('/^(Viking|Dogger|Wight|Plymouth|Portland|Thames|Fastnet|Malin) sea area/')}.length`)) === 8, 'the UK areas on the map (Viking, Dogger, Wight, Plymouth …)');
   ok(await until(`${aria('/^Dogger sea area: gale in force/')}.length === 1`, 8000), 'Dogger: a gale in force (its severe gale 9 forecast)');

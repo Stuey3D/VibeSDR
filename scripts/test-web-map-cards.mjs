@@ -177,7 +177,10 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
   await sleep(2500);
   const radios = await (await fetch(`http://127.0.0.1:${P}/vibeserver/radios`)).json();
   const rid = radios.radios?.[0]?.id;
-  ok(!!rid && await up(`http://127.0.0.1:${P}/r/${rid}/vibeserver.json`), `the radio is behind the door (${rid})`);
+  let behind = false;
+  for (let i = 0; i < 4 && !behind; i++) behind = !!rid && await up(`http://127.0.0.1:${P}/r/${rid}/vibeserver.json`);   // ★ up to 2 min on a busy machine
+  ok(behind, `the radio is behind the door (${rid})`);
+  if (!behind) console.log(fs.readFileSync(path.join(dir, 'radio.log'), 'utf8').split('\n').slice(-15).join('\n'));
   const p = await browser(dir);
   try {
     ok(await radioDatalink(p, `http://127.0.0.1:${P}/r/${rid}/`), 'the DATALINK map is up (the radio page, AIR & SEA LIVE)');

@@ -335,6 +335,9 @@ try {
   await ev(`${view}.querySelector('[data-rng="all"]').click()`);
   ok(await until(`!!document.querySelector('.vtl-mk.vtl-pulse') && window.__navMarker === 1`, 12000), 'LIVE: a new warning appears pulsing, without the map being reloaded');
   // 7 DAYS by keyboard
+  // ★★★ beta96 map cards: the time filter is in the MAP card — opened first (a hidden key cannot take focus)
+  await ev(`(() => { const b = ${view}.querySelector('[data-cbtn="map"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`);
+  await sleep(300);
   await ev(`${view}.querySelector('[data-rng="7d"]').focus()`);
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
