@@ -173,12 +173,17 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
   const env = { ...process.env, VIBESERVER_NO_RADIO_SPAWN: '1', VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: run };
   kids.push(spawn(BIN, [], { env, stdio: ['ignore', fs.openSync(path.join(dir, 'door.log'), 'w'), 'ignore'] }));
   ok(await up(`http://127.0.0.1:${P}/vibeserver.json`), `the door is up (${P})`);
-  kids.push(spawn(BIN, ['--radio-serial', 'mc-test', '--tcp', `127.0.0.1:${rtlPort}`, '--freq', '96100000', '--mode', 'wfm'], { env, stdio: ['ignore', fs.openSync(path.join(dir, 'radio.log'), 'w'), 'ignore'] }));
-  await sleep(2500);
   const radios = await (await fetch(`http://127.0.0.1:${P}/vibeserver/radios`)).json();
   const rid = radios.radios?.[0]?.id;
+  // ★ the radio process, as vibeserver@mc-test would start it; on a busy machine its first start can miss the door's
+  //   hand-off (seen 2 runs in 4 on 11-27 with seven agents building) — one fresh start more before the test gives up
   let behind = false;
-  for (let i = 0; i < 4 && !behind; i++) behind = !!rid && await up(`http://127.0.0.1:${P}/r/${rid}/vibeserver.json`);   // ★ up to 2 min on a busy machine
+  for (let attempt = 0; attempt < 2 && !behind; attempt++) {
+    const radio = spawn(BIN, ['--radio-serial', 'mc-test', '--tcp', `127.0.0.1:${rtlPort}`, '--freq', '96100000', '--mode', 'wfm'], { env, stdio: ['ignore', fs.openSync(path.join(dir, 'radio.log'), 'w'), fs.openSync(path.join(dir, 'radio.log'), 'a')] });
+    kids.push(radio);
+    for (let i = 0; i < 3 && !behind; i++) behind = !!rid && await up(`http://127.0.0.1:${P}/r/${rid}/vibeserver.json`);
+    if (!behind) { console.log(`   (radio start ${attempt + 1} not behind the door after 90 s — restarting it)`); radio.kill('SIGTERM'); await sleep(2000); }
+  }
   ok(behind, `the radio is behind the door (${rid})`);
   if (!behind) console.log(fs.readFileSync(path.join(dir, 'radio.log'), 'utf8').split('\n').slice(-15).join('\n'));
   const p = await browser(dir);
