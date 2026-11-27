@@ -535,27 +535,27 @@ const CSS = `
 .trkTop{flex-wrap:nowrap;gap:6px;min-height:40px;box-sizing:border-box}
 .trkTop .st{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;flex:none}
 .trkTop .scopeNote{display:none}
-.trkTop .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
-.trkTop .cardBtns{display:inline-flex;gap:4px;flex:none;align-items:center}
-.trkTop .cbtn{display:inline-flex;align-items:center;gap:5px;background:rgba(30,42,54,.9);color:#cfd9e3;border:1px solid #33475a;border-radius:999px;
+.trkTop .ttl{display:none}
+.trkMapHost .cardBtns{position:absolute;top:8px;right:8px;z-index:790;display:flex;flex-direction:column;align-items:stretch;gap:6px}
+.trkMapHost .cbtn{justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.45);display:inline-flex;align-items:center;gap:5px;background:rgba(30,42,54,.9);color:#cfd9e3;border:1px solid #33475a;border-radius:999px;
   padding:5px 10px;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;cursor:pointer;white-space:nowrap}
-.trkTop .cbtn:hover,.trkTop .cbtn:focus-visible{background:#2a3a4a;outline:none;border-color:#7fc8ff}
-.trkTop .cbtn[aria-expanded="true"]{background:#e8eef5;color:#0b1014;border-color:#e8eef5}
-.trkTop .cbtn[hidden]{display:none}
-.trkTop .cbtn .cn{font-weight:600;opacity:.75;font-variant-numeric:tabular-nums}
-.trkTop .cbtn .cn:empty{display:none}
-.trkTop .cbtn .lv{width:6px;height:6px;border-radius:50%;background:#ff3b2f;animation:trkLive 1.6s ease-in-out infinite}
+.trkMapHost .cbtn:hover,.trkMapHost .cbtn:focus-visible{background:#2a3a4a;outline:none;border-color:#7fc8ff}
+.trkMapHost .cbtn[aria-expanded="true"]{background:#e8eef5;color:#0b1014;border-color:#e8eef5}
+.trkMapHost .cbtn[hidden]{display:none}
+.trkMapHost .cbtn .cn{font-weight:600;opacity:.75;font-variant-numeric:tabular-nums}
+.trkMapHost .cbtn .cn:empty{display:none}
+.trkMapHost .cbtn .lv{width:6px;height:6px;border-radius:50%;background:#ff3b2f;animation:trkLive 1.6s ease-in-out infinite}
 .trkTop .spacer{flex:1 1 auto;min-width:0}
 .trkTop .rate{flex:none;font:700 11.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.04em;color:#ffd34d;white-space:nowrap;font-variant-numeric:tabular-nums}
 .trkTop .rate:empty{display:none}
 .trkTop .slot-top{display:inline-flex;align-items:center;gap:6px;flex:none}
 .trkTop .slot-top:empty{display:none}
-.trkCards{position:absolute;left:8px;top:8px;bottom:8px;z-index:760;display:flex;gap:8px;align-items:flex-start;pointer-events:none;max-width:calc(100% - 16px)}
+.trkCards{position:absolute;right:var(--trk-rail-w,84px);top:8px;bottom:8px;z-index:760;display:flex;flex-direction:row-reverse;gap:8px;align-items:flex-start;pointer-events:none;max-width:calc(100% - var(--trk-rail-w,84px) - 8px)}
 .trkCards .col{display:flex;flex-direction:column;gap:8px;max-height:100%;min-height:0;width:var(--trk-card-w,340px)}
 .trkCard2{pointer-events:auto;display:flex;flex-direction:column;min-height:0;flex:0 1 auto;background:rgba(10,14,20,.94);border:1px solid #2c3a4a;
-  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.45);overflow:hidden;transform-origin:top left;animation:trkCardIn .16s ease-out}
-@keyframes trkCardIn{from{opacity:0;transform:scale(.92) translateY(-6px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.trkCard2{animation:none}.trkTop .cbtn .lv{animation:none}}
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.45);overflow:hidden;transform-origin:top right;animation:trkCardIn .16s ease-out}
+@keyframes trkCardIn{from{opacity:0;transform:scale(.92) translateX(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.trkCard2{animation:none}.trkMapHost .cbtn .lv{animation:none}}
 .trkCard2[hidden]{display:none}
 .trkCard2>.ch{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;border-bottom:1px solid #22303d;flex:none;
   font:800 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#9fb0c2}
@@ -618,19 +618,18 @@ const CSS = `
 .trkCard2[data-card="list"]{flex:1 1 auto}
 .trkCard2[data-card="list"] .trkList .hd{cursor:default}
 .trkCard2[data-card="list"] .trkList .hd .mn{display:none}
-.trkView[data-narrow] .trkTop{flex-wrap:wrap;row-gap:6px}
-.trkView[data-narrow] .trkTop .ttl{display:none}
-.trkTop .brk{display:none}
 .trkTop .slot-share{min-width:0;flex:0 1 auto}
-.trkTop .slot-share .mapShLine{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+.trkTop .slot-share .mapShLine{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;text-transform:none;letter-spacing:.02em}
 .trkTop .slot-share>span{min-width:0;max-width:100%}
-.trkView[data-narrow] .trkTop .brk{display:block;order:9;flex:1 0 100%;height:0}
-.trkView[data-narrow] .trkTop .spacer{display:none}
-.trkView[data-narrow] .trkTop .rate{order:11;margin-left:auto;font-size:10.5px}
-.trkView[data-narrow] .trkTop .cbtn{padding:5px 8px;font-size:10px;letter-spacing:.06em}
-.trkView[data-narrow] .trkTop .cardBtns{order:10;flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
-.trkView[data-narrow] .trkTop .cardBtns::-webkit-scrollbar{display:none}
-.trkView[data-narrow] .trkCards{left:6px;right:6px;top:6px;bottom:6px;max-width:none}
+.trkTop .rate{order:0}
+/* ★ a phone: the bar may WRAP the shared line (never reorder it) — EXIT, the line, CHAT, the rate */
+.trkView[data-narrow] .trkTop{flex-wrap:wrap;row-gap:6px}
+.trkView[data-narrow] .trkTop .slot-share>span{flex-wrap:wrap}
+.trkView[data-narrow] .trkTop .slot-share .mapShLine{white-space:normal;text-align:left;line-height:1.25}
+.trkView[data-narrow] .trkTop .rate{font-size:10.5px}
+.trkView[data-narrow] .cbtn{padding:5px 8px;font-size:10px;letter-spacing:.06em}
+.trkView[data-narrow] .cardBtns{top:6px;right:6px}
+.trkView[data-narrow] .trkCards{left:6px;right:var(--trk-rail-w,76px);top:6px;bottom:6px;max-width:none}
 .trkView[data-narrow] .trkCards .col{width:100%}
 .trkView[data-narrow] .trkCard2{max-height:58%}
 `;
@@ -754,11 +753,14 @@ export class TrackView {
      *  Everything else is in a card — LIST · TUNE · VIEW · MAP · KEY · SOURCES — that pops out of its button. */
     const card = (id: string, title: string, body: string) => `<section class="trkCard2" data-card="${id}" role="region" aria-label="${esc(title)}" hidden>`
       + `<div class="ch"><span class="ct">${esc(title)}</span><button class="x" type="button" aria-label="Close ${esc(title.toLowerCase())}">×</button></div><div class="cb">${body}</div></section>`;
+    /* ★★★ beta96 TWEAK 2 (Stuart 11-27, live on the preview): the bar is EXACTLY "EXIT | Shared VFO: … 2/5 | CHAT | the
+     *  incoming messages" — no title (kept, hidden, for the dialog's name and the drivers), no card buttons: they are a
+     *  small RAIL down the map's right edge (.cardBtns in .trkMapHost), which costs the map nothing. */
     r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
-      + `<span class="cardBtns" role="toolbar" aria-label="Map controls">`
+      + `<span class="rate" role="status" aria-live="off"></span><span class="spacer"></span><span class="st" aria-live="polite"></span></div>`
+      + `<div class="trkMapHost"><span class="cardBtns" role="toolbar" aria-orientation="vertical" aria-label="Map controls">`
       + CARD_IDS.map((id) => `<button class="cbtn" type="button" data-cbtn="${id}" aria-expanded="false" hidden>${CARD_LABEL[id]}<span class="cn"></span></button>`).join('')
-      + `</span><span class="brk" aria-hidden="true"></span><span class="spacer"></span><span class="rate" role="status" aria-live="off"></span><span class="st" aria-live="polite"></span></div>`
-      + `<div class="trkMapHost"><div class="trkCards"></div><div class="trkPark" hidden>`
+      + `</span><div class="trkCards"></div><div class="trkPark" hidden>`
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
         + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`)
@@ -801,7 +803,7 @@ export class TrackView {
     for (const x of Array.from(r.querySelectorAll('.trkCard2 > .ch .x')) as HTMLButtonElement[]) {
       x.onclick = () => { const id = (x.closest('.trkCard2') as HTMLElement).dataset.card as CardId; this.cardOpen(id, false, true); (r.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null)?.focus(); };
     }
-    for (const c of Array.from(r.querySelectorAll('.trkCard2')) as HTMLElement[])
+    for (const c of [...Array.from(r.querySelectorAll('.trkCard2')), r.querySelector('.trkMapHost .cardBtns')] as HTMLElement[])
       for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) c.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     (r.querySelector('.fitOnce') as HTMLButtonElement).onclick = () => this.fitOnce();
     this.cardsLoad();
@@ -902,6 +904,11 @@ export class TrackView {
   /** Put the open cards in their columns (and the rest in the park), the buttons pressed, the obstacle told. */
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
+    { // ★ tweak 2: the cards stand beside the rail of buttons (its width follows its widest label)
+      const rail = this.root.querySelector('.trkMapHost .cardBtns') as HTMLElement | null;
+      const rw = rail ? rail.getBoundingClientRect().width : 0;
+      if (rw > 0) { const v = `${Math.ceil(rw) + (this.narrow() ? 12 : 16)}px`; if (this.root.style.getPropertyValue('--trk-rail-w') !== v) this.root.style.setProperty('--trk-rail-w', v); }
+    }
     { // ★ the MAP card's AIRCRAFT / beacon keys section: shown while a layer put keys in it (ADS-B, NDB)
       const sl = this.root.querySelector('.slot-ctl') as HTMLElement | null, sc = this.root.querySelector('.ctlSect') as HTMLElement | null;
       if (sl && sc) { const any = Array.from(sl.children).some((c) => !(c as HTMLElement).hidden); if (sc.hidden === any) sc.hidden = !any; }
@@ -1032,7 +1039,7 @@ export class TrackView {
     // ★★★ beta96 'share' = the SHARED TUNER line + CHAT, right after the title: first in the sideways row, so a phone
     //   shows it without scrolling (main.ts mapSharedSync)
     if (where === 'share') (this.root.querySelector('.ttl') as HTMLElement).after(el);
-    else if (where === 'top') (this.root.querySelector('.trkTop .cardBtns') as HTMLElement).before(el);
+    else if (where === 'top') (this.root.querySelector('.trkTop .rate') as HTMLElement).before(el);   // ★ CHAT before the rate
     else if (where === 'head') this.rowsEl.before(el);
     else this.mapHost.appendChild(el);
     return el;
@@ -1526,7 +1533,7 @@ export class TrackView {
     // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
     //   again had no KEY (and setLegend found nothing to fill)
     // ★ beta96 the cards (open ones and the park) are the view's, not the map's — they stay
-    for (const el of Array.from(this.mapHost.children)) if (!el.classList.contains('trkCards') && !el.classList.contains('trkPark') && !el.classList.contains('trkSlot')) el.remove();
+    for (const el of Array.from(this.mapHost.children)) if (!el.classList.contains('trkCards') && !el.classList.contains('trkPark') && !el.classList.contains('trkSlot') && !el.classList.contains('cardBtns')) el.remove();
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null; this.selPaused = false;
   }
@@ -1709,14 +1716,17 @@ export class TrackView {
   }
   /** ★ beta96 the open cards' corner of the map (top-left; a phone's card spans the width) — the fits keep clear of it. */
   private cardsObstacle(): { corner: string; w: number; h: number } | null {
-    const r = this.cardsEl.getBoundingClientRect(), m = this.mapHost.getBoundingClientRect();
-    let w = 0, h = 0;
-    for (const c of Array.from(this.cardsEl.querySelectorAll('.trkCard2')) as HTMLElement[]) {
-      const b = c.getBoundingClientRect(); w = Math.max(w, b.right - r.left); h = Math.max(h, b.bottom - m.top);
+    // ★ tweak 2: the rail and the cards sit down the map's RIGHT edge — the fits keep clear of that corner
+    const m = this.mapHost.getBoundingClientRect();
+    if (m.width <= 0) return null;
+    let left = m.right, bottom = m.top;
+    for (const el of [this.root.querySelector('.trkMapHost .cardBtns'), ...Array.from(this.cardsEl.querySelectorAll('.trkCard2'))] as Array<HTMLElement | null>) {
+      if (!el) continue;
+      const b = el.getBoundingClientRect(); if (b.width <= 0) continue;
+      left = Math.min(left, b.left); bottom = Math.max(bottom, b.bottom);
     }
-    if (w <= 0 || h <= 0) return null;
-    // ★ cards taller than half the map: the fit keeps clear of their width (a column down the left), not their height
-    return { corner: 'top-left', w: w + 8 + (r.left - m.left), h: Math.min(h + 8, m.height) };
+    if (left >= m.right) return null;
+    return { corner: 'top-right', w: m.right - left + 8, h: Math.min(bottom - m.top + 8, m.height) };
   }
   /** The list's corner of the map — the ADS-B layer keeps aircraft (and its fit) clear of it. */
   private placeAcObstacle() {

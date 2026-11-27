@@ -102,11 +102,19 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(await p.ev(`!!document.getElementById('mapChat')?.getClientRects().length`), `${tag} ${w}: CHAT is on screen`);
     const r = await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`);
     ok(/^VDL2 [\d.,]+ msg\/min$/.test(r), `${tag} ${w}: top right is only the message rate: "${r}"`);
-    const rr = JSON.parse(await p.ev(`JSON.stringify(${V}.querySelector('.trkTop .rate').getBoundingClientRect())`));
-    ok(rr.right > w * 0.7 && rr.top < 110, `${tag} ${w}: …at the top right (${Math.round(rr.left)},${Math.round(rr.top)})`);
+    // ★★★ tweak 2 (Stuart 11-27): the bar is EXACTLY EXIT | Shared VFO: … n/max | CHAT | the rate — in that order
+    const order = await p.ev(`(() => { const bar = ${V}.querySelector('.trkTop'); const els = [bar.querySelector('.exit'), document.getElementById('mapShLine'), document.getElementById('mapChat'), bar.querySelector('.rate')];
+      if (els.some(e => !e || !bar.contains(e) || !e.getClientRects().length)) return 'missing';
+      for (let i = 1; i < els.length; i++) if (!(els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING)) return 'order';
+      const vis = [...bar.querySelectorAll('button, .rate, .ttl')].filter(e => e.getClientRects().length && !e.closest('[hidden]'));
+      return vis.length === 4 ? 'ok' : 'extra: ' + vis.map(e => e.textContent.trim().slice(0, 20)).join(' | '); })()`);
+    ok(order === 'ok', `${tag} ${w}: the bar is EXIT | the shared line | CHAT | the rate, nothing else (${order})`);
+    ok(/^Shared VFO: .+ \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
   }
+  ok(await p.ev(`!${V}.querySelector('.trkTop [data-cbtn]') && !!${V}.querySelector('.trkMapHost .cardBtns [data-cbtn]')`), `${tag} ${w}: the card buttons are on the map's rail, not in the bar`);
+  ok(await p.ev(`!${V}.querySelector('.trkTop .ttl').getClientRects().length`), `${tag} ${w}: no title in the bar`);
   ok(await p.ev(`(() => { const s = ${V}.querySelector('.trkTop .st'); const r = s.getBoundingClientRect(); return r.width <= 1 && r.height <= 1; })()`), `${tag} ${w}: the status paragraph is not on screen`);
   // ── the buttons ──
   const shown = JSON.parse(await p.ev(SHOWN));

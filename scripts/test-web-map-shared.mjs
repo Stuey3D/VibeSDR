@@ -1,6 +1,8 @@
 // test-web-map-shared.mjs — beta96 (Stuart 11-26, "big issue"): the SHARED TUNER line, CHAT, TUNE / SHOW and the dial lock on
 // the full-screen AIR & SEA map, against the REAL server (fake rtl_tcp, no clip — nothing on air is needed), in headless Edge
 // with --mute-audio (tests are silent). docs/v12/MAP-SHARED.md.
+//   ★★★ beta96 TWEAK 2 (Stuart 11-27): the map bar's words are now "Shared VFO: Free to change mode or exit 1/4",
+//      "… Ask before changing mode or exiting 2/4", "… Locked: ask in chat to change mode or exit 2/4" (dialChat mapBarLine).
 //   1. a shared dial, the page alone, AIR & SEA LIVE from the mode menu lands on the last-used mode (AIS) → "FREE TO EXIT",
 //      CHAT beside it, TUNE (ADS-B · AIS …) and SHOW present; a raw listener joins → live "ASK BEFORE EXITING · 2/4"; CHAT
 //      opens the chat panel over the map; a SHOW chip toggled sends NOTHING to the server; VIEWS' AIR & SEA (the viewer) has
@@ -150,7 +152,7 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   await ev(`localStorage.setItem('vibesdr.airSeaLast', 'ais'); true`);
   await ev(`document.getElementById('mModeAirSea')?.click()`);
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'AIR & SEA LIVE lands on the last-used mode (AIS), the map open');
-  ok(await until(`(${MS})?.shown && /FREE TO EXIT/.test((${MS}).text)`, 8000), `alone on a shared dial: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
+  ok(await until(`(${MS})?.shown && /^Shared VFO: Free to change mode or exit 1\\/4$/.test((${MS}).text)`, 8000), `alone on a shared dial: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
   ok(await ev(`!!document.querySelector('.trkView:not([hidden]) .slot-share #mapChat') && !document.getElementById('mapChat').hidden`), 'CHAT sits beside the line in the map\'s top bar');
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.includes('adsb') && tune.includes('ais*'), `TUNE: ADS-B and AIS (AIS lit) — ${tune.join(' ')}`);
@@ -168,7 +170,7 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   await shot('free');
   // a second listener → the line follows live
   const b = await join('bbbb0001');
-  ok(await until(`/ASK BEFORE EXITING/.test((${MS})?.text || '') && /2\\/4/.test((${MS}).text)`, 8000), `a listener joins → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
+  ok(await until(`/^Shared VFO: Ask before changing mode or exiting 2\\/4$/.test((${MS})?.text || '')`, 8000), `a listener joins → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
   ok(!(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).exitLocked, 'the page was here first: EXIT stays live');
   // CHAT opens the chat panel over the map
   await ev(`document.getElementById('mapChat').click()`);
@@ -205,7 +207,7 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   await sleep(1500);
 }, async ({ ev, until, shot, others, send }) => {
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'joining a radio in AIS opens the AIR & SEA map on AIS');
-  ok(await until(`/LOCKED/.test((${MS})?.text || '')`, 10000), `locked: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
+  ok(await until(`/^Shared VFO: (Locked|.*AWAITING|.*YOURS)/i.test((${MS})?.text || '')`, 10000), `locked: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
   const st = JSON.parse(await ev(`JSON.stringify(${MS})`)) || {};
   ok(/ASK IN CHAT TO EXIT/.test(st.text) && /2\/4/.test(st.text), 'the line says ASK IN CHAT TO EXIT with the count');
   ok(st.exitLocked && /chat/i.test(st.exitTitle), `EXIT greyed with its reason — "${st.exitTitle}"`);
@@ -247,12 +249,12 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   /* ★ KNOWN (not this branch): after a raw listener leaves, the server's count (`users` AND the dial's `listeners`) stays at 2
    *  — the controls bar's own banner says "ASK TO TUNE · 2/4" too — while the ask lock does lift. The map's line reads the SAME
    *  inputs as the bar, so it is checked to AGREE with the bar and to lose LOCKED; FREE TO EXIT is reported, not required. */
-  const unlocked = await until(`!/LOCKED/.test((${MS})?.text || '')`, 20000);
+  const unlocked = await until(`!/Locked/.test((${MS})?.text || '')`, 20000);
   const bar = String(await ev(`document.getElementById('mShared')?.textContent || ''`));
   const line = (JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text || '';
-  const cnt = (t) => (t.match(/(\d+\/\d+)/) || [])[1] || (/FREE/.test(t) ? 'alone' : '?');
+  const cnt = (t) => (/FREE|Free/.test(t) ? 'alone' : (t.match(/(\d+\/\d+)/) || [])[1] || '?');   // ★ tweak 2: the map's line counts "1/4" alone, the bar says FREE
   ok(unlocked && cnt(bar) === cnt(line), `the other listener leaves → the lock lifts live; the line agrees with the bar ("${line}" / bar "${bar}")`);
-  if (!/FREE TO EXIT/.test(line)) console.log('   (finding: the server still counts the departed listener — the bar says the same)');
+  if (!/Free to change mode or exit/.test(line)) console.log('   (finding: the server still counts the departed listener — the bar says the same)');
   ok(await until(`!(${MS}).exitLocked && !document.querySelector('.trkView:not([hidden]) [data-cbtn="tune"].dialLocked, .trkView:not([hidden]) .tunePop .dialLocked')`, 5000), 'EXIT and TUNE are live again (the lock lifted)');
   // pick → tune: ADS-B from the list
   await ev(`${CHIP}.click(); true`); await sleep(300);

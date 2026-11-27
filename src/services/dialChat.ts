@@ -371,6 +371,26 @@ export function mapSharedLine(st: MapSharedState, clock?: (ms: number) => string
   return { show: true, text: `${pre}${words}${tail}`, dialLocked: locked, why };
 }
 
+/** ★★★ beta96 THE MAP BAR's LINE (Stuart 11-27, the map cards: "EXIT | Shared VFO: Ask before changing mode or exiting 2/5 |
+ *  CHAT | incoming messages") — the web map's one piece of shared-dial state, in his words: "Shared VFO: <what to do>"
+ *  and the listener count n/limit. The same states and lock as mapSharedLine (whose words the app's MapTopStrip still
+ *  uses until its port): the ask lock and the owner's scan grey the controls with the same reasons; a tuning line in
+ *  the chat (`said`) is shown as it is. Not a shared dial (each listener has their own VFO): only the count, nothing to
+ *  ask. The viewer, or a radio that only ever has one listener: nothing. */
+export function mapBarLine(st: MapSharedState, clock?: (ms: number) => string): MapSharedLine {
+  if (st.standalone || st.max === 1) return { show: false, text: '', dialLocked: false, why: '' };
+  const count = st.listeners >= 0 ? (st.youPlus ? `(You+${Math.max(1, st.listeners - 1)})` : `${st.listeners}${st.max > 1 ? `/${st.max}` : ''}`) : '';
+  if (!st.shared) return count ? { show: true, text: count, dialLocked: false, why: '' } : { show: false, text: '', dialLocked: false, why: '' };
+  const base = mapSharedLine(st, clock);   // ★ the lock and its reason are mapSharedLine's, word for word
+  if (st.said) return base;
+  const alone = st.listeners > 0 && st.listeners <= 1;
+  let words: string;
+  if (askLocked(st.ask)) words = st.ask!.askState === 'open' || (st.ask!.askState === 'no' && st.ask!.askUntil) ? askBannerText(st.ask!, true, clock)! : chatT(st.exitMoves ? 'mapLockedExit' : 'bannerAskInChat');
+  else if (alone) words = chatT(st.exitMoves ? 'mapFreeExit' : 'mapFreeTune');
+  else words = chatT(st.exitMoves ? 'mapAskExit' : 'mapAskTune');
+  return { show: true, text: `${chatT('mapSharedVfo')}: ${words}${count ? ` ${count}` : ''}`, dialLocked: base.dialLocked, why: base.why };
+}
+
 /** ★★ The SHARED TUNER banner's standing words when the ask lock is not in force — one copy for the app's bar and the
  *  browser's: FREE TO TUNE alone, ASK TO TUNE · 3/5 👤 with company, ASK BEFORE TUNING before the count is known
  *  (listeners < 0). `tight` drops the prefix (SE in Display Zoom), never the words that matter. */

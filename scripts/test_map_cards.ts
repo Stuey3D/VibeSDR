@@ -1,6 +1,7 @@
 // test_map_cards.ts — ★★★ beta96 THE MAP CONTROL CARDS' RULES (src/utils/mapCards.ts; docs/v12/MAP-CONTROL-CARDS.md): the
 // window decides how many cards (one on a phone, never the whole width), the oldest gives way, LIST alone in its column,
 // the defaults, FIT's outlier rule and its default layer.   npx tsx scripts/test_map_cards.ts
+import { mapBarLine } from '../src/services/dialChat';
 import { CARD_IDS, cardColumns, cardDefaults, cardLimit, cardToggle, fitDefault, rateWords, trimOutliers, type CardId } from '../src/utils/mapCards';
 
 let pass = 0, fail = 0;
@@ -52,5 +53,14 @@ ok(fitDefault({ ships: 3, navst: 25, warnings: 19 }, '') === 'navst', 'no ADS-B,
 ok(fitDefault({ other: 9 }, '') === '', 'only unnamed items: none');
 // ── the rate's words ──
 ok(rateWords(1425.4) === '1,425' && rateWords(98.6) === '99' && rateWords(4.25) === '4.3', `the rate: ${rateWords(1425.4)} · ${rateWords(98.6)} · ${rateWords(4.25)}`);
+// ── tweak 2: the bar's shared line, in Stuart's words ──
+const L = (o: any) => mapBarLine({ shared: true, listeners: 2, max: 5, exitMoves: true, ...o });
+ok(L({}).text === 'Shared VFO: Ask before changing mode or exiting 2/5', `others listening: "${L({}).text}"`);
+ok(L({ listeners: 1 }).text === 'Shared VFO: Free to change mode or exit 1/5', `alone: "${L({ listeners: 1 }).text}"`);
+ok(L({ exitMoves: false }).text === 'Shared VFO: Ask before changing mode 2/5', `opened from a key: "${L({ exitMoves: false }).text}"`);
+ok(L({ ask: { askFirst: true, tuneLocked: true, askState: 'idle' } }).text === 'Shared VFO: Locked: ask in chat to change mode or exit 2/5' && L({ ask: { askFirst: true, tuneLocked: true, askState: 'idle' } }).dialLocked, `ask-locked: "${L({ ask: { askFirst: true, tuneLocked: true, askState: 'idle' } }).text}"`);
+ok(L({ shared: false }).text === '2/5' && !L({ shared: false }).dialLocked, `own VFO each (not shared): just the count "${L({ shared: false }).text}"`);
+ok(!L({ standalone: true }).show && !L({ max: 1 }).show, 'the viewer and a one-listener radio: nothing');
+ok(L({ said: 'Tuning now' }).text === 'Tuning now', 'a tuning line in the chat is shown as it is');
 console.log(`test_map_cards: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

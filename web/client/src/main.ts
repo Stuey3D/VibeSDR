@@ -209,7 +209,7 @@ import { mediaSkipEnabled, dialAlone } from '../../../src/services/blindTuneGate
 import { DecoderClient, type Spot, type DecoderMode, type DecoderParams, type CwList, type CwSignal, type CwSpot, type SpotModeState } from './decoders';
 import { initChat, chatOpened, onSaid as chatSaid, onDial as chatDial,
          onDialRefused as chatRefused, chatAvailable, onListenerCount as chatListeners } from './chat';
-import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, mapSharedLine, type AskState } from '../../../src/services/dialChat';
+import { askBannerText, askLocked, ASK_NUDGE_TEXT, sharedTunerText, dabFreePhase, dabFreeText, mapBarLine, type AskState } from '../../../src/services/dialChat';
 import { airSeaTuneRows, airSeaTuneChip, TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../../../src/services/airSeaTune';
 import { radiosOf } from '../../../src/services/mapScope';
 import { otherRadiosOffered, sessionOffered, otherRadiosOf, radiosSeen, sessionStart, sessionWindow, withSession, FirstSeen, scopeRadioOk, OTHER_RADIOS_KEY,
@@ -9747,7 +9747,7 @@ function mapSharedSync() {
   const g = mapShBuild();
   const slot = o.v.slot('share');
   if (g.parentElement !== slot) slot.appendChild(g);
-  const st = mapSharedLine({
+  const st = mapBarLine({   // ★★★ beta96 map cards: Stuart's bar words ("Shared VFO: Ask before changing mode or exiting 2/5")
     shared: srvSharedDial, standalone: !spec || (window as any).__vibeMapStandalone === true || (o.v === asView && asViewOnly),
     listeners: listenerCount, max: listenerMax, ask: askNow, scanLocked: scanLockOn,
     said: scanLockOn ? scanLockLine(scanLockPhase, scanLockDone, scanLockTotal) : bannerSaidText || null,
