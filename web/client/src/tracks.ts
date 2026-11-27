@@ -794,7 +794,8 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView .trkTop .exit::before{content:"";width:18px;height:18px;background:linear-gradient(45deg,transparent 43%,#fff 43%,#fff 57%,transparent 57%),linear-gradient(-45deg,transparent 43%,#fff 43%,#fff 57%,transparent 57%)}
 .trkView .trkTop .exit:hover,.trkView .trkTop .exit:focus-visible{background:rgba(160,36,36,.96)!important;outline:2px solid #ffd34d;outline-offset:2px}
 .trkView .mChipsL{top:calc(env(safe-area-inset-top,0px) + 52px + 12px)}
-.trkView .mChipsR{top:env(safe-area-inset-top,0px)}
+.trkView .mChipsR{top:env(safe-area-inset-top,0px);align-items:flex-end}   /* ★ each chip its own width — CHAT is not as wide as RATE */
+.trkView .mChipsR>.mDock{align-self:flex-end}
 .mDock[data-dock="rate"] .hCard{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;padding-right:env(safe-area-inset-right,0px)}
 .trkView.rateOpen .trkCards .sideR{right:0!important;left:auto!important;top:var(--trk-rate-bottom,40px)!important}
 .trkView.rateOpen .trkCards .sideR>.trkCard2[data-card="rate"]{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;width:max(var(--trk-rate-w,160px),240px);transform-origin:top right}
