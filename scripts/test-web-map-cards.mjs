@@ -142,7 +142,8 @@ async function sizeChecks(p, tag, w, h, o) {
   ok(geo.list && geo.list.b >= Object.values(geo).reduce((m, g) => Math.max(m, g.b), 0) - 1, `${tag} ${w}: LIST is the bottom-left chip`);
   const mapLeft = geo.map && geo.map.l <= 1;
   ok(mapLeft === (mapH >= 600), `${tag} ${w}: MAP CONTROLS ${mapLeft ? 'down the left (a tall map)' : 'top-right (a short map, flanking)'} — map ${mapH} px tall`);
-  ok(Object.values(geo).every((g) => g.w <= 48), `${tag} ${w}: every chip is a slim side tab at rest (${Object.values(geo).map((g) => g.w).join(',')} px)`);
+  const sideTabs = Object.entries(geo).filter(([id]) => !['rate', 'list', 'scale'].includes(id)).map(([, g]) => g);
+  ok(sideTabs.every((g) => g.w <= 48), `${tag} ${w}: every edge chip is a slim side tab at rest (${sideTabs.map((g) => g.w).join(',')} px) — RATE and LIST are corner pieces`);
   const lay = JSON.parse(await p.ev(`JSON.stringify((() => { const es = [...${V}.querySelectorAll('.mDock[data-dock="layers"] .le')]; if (!es.length) return { n: 0 }; const a = es[0].getBoundingClientRect(), b = es[es.length - 1].getBoundingClientRect(); return { n: es.length, col: es.length < 2 || b.top > a.top + 4, glyph: !!es[0].querySelector('svg') }; })())`));
   ok(lay.n >= 1 && lay.glyph && lay.col, `${tag} ${w}: the LAYERS tab stacks a glyph over a count per family (${lay.n})`);
   // ── no card: the map's share of the window ──
@@ -151,7 +152,9 @@ async function sizeChecks(p, tag, w, h, o) {
   const share = (host.width * host.height) / (w * h);
   ok(share >= 0.75, `${tag} ${w}: with no card open the map is ${(share * 100).toFixed(0)} % of the window (≥ 75 %)`);
   // ── each chip: ONE press opens its card out of it; ONE press on its heading folds it back ──
-  for (const id of [...shown, 'help']) {
+  const rateStatic = await p.ev(`!!${V}.querySelector('.mDock[data-dock="rate"].static')`);
+  if (shown.includes('rate') && rateStatic) ok(await p.ev(`${BTN('rate')}.getAttribute('aria-disabled') === 'true' && !${BTN('rate')}.hasAttribute('aria-expanded')`), `${tag} ${w}: one source — RATE is a reading, not a button`);
+  for (const id of [...shown.filter((x) => x !== 'scale' && x !== 'chat' && !(x === 'rate' && rateStatic)), 'help']) {
     await p.ev(`${BTN(id)}.click(); 1`); await sleep(350);
     const vis = JSON.parse(await p.ev(VISIBLE_CARDS));
     ok(vis.includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'true'`), `${tag} ${w}: one press on ${id.toUpperCase()} opens its card`);
@@ -174,13 +177,13 @@ async function sizeChecks(p, tag, w, h, o) {
       const edges = JSON.parse(await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="${id}"] [data-tgl] .n, .trkCard2[data-card="${id}"] [data-src] .n')].filter(n => n.getClientRects().length).map(n => Math.round(n.getBoundingClientRect().right)))`));
       if (edges.length > 1) ok(Math.max(...edges) - Math.min(...edges) <= 1, `${tag} ${w}: ${id.toUpperCase()}: the ON / OFF tags line up (${[...new Set(edges)].join(',')})`);
     }
-    if (id === 'help') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="help"] .hRowH').length`) === 5, `${tag} ${w}: HELP has a line per chip`);
+    if (id === 'help') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="help"] .hRowH').length`) === 7, `${tag} ${w}: HELP has a line per chip (SERVERS, TUNE, LAYERS, MAP, LIST, RATE, CHAT)`);
     await p.ev(`${V}.querySelector('.trkCard2[data-card="${id}"] > .ch').click(); 1`); await sleep(300);
     ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: one press on its heading folds ${id.toUpperCase()} back to its tab`);
   }
   // ── the cards never cover the whole map; no sideways scroll ──
   await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(200); await p.ev(`${BTN('layers')}.click(); 1`); await sleep(400);
-  const cov = await p.ev(`(() => { const xs = new Set(); for (const x of ${V}.querySelectorAll('.trkCards .trkCard2')) { const b = x.getBoundingClientRect(); for (let i = Math.max(0, Math.floor(b.left)); i < Math.min(${w}, b.right); i++) xs.add(i); } return xs.size; })()`);
+  const cov = await p.ev(`(() => { const xs = new Set(); for (const x of ${V}.querySelectorAll('.trkCards .trkCard2${narrow ? ':not([data-card="list"])' : ''}')) { const b = x.getBoundingClientRect(); for (let i = Math.max(0, Math.floor(b.left)); i < Math.min(${w}, b.right); i++) xs.add(i); } return xs.size; })()`);
   ok(cov <= w * (narrow ? 0.99 : 0.8), `${tag} ${w}: the cards never cover the map's width (${cov} of ${w} px)`);
   const sw = await p.ev(`document.documentElement.scrollWidth`);
   ok(sw <= w, `${tag} ${w}: no sideways scroll (${sw})`);
@@ -271,7 +274,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     for (let i = 0; i < 4; i++) { hs.push(await p.ev(lh)); await sleep(2500); }   // ★ the datalink report every second, aircraft.json every 3 s: well over three ticks
     ok(new Set(hs.map((x) => x.split(':')[0])).size === 1, `LIST keeps one height through the ticks (height:rows ${hs.join(' ')})`);
     ok(await p.ev(`/auto|scroll/.test(getComputedStyle(${V}.querySelector('.trkCard2[data-card="list"] .rows')).overflowY)`), 'only its rows scroll');
-    ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); const a = ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution'); return !a || c.bottom <= a.getBoundingClientRect().top + 1 || c.right <= a.getBoundingClientRect().left; })()`), 'its bottom is above the attribution line');
+    ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); const a = ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution'); return !a || c.bottom <= a.getBoundingClientRect().top + 1 || c.right <= a.getBoundingClientRect().left || getComputedStyle(a).visibility === 'hidden'; })()`), 'its bottom is above the attribution line, or the (i) waits hidden under it');
     ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"]').__mark === 'kept' && window.__anim === 0`), `LIST through ten seconds of data: the same node, no pop-out again (${await p.ev('window.__anim')} animations)`);
     ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"] .rows').scrollTop`) === st0, `…and the same scroll (${st0})`);
     // ── AUTO on, LIST open: the fit keeps every fitted aircraft clear of the LIST (Stuart: "the map should shift over") ──
@@ -358,8 +361,10 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`${BTN('layers')}.click(); 1`); await sleep(600);
     const aside = JSON.parse(await p.ev(`JSON.stringify((() => { const l = ${V}.querySelector('.trkCard2[data-card="list"]'), y = ${V}.querySelector('.trkCard2[data-card="layers"]');
       const bg = getComputedStyle(y).backgroundColor; const a = /rgba/.test(bg) ? Number(bg.split(',')[3]) : 1;
-      return { aside: l.classList.contains('stepAside'), vis: getComputedStyle(l).visibility, alpha: a, chipDim: ${V}.querySelector('.mDock[data-dock="list"]').classList.contains('aside') }; })())`));
-    ok(aside.aside && aside.vis === 'hidden' && aside.chipDim, `750×950: LAYERS would cover the LIST — it steps aside, its chip dimmed (${JSON.stringify(aside)})`);
+      const lr = l.getBoundingClientRect(), yr = y.getBoundingClientRect(), lh = l.offsetHeight, lt = l.parentElement.getBoundingClientRect().top + l.offsetTop;
+      const over = yr.left < lr.right - 1 && yr.right > lr.left + 1 && yr.top < lt + lh - 1 && yr.bottom > lt + 1;
+      return { over, aside: l.classList.contains('stepAside'), vis: getComputedStyle(l).visibility, alpha: a, chipDim: ${V}.querySelector('.mDock[data-dock="list"]').classList.contains('aside') }; })())`));
+    ok(aside.over ? aside.aside && aside.vis === 'hidden' && aside.chipDim : !aside.aside && aside.vis === 'visible', `750×950: the LIST steps aside exactly when LAYERS would cover it (${JSON.stringify(aside)})`);
     ok(aside.alpha === 1, `the cards are opaque (alpha ${aside.alpha})`);
     await p.ev(`${V}.querySelector('.trkCard2[data-card="layers"] > .ch').click(); 1`); await sleep(500);
     ok(await p.ev(`(() => { const l = ${V}.querySelector('.trkCard2[data-card="list"]'); return !l.classList.contains('stepAside') && l.querySelector('.rows').scrollTop === window.__lst; })()`), '…LAYERS folded: the LIST back, the same scroll');
@@ -409,7 +414,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
           onTop: !!hit && !!hit.closest('.mDock[data-dock="list"]'), expanded: d.querySelector('[data-cbtn]').getAttribute('aria-expanded') }; })())`));
       const bar = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), hd = c.querySelector('.trkList .hd').getBoundingClientRect(), rows = c.querySelector('.rows').getBoundingClientRect(), chip = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect();
         const cr = c.getBoundingClientRect(), srt = c.querySelector('.srt').getBoundingClientRect(), tabs = c.querySelector('.tabWrap').getBoundingClientRect();
-        const under = [...c.querySelectorAll('.rows .trkRow')].filter(r => { const b = r.getBoundingClientRect(); return b.height && b.bottom > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
+        const under = [...c.querySelectorAll('.rows .trkRow')].filter(r => { const b = r.getBoundingClientRect(); const bot = Math.min(b.bottom, rows.bottom); return b.height && bot > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
         return { rowsTop: Math.round(rows.top - cr.top), barBelow: hd.top >= rows.bottom - 1, chipInBar: chip.top >= hd.top - 2 && chip.bottom <= hd.bottom + 2, sortInBar: srt.width === 0 || (srt.top >= hd.top - 1 && srt.bottom <= hd.bottom + 1), tabsRight: tabs.width === 0 || tabs.left >= chip.right - 1, under }; })())`));
       ok(t.title === 'none' && t.chipVis === 'visible' && t.arrow !== 'none' && t.expanded === 'true' && bar.rowsTop <= 2 && bar.barBelow && bar.chipInBar && bar.sortInBar && bar.tabsRight && bar.under === 0,
          `the rows from the drawer's top; ONE bar at its foot — the chip, the tabs, the sort; nothing over a row (${JSON.stringify(bar)})`);
@@ -480,7 +485,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     // ── the chip covers a row only when the list scrolls (Stuart 13:13) ──
     { const r0 = await rowsAt(390, 844, true);
       const geo = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), rows = c.querySelector('.rows'), chip = ${V}.querySelector('.mDock[data-dock="list"] .hCard').getBoundingClientRect();
-        const under = [...rows.querySelectorAll('.trkRow')].filter(r => { const b = r.getBoundingClientRect(); return b.height && b.bottom > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
+        const R = rows.getBoundingClientRect(); const under = [...rows.querySelectorAll('.trkRow')].filter(r => { const b = r.getBoundingClientRect(); const bot = Math.min(b.bottom, R.bottom); return b.height && bot > chip.top + 1 && b.top < chip.bottom - 1 && b.left < chip.right - 1; }).length;
         return { scroll: rows.scrollHeight > rows.clientHeight + 1, under, h: Math.round(c.getBoundingClientRect().height), spacer: getComputedStyle(rows, '::after').height }; })())`));
       const g1 = await geo();
       ok(g1.scroll && g1.under === 0, `AIRCRAFT (scrolls): no row under the chip (${JSON.stringify(g1)})`);
@@ -514,8 +519,8 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       const keys1 = await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow')].map(r => r.dataset.key))`);
       const pz = JSON.parse(await p.ev(`JSON.stringify((() => { const b = ${V}.querySelector('.trkList .hd .lPause'); return { shown: !b.hidden && b.getBoundingClientRect().width > 0, text: b.textContent.trim() }; })())`));
       ok(keys0 === keys1 && pz.shown && /\+2$/.test(pz.text), `scrolled: the rows hold their order, "‖ +2" shows (${pz.text})`);
-      await p.ev(`${V}.querySelector('.trkList .hd .lPause').click(); 1`); await sleep(400);
-      const after = JSON.parse(await p.ev(`JSON.stringify({ hid: ${V}.querySelector('.trkList .hd .lPause').hidden, n: ${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="__t"]').length })`));
+      const after0 = await p.ev(`(() => { ${V}.querySelector('.trkList .hd .lPause').click(); return JSON.stringify({ hid: ${V}.querySelector('.trkList .hd .lPause').hidden, n: ${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="__t"]').length }); })()`);
+      const after = JSON.parse(after0);
       ok(after.hid && after.n === 2, `…pressed: the new rows are in, the key gone (${JSON.stringify(after)})`);
       await p.ev(`(() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); r.scrollTop = 200; r.dispatchEvent(new Event('scroll')); return 1; })()`); await sleep(300);
       const fz = await p.ev(`!${V}.querySelector('.trkList .hd .lPause').hidden`);

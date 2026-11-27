@@ -644,7 +644,7 @@ const CSS = `
 .trkCard2 .mRow .nm b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .trkCard2 .mRow .nm small{font:500 11px/1.25 system-ui,sans-serif;color:#93a3b4}
 .trkCard2 .mRow .n{margin-left:auto;font:700 12.5px/1 ui-monospace,Menlo,monospace;color:#ffd34d;white-space:nowrap}
-.trkCard2 .mRow::after{content:"ON";flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787}
+.trkCard2 .mRow::after{content:"ON";flex:none;box-sizing:border-box;width:30px;text-align:center;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787}
 .trkCard2 .mRow[aria-pressed="false"]{color:#7f93a7}
 .trkCard2 .mRow[aria-pressed="false"] .n{color:#7f93a7}
 .trkCard2 .mRow[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
@@ -757,6 +757,9 @@ const CSS = `
 /* ★★★ Stuart 12:50–12:56 NO TOP BAR — the map runs to the top. The bar's pieces float over it: the big round X top-left
  *  (red-tinted, never an edge tab), the shared-tuner pill top-centre (tap = chat), RATE then CHAT down the right edge, the
  *  zoom below them. The old bar element stays for the drivers (its status line is off-screen), out of the flow. */
+/* ★ Stuart 14:12: nothing under a full-screen map keeps the page composing — the radio page's breathing dots, marquees
+ *  and pulses pause while a map is up (body.trkMapUp, set by show / hide) */
+body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-state:paused!important}
 .trkView .trkTop{position:absolute!important;left:0;right:0;top:0;z-index:801;background:none!important;border:0!important;box-shadow:none!important;min-height:0!important;
   padding:calc(env(safe-area-inset-top,0px) + 10px) var(--trk-pill-pad,72px) 0!important;display:flex!important;flex-wrap:wrap!important;justify-content:center;align-items:flex-start;gap:6px;pointer-events:none}
 .trkView .trkTop>*{pointer-events:auto}
@@ -926,7 +929,7 @@ const CSS = `
 .trkCard2 .mRow .n{min-width:4.5ch;text-align:right}
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"]{color:#7f93a7}
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"] .n{color:#7f93a7}
-.trkCard2[data-card="layers"] .tgl .btn.chip::after{content:"ON";flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787;margin-left:8px}
+.trkCard2[data-card="layers"] .tgl .btn.chip::after{content:"ON";flex:none;box-sizing:border-box;width:30px;text-align:center;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787;margin-left:8px}
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"]::after{content:"OFF";background:#2a1d1d;color:#ff8a6b}
 .trkCard2[data-card="layers"] .tgl .btn.chip.live::before{margin-right:-4px}
 /* ★ tweak 4: a tucked tab wears its chip's own glyph (the health pill's + is its own) */
@@ -1301,6 +1304,7 @@ export class TrackView {
       if (this.dialRefuses(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
     }, { capture: true });
     document.body.appendChild(r);
+    if (/[?&]perf=1\b/.test(location.search)) perfOverlay();
   }
   /* ── ★★★ beta96 THE CARDS (Stuart 11-27) ─────────────────────────────────────────────────────────────────────────────
    *  ONE card on a phone-width window (opening another shuts the first); wider windows take more, side by side in columns
@@ -1415,7 +1419,7 @@ export class TrackView {
     { /* ★★★ Stuart 11-27: a TALL window puts every chip down the LEFT (SERVERS, TUNE, LAYERS, MAP CONTROLS; LIST bottom-left);
        *  a shorter one flanks — MAP CONTROLS top-right. By the window, live as it is resized. */
       // ★ the whole stack measured: every offered chip's own height (a tucked one counts as out — no flapping as it tucks)
-      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden && d.dataset.dock !== 'rate' && d.dataset.dock !== 'chat' && d.dataset.dock !== 'scale');
+      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden && d.dataset.dock !== 'rate' && d.dataset.dock !== 'chat');   // ★ the scale counted, as when the one-side rule was calibrated
       const xH = ((this.root.querySelector('.trkTop .exit') as HTMLElement | null)?.offsetHeight || 48) + 14;   // ★ the X above SERVERS
       const stackH = docks.reduce((t, d) => t + Math.max(40, (d.querySelector('.hCard') as HTMLElement).offsetHeight) + 8, 16 + xH);
       const one = oneSide(this.mapHost.clientHeight || 0, stackH);
@@ -2442,6 +2446,7 @@ export class TrackView {
   }
 
   show(rx: LatLon | null) {
+    document.body.classList.add('trkMapUp');
     this.rx = rx;
     (window as any).__vibeTrkView = this;   // ★ for drivers (scripts/test-web-map-cards.mjs): the view last shown
     if (this.open) return;
@@ -2463,6 +2468,7 @@ export class TrackView {
     this.tuneOpen(false);
     this.cardsTell(new Set());   // ★ every card the host filled gives its nodes back (CHAT's log and replies)
     this.root.hidden = true;
+    if (!document.querySelector('.trkView:not([hidden])')) document.body.classList.remove('trkMapUp');
     this.attribObs?.disconnect(); this.attribObs = null;
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];
@@ -2859,4 +2865,45 @@ export function aisSafetyHtml(r: AisReport): string {
   // ★ V12 2026-11-16 area notices and text descriptions (binary messages): after the safety texts, newest first, two at most
   const notes = (r.notices || []).slice(-2).reverse().map((n) => `<div>ℹ <b>${esc(n.name || 'MMSI ' + n.mmsi)}</b>: ${esc(n.text)} <span style="opacity:.7">· ${esc(ago(n.age))} ago</span></div>`);
   return [...safety, ...notes].join('');
+}
+
+/* ★★ ?perf=1 — a tiny on-page meter (Stuart reads it in Safari, where we cannot trace WebKit headless): rAF callbacks,
+ *  MapLibre renders, setData calls a second, and the worst main-thread stall (a 100 ms heartbeat's lateness — Safari has
+ *  no long-task API). Off unless asked for; nothing here runs otherwise. */
+function perfOverlay() {
+  if ((window as any).__perfOn) return; (window as any).__perfOn = true;
+  const c = { raf: 0, render: 0, setData: 0, lag: 0 };
+  let mode = 'ambient', modeT: ReturnType<typeof setTimeout> | null = null;
+  const oRaf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = (cb: FrameRequestCallback) => oRaf((t) => { c.raf++; cb(t); });
+  const hook = () => {
+    const ml = (window as any).maplibregl; if (!ml || ml.__perf) return !!ml?.__perf; ml.__perf = true;
+    const P = ml.Map.prototype, oR = P._render; if (oR) P._render = function (...a: any[]) { c.render++; return oR.apply(this, a); };
+    // ★ the frame-rate mode: a finger on the map (MapLibre's own loop, full rate) or ambient (≤ 30 fps)
+    const oF = P.fire; if (oF) P.fire = function (ev: any, ...a: any[]) { const t = typeof ev === 'string' ? ev : ev?.type; const oe = typeof ev === 'object' && ev?.originalEvent;
+      if (t === 'movestart' && oe) { mode = 'max: gesture'; if (modeT) clearTimeout(modeT); } else if (t === 'moveend' && mode !== 'ambient') { if (modeT) clearTimeout(modeT); modeT = setTimeout(() => { mode = 'ambient'; }, 300); }
+      return oF.call(this, ev, ...a); };
+    const G = ml.GeoJSONSource?.prototype; if (G) { const oS = G.setData; G.setData = function (...a: any[]) { c.setData++; return oS.apply(this, a); }; }
+    return true;
+  };
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:50%;bottom:4px;transform:translateX(-50%);z-index:99999;background:rgba(0,0,0,.8);color:#7fff9a;font:11px/1.3 ui-monospace,Menlo,monospace;padding:4px 8px;border-radius:6px;pointer-events:none;white-space:pre';
+  document.body.appendChild(box);
+  // the overlay's own frame clock (it ticks only while the overlay is on — ?perf=1): the frames the browser actually runs
+  /* ★ no frame meter of its own: a requestAnimationFrame loop ticks at the display's rate whether or not anything is
+   *  drawn (it read 60 while the map drew 4) and it would keep the page awake. MAP RENDERS is the presented-frames
+   *  figure — every frame the map draws is one MapLibre render. */
+  let last = performance.now();
+  setInterval(() => { const t = performance.now(); c.lag = Math.max(c.lag, t - last - 100); last = t; }, 100);
+  setInterval(() => {
+    hook();
+    const g = ((window as any).__vsGpu || []).filter((x: any) => x).slice(-1)[0];
+    const gs = g ? g.stats() : null;
+    const why = gs && gs.why ? Object.entries(gs.why).map(([k, v]) => `${k} ${v}`).join(', ') : '';
+    const gpuWords = !gs ? 'GPU layer: none' : gs.ok ? `GPU layer: OK (${gs.n}) · ambient ${gs.fps} fps for ${gs.pxs} px/s${why ? ` · easing: ${why}` : ''}` : `GPU layer: failed — ${gs.err || 'not started'}`;
+    const anims = (document as any).getAnimations ? (document as any).getAnimations().filter((a: any) => a.playState === 'running').length : -1;
+    const modeW = mode.startsWith('max') ? mode : gs && gs.ok ? `ambient ${gs.fps} fps` : 'ambient';
+    box.textContent = `${modeW} · page rAF ${c.raf}/s · map renders ${c.render}/s · setData ${c.setData}/s · CSS animations ${anims} · worst stall ${Math.round(c.lag)} ms\n${gpuWords}`;
+    c.raf = 0; c.render = 0; c.setData = 0; c.lag = 0;
+  }, 1000);
 }

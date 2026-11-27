@@ -1526,11 +1526,55 @@
                     paint: { 'text-color': T.label, 'text-halo-color': T.halo, 'text-halo-width': 1.2, 'text-opacity': ['get', 'lo'] } });
       rxImage();
       glReady = true;
+      gpuStart();
       drawRx(); drawRings(); drawRange();
       kick();
     }
+    /* ★★★ the GPU marker layer (GpuMarkers above): the aircraft icons drawn and dead-reckoned on the GPU; the symbol
+     *  layer keeps the labels, the halo and the ring (moved at the half-pixel rule, a few times a second at most). */
+    let gpu = null, gpuOn = false, gpuSig = '';
+    function gpuStart() {
+      if (gpu || !GpuMarkers || /[?&]gpu=0\b/.test((global.location && global.location.search) || '')) return;
+      gpu = GpuMarkers.create(gl, { id: 'vsadsb-gpu', iconBox: ICON_BOX, dpr: DPR, beforeId: 'vsadsb-labels',
+        iconFor: (key) => { const k = key.split('|'); return iconImage(k[0], TONE[k[1]], k[1] === 'ground' ? 0.8 : 0.92, k[2] === 'g', DPR); },
+        onReady: () => { if (!gpu || !gpu.ok || destroyed) return; gpuOn = true; gpuSig = ''; symVis('none'); forceFlush = true; kick(); },
+        onFail: () => { gpuOn = false; symVis('visible'); forceFlush = true; if (!destroyed) kick(); } });
+    }
+    function symVis(v) {
+      for (const id of ['vsadsb-icons', 'vsadsb-labels', 'vsadsb-halo', 'vsadsb-ring']) { try { if (gl.getLayer(id)) gl.setLayoutProperty(id, 'visibility', v); } catch (e) { /* none */ } }
+      if (v === 'none') { try { const src = gl.getSource('vsadsb-ac'); if (src) src.setData({ type: 'FeatureCollection', features: [] }); } catch (e) { /* none */ } }
+    }
+    /** The aircraft as the GPU layer's markers — written only when something the shader cannot work out has changed. */
+    function gpuSync(t) {
+      if (!gpuOn) return;
+      let sig = (selected || '') + th;
+      for (const s of ac.values()) if (s.fix) {
+        const lw = !!(s.lblWant && !s.goneAt);
+        if (lw && !s.gLbl) s.gLblAt = t;
+        s.gLbl = lw;
+        sig += s.hex + s.fix.t + toneKey(s.a) + s.kind + (s.goneAt || 0) + (s.corr ? s.corr.t0 : 0) + (s.fadeIn ? 'f' : '') + (s.bornAt ? 'b' : '') + (lw ? labelText(s) + labelAltColour(s) : '');
+      }
+      if (sig === gpuSig) return;
+      gpuSig = sig;
+      const list = [];
+      for (const s of ac.values()) {
+        if (!s.fix) continue;
+        const tone = toneKey(s.a), glow = s.hex === selected;
+        const to = s.fix.track != null && isFinite(s.fix.track) ? s.fix.track : (s.hdg || 0);
+        if (s.gpuTo !== to) { const fr = s.gpuTo != null ? s.gpuTo : (s.hdg != null ? s.hdg : to); s.gpuFrom = Math.abs(angleTo(fr, to)) < 3 ? to : fr; s.gpuTo = to; s.gpuT0 = t; }
+        list.push({ id: s.hex, lat: s.fix.lat, lon: s.fix.lon, t: s.fix.t, gs: s.fix.gs, track: s.fix.track, maxDrMs: MAX_DR_S * 1000,
+                    key: s.kind + '|' + tone + '|' + (glow ? 'g' : '') + '|' + th, hdgFrom: s.gpuFrom, hdgTo: s.gpuTo, hdgT0: s.gpuT0,
+                    noRotate: !!NO_ROTATE[s.kind], corr: s.corr ? { dLat: s.corr.dLat, dLon: s.corr.dLon, t0: s.corr.t0, ms: s.corr.ms || GLIDE_MS } : null,
+                    shownAt: s.fadeIn ? s.shownAt : null, goneAt: s.goneAt || null, fadeInMs: FADE_IN_MS, fadeOutMs: FADE_OUT_MS,
+                    z: glow ? 1000 : tone === 'alert' ? 900 : (s.a.alt_baro === 'ground' ? 0 : 1),
+                    bornAt: s.bornAt && t - s.bornAt < RING_MS * RING_REPEATS ? s.bornAt : null, rgb: String(TONE[tone] || '255,255,255').split(',').map(Number),
+                    label: s.gLbl ? { l1: labelName(s), l2: labelAlt(s), c2: labelAltColour(s), col: T.label, halo: T.halo, at: s.gLblAt } : null });
+      }
+      gpu.set(list);
+    }
     function hitHex(point) { return hitHexR(point, 12); }
     function hitHexR(point, r) {
+      if (gpuOn) return gpu.pick(point, r);
       const f = gl.queryRenderedFeatures([[point.x - r, point.y - r], [point.x + r, point.y + r]], { layers: ['vsadsb-icons'] });
       if (!f.length) return null;
       // ★ The nearest of whatever is under the finger, not the first MapLibre happened to list.
@@ -1559,8 +1603,9 @@
       if (gl.isStyleLoaded && gl.isStyleLoaded()) glSetup(); else gl.once('load', glSetup);
       gl.on('click', onGlClick);
       gl.on('mousemove', onGlHover);
+      gl.on('moveend', () => { if (gpuOn && !destroyed) { forceFlush = true; kick(); } });   // ★ the labels' on-screen set follows a pan
       // ★ A vm whose style arrives later: setStyle({diff:false}) fires style.load, after which our sources are gone.
-      gl.on('style.load', () => { if (!gl.getSource('vsadsb-ac')) { glReady = false; imgs.clear(); glSetup(); } });
+      gl.on('style.load', () => { if (!gl.getSource('vsadsb-ac')) { glReady = false; imgs.clear(); if (gpu) { gpu.destroy(); gpu = null; gpuOn = false; } glSetup(); } });
       gl.on('styleimagemissing', (e) => {
         const m = /^vsadsb-(dark|light)-([a-z0-9]+)-([a-z]+)(-g)?$/.exec(e.id || '');
         if (m && m[1] === th) imgId(m[2], m[3], !!m[4]);
@@ -2001,17 +2046,20 @@
     }
 
     /* ── the frame loop ─────────────────────────────────────────────────────────────────────── */
-    /* ★★★ beta96 IDLE COST (Stuart 11-27 13:18: "my iphone started burning my leg"; Safari 14.6 % CPU and the GPU at a
-     *  steady 64 fps on his Mac with the map left alone). Every moving aircraft was dead-reckoned and the whole layer
-     *  setData'd 18–30 times a second — each setData costs MapLibre a worker parse and two or three repaints, so the map
-     *  never stopped drawing. At map scale 2–4 positions a second read as smooth: GPU layer 4 Hz (2 Hz past 60 aircraft),
-     *  DOM markers 2 Hz. Between those steps NOTHING runs — the wait is a timer, never a spinning rAF — so the map draws no
-     *  frame and the page sleeps. */
+    /* ★★★ beta96 IDLE COST, SMOOTH (Stuart 11-27 13:18 "my iphone started burning my leg" — Safari 14.6 %, the GPU at a
+     *  steady 64 fps with the map left alone; then 13:30 "the older map is smoother" after a 2 Hz throttle). Every moving
+     *  aircraft was dead-reckoned and the whole layer setData'd 18–30 times a second — each setData a worker parse and two
+     *  or three repaints — though at country zoom a jet moves a tenth of a pixel a second. Now a flush happens only when
+     *  something has VISIBLY changed: an aircraft half a pixel from where it was last drawn (at the map's own zoom), a
+     *  turn of 2°, a fade, a ring, a label easing. Zoomed in, that is as smooth as before (up to 30 fps); zoomed out it is
+     *  a frame every few seconds. Between flushes nothing runs — the wait is a timer sized to the fastest aircraft's next
+     *  half pixel, never a spinning rAF — so the map draws no frame and the page sleeps. DOM markers (Leaflet) 2 Hz. */
     function frameGap(n) {
-      if (lm) return 500;
-      return n > 60 ? 500 : 250;
+      void n;
+      return lm ? 500 : 33;   // ★ with the GPU drawing the icons this loop only moves the labels — only what is on screen, at the half-pixel rule
     }
-    let waitT = 0;
+    const MOVE_PX = 0.5, TURN_DEG = 2;
+    let waitT = 0, forceFlush = true;
     function kick() { if (!rafId && !waitT && !destroyed) rafId = requestAnimationFrame(frame); }
     let lastT = 0;
     function frame() {
@@ -2019,8 +2067,9 @@
       if (destroyed) return;
       const t = now();
       const n = ac.size;
-      const gap = frameGap(n);
-      if (gap && t - lastFlush < gap) { waitT = setTimeout(() => { waitT = 0; kick(); }, gap - (t - lastFlush)); return; }
+      // ★ the GPU draws the motion: this loop runs at most twice a second (ten with a card open), whoever kicks it
+      const gap = gpuOn ? (popup ? 100 : 500) : frameGap(n);
+      if (gap && t - lastFlush < gap && !forceFlush) { if (!waitT) waitT = setTimeout(() => { waitT = 0; kick(); }, gap - (t - lastFlush)); return; }
       const dt = lastT ? Math.min(250, t - lastT) : 16; lastT = t;
       lastFlush = t;
       let animating = false;
@@ -2045,7 +2094,46 @@
             || (s.fadeIn && t - s.shownAt < FADE_IN_MS)) animating = true;
       }
       if (t - labelAt > LABEL_EVERY_MS) { labelAt = t; decideLabels(); }
-      if (gl) flushGl(t); else flushLl(t);
+      if (gl && gpuOn) {
+        /* ★★★ Stuart 14:00 ("anything that moves, GPU"): icons, labels and the new-aircraft rings are the GPU layer's —
+         *  no setData for the aircraft at all. This loop now only decides the labels, keeps the trail and an open card's
+         *  place, and hands the GPU new attributes when the data changes: 2 a second (10 with a card open). */
+        gpuSync(t);
+        if (drawTrail(t)) animating = true;
+        if (popup && selected && ac.has(selected)) { const s = ac.get(selected); if (s.disp) popup.setLngLat([s.disp.lon, s.disp.lat]); }
+        forceFlush = false;
+        if (animating && !waitT && !destroyed) waitT = setTimeout(() => { waitT = 0; kick(); }, popup ? 100 : 500);
+        return;
+      }
+      if (gl) {
+        // ★ only when something has visibly changed (above): the half-pixel test at the map's zoom, else wait for it
+        const z = gl.getZoom ? gl.getZoom() : 8, ppd = 512 * Math.pow(2, z) / 360;   // CSS px per degree of longitude (512-px tiles)
+        const MOVE = gpuOn ? 1.5 : MOVE_PX;
+        let moved = forceFlush, fastest = 0;
+        let vb2 = null;
+        if (gpuOn) { try { const b = gl.getBounds(); vb2 = b; } catch (e) { vb2 = null; } }
+        for (const s of ac.values()) {
+          if (!s.disp) continue;
+          if (vb2 && !vb2.contains([s.disp.lon, s.disp.lat])) continue;
+          const ky = ppd / Math.max(0.2, Math.cos(s.disp.lat * Math.PI / 180));
+          if (s.goneAt || (!gpuOn && (s.fadeIn || s.corr)) || (s.lo != null && s.lo !== (s.lblWant && !s.goneAt ? 1 : 0)) || (s.bornAt && t - s.bornAt < RING_MS * RING_REPEATS)) moved = true;
+          if (!s.fl) { moved = true; continue; }
+          const px = Math.max(Math.abs(s.disp.lon - s.fl.lon) * ppd, Math.abs(s.disp.lat - s.fl.lat) * ky);
+          if (px >= MOVE || (!gpuOn && Math.abs(angleTo(s.fl.h || 0, s.hdg || 0)) >= TURN_DEG)) moved = true;
+          if (s.fix && s.fix.gs > 0) fastest = Math.max(fastest, (s.fix.gs * 1.852 / 3600 / 111.32) * ky);   // px a second
+        }
+        if (moved) {
+          forceFlush = false;
+          flushGl(t);
+          for (const s of ac.values()) if (s.disp) s.fl = { lat: s.disp.lat, lon: s.disp.lon, h: s.hdg || 0 };
+        } else if (animating && fastest > 0) {
+          // nothing visible yet: sleep until the fastest aircraft is due its next half pixel (≤ 2 s)
+          const wait = Math.min(2000, Math.max(33, (MOVE / fastest) * 1000));
+          if (drawTrail(t)) { /* the trail keeps its own pace */ }
+          if (!waitT && !destroyed) waitT = setTimeout(() => { waitT = 0; kick(); }, wait);
+          return;
+        }
+      } else flushLl(t);
       if (drawTrail(t)) animating = true;
       if (popup && selected && ac.has(selected)) {
         const s = ac.get(selected);
@@ -2097,8 +2185,13 @@
       if (!src) return;
       const feats = [];
       let anyLblAnim = false;
+      // ★ with the GPU drawing the icons, the labels' source carries only what is on screen (and a margin): close up a
+      //   handful of features at the frame rate, far out all of them a few times a minute
+      let vb = null;
+      if (gpuOn) { try { const b = gl.getBounds(), w = b.getEast() - b.getWest(), h = b.getNorth() - b.getSouth(); vb = { w: b.getWest() - w * 0.2, e: b.getEast() + w * 0.2, s: b.getSouth() - h * 0.2, n: b.getNorth() + h * 0.2 }; } catch (e) { vb = null; } }
       for (const s of ac.values()) {
         if (!s.disp) continue;
+        if (vb && (s.disp.lon < vb.w || s.disp.lon > vb.e || s.disp.lat < vb.s || s.disp.lat > vb.n) && s.hex !== selected) continue;
         const tone = toneKey(s.a);
         const glow = s.hex === selected;
         let op = 1;
@@ -2267,6 +2360,7 @@
         try { if (dprMq) dprMq.removeEventListener('change', dprChanged); } catch (e) { /* gone */ }
         if (rafId) cancelAnimationFrame(rafId);
         if (waitT) { clearTimeout(waitT); waitT = 0; }
+        if (gpu) { gpu.destroy(); gpu = null; gpuOn = false; }
         if (rangeTimer) clearInterval(rangeTimer);
         if (rangeDrawTimer) clearTimeout(rangeDrawTimer);
         doc.removeEventListener('visibilitychange', onVis);
@@ -2294,8 +2388,336 @@
     return api;
   }
 
+  /* ══════════════════════════════════════════════════════════════════════════════════════════════
+   * ★★★ beta96 THE GPU MARKER LAYER (Stuart 11-27: "use the gpu where possible"; docs/v12/MAP-TEMPLATE.md) — moving
+   * markers drawn by ONE MapLibre custom WebGL layer: each marker's last fix, its velocity, its correction glide, its
+   * heading ease and its fade go up as vertex attributes ONLY when the data changes; every frame sets one uniform (the
+   * time) and the vertex shader dead-reckons, rotates and fades. One draw call a frame, next to no CPU.
+   *   • 30 fps ambient, and only while something on screen would visibly move (half a pixel at this zoom) or a glide /
+   *     fade / turn is under way — a timer drives map.triggerRepaint(); nothing moving → no frames at all. A finger on
+   *     the map is MapLibre's own render loop (the display's full rate), which draws this layer as it goes.
+   *   • Icons: one texture atlas of canvas-drawn glyphs (iconFor(key) → ImageData, cached by key).
+   *   • Picking on demand (pick(point, r)) against the positions extrapolated at that moment.
+   *   • WebGL1 and 2; any failure to initialise → ok false, the host keeps its symbol-layer path.
+   * Generic: ADS-B uses it first; any map with moving markers (ships, sondes, APRS…) can host it.
+   * create(map, { iconBox, dpr, beforeId, iconFor }) → { ok, set(markers), pick(point, r), poke(), destroy() }
+   *   marker = { id, lat, lon, t (performance.now ms of the fix), gs (knots), track (deg), maxDrMs, key (icon),
+   *              hdgFrom, hdgTo, hdgT0, noRotate, corr: { dLat, dLon, t0, ms } | null, shownAt, goneAt, fadeInMs,
+   *              fadeOutMs, z }
+   * ══════════════════════════════════════════════════════════════════════════════════════════════ */
+  const GpuMarkers = (function () {
+    const VS = [
+      'precision highp float;',
+      'attribute vec2 a_pos; attribute vec2 a_vel; attribute vec4 a_time; attribute vec2 a_corr; attribute vec2 a_corner;',
+      'attribute vec4 a_rot; attribute vec2 a_uv; attribute vec4 a_fade; attribute vec4 a_quad; attribute vec2 a_uvs; attribute vec4 a_kind;',
+      'uniform mat4 u_mvp; uniform float u_now; uniform vec2 u_px; uniform float u_bearing;',
+      'varying vec2 v_uv; varying float v_op; varying float v_kind; varying vec3 v_col; varying float v_r;',
+      'float ease(float k) { return k < 0.5 ? 4.0 * k * k * k : 1.0 - pow(-2.0 * k + 2.0, 3.0) / 2.0; }',
+      'void main() {',
+      '  float dt = clamp(u_now - a_time.x, 0.0, a_time.w);',
+      '  vec2 p = a_pos + a_vel * dt;',
+      '  if (a_time.z > 0.0) { float k = clamp((u_now - a_time.y) / a_time.z, 0.0, 1.0); p += a_corr * (1.0 - ease(k)); }',
+      '  vec4 c = u_mvp * vec4(p, 0.0, 1.0);',
+      '  float hk = clamp((u_now - a_rot.z) / 400.0, 0.0, 1.0);',
+      '  float d = mod(a_rot.y - a_rot.x + 540.0, 360.0) - 180.0;',
+      '  float h = a_rot.w > 0.5 ? 0.0 : radians(a_rot.x + d * hk) - u_bearing;',
+      '  float cs = cos(h), sn = sin(h);',
+      '  vec2 q = a_corner * a_quad.zw;',
+      '  vec2 o = vec2(q.x * cs + q.y * sn, -q.x * sn + q.y * cs) + a_quad.xy;',
+      '  c.xy += o * u_px * c.w;',
+      '  gl_Position = c;',
+      '  v_kind = a_kind.x; v_col = a_kind.yzw / 255.0;',
+      '  v_uv = a_kind.x > 1.5 ? a_corner : a_uv + vec2(a_corner.x * 0.5 + 0.5, 0.5 - a_corner.y * 0.5) * a_uvs;',
+      '  float op = 1.0;',
+      '  if (a_fade.y >= 0.0) op = clamp(1.0 - (u_now - a_fade.y) / a_fade.w, 0.0, 1.0);',
+      '  else if (a_fade.x >= 0.0) op = clamp((u_now - a_fade.x) / a_fade.z, 0.0, 1.0);',
+      '  v_r = 0.0;',
+      '  if (a_kind.x > 1.5) {',   // the new aircraft's ring: three 1.4 s swells from its birth (a_fade.x)
+      '    float k = (u_now - a_fade.x) / 1400.0;',
+      '    float f = fract(k); float e = 1.0 - (1.0 - f) * (1.0 - f) * (1.0 - f);',
+      '    v_r = (13.0 + 26.0 * e) / a_quad.z; op = (k < 0.0 || k > 3.0) ? 0.0 : 0.8 * (1.0 - e);',
+      '  }',
+      '  v_op = op;',
+      '}'].join('\n');
+    const FS = ['precision mediump float;', 'uniform sampler2D u_tex; varying vec2 v_uv; varying float v_op; varying float v_kind; varying vec3 v_col; varying float v_r;',
+      'void main() {',
+      '  if (v_kind > 1.5) { float dd = length(v_uv); float a = 1.0 - smoothstep(0.0, 0.06, abs(dd - v_r)); gl_FragColor = vec4(v_col, 1.0) * a * v_op; }',
+      '  else gl_FragColor = texture2D(u_tex, v_uv) * v_op;',
+      '}'].join('\n');
+    const ATTRS = [['a_pos', 2], ['a_vel', 2], ['a_time', 4], ['a_corr', 2], ['a_corner', 2], ['a_rot', 4], ['a_uv', 2], ['a_fade', 4], ['a_quad', 4], ['a_uvs', 2], ['a_kind', 4]];
+    const FLOATS = ATTRS.reduce((t, a) => t + a[1], 0);
+    const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+    const R = 6371.0088 / 1.852;   // the earth in nautical miles
+    const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+    /** A growable 2-D atlas of equal slots, uploaded whole when it grows, slot by slot after. */
+    function Atlas(sw, sh, cols) {
+      const a = { sw, sh, cols, rows: 0, cv: null, cx: null, full: true, dirty: [], free: [], n: 0 };
+      a.alloc = () => {
+        const s = a.free.length ? a.free.pop() : a.n++;
+        const need = Math.floor(s / cols) + 1;
+        if (need > a.rows) {
+          const old = a.cv; a.rows = Math.max(need, a.rows * 2 || 2);
+          a.cv = document.createElement('canvas'); a.cv.width = cols * sw; a.cv.height = a.rows * sh;
+          a.cx = a.cv.getContext('2d'); if (old) a.cx.drawImage(old, 0, 0);
+          a.full = true;
+        }
+        return s;
+      };
+      a.xy = (s) => [(s % cols) * sw, Math.floor(s / cols) * sh];
+      a.uv = (s) => [(s % cols) / cols, Math.floor(s / cols) / a.rows, 1 / cols, 1 / a.rows];
+      a.upload = (g, tex) => {
+        if (!a.cv) return;
+        g.bindTexture(g.TEXTURE_2D, tex);
+        g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+        if (a.full) {
+          g.texImage2D(g.TEXTURE_2D, 0, g.RGBA, g.RGBA, g.UNSIGNED_BYTE, a.cv);
+          g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.LINEAR);
+          g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, g.CLAMP_TO_EDGE); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, g.CLAMP_TO_EDGE);
+          a.full = false; a.dirty = [];
+        } else for (const s of a.dirty) { const [x, y] = a.xy(s); g.texSubImage2D(g.TEXTURE_2D, 0, x, y, g.RGBA, g.UNSIGNED_BYTE, a.cx.getImageData(x, y, sw, sh)); }
+        a.dirty = [];
+        g.pixelStorei(g.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      };
+      return a;
+    }
+
+    function create(map, o) {
+      const ML = (typeof window !== 'undefined' && window.maplibregl) || null;
+      const box = o.iconBox || 40, dpr = o.dpr || 1, S = Math.ceil(box * dpr);
+      const LW = o.labelW || 120, LH = o.labelH || 28;
+      let drawN = 0, lastErr = '', checked = false;
+      const api = { ok: false, fps: 0, pxs: 0, set, pick, poke, destroy,
+                    stats: () => ({ n, labels: nl, ok: api.ok, draws: drawN, err: lastErr, fps: api.fps || 0, pxs: api.pxs || 0, why: api.why }) };
+      function fail(why) { lastErr = why; console.error('gpumarkers: ' + why + ' — the symbol path draws the markers'); if (api.ok) { api.ok = false; o.onFail && o.onFail(new Error(why)); } }
+      if (!ML || !ML.MercatorCoordinate) return api;
+      const merc = (lon, lat) => { const m = ML.MercatorCoordinate.fromLngLat({ lng: lon, lat }); return [m.x, m.y]; };
+      const T0 = nowMs();
+      let glc = null, prog = null, bufI = null, bufL = null, texI = null, texL = null, loc = {}, n = 0, nl = 0, dead = false;
+      let markers = [];
+      const icons = Atlas(S, S, 8), iconSlot = new Map();
+      const labels = Atlas(Math.ceil(LW * dpr), Math.ceil(LH * dpr), 16), labelSlot = new Map();   // id → { s, sig }
+      let tickT = 0, rafT = 0, held = 0, downAt = 0;
+      const layer = {
+        id: o.id || 'vs-gpu-markers', type: 'custom', renderingMode: '2d',
+        onAdd(m, g) {
+          try {
+            glc = g;
+            const sh = (type, src) => { const s = g.createShader(type); g.shaderSource(s, src); g.compileShader(s); if (!g.getShaderParameter(s, g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(s) || 'shader'); return s; };
+            prog = g.createProgram(); g.attachShader(prog, sh(g.VERTEX_SHADER, VS)); g.attachShader(prog, sh(g.FRAGMENT_SHADER, FS)); g.linkProgram(prog);
+            if (!g.getProgramParameter(prog, g.LINK_STATUS)) throw new Error(g.getProgramInfoLog(prog) || 'link');
+            for (const [a] of ATTRS) loc[a] = g.getAttribLocation(prog, a);
+            for (const u of ['u_mvp', 'u_now', 'u_px', 'u_bearing', 'u_tex']) loc[u] = g.getUniformLocation(prog, u);
+            bufI = g.createBuffer(); bufL = g.createBuffer(); texI = g.createTexture(); texL = g.createTexture();
+            api.ok = true;
+            o.onReady && setTimeout(o.onReady, 0);
+          } catch (e) { lastErr = String(e && e.message || e); console.error('gpumarkers: no GPU layer — the symbol path stays', e); api.ok = false; o.onFail && o.onFail(e); }
+        },
+        render(g, args) {
+          if (!api.ok || (!n && !nl)) return;
+          /* ★ the matrix that takes MERCATOR [0,1] to clip space: v5 hands it as defaultProjectionData.mainMatrix (its
+           *  modelViewProjectionMatrix is in world pixels — the planes drew 17 screens off, Stuart 13:51); v3/v4 the matrix */
+          const mvp = args && args.defaultProjectionData && args.defaultProjectionData.mainMatrix ? args.defaultProjectionData.mainMatrix
+            : args && args.length === 16 ? args : null;
+          if (!mvp) { fail('no projection matrix from this MapLibre'); return; }
+          if (!checked && markers.length) {   // ★ once per data set: an on-screen marker must land on screen, or fail over
+            checked = true;
+            const b = map.getBounds(), mk = markers.find((x) => b && b.contains([x.lon, x.lat]));
+            if (mk) { const p = merc(mk.lon, mk.lat), M = mvp, c = [0, 1, 3].map((r) => M[r] * p[0] + M[4 + r] * p[1] + M[12 + r]);
+              if (!(Math.abs(c[0] / c[2]) <= 1.2 && Math.abs(c[1] / c[2]) <= 1.2)) { fail('the projection put an on-screen marker off-screen'); return; } }
+          }
+          g.useProgram(prog);
+          const cv = map.getCanvas(), pr = g.drawingBufferWidth / Math.max(1, cv.clientWidth || cv.width);
+          g.uniformMatrix4fv(loc.u_mvp, false, mvp);
+          g.uniform1f(loc.u_now, nowMs() - T0);
+          g.uniform2f(loc.u_px, 2 * pr / g.drawingBufferWidth, 2 * pr / g.drawingBufferHeight);
+          g.uniform1f(loc.u_bearing, (map.getBearing() || 0) * Math.PI / 180);
+          g.uniform1i(loc.u_tex, 0); g.activeTexture(g.TEXTURE0);
+          g.enable(g.BLEND); g.blendFunc(g.ONE, g.ONE_MINUS_SRC_ALPHA); g.disable(g.DEPTH_TEST); g.disable(g.STENCIL_TEST); g.disable(g.CULL_FACE); g.colorMask(true, true, true, true);
+          const pass = (buf, tex, atlas, count) => {
+            if (!count) return;
+            if (atlas.full || atlas.dirty.length) atlas.upload(g, tex);
+            g.bindTexture(g.TEXTURE_2D, tex);
+            g.bindBuffer(g.ARRAY_BUFFER, buf);
+            let off = 0;
+            for (const [a, k] of ATTRS) { if (loc[a] >= 0) { g.enableVertexAttribArray(loc[a]); g.vertexAttribPointer(loc[a], k, g.FLOAT, false, FLOATS * 4, off * 4); } off += k; }
+            g.drawArrays(g.TRIANGLES, 0, count * 6);
+            for (const [a] of ATTRS) if (loc[a] >= 0) g.disableVertexAttribArray(loc[a]);
+          };
+          pass(bufI, texI, icons, n);
+          pass(bufL, texL, labels, nl);
+          drawN++;
+          { const e = g.getError(); if (e) fail('WebGL error ' + e); }
+        },
+        onRemove() { dead = true; if (tickT) clearTimeout(tickT); if (rafT) cancelAnimationFrame(rafT); }
+      };
+      try { map.addLayer(layer, o.beforeId && map.getLayer(o.beforeId) ? o.beforeId : undefined); }
+      catch (e) { console.error('gpumarkers: addLayer', e); return api; }
+      const onMove = () => poke();
+      map.on('moveend', onMove); map.on('zoomend', onMove);
+
+      function iconUv(key) {
+        let s = iconSlot.get(key);
+        if (s == null) {
+          s = icons.alloc(); iconSlot.set(key, s);
+          const img = o.iconFor(key); const [x, y] = icons.xy(s);
+          if (img) icons.cx.putImageData(img, x, y);
+          if (!icons.full) icons.dirty.push(s);
+        }
+        return s;
+      }
+      /** A marker's label, drawn into its own slot only when its words or colours change. */
+      function labelUv(mk) {
+        const L = mk.label, sig = L.l1 + '|' + (L.l2 || '') + '|' + (L.c2 || '') + '|' + L.col + L.halo;
+        let e = labelSlot.get(mk.id);
+        if (!e) { e = { s: labels.alloc(), sig: '' }; labelSlot.set(mk.id, e); }
+        if (e.sig !== sig) {
+          e.sig = sig;
+          const [x, y] = labels.xy(e.s), c = labels.cx, w = labels.sw, h = labels.sh;
+          c.save(); c.clearRect(x, y, w, h); c.beginPath(); c.rect(x, y, w, h); c.clip();
+          c.scale(1, 1); c.font = (10 * dpr) + 'px ui-monospace, "JetBrains Mono", Menlo, monospace'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+          const lh = 11.5 * dpr, two = !!L.l2, y1 = y + h / 2 - (two ? lh / 2 : 0), x0 = x + 2 * dpr;
+          c.lineWidth = 2.4 * dpr; c.strokeStyle = L.halo; c.fillStyle = L.col;
+          c.strokeText(L.l1, x0, y1); c.fillText(L.l1, x0, y1);
+          if (two) { c.strokeText(L.l2, x0, y1 + lh); c.fillStyle = L.c2 || L.col; c.fillText(L.l2, x0, y1 + lh); }
+          c.restore();
+          if (!labels.full) labels.dirty.push(e.s);
+        }
+        return e.s;
+      }
+      function velOf(mk, p) {
+        if (!(mk.gs > 0) || mk.track == null || !isFinite(mk.track)) return [0, 0];
+        const d = mk.gs / 3600 / R, b = mk.track * Math.PI / 180, la = mk.lat * Math.PI / 180, lo = mk.lon * Math.PI / 180;   // one second on
+        const la2 = Math.asin(Math.sin(la) * Math.cos(d) + Math.cos(la) * Math.sin(d) * Math.cos(b));
+        const lo2 = lo + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la), Math.cos(d) - Math.sin(la) * Math.sin(la2));
+        const q = merc(lo2 * 180 / Math.PI, la2 * 180 / Math.PI); return [(q[0] - p[0]) / 1000, (q[1] - p[1]) / 1000];
+      }
+      function put(f, i, mk, p, v, corr, rot, uv, fade, quad, kind) {
+        for (const [kx, ky] of CORNERS) {
+          f[i++] = p[0]; f[i++] = p[1]; f[i++] = v[0]; f[i++] = v[1];
+          f[i++] = mk.t - T0; f[i++] = corr[2]; f[i++] = corr[3]; f[i++] = mk.maxDrMs || 0;
+          f[i++] = corr[0]; f[i++] = corr[1]; f[i++] = kx; f[i++] = ky;
+          f[i++] = rot[0]; f[i++] = rot[1]; f[i++] = rot[2]; f[i++] = rot[3];
+          f[i++] = uv[0]; f[i++] = uv[1];
+          f[i++] = fade[0]; f[i++] = fade[1]; f[i++] = fade[2]; f[i++] = fade[3];
+          f[i++] = quad[0]; f[i++] = quad[1]; f[i++] = quad[2]; f[i++] = quad[3];
+          f[i++] = uv[2]; f[i++] = uv[3];
+          f[i++] = kind[0]; f[i++] = kind[1]; f[i++] = kind[2]; f[i++] = kind[3];
+        }
+        return i;
+      }
+      /** The markers, written as attributes (only on a data change — the shader moves them between). */
+      function set(list) {
+        if (!api.ok || !glc) return;
+        markers = list.slice().sort((a, b) => (a.z || 0) - (b.z || 0)); checked = false;
+        // labels whose aircraft went: their slots back to the free list
+        const keep = new Set(markers.filter((m) => m.label).map((m) => m.id));
+        for (const [id, e] of labelSlot) if (!keep.has(id)) { labelSlot.delete(id); labels.free.push(e.s); }
+        const rings = markers.filter((m) => m.bornAt != null);
+        const withLbl = markers.filter((m) => m.label);
+        // slots first (an atlas may grow and change every uv)
+        for (const mk of markers) iconUv(mk.key);
+        for (const mk of withLbl) labelUv(mk);
+        const fI = new Float32Array((rings.length + markers.length) * 6 * FLOATS), fL = new Float32Array(withLbl.length * 6 * FLOATS);
+        let i = 0, j = 0;
+        const cache = new Map();
+        const geo = (mk) => {
+          let g = cache.get(mk.id);
+          if (!g) {
+            const p = merc(mk.lon, mk.lat), v = velOf(mk, p);
+            let corr = [0, 0, 0, 0];
+            if (mk.corr) { const a = merc(mk.lon + mk.corr.dLon, mk.lat + mk.corr.dLat); corr = [a[0] - p[0], a[1] - p[1], mk.corr.t0 - T0, mk.corr.ms]; }
+            g = { p, v, corr }; cache.set(mk.id, g);
+          }
+          return g;
+        };
+        const fadeOf = (mk) => [mk.shownAt != null ? mk.shownAt - T0 : -1, mk.goneAt != null ? mk.goneAt - T0 : -1, mk.fadeInMs || 600, mk.fadeOutMs || 900];
+        for (const mk of rings) {   // the new aircraft's three rings, under the icons
+          const g = geo(mk), c = mk.rgb || [255, 255, 255];
+          i = put(fI, i, mk, g.p, g.v, g.corr, [0, 0, 0, 1], [0, 0, 0, 0], [mk.bornAt - T0, -1, 1, 1], [0, 0, 40, 40], [2, c[0], c[1], c[2]]);
+        }
+        for (const mk of markers) {
+          const g = geo(mk), u = icons.uv(iconSlot.get(mk.key));
+          const rot = [mk.hdgFrom != null ? mk.hdgFrom : (mk.hdgTo || 0), mk.hdgTo || 0, (mk.hdgT0 || 0) - T0, mk.noRotate ? 1 : 0];
+          i = put(fI, i, mk, g.p, g.v, g.corr, rot, u, fadeOf(mk), [0, 0, box / 2, box / 2], [0, 0, 0, 0]);
+        }
+        for (const mk of withLbl) {   // the label: upright, its left edge 12.5 px right of the icon's centre (MapLibre's 1.25 em)
+          const g = geo(mk), u = labels.uv(labelSlot.get(mk.id).s);
+          const lf = [mk.label.at != null ? mk.label.at - T0 : -1, mk.goneAt != null ? mk.goneAt - T0 : -1, 400, mk.fadeOutMs || 900];
+          j = put(fL, j, mk, g.p, g.v, g.corr, [0, 0, 0, 1], u, lf, [12.5 + LW / 2 - 2, 0, LW / 2, LH / 2], [1, 0, 0, 0]);
+        }
+        glc.bindBuffer(glc.ARRAY_BUFFER, bufI); glc.bufferData(glc.ARRAY_BUFFER, fI, glc.DYNAMIC_DRAW);
+        glc.bindBuffer(glc.ARRAY_BUFFER, bufL); glc.bufferData(glc.ARRAY_BUFFER, fL, glc.DYNAMIC_DRAW);
+        n = rings.length + markers.length; nl = withLbl.length;
+        poke();
+      }
+      /* ★ the frame policy (Stuart 13:58): ADAPTIVE — fast enough that no on-screen marker steps more than ~1.5 px a frame
+       *  (5 fps far out, the display's own rate up close), a glide / turn / fade / ring at least 30 fps; nothing moving →
+       *  no frames. High rates ride the display's frame clock, low ones a timer, so a slow scene lets the panel drop. */
+      function poke() { if (tickT) { clearTimeout(tickT); tickT = 0; } if (rafT) { cancelAnimationFrame(rafT); rafT = 0; } tick(); }
+      function tick() {
+        tickT = 0; rafT = 0;
+        if (dead || !api.ok || !n) return;
+        const t = nowMs();
+        const z = map.getZoom(), ppd = 512 * Math.pow(2, z) / 360, bnd = map.getBounds();
+        let fastest = 0, easing = false, need = 0, fixed = false; const why = {};
+        const ez = (k) => { easing = true; why[k] = (why[k] || 0) + 1; };
+        for (const mk of markers) {
+          const onScreen = !bnd || bnd.contains([mk.lon, mk.lat]);
+          const kyy = ppd / Math.max(0.2, Math.cos(mk.lat * Math.PI / 180));
+          // ★ a glide or a turn counts only on screen and only if it is visible (half a pixel / two degrees)
+          // …and at the rate its own speed needs, not a flat 30: a glide of g px over its ms, a turn of a° (the nose, 20 px out)
+          if (onScreen && mk.corr && t - mk.corr.t0 < mk.corr.ms) { const g = Math.max(Math.abs(mk.corr.dLon) * ppd, Math.abs(mk.corr.dLat) * kyy); if (g >= 0.5) { ez('glide'); need = Math.max(need, 1.9 * g / (mk.corr.ms / 1000) / 1.5); } }
+          if (onScreen && mk.hdgT0 && t - mk.hdgT0 < 400) { const a = Math.abs((((mk.hdgTo || 0) - (mk.hdgFrom || 0) + 540) % 360) - 180); if (a >= 3) { ez('turn'); need = Math.max(need, 1.9 * (a * Math.PI / 180 * 20) / 0.4 / 1.5); } }
+          if (onScreen && ((mk.goneAt != null && t - mk.goneAt < (mk.fadeOutMs || 900)) || (mk.shownAt != null && t - mk.shownAt < (mk.fadeInMs || 600)))) { ez('fade'); fixed = true; }
+          if (onScreen && mk.bornAt != null && t - mk.bornAt < 4200) { ez('ring'); fixed = true; }
+          if (onScreen && mk.label && mk.label.at != null && t - mk.label.at < 400) { ez('label'); fixed = true; }
+          if (!(mk.gs > 0) || t - mk.t > (mk.maxDrMs || 0)) continue;
+          if (bnd && !bnd.contains([mk.lon, mk.lat])) continue;
+          const ky = ppd / Math.max(0.2, Math.cos(mk.lat * Math.PI / 180));
+          fastest = Math.max(fastest, (mk.gs * 1.852 / 3600 / 111.32) * ky);   // CSS px a second
+        }
+        const want = Math.max(fastest / 1.5, need, fixed ? 12 : 0);   // ★ a ring / fade / label easing in: 12 fps is smooth enough for opacity and a 19 px/s swell
+        let fps = want > 0 ? Math.min(120, Math.max(5, Math.ceil(want))) : 0;
+        void easing;
+        // ★ hysteresis (Stuart 14:07 "it drops to 5 fps every so often"): up at once, down only after a second below
+        if (fps >= held) { held = fps; downAt = 0; }
+        else { if (!downAt) downAt = t; if (t - downAt > 1000) { held = fps; downAt = 0; } }
+        fps = held;
+        api.fps = fps; api.pxs = Math.round(fastest); api.why = why;
+        if (!fps) return;   // ★ nothing on screen moves: no frames
+        map.triggerRepaint();
+        if (fps >= 50) rafT = requestAnimationFrame(tick);
+        else tickT = setTimeout(tick, 1000 / fps);
+      }
+      /** The marker under a point (CSS px), positions extrapolated now — on a tap or a hover only. */
+      function pick(point, r) {
+        const t = nowMs();
+        let best = null, bd = r;
+        for (const mk of markers) {
+          if (mk.goneAt != null) continue;
+          let lat = mk.lat, lon = mk.lon;
+          if (mk.gs > 0 && mk.track != null) {
+            const dt = Math.max(0, Math.min(mk.maxDrMs || 0, t - mk.t)) / 1000, d = mk.gs * dt / 3600 / R, b = mk.track * Math.PI / 180, la = lat * Math.PI / 180;
+            const la2 = Math.asin(Math.sin(la) * Math.cos(d) + Math.cos(la) * Math.sin(d) * Math.cos(b));
+            lon = lon + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la), Math.cos(d) - Math.sin(la) * Math.sin(la2)) * 180 / Math.PI; lat = la2 * 180 / Math.PI;
+          }
+          if (mk.corr) { const k = Math.min(1, (t - mk.corr.t0) / mk.corr.ms), e = 1 - easeInOut(k); lat += mk.corr.dLat * e; lon += mk.corr.dLon * e; }
+          const p = map.project([lon, lat]), dd = Math.hypot(p.x - point.x, p.y - point.y);
+          if (dd < bd) { bd = dd; best = mk.id; }
+        }
+        return best;
+      }
+      function destroy() { dead = true; if (tickT) clearTimeout(tickT); if (rafT) cancelAnimationFrame(rafT); try { map.off('moveend', onMove); map.off('zoomend', onMove); if (map.getLayer(layer.id)) map.removeLayer(layer.id); } catch (e) { /* gone with the map */ } }
+      if (typeof window !== 'undefined') (window.__vsGpu = window.__vsGpu || []).push(api);
+      return api;
+    }
+    return { create };
+  })();
+
   /* ★ What the NDB layer (ndblayer.js) borrows so its map looks and measures exactly like this one: the rings, the
    *  theme, the receiver's house, the camera and the CSS (its ring labels' classes). */
   const shared = { ringsFor, addRingLayers, setRingData, leafletRings, THEME, RX_SVG, injectCss };
   global.VibeAdsbLayer = { create, maths, shared, ICONS: Object.keys(ICONS), iconSvg, iconClassOf, acIconSvg, AC_CLASS_NAME };
+  global.VibeGpuMarkers = GpuMarkers;   // ★ the template's moving-marker layer (docs/v12/MAP-TEMPLATE.md)
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -4150,7 +4150,11 @@ function loop(frameTs?: number) {
   if (hhUiCap > 0) { hhDrawn++; if (ts - hhDrawnAt >= 1000) { hhUiFpsNow = hhDrawn * 1000 / (ts - hhDrawnAt); hhDrawn = 0; hhDrawnAt = ts; } }
   try { renderFrame(ts); }
   catch (e) { noteFault('web-render', 'frame', e); }
-  requestAnimationFrame(loop);
+  /* ★★★ beta96 IDLE COST (Stuart 14:12): a full-screen map over the radio page draws nothing of it (trackViewUp), but this
+   *  loop still asked for every display frame — 60–120 wake-ups a second for nothing, keeping Safari composing at the
+   *  panel's rate. Under a map it runs 5 times a second (the rows are still taken in; only the drawing waits). */
+  if (trackViewUp()) setTimeout(() => requestAnimationFrame(loop), 200);
+  else requestAnimationFrame(loop);
 }
 
 function renderFrame(frameTs: number) {
@@ -10598,7 +10602,7 @@ function aisDscOn(): boolean { return aisOn && aisReport?.combo === 'ais+dsc'; }
 let aisOn = false;
 let aisReport: AisReport | null = null;
 const aisTrailWait = new Map<number, (pts: [number, number][]) => void>();
-function trackViewUp(): boolean { return !!asView?.open; }   // ★ V12 nothing drawn behind it, as NDB (beta96: the VOR map and SONDES are the AIR & SEA map's)
+function trackViewUp(): boolean { return !!asView?.open || !!ismMapView?.open || !!ismGalView?.open; }   // ★ V12 nothing drawn behind it, as NDB (beta96: the VOR map and SONDES are the AIR & SEA map's)
 function aisReadCap(j: any) {
   aisDscCap = j?.aisDsc === true;
   if (j?.ais === true) aisCap = { ok: true, why: '' };
@@ -10697,6 +10701,8 @@ async function avSharedFetch(): Promise<SharedAircraft | null> {
 async function avPoll() {
   if (avPollT) { clearTimeout(avPollT); avPollT = null; }
   if (!asView?.open) return;
+  // ★ a hidden tab polls nothing: the next poll waits for it to be seen again
+  if (document.hidden) { document.addEventListener('visibilitychange', () => { if (!document.hidden) void avPoll(); }, { once: true }); return; }
   const seq = ++avPollSeq;
   const got = await avSharedFetch();
   if (seq !== avPollSeq || !asView?.open) return;
