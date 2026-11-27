@@ -17,7 +17,7 @@
  *    parent says why; TUNE's card fades while locked.
  *  ★ No dead controls (AGENTS.md): a card with nothing in it is not offered; RATE with one source is a reading.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Slider from '@react-native-community/slider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -32,7 +32,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, cardBox, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, PILL_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, LIST_CHIP_H, PILL_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -145,6 +145,32 @@ export interface ListIn {
 }
 
 const LIST_OPEN_KEY = 'lsv_map_list_open', LIST_MAX_KEY = 'lsv_map_list_max';
+/* ★★★ THE CHROME'S SIZE (Stuart, build 586 on the Mac: "super tiny"): every chip, card, key and line of text is drawn at the
+ *  window's scale (mapChrome chromeScale — 1 on a phone, up to 1.45 on an iPad or a Mac window, as the rest of the app). */
+const KCtx = React.createContext(1);
+const SCALED_KEYS = new Set(['width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'fontSize', 'lineHeight', 'letterSpacing', 'gap',
+  'padding', 'paddingHorizontal', 'paddingVertical', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
+  'margin', 'marginHorizontal', 'marginVertical', 'marginTop', 'marginBottom', 'marginLeft', 'marginRight',
+  'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius', 'top', 'left', 'right', 'bottom']);
+const styleCache = new Map<number, typeof RAW>();
+function scaledStyles(k: number): typeof RAW {
+  const kk = Math.round(k * 100) / 100;
+  let out = styleCache.get(kk);
+  if (!out) {
+    const o: Record<string, Record<string, unknown>> = {};
+    for (const [name, st] of Object.entries(RAW)) {
+      const t: Record<string, unknown> = {};
+      for (const [key, v] of Object.entries(st as Record<string, unknown>)) t[key] = typeof v === 'number' && SCALED_KEYS.has(key) ? v * kk : v;
+      o[name] = t;
+    }
+    out = StyleSheet.create(o as never) as typeof RAW;
+    if (styleCache.size > 8) styleCache.clear();
+    styleCache.set(kk, out);
+  }
+  return out;
+}
+function useStyles() { return scaledStyles(useContext(KCtx)); }
+function useK() { return useContext(KCtx); }
 type Transient = ChipId | 'help' | null;
 
 export default function MapChrome(p: MapChromeProps) {
@@ -174,9 +200,13 @@ export default function MapChrome(p: MapChromeProps) {
     ...(p.health ? ['health' as const] : []), ...(p.time ? ['time' as const] : []), ...(rc.show ? ['rate' as const] : []),
   ];
   const famText = p.layers?.fam.map((f) => String(f.n)) ?? [];
-  const g = chromeGeom({ w: p.winW, h: p.winH, insets: p.insets, chips,
-                         layersW: 30 + famText.reduce((a, t) => a + 18 + t.length * 7, 0), layersCompactW: 30 + (famText[0]?.length ?? 1) * 7 + 18,
-                         rateW: Math.min(150, 26 + rc.text.length * 6.6 + (rc.more ? 26 : 0)) });
+  const k = chromeScale(p.winW, p.winH);
+  const geo = chromeGeomAt({ w: p.winW, h: p.winH, insets: p.insets, chips,
+                             layersW: 30 + famText.reduce((a, t) => a + 18 + t.length * 7, 0), layersCompactW: 30 + (famText[0]?.length ?? 1) * 7 + 18,
+                             // ★ tall: each family an icon over its count, the chip as tall and as wide as they need
+                             layersTallH: famText.length ? famText.length * 31 + 10 : 44, layersTallW: 16 + Math.max(15, ...famText.map((t) => t.length * 7.2)),
+                             rateW: Math.min(150, 26 + rc.text.length * 6.6 + (rc.more ? 26 : 0)) }, k);
+  const g = geo.g;
 
   // ── transient cards: one at a time; idle / map tap / another card fold it ──
   const idleT = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -219,21 +249,27 @@ export default function MapChrome(p: MapChromeProps) {
   }, [p.visible, p.onZoom]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── LIST's footprint for the page ──
-  const listH = !listShown ? LIST_CHIP_H : listMax ? g.list.maxH : Math.min(g.list.maxH, g.list.rows * ROW_H + 34);
+  const listH = !listShown ? LIST_CHIP_H * k : listMax ? g.list.maxH : Math.min(g.list.maxH, (g.list.rows * ROW_H + 34) * k);
   useEffect(() => { p.onFootprint?.(listShown ? g.list.w : 120, listH, g.list.side); }, [listShown, g.list.w, listH, g.list.side]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { p.wf?.onShown(listShown && pane === 'wf' && !!p.wf?.offered); }, [listShown, pane, p.wf?.offered]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!p.wf?.offered && pane === 'wf') setPane('list'); }, [p.wf?.offered]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const s = styles;
+  const s = scaledStyles(k);
   const box = (id: ChipId) => g.boxes[id]!;
-  const cardAt = (id: ChipId) => cardBox(g, id, p.winW, p.winH);
+  const cardAt = (id: ChipId) => cardBoxAt(geo, id, p.winW, p.winH);
   const chipIcon = (id: ChipId, col: string): React.ReactNode => {
     switch (id) {
       case 'exit': return <Text style={[s.exitX, { color: '#fff' }]}>{'✕'}</Text>;
-      case 'servers': return <SectionIcon name="instance" size={20} color={col} />;
-      case 'tune': return <Svg width={20} height={20} viewBox="0 0 16 16"><Path d={RADIO_D} fill="none" stroke={col} strokeWidth={1.4} /></Svg>;
-      case 'stats': return <ModeIcon name="stats" size={20} color={col} />;
-      case 'map': return <SectionIcon name="controls" size={20} color={col} />;
+      case 'servers': return <ModeIcon name="servers" size={22 * k} color={col} />;
+      case 'tune': return <ModeIcon name="radio" size={22 * k} color={col} />;
+      case 'stats': return <ModeIcon name="stats" size={22 * k} color={col} />;
+      /* ★ MAP: the folded map with the camera's state on it — AUTO on (magnifier + A), paused (the pause), off (no entry) */
+      case 'map': return (
+        <View>
+          <ModeIcon name="map" size={22 * k} color={col} />
+          <View style={s.mapState}><ModeIcon name={p.map.ctl.auto === 'on' ? 'zoomAuto' : p.map.ctl.auto === 'paused' ? 'zoomPause' : 'noEntry'} size={12 * k}
+                                             color={p.map.ctl.auto === 'off' ? '#ff6b5e' : p.map.ctl.auto === 'paused' ? '#ffb833' : C.live} /></View>
+        </View>);
       case 'chat': return <ChatGlyph col={col} />;
       default: return null;
     }
@@ -248,6 +284,7 @@ export default function MapChrome(p: MapChromeProps) {
   const open = (id: Transient) => card === id;
 
   return (
+    <KCtx.Provider value={k}>
     <NavCtx.Provider value={nav.navCtx}>
       <View style={StyleSheet.absoluteFill} pointerEvents="box-none" onTouchStart={() => { noteTouchInteraction(); if (card) idleArm(); }}>
         {/* ── the ✕ — the first tab / the top-left corner piece ── */}
@@ -286,7 +323,7 @@ export default function MapChrome(p: MapChromeProps) {
         {/* ── the open transient card ── */}
         {card && card !== 'help' && renderCard(card as ChipId)}
         {card === 'help' && (
-          <Card title="HELP" at={{ x: Math.max(8, p.winW - g.br.right - 330), y: Math.max(g.safe.t + 8, 60), w: Math.min(330, p.winW - 16), maxH: p.winH - 140 }} onClose={() => setCard(null)}>
+          <Card title="HELP" at={{ x: Math.max(8, p.winW - g.br.right - 330 * k), y: Math.max(g.safe.t + 8, 60 * k), w: Math.min(330 * k, p.winW - 16), maxH: p.winH - 140 * k }} onClose={() => setCard(null)}>
             {MAP_HELP.filter((h) => h.id === 'list' || h.id === 'map' || chips.includes(h.id as ChipId)).map((h) => (
               <Text key={h.id} style={s.helpLine}><Text style={s.helpName}>{h.name}  </Text>{h.words}</Text>
             ))}
@@ -305,6 +342,7 @@ export default function MapChrome(p: MapChromeProps) {
                      lift={!g.short && listShown && g.list.w >= p.winW - 60 ? listH : 0} hide={listMax && !g.short} />
       </View>
     </NavCtx.Provider>
+    </KCtx.Provider>
   );
 
   function renderChip(id: ChipId) {
@@ -322,10 +360,10 @@ export default function MapChrome(p: MapChromeProps) {
           <View style={g.short ? s.famRow : s.famCol}>
             {fam.length ? fam.map((f, i) => (
               <View key={i} style={g.short ? s.famItemRow : s.famItem}>
-                <ModeIcon name={f.glyph} size={g.short ? 14 : 13} color={isOpen ? C.gold : f.colour} />
+                <ModeIcon name={f.glyph} size={(g.short ? 15 : 15) * k} color={isOpen ? C.gold : f.colour} />
                 <Text style={[s.famN, isOpen && { color: C.gold }]} numberOfLines={1}>{f.n > 999 ? '999+' : f.n}</Text>
               </View>
-            )) : <ModeIcon name="map" size={18} color={col} />}
+            )) : <ModeIcon name="aircraft" size={20 * k} color={col} />}
           </View>
         </ChipKey>
       );
@@ -400,24 +438,32 @@ export default function MapChrome(p: MapChromeProps) {
 
 const CHIP_WORDS: Partial<Record<ChipId, string>> = { servers: 'Servers — leave, or switch radio', tune: 'Tune — mode and gain', layers: 'Layers',
   stats: 'Stats — newest, furthest, longest tracked', map: 'Map controls', chat: 'Chat' };
-/** the TUNE chip's glyph: a receiver with its whip (the house line style) */
-const RADIO_D = 'M2.5 6.5h11v7h-11zM4.5 6.5l7-4.5M5 10h3M10.5 10a1 1 0 1 0 0.01 0';
 
 // ── pieces ──
-function ChipKey({ style, words, onPress, children }: { style: unknown; words: string; onPress: () => void; children: React.ReactNode }) {
-  const { focused, viewRef } = useNavButton(onPress);
+function ChipKey({ style, words, onPress, children, hitSlop, padPress, preferred }: { style: unknown; words: string; onPress: () => void; children: React.ReactNode; hitSlop?: number;
+                   /** what ENTER on a pad / keyboard does when it differs from a tap (the LIST stop: step into the rows) */
+                   padPress?: () => void; preferred?: boolean }) {
+  const { focused, viewRef } = useNavButton(padPress ?? onPress, false, { preferred: !!preferred });
   const { ring } = useNavFocus();
   return (
-    <TouchableOpacity ref={viewRef as never} style={style as never} onPress={onPress} activeOpacity={0.75} accessibilityRole="button" accessibilityLabel={words}>
+    <TouchableOpacity ref={viewRef as never} style={style as never} onPress={onPress} activeOpacity={0.75} accessibilityRole="button" accessibilityLabel={words}
+                      hitSlop={hitSlop}>
       {children}
       <NavRing on={focused} color={ring} radius={10} />
     </TouchableOpacity>
   );
 }
 function ChatGlyph({ col }: { col: string }) {
-  return <Svg width={20} height={20} viewBox="0 0 24 24"><Path d="M4 5h16v10H9l-5 4z" fill="none" stroke={col} strokeWidth={1.8} strokeLinejoin="round" /></Svg>;
+  const k = useK();   // ★ the web's chat glyph: the bubble with its three dots
+  return (
+    <Svg width={22 * k} height={22 * k} viewBox="0 0 24 24">
+      <Path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" fill="none" stroke={col} strokeWidth={1.9} strokeLinejoin="round" />
+      <Circle cx={9} cy={10.5} r={1.1} fill={col} /><Circle cx={12} cy={10.5} r={1.1} fill={col} /><Circle cx={15} cy={10.5} r={1.1} fill={col} />
+    </Svg>
+  );
 }
 function PulseWrap({ pulseAt, reduce, style, children }: { pulseAt: number; reduce: boolean; style: unknown; children: React.ReactNode }) {
+  const styles = useStyles();
   const a = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (!pulseAt || reduce) return;
@@ -437,10 +483,12 @@ function PulseWrap({ pulseAt, reduce, style, children }: { pulseAt: number; redu
   );
 }
 function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: ReturnType<typeof chromeGeom>; text: string; locked: boolean; pulseAt: number; reduce: boolean; onPress: () => void; disabled: boolean }) {
-  const words = pillWords(text, Math.floor((g.pill.w - 24) / 6.4));
-  const w = Math.min(g.pill.w, Math.max(80, words.length * 6.4 + 26));
+  const styles = useStyles();
+  const k = useK();
+  const words = pillWords(text, Math.floor((g.pill.w - 24 * k) / (6.4 * k)));
+  const w = Math.min(g.pill.w, Math.max(80 * k, (words.length * 6.4 + 26) * k));
   return (
-    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: g.pill.x + (g.pill.w - w) / 2, width: w, height: PILL_H }}>
+    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: g.pill.x + (g.pill.w - w) / 2, width: w, height: PILL_H * k }}>
       <NavRow>
         <ChipKey style={[styles.pill, locked && styles.pillLocked, g.pill.at === 'top' ? styles.pillTop : styles.pillBottom, { width: '100%', height: '100%' }]}
                  words={`${text} — ${disabled ? 'chat is not available here' : 'open the chat'}`} onPress={() => { if (!disabled) onPress(); }}>
@@ -451,17 +499,27 @@ function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: Retu
   );
 }
 function Card({ title, at, onClose, children, faded }: { title: string; at: { x: number; y: number; w: number; maxH: number }; onClose: () => void; children: React.ReactNode; faded?: boolean }) {
+  const styles = useStyles();
+  /* ★★★ THE OPEN CARD IS THE PAD'S SCOPE (the web's rule): its keys walk, the highlighted one is scrolled into view (its own
+   *  ScrollView carries the scope's scrollProps), and BACK — a pad's back, Escape or Backspace — shuts it; the chip that opened it
+   *  is still the highlight in the chrome's own walk beneath. The × is a full 44-point target (Stuart, build 586: "can't close an
+   *  open card"). */
+  const scope = usePanelNav(true, { flat: true, onBack: () => { onClose(); return true; } });
   return (
-    <View style={[styles.card, { left: at.x, top: at.y, width: at.w, maxHeight: at.maxH }, faded && { opacity: 0.6 }]} accessibilityViewIsModal={false}>
-      <View style={styles.cardHead}>
-        <Text style={styles.cardTitle}>{title}</Text>
-        <NavRow><ChipKey style={styles.cardX} words={`Close ${title.toLowerCase()}`} onPress={onClose}><Text style={styles.cardXTxt}>{'×'}</Text></ChipKey></NavRow>
+    <NavCtx.Provider value={scope.navCtx}>
+      <View style={[styles.card, { left: at.x, top: at.y, width: at.w, maxHeight: at.maxH }, faded && { opacity: 0.6 }]} accessibilityViewIsModal={false}>
+        <View style={styles.cardHead}>
+          <Text style={styles.cardTitle}>{title}</Text>
+          <NavRow><ChipKey style={styles.cardX} words={`Close ${title.toLowerCase()}`} onPress={onClose} hitSlop={8}><Text style={styles.cardXTxt}>{'\u00d7'}</Text></ChipKey></NavRow>
+        </View>
+        <ScrollView {...scope.scrollProps} style={{ maxHeight: at.maxH - 46 * (StyleSheet.flatten(styles.cardHead).height as number) / 46 }}
+                    contentContainerStyle={[scrollLane, { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">{children}</ScrollView>
       </View>
-      <ScrollView style={{ maxHeight: at.maxH - 40 }} contentContainerStyle={[scrollLane, { paddingBottom: 8 }]} keyboardShouldPersistTaps="handled">{children}</ScrollView>
-    </View>
+    </NavCtx.Provider>
   );
 }
 function RowKey({ label, sub, onPress, on, right, dim }: { label: string; sub?: string; onPress: () => void; on?: boolean; right?: React.ReactNode; dim?: boolean }) {
+  const styles = useStyles();
   return (
     <NavRow>
       <ChipKey style={[styles.rowKey, on && styles.rowKeyOn, dim && styles.dim]} words={`${label}${sub ? ', ' + sub : ''}`} onPress={onPress}>
@@ -475,6 +533,7 @@ function RowKey({ label, sub, onPress, on, right, dim }: { label: string; sub?: 
   );
 }
 function Key({ label, on, onPress, words, dim }: { label: string; on?: boolean; onPress: () => void; words: string; dim?: boolean }) {
+  const styles = useStyles();
   return (
     <ChipKey style={[styles.key, on && styles.keyOn, dim && styles.dim]} words={words} onPress={onPress}>
       <Text style={[styles.keyTxt, on && { color: '#111' }]} numberOfLines={1}>{label}</Text>
@@ -484,6 +543,7 @@ function Key({ label, on, onPress, words, dim }: { label: string; on?: boolean; 
 
 /** ★★★ THE ONE-ROW GAIN: [AGC name] value ⌄ (AGC on) · slider value [AGC name] (manual) · 🔒 + inline password (locked). */
 function GainRowView({ row, h, locked, onLocked }: { row: GainRow; h: MapGainHandlers; locked: boolean; onLocked: () => void }) {
+  const styles = useStyles();
   const [pw, setPw] = useState(false);
   const [pwText, setPwText] = useState('');
   const [pwMsg, setPwMsg] = useState('');
@@ -551,6 +611,7 @@ function GainSlide({ row, onDrag, onSet }: { row: Extract<GainRow, { min: number
   );
 }
 function TuneList({ t, locked, onLocked, onDone }: { t: NonNullable<MapChromeProps['tune']>; locked: boolean; onLocked: () => void; onDone: () => void }) {
+  const styles = useStyles();
   if (t.rows.length < 2) return null;
   let last = '';
   return (
@@ -571,6 +632,7 @@ function TuneList({ t, locked, onLocked, onDone }: { t: NonNullable<MapChromePro
   );
 }
 function LayerRows({ l }: { l: NonNullable<MapChromeProps['layers']> }) {
+  const styles = useStyles();
   const badges = liveBadges(l.rows);
   let lastG = '';
   return (
@@ -600,6 +662,7 @@ function LayerRows({ l }: { l: NonNullable<MapChromeProps['layers']> }) {
   );
 }
 function StatsCard({ at, st, onClose }: { at: { x: number; y: number; w: number; maxH: number }; st: NonNullable<MapChromeProps['stats']>; onClose: () => void }) {
+  const styles = useStyles();
   const [mode, setMode] = useState('');
   const sec = st.sections.find((x) => x.mode === mode) ?? st.sections[0];
   return (
@@ -612,6 +675,7 @@ function StatsCard({ at, st, onClose }: { at: { x: number; y: number; w: number;
   );
 }
 function MapCard({ at, m, onClose }: { at: { x: number; y: number; w: number; maxH: number }; m: MapChromeProps['map']; onClose: () => void }) {
+  const styles = useStyles();
   const [fitOpen, setFitOpen] = useState(false);
   const c = m.ctl;
   return (
@@ -665,6 +729,7 @@ function AutoGlyph({ state }: { state: 'on' | 'off' | 'paused' }) {
 }
 
 function BottomRight({ g, scale, helpOpen, onHelp, onZoom, lift, hide }: { g: ReturnType<typeof chromeGeom>; scale: MapChromeProps['scale']; helpOpen: boolean; onHelp: () => void; onZoom: (d: 1 | -1) => void; lift: number; hide: boolean }) {
+  const styles = useStyles();
   if (hide) return null;
   const bar = scaleBar(scale, 80);
   const pos = { right: g.br.right, bottom: g.br.bottom + lift + (lift ? GAP : 0) };
@@ -711,9 +776,21 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
   const heldRef = useRef(held); heldRef.current = held;
   const rows = held ?? L.rows;
   const newN = held ? L.rows.filter((r) => !held.some((h) => h.key === r.key)).length : 0;
-  const scrollRef = useRef<ScrollView | null>(null);
   useEffect(() => { setHeld(null); }, [L.tab]);
   const pad = g.short ? 0 : 0;
+  const k = useK();
+  const styles = useStyles();
+  /* ★★★ STUART'S LIST FLOW (as the R36S handheld): the LIST is ONE stop in the chrome's walk (Down from it goes past the rows
+   *  to the bottom-right group). ENTER steps INTO it (the first row with a place on the map); Up / Down move row by row and the
+   *  list SCROLLS to keep the row in view (this scope's scrollProps on the list's ScrollView — PanelNav revealIn). ENTER on a
+   *  row selects it — centred on the map, its card opened — and the highlight moves INTO that card (ItemCard). BACK in the card
+   *  shuts it and the highlight is on the SAME row; BACK again leaves the list (the highlight back on the LIST stop). */
+  const [inside, setInside] = useState(false);
+  const [item, setItem] = useState<TrackRow | null>(null);
+  useEffect(() => { if (!shown) { setInside(false); setItem(null); } }, [shown]);
+  const scope = usePanelNav(inside, { flat: true, onBack: () => { setInside(false); setItem(null); return true; } });
+  const scrollRef = scope.scrollRef;
+  const firstPlaced = rows.find((r) => !r.noPos)?.key ?? rows[0]?.key;
   if (!shown) {
     // ★ the collapsed chip: one rounded rectangle [☰ n ⌃ | ≋]
     const pos = g.list.side ? { left: g.list.x, top: g.list.top } : { left: -2, bottom: -2 + pad };
@@ -721,13 +798,13 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
       <NavRow>
         <View style={[styles.lChip, pos, !g.list.side && { paddingBottom: p.insets.bottom + 2, paddingLeft: p.insets.left + 2 }]}>
           <ChipKey style={styles.lChipKey} words={`Show the list, ${count}`} onPress={() => onOpen(true)}>
-            <ModeIcon name="list" size={16} color={C.ink} /><Text style={styles.lChipN}>{count}</Text><Text style={styles.lChipChev}>{'⌃'}</Text>
+            <ModeIcon name="list" size={18 * k} color={C.ink} /><Text style={styles.lChipN}>{count}</Text><Text style={styles.lChipChev}>{'⌃'}</Text>
           </ChipKey>
           {wfOk && (
             <>
               <View style={styles.lChipSep} />
               <ChipKey style={styles.lChipKey} words="Open the live waterfall" onPress={() => { onPane('wf'); onOpen(true); }}>
-                <ModeIcon name="waterfall" size={16} color={C.ink} />
+                <ModeIcon name="waterfall" size={18 * k} color={C.ink} />
               </ChipKey>
             </>
           )}
@@ -738,14 +815,20 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
   const w = g.list.w;
   const pos = g.list.side ? { left: g.list.x, top: g.list.top, height: max ? g.list.maxH : Math.min(g.list.maxH, height) }
     : { left: 0, bottom: 0, height: height + p.insets.bottom, paddingBottom: p.insets.bottom };
-  const bodyH = (pos.height as number) - (g.list.side ? 0 : p.insets.bottom) - 34;
+  const bodyH = (pos.height as number) - (g.list.side ? 0 : p.insets.bottom) - 34 * k;
+  const pickRow = (r: TrackRow) => { L.onPick(r); };
+  const enterRow = (r: TrackRow) => { L.onPick(r); setItem(r); };
   return (
-    <View style={[styles.drawer, { width: w }, pos, !g.list.side && styles.drawerFlush]} onTouchStart={noteTouchInteraction}>
+    <>
+    <View style={[styles.drawer, { width: w }, pos, !g.list.side && styles.drawerFlush, inside && styles.drawerIn]} onTouchStart={noteTouchInteraction}>
+      {/* ★ the LIST stop (the chrome's walk): ENTER steps into the rows — a tap on it is nothing more than a tap on the drawer */}
+      {!inside && <NavRow><ListStop words={`The list, ${count} — Enter to step into the rows`} onEnter={() => setInside(true)} /></NavRow>}
+      <NavCtx.Provider value={inside ? scope.navCtx : null}>
       {/* the folder tabs: swap (top-left), maximise (top-right) */}
       <NavRow>
-        {wfOk && <ChipKey style={[styles.ftab, g.list.side ? { right: -34, top: 0 } : { left: 8, top: -26 }]} words={pane === 'wf' ? 'Show the list' : 'Show the live waterfall'}
-                          onPress={() => onPane(pane === 'wf' ? 'list' : 'wf')}><ModeIcon name={pane === 'wf' ? 'list' : 'waterfall'} size={15} color={C.ink} /></ChipKey>}
-        {!g.list.side && <ChipKey style={[styles.ftab, { right: 8, top: -26 }]} words={max ? 'Restore the list' : 'Maximise the list'} onPress={() => onMax(!max)}>
+        {wfOk && <ChipKey style={[styles.ftab, g.list.side ? { right: -34 * k, top: 0 } : { left: 8 * k, top: -26 * k }]} words={pane === 'wf' ? 'Show the list' : 'Show the live waterfall'}
+                          onPress={() => onPane(pane === 'wf' ? 'list' : 'wf')}><ModeIcon name={pane === 'wf' ? 'list' : 'waterfall'} size={17 * k} color={C.ink} /></ChipKey>}
+        {!g.list.side && <ChipKey style={[styles.ftab, { right: 8 * k, top: -26 * k }]} words={max ? 'Restore the list' : 'Maximise the list'} onPress={() => onMax(!max)}>
           <Text style={styles.ftabTxt}>{max ? '⌄' : '⌃'}</Text></ChipKey>}
       </NavRow>
       {pane === 'wf' && p.wf ? (
@@ -760,11 +843,13 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
           {!!L.route && <NavRow><View style={styles.listBar}>
             <Key label={L.route.on ? 'HIDE ROUTE' : 'ROUTE'} on={L.route.on} words={`${L.route.on ? 'Hide' : 'Show'} the route ${L.route.name}'s message came by, hop by hop`} onPress={() => L.onRoute?.()} />
             <Text style={styles.status} numberOfLines={1}>{L.route.name}</Text></View></NavRow>}
-          <ScrollView ref={scrollRef} style={{ height: bodyH - (L.filter ? 30 : 0) - (L.route ? 30 : 0) - (L.safety?.length ?? 0) * 18 }} contentContainerStyle={scrollLane} keyboardShouldPersistTaps="handled"
-                      scrollEventThrottle={64}
-                      onScroll={(e) => { const y = e.nativeEvent.contentOffset.y; if (y > 6 && !heldRef.current) setHeld(L.rows); else if (y <= 2 && heldRef.current) setHeld(null); }}>
+          <ScrollView ref={scrollRef} style={{ height: bodyH - ((L.filter ? 30 : 0) + (L.route ? 30 : 0) + (L.safety?.length ?? 0) * 18) * k }} contentContainerStyle={scrollLane} keyboardShouldPersistTaps="handled"
+                      scrollEventThrottle={16}
+                      onScroll={(e) => { scope.scrollProps.onScroll(e); const y = e.nativeEvent.contentOffset.y;
+                                         if (y > 6 && !heldRef.current) setHeld(L.rows); else if (y <= 2 && heldRef.current) setHeld(null); }}>
             {L.extraRows}
-            {rows.map((r) => <NavRow key={r.key}><ListRow r={r} sel={!!L.selected && L.selected === r.key} onPress={() => L.onPick(r)} /></NavRow>)}
+            {rows.map((r) => <NavRow key={r.key}><ListRow r={r} sel={!!L.selected && L.selected === r.key} preferred={r.key === firstPlaced}
+                                                          onPress={() => pickRow(r)} onEnter={() => enterRow(r)} /></NavRow>)}
             {!count && <Text style={styles.empty} numberOfLines={4}>{L.empty}</Text>}
             {L.foot}
           </ScrollView>
@@ -774,7 +859,7 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
       <NavRow>
         <View style={styles.foot}>
           <ChipKey style={styles.footChip} words={`Hide the list, ${count}`} onPress={() => onOpen(false)}>
-            <ModeIcon name="list" size={14} color={C.ink} /><Text style={styles.lChipN}>{count}</Text><Text style={styles.lChipChev}>{'⌄'}</Text>
+            <ModeIcon name="list" size={16 * k} color={C.ink} /><Text style={styles.lChipN}>{count}</Text><Text style={styles.lChipChev}>{'⌄'}</Text>
           </ChipKey>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ alignItems: 'center', gap: 4 }} keyboardShouldPersistTaps="handled">
             {pane === 'list' && (L.tabs?.length ?? 0) >= 2 && L.tabs!.map((t) => <Key key={t.id} label={`${t.label} ${t.n}`} on={L.tab === t.id} words={`${t.label}: ${t.n}`} onPress={() => L.onTab?.(t.id)} />)}
@@ -784,17 +869,62 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
           {pane === 'list' && !!L.sort && (
             <ChipKey style={styles.key} words={L.sort === 'nearest' ? 'Sorted nearest first — press for latest' : 'Sorted latest first — press for nearest'}
                      onPress={() => L.onSort?.(L.sort === 'nearest' ? 'latest' : 'nearest')}>
-              <ModeIcon name={L.sort === 'nearest' ? 'nearest' : 'clock'} size={14} color={C.ink} />
+              <ModeIcon name={L.sort === 'nearest' ? 'nearest' : 'clock'} size={16 * k} color={C.ink} />
             </ChipKey>
           )}
         </View>
       </NavRow>
+      </NavCtx.Provider>
+    </View>
+    {item && <ItemCard r={item} g={g} list={L} onClose={() => setItem(null)} onCentre={() => L.onPick(item)} />}
+    </>
+  );
+}
+/** The LIST's one stop in the chrome's walk: ENTER (a pad's enter, the keyboard's Enter) steps into the rows. Drawn over the
+ *  drawer's header line; a touch passes through to whatever is under it. */
+function ListStop({ words, onEnter }: { words: string; onEnter: () => void }) {
+  const { focused, viewRef } = useNavButton(onEnter);
+  const { ring } = useNavFocus();
+  return (
+    <View ref={viewRef as never} style={StyleSheet.absoluteFill} pointerEvents="none" accessible accessibilityRole="button" accessibilityLabel={words}>
+      <NavRing on={focused} color={ring} radius={12} />
     </View>
   );
 }
+/** ★★★ THE ITEM'S CARD for the pad (Stuart's flow, step 4): the row ENTER selected — centred on the map, its page card open —
+ *  with the controls the pad can reach (the page's card is HTML, out of the pad's reach): ROUTE where its node carries one,
+ *  CENTRE, CLOSE. Its own scope: the highlight lands on its first control; BACK shuts it and the highlight is on the same row. */
+function ItemCard({ r, g, list, onClose, onCentre }: { r: TrackRow; g: ReturnType<typeof chromeGeom>; list: ListIn; onClose: () => void; onCentre: () => void }) {
+  const styles = useStyles();
+  const k = useK();
+  const scope = usePanelNav(true, { flat: true, onBack: () => { onClose(); return true; } });
+  const route = list.route && list.selected === r.key ? list.route : null;
+  const x = g.list.side ? g.list.x + g.list.w + GAP * k : GAP * k;
+  const kv = [r.sp, r.range && r.range !== 'no position' ? r.range : '', r.gs ?? '', r.age ? `heard ${r.age}` : ''].filter(Boolean).join(' \u00b7 ');
+  return (
+    <NavCtx.Provider value={scope.navCtx}>
+      <View style={[styles.card, styles.itemCard, { left: x, top: g.safe.t + 70 * k, width: Math.min(320 * k, g.safe.r - x - GAP * k) }]} accessibilityLabel={`${r.name} card`}>
+        <View style={styles.cardHead}>
+          <Text style={styles.cardTitle} numberOfLines={1}>{r.name}</Text>
+          <NavRow><ChipKey style={styles.cardX} words={`Close the ${r.name} card`} onPress={onClose} hitSlop={8}><Text style={styles.cardXTxt}>{'\u00d7'}</Text></ChipKey></NavRow>
+        </View>
+        {!!r.second && <Text style={styles.facts} numberOfLines={3}>{r.second}</Text>}
+        {!!kv && <Text style={styles.facts} numberOfLines={2}>{kv}</Text>}
+        <NavRow><View style={styles.keyRow}>
+          {route && <ChipKey style={[styles.key, route.on && styles.keyOn]} preferred words={`${route.on ? 'Hide' : 'Show'} the route ${route.name}'s message came by`} onPress={() => list.onRoute?.()}>
+            <Text style={[styles.keyTxt, route.on && { color: '#111' }]}>{route.on ? 'HIDE ROUTE' : 'ROUTE'}</Text></ChipKey>}
+          <ChipKey style={styles.key} preferred={!route} words={`Centre ${r.name} on the map`} onPress={onCentre}><Text style={styles.keyTxt}>CENTRE</Text></ChipKey>
+          <ChipKey style={styles.key} words="Close the card — back to the list" onPress={onClose}><Text style={styles.keyTxt}>CLOSE</Text></ChipKey>
+        </View></NavRow>
+      </View>
+    </NavCtx.Provider>
+  );
+}
 /** A row: [flag] CALLSIGN [MIL]/[EMERG] [FL | nm | kt] … SNR chip + age */
-function ListRow({ r, sel, onPress }: { r: TrackRow; sel: boolean; onPress: () => void }) {
-  const { focused, viewRef } = useNavButton(onPress);
+function ListRow({ r, sel, onPress, onEnter, preferred }: { r: TrackRow; sel: boolean; onPress: () => void; onEnter?: () => void; preferred?: boolean }) {
+  const styles = useStyles();
+  // ★ a tap selects and centres it (the page opens its card); ENTER on a pad / keyboard does that AND opens the pad's item card
+  const { focused, viewRef } = useNavButton(onEnter ?? onPress, false, { preferred: !!preferred });
   const { ring } = useNavFocus();
   const kv = [r.sp, r.range && r.range !== 'no position' ? r.range : '', r.gs ?? ''].filter(Boolean);
   return (
@@ -818,8 +948,7 @@ function ListRow({ r, sel, onPress }: { r: TrackRow; sel: boolean; onPress: () =
     </TouchableOpacity>
   );
 }
-
-const styles = StyleSheet.create({
+const RAW = {
   dim: { opacity: 0.42 },
   chip: { position: 'absolute', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, alignItems: 'center', justifyContent: 'center' },
   chipPos: { position: 'absolute' },
@@ -833,11 +962,11 @@ const styles = StyleSheet.create({
   rate: { position: 'absolute', backgroundColor: C.ground, borderColor: C.rim, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   rateCorner: { borderTopWidth: 0, borderRightWidth: 0, borderBottomLeftRadius: 14 },
   rateTxt: { fontFamily: F, fontSize: 11, color: C.ink, textAlign: 'center' },
-  famCol: { alignItems: 'center', gap: 1 },
+  famCol: { alignItems: 'center', gap: 3 },
   famRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   famItem: { alignItems: 'center' },
   famItemRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  famN: { fontFamily: F, fontSize: 9.5, color: C.ink },
+  famN: { fontFamily: F, fontSize: 11.5, color: C.ink },
   badge: { position: 'absolute', top: 6, right: 6, width: 8, height: 8, borderRadius: 4, backgroundColor: '#ff6b5a' },
   pulseRing: { borderRadius: 14, borderWidth: 2, borderColor: '#ffcf7a' },
   pill: { backgroundColor: 'rgba(40,30,12,0.96)', borderWidth: 1, borderColor: 'rgba(255,190,80,0.5)', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
@@ -846,9 +975,9 @@ const styles = StyleSheet.create({
   pillLocked: { borderColor: 'rgba(255,120,100,0.6)', backgroundColor: 'rgba(58,20,16,0.96)' },
   pillTxt: { fontFamily: F, fontSize: 11, letterSpacing: 0.5, color: '#ffcf7a' },
   card: { position: 'absolute', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 12, paddingHorizontal: 8, paddingTop: 4, zIndex: 40 },
-  cardHead: { flexDirection: 'row', alignItems: 'center', height: 34 },
+  cardHead: { flexDirection: 'row', alignItems: 'center', height: 46 },
   cardTitle: { flex: 1, fontFamily: F, fontSize: 11, letterSpacing: 1.4, color: C.dim },
-  cardX: { width: 34, height: 30, alignItems: 'center', justifyContent: 'center' },
+  cardX: { width: 44, height: 44, marginRight: -8, alignItems: 'center', justifyContent: 'center' },
   cardXTxt: { color: C.ink, fontSize: 22, lineHeight: 24 },
   facts: { fontFamily: F, fontSize: 10.5, color: C.dim, paddingHorizontal: 4, paddingVertical: 4 },
   grp: { fontFamily: F, fontSize: 9.5, letterSpacing: 1.2, color: C.faint, paddingHorizontal: 6, paddingTop: 8, paddingBottom: 3 },
@@ -893,6 +1022,9 @@ const styles = StyleSheet.create({
   lChipN: { fontFamily: F, fontSize: 12.5, color: C.ink },
   lChipChev: { fontFamily: F, fontSize: 12, color: C.dim },
   drawer: { position: 'absolute', backgroundColor: C.ground, borderWidth: 1, borderColor: C.rim, borderRadius: 12 },
+  drawerIn: { borderColor: '#ffd34d' },
+  itemCard: { zIndex: 60, paddingBottom: 8 },
+  mapState: { position: 'absolute', right: -7, bottom: -6, backgroundColor: 'rgba(12,14,12,0.95)', borderRadius: 7 },
   drawerFlush: { borderLeftWidth: 0, borderBottomWidth: 0, borderBottomLeftRadius: 0, borderTopLeftRadius: 0 },
   ftab: { position: 'absolute', width: 34, height: 26, backgroundColor: C.ground, borderWidth: 1, borderBottomWidth: 0, borderColor: C.rim, borderTopLeftRadius: 8, borderTopRightRadius: 8, alignItems: 'center', justifyContent: 'center' },
   ftabTxt: { color: C.ink, fontSize: 13 },
@@ -916,4 +1048,4 @@ const styles = StyleSheet.create({
   kv: { fontFamily: F, fontSize: 10, color: C.dim, flexShrink: 1, marginLeft: 4 },
   lsecond: { fontFamily: F, fontSize: 9.5, color: C.faint, marginTop: 1 },
   age: { fontFamily: F, fontSize: 10, color: C.dim, minWidth: 30, textAlign: 'right' },
-});
+} as const;

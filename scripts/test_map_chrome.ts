@@ -4,9 +4,10 @@
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
+import { revealScrollTarget } from '../src/utils/navReveal';
 import { ndbSanitise } from '../src/services/ndb';
 import { fitDefault } from '../src/utils/mapCards';
 
@@ -166,12 +167,38 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
 // ── the pad's order ──
 {
   const g = chromeGeom({ w: 956, h: 376, insets: { top: 0, bottom: 20, left: 62, right: 62 }, chips: ALL });
-  const o = padOrder(g, { cardOpen: true, listRows: 2, br: true });
-  ok(o[0] === 'chip:exit' && o.indexOf('chip:rate') < o.indexOf('card') && o.indexOf('card') < o.indexOf('row:0') && o[o.length - 1] === 'help',
-     `short: the top row → the card → LIST rows → bottom-right (${o.join(' ')})`);
+  const o = padOrder(g, { listRows: 100, br: true, pill: true });
+  ok(o[0] === 'chip:exit' && o.indexOf('chip:rate') < o.indexOf('pill') && o.indexOf('pill') < o.indexOf('list') && o[o.length - 1] === 'help',
+     `short: the top row → the pill → the LIST (one stop) → bottom-right (${o.join(' ')})`);
+  ok(!o.some((x) => x.startsWith('row:')) && o.indexOf('help') === o.indexOf('list') + 1, 'the LIST is ONE stop: Down from it goes PAST the rows to the bottom-right group (100 rows, none visited)');
+  const inside = padOrder(g, { listInside: true, listRows: 3, br: true });
+  ok(inside.join() === 'row:0,row:1,row:2,bar', `ENTER on the LIST steps INTO it: its rows, then its bar (${inside.join(' ')}); BACK steps out`);
+  ok(padOrder(g, { cardOpen: true, listRows: 9, br: true }).join() === 'card', 'an open card is its own scope (ENTER opens it, BACK shuts it)');
   const t = chromeGeom({ w: 375, h: 560, insets: { top: 20, bottom: 0, left: 0, right: 0 }, chips: ALL });
-  const ot = padOrder(t, { cardOpen: false, listRows: 0, br: false });
+  const ot = padOrder(t, { br: false });
   ok(ot[0] === 'chip:exit' && ot.indexOf('chip:stats') < ot.indexOf('chip:rate'), `tall: the left family, then the right column (${ot.join(' ')})`);
+}
+// ── the highlighted row is scrolled into view (index 40 of 100, from the top and from mid-list) ──
+{
+  const rowH = 44, viewH = 5 * rowH;
+  const at = (i: number, y: number) => i * rowH - y;   // the row's distance from the viewport's top
+  const y1 = revealScrollTarget(at(40, 0), rowH, viewH, 0);
+  ok(y1 != null && at(40, y1) >= rowH && at(40, y1) + rowH <= viewH - rowH, `row 40 of 100 highlighted from the top → scrolled to ${y1}: fully visible with a row's margin`);
+  const y2 = revealScrollTarget(at(41, 1680), rowH, viewH, 1680);
+  ok(y2 === null, 'the next row still on screen: no jump');
+  const y3 = revealScrollTarget(at(20, 1680), rowH, viewH, 1680);
+  ok(y3 != null && at(20, y3) >= 0 && at(20, y3) + rowH <= viewH, 'from mid-list, back up to row 20: scrolled into view');
+  ok(revealScrollTarget(at(0, 100), rowH, viewH, 100) === 0, 'never above the top');
+}
+// ── the chrome's size follows the window (Stuart: "on the iPad/Mac build they are super tiny") ──
+{
+  ok(chromeScale(390, 844) === 1 && chromeScale(956, 376) === 1, 'a phone (either way up): the reference size');
+  ok(Math.abs(chromeScale(820, 1180) - 1180 / 926) < 1e-9 && chromeScale(1440, 900) === 1.45 && chromeScale(2560, 1440) === 1.45, `iPad / Mac windows: by the long side, ≤ 1.45 (${chromeScale(820, 1180).toFixed(2)}, ${chromeScale(1440, 900)})`);
+  ok(Math.round(44 * chromeScale(1440, 900) * 0.77) === 49, 'a 1440-pt Mac window at the Mac’s 77 %: the chip ≈ 49 px (the web’s 48)');
+  const at = chromeGeomAt({ w: 1440, h: 900, insets: { top: 24, bottom: 0, left: 0, right: 0 }, chips: ALL }, 1.45);
+  ok(at.g.boxes.servers!.h === 44 * 1.45 && !at.g.short && at.g.boxes.exit!.x === 0, 'the layout at scale: the same rules, every distance × k');
+  const c = cardBoxAt(at, 'tune', 1440, 900);
+  ok(c.w <= 340 * 1.45 + 0.01 && c.x >= at.g.boxes.tune!.x + at.g.boxes.tune!.w && c.x + c.w <= 1440, 'a card at scale opens beside its chip, inside the window');
 }
 
 // ── SERVERS: LEAVE always, then every other radio with its listeners ──
@@ -237,6 +264,42 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const m1 = wfModelNdb(rep2, seen, false);
   ok(m1.stamps.length === 1 && m1.stamps[0].text === 'LA' && m1.stamps[0].hz === 400500, `a NEW decoded ident is stamped at its frequency (${JSON.stringify(m1.stamps)})`);
   ok(wfModelNdb(rep2, seen, false).stamps.length === 0, 'the same reading again: not stamped twice');
+}
+
+// ── Stuart's LIST flow, step by step (the R36S handheld's): stop → ENTER rows → Down ×3 → ENTER its card → BACK same row → BACK stop ──
+{
+  const o = { rows: 100, firstPlaced: 2 };
+  let st: ReturnType<typeof listFlowStep> = { at: 'stop', row: 0 };
+  const step = (k: 'enter' | 'back' | 'up' | 'down') => { if (st !== 'out') st = listFlowStep(st, k, o); return st; };
+  step('down');
+  ok(st !== 'out' && st.at === 'stop', '1. Down on the LIST stop does not enter it (the chrome’s walk moves on past it)');
+  step('enter');
+  ok(st !== 'out' && st.at === 'rows' && st.row === 2, '2. ENTER → into the list: the first row with a place on the map');
+  step('down'); step('down'); step('down');
+  ok(st !== 'out' && st.at === 'rows' && st.row === 5, '3. Down × 3 → row by row (the list scrolls to keep it in view)');
+  step('enter');
+  ok(st !== 'out' && st.at === 'item' && st.row === 5, '4. ENTER on a row → its card, the highlight in it');
+  step('down');
+  ok(st !== 'out' && st.at === 'item', '   (Up / Down in the card are the card’s own keys)');
+  step('back');
+  ok(st !== 'out' && st.at === 'rows' && st.row === 5, '5. BACK in the card → the card shut, the highlight on the SAME row');
+  step('back');
+  ok(st !== 'out' && st.at === 'stop', '6. BACK again → out of the list, the highlight on the LIST stop');
+  step('back');
+  ok(st === 'out', '   BACK on the stop passes on (the chrome’s BACK: a card, then the map’s exit)');
+  ok(listFlowStep({ at: 'rows', row: 99 }, 'down', o) !== 'out' && (listFlowStep({ at: 'rows', row: 99 }, 'down', o) as { row: number }).row === 99, 'the last row stays the last');
+  ok((listFlowStep({ at: 'stop', row: 0 }, 'enter', { rows: 0, firstPlaced: 0 }) as { at: string }).at === 'stop', 'an empty list: ENTER stays on the stop');
+}
+
+// ── the LAYERS chip grows to hold its families (Stuart, build 586: "the chip doesn't grow to accommodate it") ──
+{
+  const g = chromeGeom({ w: 440, h: 956, insets: { top: 62, bottom: 34, left: 0, right: 0 }, chips: ALL, layersTallH: 2 * 31 + 10, layersTallW: 16 + 3 * 7.2 });
+  const ly = g.boxes.layers!;
+  ok(ly.h === 72 && ly.w >= 44 && g.boxes.stats!.y >= ly.y + ly.h, `tall: LAYERS as tall as its two families (${ly.h} pt) and the next chip below it`);
+  const g1 = chromeGeom({ w: 440, h: 956, insets: { top: 62, bottom: 34, left: 0, right: 0 }, chips: ALL, layersTallH: 10, layersTallW: 10 });
+  ok(g1.boxes.layers!.h === 44 && g1.boxes.layers!.w === 44, 'never smaller than a chip');
+  const wide = chromeGeom({ w: 440, h: 956, insets: { top: 62, bottom: 34, left: 0, right: 0 }, chips: ALL, layersTallW: 16 + 5 * 7.2 });
+  ok(wide.boxes.layers!.w > 44, 'a five-figure count widens it');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

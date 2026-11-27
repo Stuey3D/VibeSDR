@@ -69,6 +69,10 @@ export interface ChromeIn {
   rateW?: number;
   /** HEALTH's measured height in the tall layout (the EdgeChip pair: TIME sits under it). */
   healthH?: number;
+  /** ★★★ the LAYERS chip in the tall layout: its families stacked, icon over count — it GROWS to hold them (Stuart, build 586:
+   *  "the chip doesn't grow to accommodate it"), never smaller than a chip. */
+  layersTallW?: number;
+  layersTallH?: number;
 }
 export interface ChromeGeom {
   short: boolean;
@@ -147,11 +151,13 @@ export function chromeGeom(p: ChromeIn): ChromeGeom {
   if (has('rate')) boxes.rate = { x: w - rateW - ins.right, y: 0, w: rateW + ins.right, h: CORNER + ins.top };
   const leftIds: ChipId[] = (['servers', 'tune', 'layers', 'stats'] as ChipId[]).filter(has);
   // the whole stack MAP would join: the ✕, the chips, the LIST chip, their gaps
-  const stackH = boxes.exit.h + GAP + (leftIds.length + 1) * (CHIP + GAP) + LIST_CHIP_H;
+  const lyH = Math.max(CHIP, finite(p.layersTallH ?? CHIP, CHIP)), lyW = Math.max(CHIP, finite(p.layersTallW ?? CHIP, CHIP));
+  const hOf = (id: ChipId) => (id === 'layers' ? lyH : CHIP);
+  const stackH = boxes.exit.h + GAP + (leftIds.length + 1) * (CHIP + GAP) + (leftIds.includes('layers') ? lyH - CHIP : 0) + LIST_CHIP_H;
   const one = has('map') && oneSideRule(h, stackH);
   if (one) leftIds.push('map');
   let y = boxes.exit.h + GAP;
-  for (const id of leftIds) { boxes[id] = { x: 0, y, w: CHIP + ins.left, h: CHIP }; cardFrom[id] = 'L'; y += CHIP + GAP; }
+  for (const id of leftIds) { const hh = hOf(id); boxes[id] = { x: 0, y, w: (id === 'layers' ? lyW : CHIP) + ins.left, h: hh }; cardFrom[id] = 'L'; y += hh + GAP; }
   const leftFoot = y;
   // the right column under RATE (or under the top inset when no RATE): CHAT, then MAP when flanking; then HEALTH, TIME
   let ry = (boxes.rate ? boxes.rate.h : ins.top) + GAP;
@@ -524,13 +530,66 @@ export const CREDITS_FOLD_MS = 5000;
 /** The ask-lock pulse on the pill and CHAT: this long, then it stops (2–3 s). */
 export const ASK_PULSE_MS = 2600;
 
-/** ★ The pad's reading order across the chrome (controller): the top row / family, then the open card, then LIST's rows,
- *  then the bottom-right group. Only what is offered. */
-export function padOrder(g: ChromeGeom, opts: { cardOpen: boolean; listRows: number; br: boolean }): string[] {
+/** ★★★ THE PAD'S WALK (the web's rules, Stuart on build 586: "moving the arrow down on the list goes to the lower lines but
+ *  doesn't scroll; also scrolling a super long list to get to the buttons underneath"): the chips in reading order, the
+ *  pill, then the LIST as ONE stop, then the bottom-right group — never through the rows. ENTER on the LIST steps INTO it
+ *  (its rows, then its bar's keys; BACK steps out to the LIST stop). An open card is its own scope (ENTER on a chip opens
+ *  it and the highlight goes inside; BACK shuts it and the highlight is back on its chip). */
+export function padOrder(g: ChromeGeom, opts: { cardOpen?: boolean; listInside?: boolean; listRows?: number; br: boolean; pill?: boolean }): string[] {
+  if (opts.cardOpen) return ['card'];
+  if (opts.listInside) return [...Array.from({ length: Math.max(0, opts.listRows ?? 0) }, (_, i) => `row:${i}`), 'bar'];
   const chips = (Object.keys(g.boxes) as ChipId[]).sort((a, b) => {
     if (g.short) return (g.boxes[a]!.x - g.boxes[b]!.x);
     const side = (id: ChipId) => (g.cardFrom[id] === 'R' || id === 'rate' ? 1 : 0);
     return side(a) - side(b) || g.boxes[a]!.y - g.boxes[b]!.y;
   });
-  return [...chips.map((c) => `chip:${c}`), ...(opts.cardOpen ? ['card'] : []), 'list', ...Array.from({ length: Math.max(0, opts.listRows) }, (_, i) => `row:${i}`), ...(opts.br ? ['help'] : [])];
+  return [...chips.map((c) => `chip:${c}`), ...(opts.pill ? ['pill'] : []), 'list', ...(opts.br ? ['help'] : [])];
+}
+
+/** ★★★ STUART'S LIST FLOW (as the R36S handheld UI — the same spec the web follows), as a pure step function the LIST drawer
+ *  runs on ENTER / BACK (Up / Down are the scope's own walk, row by row, the list scrolling to keep the row in view):
+ *    stop  + ENTER → rows   (the first row with a place on the map)
+ *    rows  + ENTER → item   (that row selected: centred, its card opened, the highlight INTO the card)
+ *    item  + BACK  → rows   (the card shut, the highlight on the SAME row)
+ *    rows  + BACK  → stop   (out of the list; free to move round the chips and the bottom-right group)
+ *    stop  + BACK  → out    (passed on: the chrome's own BACK — a card, then the map's exit) */
+export type ListFlow = { at: 'stop' | 'rows' | 'item'; row: number };
+export function listFlowStep(st: ListFlow, key: 'enter' | 'back' | 'up' | 'down', o: { rows: number; firstPlaced: number }): ListFlow | 'out' {
+  if (key === 'back') return st.at === 'item' ? { at: 'rows', row: st.row } : st.at === 'rows' ? { at: 'stop', row: st.row } : 'out';
+  if (key === 'enter') {
+    if (st.at === 'stop') return o.rows > 0 ? { at: 'rows', row: Math.max(0, Math.min(o.rows - 1, o.firstPlaced)) } : st;
+    if (st.at === 'rows') return { at: 'item', row: st.row };
+    return st;
+  }
+  if (st.at !== 'rows' || o.rows <= 0) return st;
+  return { at: 'rows', row: Math.max(0, Math.min(o.rows - 1, st.row + (key === 'down' ? 1 : -1))) };
+}
+
+/** ★★★ THE CHROME'S SIZE (Stuart, build 586 on the Mac: "on the iPad/Mac build they are super tiny"): a phone's window is the
+ *  reference (1); a TABLET-SIZED window (shorter side ≥ 600 — every iPad, a Mac window) scales by its long side the way the
+ *  rest of the app does (useUiScale: max(W, H) / 926), 1 … 1.45 — so a 1440-point Mac window, drawn at the Mac's 77 %, shows
+ *  a 64-point chip as ≈ 49 px: the web's 48. The window, never the device. */
+export const CHROME_SCALE_MAX = 1.45;
+export function chromeScale(w: number, h: number): number {
+  if (!(Math.min(w, h) >= 600)) return 1;
+  return Math.max(1, Math.min(CHROME_SCALE_MAX, Math.max(w, h) / 926));
+}
+/** The layout at scale k: worked out on the window divided by k (so the same rules decide), then every distance times k. */
+export function chromeGeomAt(p: ChromeIn, k: number): { g: ChromeGeom; g0: ChromeGeom; k: number } {
+  const kk = Number.isFinite(k) && k > 0 ? k : 1;
+  const g0 = chromeGeom({ ...p, w: p.w / kk, h: p.h / kk, insets: { top: p.insets.top / kk, bottom: p.insets.bottom / kk, left: p.insets.left / kk, right: p.insets.right / kk } });
+  if (kk === 1) return { g: g0, g0, k: 1 };
+  const m = (v: number) => v * kk;
+  const bx = (b: Box): Box => ({ x: m(b.x), y: m(b.y), w: m(b.w), h: m(b.h) });
+  const boxes: ChromeGeom['boxes'] = {};
+  for (const id of Object.keys(g0.boxes) as ChipId[]) boxes[id] = bx(g0.boxes[id]!);
+  const g: ChromeGeom = { ...g0, boxes, safe: { l: m(g0.safe.l), r: m(g0.safe.r), t: m(g0.safe.t), b: m(g0.safe.b) },
+    list: { ...g0.list, x: m(g0.list.x), bottom: m(g0.list.bottom), w: m(g0.list.w), maxH: m(g0.list.maxH), top: m(g0.list.top) },
+    pill: { ...g0.pill, x: m(g0.pill.x), w: m(g0.pill.w), y: m(g0.pill.y) }, br: { ...g0.br, right: m(g0.br.right), bottom: m(g0.br.bottom) }, zoomTop: m(g0.zoomTop) };
+  return { g, g0, k: kk };
+}
+/** A card's box at scale k (cardBox on the unscaled layout, times k). */
+export function cardBoxAt(at: { g0: ChromeGeom; k: number }, id: ChipId, w: number, h: number): { x: number; y: number; w: number; maxH: number } {
+  const c = cardBox(at.g0, id, w / at.k, h / at.k);
+  return { x: c.x * at.k, y: c.y * at.k, w: c.w * at.k, maxH: c.maxH * at.k };
 }

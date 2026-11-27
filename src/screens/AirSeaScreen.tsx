@@ -33,6 +33,9 @@ import { navSanitise, navSince, navRangeOf, type NavReport } from '../services/n
 import { navWarnSanitise, navMetSanitise, type NavWarnReport, type NavMetReport } from '../services/navtexWarn';
 import { storedLoader, type GalPos, type StoredKind } from '../services/storedLayers';
 import type { LiveTab, AircraftSort } from '../services/liveMaps';
+import type { MapCardsIn } from '../components/MapChrome';
+import { rateRows } from '../utils/mapChrome';
+import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
 
 export type AirSeaParams = {
   /** the SERVER's address (the front door, or the one-radio server itself) */
@@ -194,6 +197,25 @@ export default function AirSeaScreen({ navigation, route }: { navigation: any; r
   [shared, shipStore, dscGal, navReport, navWarnRep, navMetRep, navRange, sdStored, vmStored, avLayers, shipLayers, rx, view, picked, openTab, sort, msgKey, vst.clock, tick, cardText]);
 
   const close = useCallback(() => { void viewer.leave(); navigation.goBack(); }, [viewer, navigation]);
+  /* ★★★ beta97 THE MAP CARDS on the viewer too (Stuart, build 586 on the Lenovo: SERVERS and STATS were missing): SERVERS
+   *  (LEAVE — back to where the map was opened), STATS (every source's aircraft, per mode — mapStats.ts), RATE (each feed's
+   *  own messages a second, the busiest first). No TUNE (nothing here moves a radio), no gain, no waterfall. */
+  const stats = useRef<StatsStore>(new Map());
+  const statsOpened = useRef(Date.now());
+  const sections = useMemo(() => {
+    const now = Date.now();
+    const obs: Array<{ mode: string; key: string; lat: number; lon: number; name: string }> = [];
+    for (const pl of shared?.aircraft ?? []) if (pl.lat != null && pl.lon != null) for (const m of pl.src) obs.push({ mode: m, key: `a:${pl.key}`, lat: pl.lat, lon: pl.lon, name: pl.flight || pl.reg || pl.icao || '' });
+    statsSeen(stats.current, obs, now);
+    return statsSections(stats.current, rx, now, statsOpened.current);
+  }, [shared, rx]);
+  const cards = useMemo<MapCardsIn>(() => ({
+    servers: { rows: [{ id: 'back', label: 'Leave \u2014 back', sub: route.params?.name ?? base.replace(/^https?:\/\//, '') }], onPick: () => close() },
+    gain: { kind: 'none', more: false }, gainH: { onAgc: () => {}, onSet: () => {} },
+    stats: sections.length ? { sections, onPick: () => {} } : null,
+    rate: rateRows({ feeds: shared?.feeds ?? [] }),
+    health: null, time: null, wf: null,
+  }), [sections, shared?.feeds, close, route.params?.name, base]);
 
   // ── refused: one sentence and the way back (pad: the one key, highlighted) ──
   // ★ the pad: the card's one key (Enter or Back); while the map is open it is MapOverlay's own (useOverlay — Back closes it)
@@ -224,6 +246,7 @@ export default function AirSeaScreen({ navigation, route }: { navigation: any; r
           rxLat={rx?.lat ?? null}
           rxLon={rx?.lon ?? null}
           trk={trk as any}
+          cards={cards}
           adsbFeedWarn={vst.banner || shared?.feedWarn || ''}
           safeInsets={insets}
         />

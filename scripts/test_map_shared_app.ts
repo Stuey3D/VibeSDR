@@ -16,10 +16,14 @@ ok(/const exitLocked = !!dialLock\?\.why && dialLock\.exitMoves;/.test(mo) && /d
 ok(/exitLocked=\{exitLocked\} onExit=\{closeGuarded\}/.test(mo) && /exit=\{\{ label: exitLabel, words: exitWords, locked: p\.exitLocked, onPress: p\.onExit \}\}/.test(mo), 'the cards\' ✕ is closeGuarded, greyed while locked');
 ok(!existsSync(new URL('../src/components/MapTopStrip.tsx', import.meta.url)) && !/MapTopStrip|__backLock|t === 'mapTop'/.test(mo), '★★★ the old strip, its bar height and the page key\'s lock are DELETED, not hidden');
 ok(!/<div id="topbar">/.test(mo), '★★★ no map page has a top bar of its own (the cards)');
-ok(/<NavCtx\.Provider value=\{nav\.navCtx\}>/.test(st) && (st.match(/usePanelNav\(/g) || []).length === 1, 'ONE pad order for every chip, card and LIST row (never two owners)');
+// ★★★ beta97 (Stuart's controller flow): ONE walk for the chips / pill / LIST stop / bottom-right; an open card, the LIST's
+//     inside and an item's card are each a SCOPE above it (the top owner takes the pad; BACK steps out one scope)
+ok(/<NavCtx\.Provider value=\{nav\.navCtx\}>/.test(st) && (st.match(/usePanelNav\(/g) || []).length === 4
+   && /const scope = usePanelNav\(inside, \{ flat: true, onBack: \(\) => \{ setInside\(false\); setItem\(null\); return true; \} \}\);/.test(st)
+   && /<NavCtx\.Provider value=\{inside \? scope\.navCtx : null\}>/.test(st), 'ONE walk; a card, the LIST\'s rows and an item\'s card are scopes above it (rows never in the walk)');
 
 console.log('── MapChrome ──');
-ok((st.match(/useNavButton\(onPress\)/g) || []).length >= 2 && /<NavRing/.test(st), 'every key, chip and TUNE row is a pad key');
+ok(/useNavButton\(padPress \?\? onPress/.test(st) && /useNavButton\(onEnter \?\? onPress/.test(st) && /<NavRing/.test(st), 'every key, chip, row and TUNE row is a pad key');
 ok(/onPress=\{\(\) => \(tuneLocked \? refuse\(\) : toggle\(id\)\)\}/.test(st) && /const refuse = \(\) => \{ setPulseAt\(Date\.now\(\)\); p\.onLocked\(p\.lockWhy\); \};/.test(st), 'the TUNE chip is refused with the reason while locked — and the pill + CHAT pulse');
 ok(/if \(r\.why\) \{ t\.onRefused\(r\.why\); return; \}/.test(st) && /if \(!r\.live\) t\.onPick\(r\.id\)/.test(st), 'a row the server greys says why; a pick tunes (not the live one)');
 ok(/TUNE_ICON_PATH\[r\.icon\]/.test(st) && /TUNE_GROUP_LABEL\[r\.group\]/.test(st), 'rows: icon, grouped');
