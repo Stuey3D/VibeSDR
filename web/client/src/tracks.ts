@@ -755,6 +755,7 @@ const CSS = `
 @keyframes trkAskFlash{0%{opacity:.5}100%{opacity:1}}
 /* ★★ the radio page's SERVER HEALTH chip, lent to the map's right column (main.ts mapChromeAdopt) — in the flow, not fixed */
 .trkView .mChipsR #srvHealth{position:relative!important;top:auto!important;right:auto!important;left:auto!important;bottom:auto!important;transform:none!important;pointer-events:auto;align-self:flex-end}
+.trkView .mChipsR #rxBadge{position:relative!important;top:auto!important;right:auto!important;align-self:flex-end;padding-right:12px;margin-top:-4px}
 .mTime .hCard{padding:6px 5px!important;min-width:30px}
 .mTime .tl{writing-mode:vertical-rl;transform:rotate(180deg);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#cfd9e3}
 .mTime.warn .tl{color:#ffd479}.mTime.crit .tl{color:#ff8a7d}

@@ -144,7 +144,7 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(pz.bar && pz.chat && pz.run > 0, `${tag} ${w}: a locked press pulses the shared-tuner bar and CHAT (${JSON.stringify(pz)})`);
     await sleep(4000);
     ok(await p.ev(`document.getAnimations().filter(a => a.playState === 'running' && /^trkAsk/.test(a.animationName || '')).length`) === 0, `${tag} ${w}: …and 4 s later the pulse has stopped (no trkAsk animation running)`);
-    ok(/^Shared VFO: .+ \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
+    ok(/^Shared VFO(: .+| · \w+ ·) \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
     ok(await p.ev(`(() => { const d = ${V}.querySelector('.mDock[data-dock="rate"]'); return d.hidden || /\/s$|\/min$/.test(d.querySelector('.ru').textContent); })()`), `${tag} ${w}: RATE shows a rate or nothing — never a count`);

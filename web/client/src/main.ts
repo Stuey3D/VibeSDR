@@ -4173,6 +4173,7 @@ window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderM
 /* ★★ Stuart 14:38: the radio page's own SERVER HEALTH chip lent to the map's right column while a map is up (the same
  *  element, so its card, its tuck and its alerts work as they do on the page), and the TIME LIMIT mirrored as a chip. */
 const healthHome: { parent: Node | null; next: Node | null } = { parent: null, next: null };
+const badgeHome: { parent: Node | null; next: Node | null } = { parent: null, next: null };
 /* ★★★ Stuart 14:55 ("gain setting is missing"): the TUNE card carries the radio page's OWN gain controls — the same
  *  nodes, lent while a map is up and put back after: #rowGain + #rowAgc (an RTL's list and VIBE AGC), #rspCtls (an RSP's
  *  LNA state / IF reduction), #ahfCtls (the HF+'s attenuator + preamp), #aspCtls / #hrfCtls / #usrpCtls. The page already
@@ -4205,12 +4206,20 @@ function mapChromeAdopt(on: boolean) {
     if (on && col) { if (h.parentElement !== col) { healthHome.parent = h.parentNode; healthHome.next = h.nextSibling; col.insertBefore(h, col.querySelector('[data-dock="map"]')); } }
     else if (!on && healthHome.parent && h.parentNode !== healthHome.parent) h.parentNode && (healthHome.parent as Element).insertBefore(h, healthHome.next && healthHome.next.parentNode === healthHome.parent ? healthHome.next : null);
   }
+  /* ★ Stuart 15:01 ("time and health still not correct server ones"): the page's time is not a chip — it is the
+   *  receiver badge (#rxBadge: the radio's name, where it is, "Guaranteed time 14:40"), right under the health pill. The
+   *  same element is lent, straight under the lent health pill, exactly as the page shows it; the mirrored TIME chip went. */
+  const b = document.getElementById('rxBadge');
+  if (b) {
+    if (on && col) { if (b.parentElement !== col) { badgeHome.parent = b.parentNode; badgeHome.next = b.nextSibling; const hh = document.getElementById('srvHealth'); col.insertBefore(b, hh && hh.parentElement === col ? hh.nextSibling : col.querySelector('[data-dock="map"]')); } }
+    else if (!on && badgeHome.parent && b.parentNode !== badgeHome.parent) (badgeHome.parent as Element).insertBefore(b, badgeHome.next && badgeHome.next.parentNode === badgeHome.parent ? badgeHome.next : null);
+  }
   mapTimeSync();
 }
 function mapTimeSync() {
   const t = document.getElementById('rxTimeLeft');
   const text = t && !t.hidden ? (t.textContent || '').trim() : '';
-  for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft(text, t?.className || '');
+  void text; for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft('', '');   // ★ the page's own badge carries it now
 }
 window.addEventListener('vibe:mapopened', () => { mapChromeAdopt(true); mapDeckVars(); });
 /** ★ the shared-tuner bar wears the control deck's material: the look (skin, transparency) is put on #mcard only

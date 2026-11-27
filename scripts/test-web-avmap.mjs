@@ -139,7 +139,7 @@ try {
     ok(!(await ev(`/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(${V}.querySelector('.rows').textContent)`)), '★ MESSAGES: labels only, never a body (not the owner)');
     await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
     ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'aircraft'`, 3000), 'the AIRCRAFT tab');
-    ok(await ev(`${V}.querySelector('.trkList .hd .srt [aria-pressed="true"]')?.textContent`) === 'LATEST', 'DATALINK: the aircraft sort is LATEST');
+    ok(await ev(`${V}.querySelector('.trkList .hd .srt .srtT')?.dataset.srt`) === 'latest', 'DATALINK: the aircraft sort is LATEST (the one sort toggle wears the current sort)');
     const rowsTxt = () => ev(`${V}?.querySelector('.rows')?.textContent || ''`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '') && /VDL2 \\+ ADS-B|ADS-B \\+ VDL2/.test(${V}?.querySelector('.rows')?.textContent || '')`, 45000),
        `radio A's ADS-B joins radio B's datalink: ${(await rowsTxt()).slice(0, 300)}`);
@@ -150,8 +150,9 @@ try {
      *  heard each aircraft (vibe_aircraft_share.h radios) — radio A's tag is seen on radio B's page, so the switch is drawn;
      *  OFF hides 400F11 (radio A's ADS-B only) and keeps 4CA97B (heard by both: A's ADS-B and B's VDL2) */
     if (!process.env.SKIP_SCOPE) {
-      const SCOPE = `${V}?.querySelector('.scope [data-scope]')`;
-      ok(await until(`!!${SCOPE} && !${SCOPE}.closest('.scope').hidden`, 8000), 'two radios: the OTHER RADIOS ON THIS SERVER chip is drawn on radio B\'s map');
+      // ★ tweak 3: OTHER RADIOS is the other radio's row in MAP CONTROLS → SOURCES
+      const SCOPE = `[...(${V}?.querySelectorAll('.srcBody [data-src]') || [])].find(b => /a radio on this server/.test(b.textContent || ''))`;
+      ok(await until(`!!${SCOPE}`, 8000), 'two radios: radio A has its SOURCES row on radio B\'s map');
       await ev(`${SCOPE}.click(); true`);
       ok(await until(`![...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:400F11')`, 6000), 'OFF: 400F11 (radio A\'s ADS-B only) is hidden on radio B\'s map');
       ok(await ev(`[...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:4CA97B')`), 'OFF: 4CA97B stays (radio B heard it too, on VDL2)');
@@ -160,8 +161,8 @@ try {
       await ev(`localStorage.removeItem('vibesdr.mapOtherRadios'); true`);
     }
     // ★ NEAREST: the rows by range (the receiver's own position)
-    await ev(`${V}.querySelector('.trkList .hd .srt [data-srt="nearest"]').click()`);
-    { const nm = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow')].map(r => parseFloat((r.querySelector('.rg')?.textContent || '').replace(/[^0-9.]/g, ''))).filter(x => x === x))`) || '[]');
+    await ev(`(() => { const t = ${V}.querySelector('.trkList .hd .srt .srtT'); if (t && t.dataset.srt !== 'nearest') t.click(); return 1; })()`);
+    { const nm = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow')].map(r => [...r.querySelectorAll('.kv span')].map(s => s.textContent || '').find(t => /nm$/.test(t))).filter(Boolean).map(t => parseFloat(t)).filter(x => x === x))`) || '[]');
       ok(nm.length >= 2 && nm.every((x, i) => i === 0 || x >= nm[i - 1]), `NEAREST: by range (${nm.join(', ')} NM)`); }
     ok(await ev(`localStorage.getItem('vibesdr.airSeaSort')`) === 'nearest', '…remembered');
     await until(`[...${V}.querySelectorAll('[data-tgl]')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join(',').startsWith('VDL2,ACARS,ADS-C,ADS-B,AIRPORTS')`, 15000);
@@ -183,8 +184,9 @@ try {
     ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,RANGE,LABELS,⌖',   // ★ beta94 + RANGE: the ADS-B layer's range outline key (b94-accard) is the aviation map's too
        `beta90: the ADS-B map's controls on the aviation map (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`)})`);
     ok(await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk[data-key^="a:"]').length === 0`), 'beta90: no aircraft drawn twice (the track layer has only the stations)');
-    const scale = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .maplibregl-ctrl-scale, .trkView:not([hidden]) .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
-    ok(/km/.test(scale || '') && /nm|NM/.test(scale || ''), `beta90: the scale bar, km and NM (${scale})`);
+    // ★ map cards: the scale is the vertical edge chip, NM on an aviation map (Stuart 11-27)
+    const scale = await ev(`document.querySelector('.trkView:not([hidden]) .mScale .vsLbl')?.dataset.t || ''`);
+    ok(/nm$/.test(scale || ''), `the vertical scale, in NM on the aviation map (${scale})`);
     // ★★ beta90 a datalink aircraft (no track, no speed): two fixes → it faces the bearing between them and GLIDES there
     const glide = JSON.parse(await ev(`(() => { const L = window.__vibeAcLayer; const a = { hex: '~abc123', flight: 'TST1', lat: 51.0, lon: -1.0, alt_baro: 35000, sparse: true, seen_pos: 30 };
       L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0 })]);
