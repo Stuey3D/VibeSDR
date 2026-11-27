@@ -46,6 +46,7 @@
 
 #include "vibe_beast.h"
 #include "vibe_sbs.h"
+#include "vibe_uberhfdl.h"   // ★ beta96 follow-up: an UberSDR's HFDL add-on (JSON over HTTP) as a source
 #include "vibe_adsb.h"
 #include "vibe_aircraft_share.h"
 
@@ -66,7 +67,7 @@ inline double& stallSec() { static double s = beast::kStallSec; return s; }
 
 /** One source as the owner set it. */
 struct SourceCfg {
-    std::string fmt = "beast";     ///< "beast" | "sbs"
+    std::string fmt = "beast";     ///< "beast" | "sbs" | "uberhfdl" (an UberSDR's HFDL add-on, polled: connect only, HFDL)
     std::string dir = "connect";   ///< "connect" | "listen"
     std::string host;              ///< connect only
     int port = beast::kDefaultPort;
@@ -91,16 +92,18 @@ inline bool parseSources(const std::string& text, std::vector<SourceCfg>& out, s
     for (const J& e : j.a) {
         if (e.kind != J::Obj) { err = "an aircraft feed entry is not an object"; return false; }
         SourceCfg c;
-        c.fmt = e.str("fmt", "beast"); c.dir = e.str("dir", "connect"); c.label = e.str("label", c.fmt == "sbs" ? "hfdl" : "adsb");
+        c.fmt = e.str("fmt", "beast"); c.dir = e.str("dir", "connect"); c.label = e.str("label", c.fmt == "beast" ? "adsb" : "hfdl");
         c.name = sbs::trim(e.str("name"));
         if (c.name.size() > 40) c.name.resize(40);
         for (char& ch : c.name) if ((unsigned char)ch < 0x20 || ch == '"' || ch == '\\') ch = ' ';
-        if (c.fmt != "beast" && c.fmt != "sbs") { err = "a feed's format is Beast or BaseStation (SBS)"; return false; }
+        if (c.fmt != "beast" && c.fmt != "sbs" && c.fmt != "uberhfdl") { err = "a feed's format is Beast, BaseStation (SBS) or UberSDR HFDL"; return false; }
+        if (c.fmt == "uberhfdl" && c.dir != "connect") { err = "an UberSDR HFDL feed is read from the UberSDR (this server connects to it)"; return false; }
         if (c.dir != "connect" && c.dir != "listen") { err = "a feed either connects to an address or listens on a port"; return false; }
         if (!labelOk(c.label)) { err = "a feed's label is ADS-B, HFDL, VDL2 or ACARS"; return false; }
         if (c.fmt == "beast") c.label = "adsb";   // ★ Beast is Mode S: nothing else
+        if (c.fmt == "uberhfdl") c.label = "hfdl";   // ★ the add-on's aircraft are HFDL, nothing else
         const J* p = e.get("port");
-        const double pd = p && p->kind == J::Num ? p->n : (c.fmt == "sbs" ? kSbsPort : beast::kDefaultPort);
+        const double pd = p && p->kind == J::Num ? p->n : (c.fmt == "sbs" ? kSbsPort : c.fmt == "uberhfdl" ? uberhfdl::kDefaultPort : beast::kDefaultPort);
         if (c.dir == "connect") {
             std::string h; int pt = 0;
             if (!beast::parseHostPort(beast::hostPortText(e.str("host"), int(pd)), h, pt, err)) return false;
@@ -330,7 +333,10 @@ public:
         startWall_ = vibeavshare::wallMs();
         auto pre = [this](const std::string& l) { if (log_) log_("[aircraft feeds] " + title(c_) + ": " + l); };
         const bool adsb = c_.label == "adsb";
-        if (c_.dir == "connect") {
+        if (c_.fmt == "uberhfdl") {
+            up_.setLog([this](const std::string& l) { if (log_) log_("[aircraft feeds] " + title(c_) + " \xe2\x80\x94 " + l); });
+            up_.start(c_.host, c_.port, tbl_.posKeepMs(), [this](const uberhfdl::Parsed& p) { onUber(p); });
+        } else if (c_.dir == "connect") {
             in_.setLog([this](const std::string& l) { if (log_) log_("[aircraft feeds] " + title(c_) + " \xe2\x80\x94 " + l); });
             if (c_.fmt == "beast")
                 in_.start(c_.host, c_.port, [this](const std::vector<beast::Decoded>& ds) { onBeast(ds); });
@@ -345,7 +351,7 @@ public:
             }, title(c_));
         }
     }
-    void stop() { in_.stop(); ln_.stop(); }
+    void stop() { in_.stop(); ln_.stop(); up_.stop(); }
     int boundPort() const { return ln_.boundPort(); }
     Listener& listener() { return ln_; }
 
@@ -353,7 +359,7 @@ public:
     void shareSince(int64_t sinceMs, std::vector<vibeavshare::Update>& out) {
         std::lock_guard<std::mutex> lk(m_);
         const int64_t nowMs = vibeavshare::wallMs();
-        if (c_.fmt == "sbs") { tbl_.shareSince(sinceMs, nowMs, out, std::string(sbs::labelWords(c_.label)) + " feed" + (c_.name.empty() ? "" : " (" + c_.name + ")")); return; }
+        if (c_.fmt != "beast") { tbl_.shareSince(sinceMs, nowMs, out, std::string(sbs::labelWords(c_.label)) + " feed" + (c_.name.empty() ? "" : " (" + c_.name + ")")); return; }
         const double tn = now();
         auto wall = [&](double t) { return nowMs - (int64_t)std::llround((tn - t) * 1000); };
         for (const auto& kv : tr_.aircraft()) {
@@ -384,11 +390,16 @@ public:
     }
     size_t aircraft() {
         std::lock_guard<std::mutex> lk(m_);
-        return c_.fmt == "sbs" ? tbl_.heardWithin(vibeavshare::wallMs(), tbl_.posKeepMs()) : tr_.aircraft().size();
+        return c_.fmt != "beast" ? tbl_.heardWithin(vibeavshare::wallMs(), tbl_.posKeepMs()) : tr_.aircraft().size();
     }
     /** ★ Is the source DOWN (see the header)? `secs` = for how long. */
     bool down(double& secs) const {
         const bool adsb = c_.label == "adsb";
+        if (c_.fmt == "uberhfdl") {   // ★ down when no good answer for the stall time (a datalink: silence alone is not down)
+            const double s = up_.secsSinceOk();
+            if (s > stallSec()) { secs = s; return true; }
+            return false;
+        }
         if (c_.dir == "connect") {
             const long ds = in_.downSinceUtc();
             if (ds > 0) { secs = double(std::time(nullptr) - ds); return true; }
@@ -413,7 +424,11 @@ public:
         std::string st, line, err;
         double perSec = 0; uint64_t msgs = 0;
         const std::string where = c_.dir == "connect" ? beast::hostPortText(c_.host, c_.port) : "port " + std::to_string(c_.port);
-        if (c_.dir == "connect") {
+        if (c_.fmt == "uberhfdl") {
+            st = up_.state(); line = up_.line(); err = up_.error();
+            if (line.empty()) line = "reading " + where + uberhfdl::kPath;
+            msgs = up_.rowsIn();
+        } else if (c_.dir == "connect") {
             vibe::antswitch::Json j;
             const std::string s = in_.statusJson();
             if (vibe::antswitch::parseJson(s, j)) {
@@ -476,6 +491,11 @@ private:
         onBeast(out);
         return out.size();
     }
+    void onUber(const uberhfdl::Parsed& p) {
+        std::lock_guard<std::mutex> lk(m_);
+        const int64_t nowMs = vibeavshare::wallMs();
+        for (const auto& m : p.msgs) { ++st_.lines; if (tbl_.apply(m, nowMs)) ++st_.msgs; }
+    }
     size_t onSbs(int id, const uint8_t* p, size_t n) {
         std::lock_guard<std::mutex> lk(m_);
         if (id != sbsId_) { split_.reset(); sbsId_ = id; }
@@ -504,6 +524,7 @@ private:
     int64_t startWall_ = 0;
     beast::BeastInput in_;
     Listener ln_;
+    uberhfdl::Poller up_;
 };
 
 // ══ THE SET: every source of this machine, the shared-table provider, the banner, the status file ════════════════════
@@ -576,6 +597,20 @@ public:
             writeStatusFile();   // ★ an empty list says so to the other processes at once
         }
         return true;
+    }
+    /** ★ beta96 follow-up (the feed test): does one of this machine's sources listen on `port`? Its title, format, line. */
+    bool ownedListen(int port, std::string& ttl, std::string& fmt, std::string& line, bool& internal) {
+        std::lock_guard<std::mutex> lk(m_);
+        for (auto& s : src_) {
+            const SourceCfg& c = s->cfg();
+            if (c.dir != "listen") continue;
+            if (c.internal ? s->boundPort() != port : c.port != port) continue;
+            ttl = title(c); fmt = c.fmt; internal = c.internal;
+            vibe::antswitch::Json j;
+            if (!c.internal && vibe::antswitch::parseJson(s->statusJson(true), j)) line = j.str("line");
+            return true;
+        }
+        return false;
     }
     size_t size() { std::lock_guard<std::mutex> lk(m_); size_t n = 0; for (auto& s : src_) if (!s->cfg().internal) ++n; return n; }
     /** The loopback ingest port (0 = none yet). */

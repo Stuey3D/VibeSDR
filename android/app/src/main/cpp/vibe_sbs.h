@@ -47,6 +47,7 @@ struct Msg {
     int type = 0;                      ///< 1..8
     uint32_t icao = 0;
     std::string callsign;
+    std::string reg;                   ///< ★ a registration (BaseStation has none; the UberSDR HFDL add-on gives one)
     bool hasAlt = false; int altFt = 0;
     bool hasGs = false; float gs = 0;
     bool hasTrk = false; float trk = 0;
@@ -223,6 +224,7 @@ public:
         Row& r = it->second;
         r.heardMs = nowMs; ++r.msgs;
         if (!m.callsign.empty()) r.callsign = m.callsign;
+        if (!m.reg.empty()) r.reg = m.reg;
         if (m.hasAlt) { r.hasAlt = true; r.altFt = m.altFt; }
         if (m.hasGs) { r.hasGs = true; r.gs = m.gs; }
         if (m.hasTrk) { r.hasTrk = true; r.trk = m.trk; }
@@ -254,7 +256,7 @@ public:
             Row& r = kv.second;
             if (r.heardMs < sinceMs) continue;
             vibeavshare::Update u;
-            u.icao = kv.first; u.flight = r.callsign;
+            u.icao = kv.first; u.flight = r.callsign; u.reg = r.reg;
             u.srcMask = uint8_t(1u << src_); u.srcMs[src_] = r.heardMs; u.heardMs = r.heardMs;
             if (src_ == vibeavshare::kHfdl && r.khz > 0) { char b[40]; std::snprintf(b, sizeof b, "HFDL %d", r.khz); u.via = b; }
             else u.via = via;
@@ -276,7 +278,7 @@ public:
     uint64_t badPositions() const { return badPos_; }
     void clear() { rows_.clear(); }
     struct Row {
-        std::string callsign;
+        std::string callsign, reg;
         bool hasAlt = false; int altFt = 0;
         bool hasGs = false; float gs = 0;
         bool hasTrk = false; float trk = 0;

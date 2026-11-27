@@ -202,6 +202,9 @@ flags_for() {
     #    labels (HFDL never ADS-B), a LISTEN source, two sources merged in the shared table, the banner, and the hub as a
     #    middle man (each reply once, byte-faithful, HFDL never forwarded, the loop guard, own-only). 127.0.0.1 only. ~12 s.
     test-aircraft-feeds)   echo "-O2 -pthread" ;;
+    # ★★ beta96 follow-up: TEST A FEED BEFORE SAVING, AUTO-DETECT and the UberSDR HFDL source (vibe_feed_test.h, vibe_uberhfdl.h;
+    #    docs/v12/FEED-TEST.md): fake Beast / BaseStation / UberSDR servers on 127.0.0.1, the captured fixture. ~25 s.
+    test-feed-test)        echo "-O2 -pthread" ;;
     # ★★ V12 beta96 THE SHARED AIRCRAFT TABLE AS DELTAS (vibe_aircraft_delta.h) + the standalone map's viewer tickets
     #    (vibe_airsea_viewers.h): rows rebuilt field for field, cursors, the 150-aircraft bytes (full / gzip / delta), the gate.
     test-aircraft-delta)   echo "-O2 -pthread" ;;
