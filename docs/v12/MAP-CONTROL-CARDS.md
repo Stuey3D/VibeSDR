@@ -37,19 +37,27 @@ how many cards can be open follows the window; a phone shows one at a time.
 - **Spectrum on only while it shows** (`spec` on:1 / on:0). **Server** (`recomputeEngineRate`, `vsMapMode`): in a map
   mode the display FFT runs at the 1 fps housekeeping floor with nobody's waterfall open, ≤ 10 fps with one open; the FFT
   size is untouched (a change restarts the engine and dips everyone's audio).
-- **Short landscape** (`mapCards.shortMap`: map height < 480 and wider than tall) — STUART'S DESIGN (11-27 17:5x): the top
-  edge has no inset in landscape, so EVERY chip hangs from it — the family (SERVERS, TUNE, LAYERS, STATS, MAP) right of the
-  ✕, and at the right end before the RATE corner CHAT and the health / time pair (their tab when tucked, their card when
-  out); every card drops DOWN. The LIST / waterfall is a LEFT SIDE PANEL at full height under the ✕ (300–360 px, its two
-  tabs on its right edge). The shared-tuner pill sits at the bottom centre (flat on the edge; "Ask · 3/4" when short of
-  room, never an ellipsis through the count). One geometry pass (`TrackView.shortGeom`) places the bottom-right group —
-  credits (i), ?, zoom [− +], a HORIZONTAL scale — from the box and the measured insets, and the pill's span. A row too
-  long for the window drops the family's counts (`famCompact`). Portrait is untouched: every rule is `[data-short]`.
-- **Safe areas:** `viewport-fit=cover` only while a map is up (`TrackView.coverOn`); the island side takes the full inset,
-  the other side only a ~20 px corner allowance for corner pieces (`islandSide.ts` from the orientation angle, the app's
-  EdgeChip rule) — `--sai-*` (raw), `--sai-le/-re` (an edge tab), `--sai-lc/-rc` (a corner piece). Android: env() as given.
-  Stuart's own device numbers (956×376, L62 R62 T0 B20) are the e2e's device profile. `?perf=1` shows the decision
-  (`window.__mapGeom`). ★ The radio page itself has NOT had a safe-area pass — it keeps Safari's letterbox.
+- **Short landscape** (`mapCards.shortMap`: map height < 480 and wider than tall) — STUART'S SAFE RECTANGLE (11-27
+  evening, approved on ls13p): "the map takes the full width, but we build the chip system around the safe zones, so the ✕
+  joins the top row". The MAP runs edge to edge under the insets (`fitViewport`); ALL chrome sits inside the safe rectangle
+  (x from the left inset to the width less the right inset, above the bottom inset). ONE top row hanging from the top edge
+  (no inset there), native boxes, one height (`--trk-tab-h`) and one width (`--trk-tab-w`, both measured by `shortGeom`),
+  8 px gaps: ✕ (the first tab, red) · SERVERS · TUNE · LAYERS · STATS · MAP … CHAT · HEALTH · TIME · RATE (the last; wider
+  for its words). LAYERS keeps its own width so every family's count shows; a row too long for the window drops ALL the
+  family's counts together (`famCompact`). Every card drops from under the row. The LIST / waterfall is a side panel from
+  the safe left, under the row, above the bottom inset (300–360 px, its two tabs on its right edge). The pill sits at the
+  bottom centre above the inset ("Ask · 3/4" when short of room, never an ellipsis through the count, measured by its
+  words). `TrackView.shortGeom` places the bottom-right group — credits (i), ?, zoom [− +], a HORIZONTAL scale — from the
+  box and the raw insets, and the pill's span. Insets 0 (Android without a cutout, a short desktop window): the same layout
+  full width. Portrait is untouched. ★ ONE block of `[data-short]` rules in tracks.ts (after the portrait list rules) —
+  the earlier landscape layouts (bottom-edge family row, right-column edge tabs, inset strips, corner ✕ / RATE) were
+  DELETED, not overridden: nothing relies on cascade order.
+- **Safe areas:** `viewport-fit=cover` only while a map is up (`TrackView.coverOn`); `--sai-l/-r/-t/-b` = env() as the
+  browser reports it (iOS gives both sides the same inset in landscape). Portrait's edge pieces sit on the physical edge
+  and pad their content in by the inset; landscape's chrome stands inside the safe rectangle. The island side
+  (`islandSide.ts`, `<html data-island>`) is diagnostic only now — no layout value depends on it. Stuart's own device
+  numbers (956×376, L62 R62 T0 B20) are the e2e's device profile, with 667×320 (SE) and three Android profiles. `?perf=1`
+  shows the decision (`window.__mapGeom`). ★ The radio page itself has NOT had a safe-area pass — it keeps Safari's letterbox.
 - **The PURGE (11-27, Stuart: "old and new fighting each other")** — deleted, not hidden: the old ADS-B view / live sheet /
   table / NEWEST-FURTHEST-LONGEST chips and their CSS and code (`adsb.ts adsbListHtml` & co, `#adsbView` `#adsbLive`
   `#adsbList` `#adsbChips`), the old top bar's SHOW / TIME / RANGE / scope / tune rows, the card rail, the list's minimise
@@ -60,9 +68,9 @@ how many cards can be open follows the window; a phone shows one at a time.
   TrackLiveList.tsx) and the AUTO/FIT keys in the layer — purge them the same way when the cards land in the app.
 - **e2e:** `scripts/test-web-map-waterfall.mjs` (swap, spec on/off and server frame rates, markers per channel, passive,
   palette follows the page, lit + bursts, history kept across maximise / rotation, drawer never grows, tabs clear),
-  `scripts/test-web-map-landscape.mjs` (932×370, 932×430, 852×340, 667×320; insets; `PREVIEW_URL=` drives the preview).
+  `scripts/test-web-map-landscape.mjs` (932×370, 932×430, 852×340, 667×320; the 956×376 device profile both island sides and 667×320: every chrome rect inside the safe rectangle, the map under every corner and edge, a real touch per top-row tab opens its own card, one height / width, arrows centred, LAYERS counts; Android; `PREVIEW_URL=` drives the preview).
 - **App port:** the same model (`mapWfModel.ts`) and rules; the app's waterfall view takes the processed frames the same
-  way; the island side from `useIslandSide`.
+  way; short landscape the same safe rectangle (the app's own insets from react-native-safe-area-context).
 
 ## Tweaks from Stuart (live preview, 11-27)
 

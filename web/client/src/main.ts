@@ -10033,8 +10033,12 @@ function mapSharedSync() {
     line.title = st.why || (alone ? 'Nobody else is listening — free to tune' : 'Others share this dial — ask in the chat before you change it');
     // ★ Stuart 14:42: one line — too wide for the room between the ✕ and RATE, it says less ("Shared VFO · Ask · 2/5")
     line.dataset.long = line.textContent || '';
+    /* ★ overflow measured by the WORDS' own box against the line's content box — scrollWidth over-reports this padded,
+     *  letter-spaced pill by ~24 px and dropped "Shared VFO · Free · 1/4" to "Free · 1/4" with room to spare (map-cards e2e) */
+    const over = () => { const rg = document.createRange(); rg.selectNodeContents(line); const cs = getComputedStyle(line);
+      return rg.getBoundingClientRect().width > line.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) + 1; };
     requestAnimationFrame(() => {
-      if (!line.isConnected || line.scrollWidth <= line.clientWidth + 1) return;
+      if (!line.isConnected || !over()) return;
       const t = line.dataset.long || '', n = /(\d+\/\d+)\s*$/.exec(t)?.[1] ?? '', head = t.split(':')[0].trim();
       if (mapNudge && Date.now() < mapNudge.until) { line.textContent = 'ASK IN CHAT'; return; }
       const word = /ask/i.test(t) ? 'Ask' : /free/i.test(t) ? 'Free' : /lock/i.test(t) ? 'Locked' : '';
@@ -10043,7 +10047,7 @@ function mapSharedSync() {
       /* ★ still too wide (the short-landscape pill between the panel and the bottom-right group at 667 px): the word and the
        *  count alone — never an ellipsis through the count (Stuart 17:5x: "Ask · 3/4", "Locked · 3/4") */
       requestAnimationFrame(() => {
-        if (!line.isConnected || line.scrollWidth <= line.clientWidth + 1) return;
+        if (!line.isConnected || !over()) return;
         line.textContent = [word || 'Ask', n].filter(Boolean).join(' · ');
       });
     });
