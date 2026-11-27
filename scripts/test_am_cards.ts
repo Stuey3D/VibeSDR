@@ -2,7 +2,7 @@
 // the page's statistics checked and turned into the STATS card's sections, a station's row finds it (its spot key), the
 // LIST's one sort key; and the app's source: the old chrome deleted, the cards drawn.   npx tsx scripts/test_am_cards.ts
 import { readFileSync, existsSync } from 'node:fs';
-import { amStatsClean, amStatsSections, amSortRows } from '../src/utils/amCards';
+import { amStatsClean, amStatsSections, amSortRows, pageRowsClean, pageRowsAsTrack, ageShort } from '../src/utils/amCards';
 import { amSpotKey } from '../src/utils/amateurMap';
 
 let pass = 0, fail = 0;
@@ -42,6 +42,18 @@ ok(/\{amCards && !!amList && !!pageUri && !packError && \(\s*<MapChrome /.test(m
 ok(/ranges: \[\.\.\.DIGI_WINDOWS, \.\.\.\(amateur \? \[SESSION_RANGE\] : \[\]\)\]/.test(mo) && /extra: <AmFilters /.test(mo) && /pageCall\('__digiSet', k, v\)/.test(mo), 'MAP CONTROLS: TIME (windows + THIS SESSION), MODE / BAND / RADIO');
 ok(/amStatsTell\(st,ak\);/.test(mo) && /button:null,what:'station shown'/.test(mo) && /window\.__mapAuto=\{state:function\(\)\{return digiFit\?digiFit\.state\(\)/.test(mo),
    'the spots maps: the numbers go to the STATS card; AUTO / FIT = the shared auto fit from MAP CONTROLS (no key in the page)');
+
+// ── the LIST of the maps off the track host: the page's own rows ──
+{
+  const now = 1_000_000_000_000;
+  const rows = pageRowsClean([{ key: 'G4ABC|20m|FT8', name: 'G4ABC', second: 'FT8 · 20m · England', t: now - 30_000, km: 120.4, mode: 'FT8' },
+    { key: '', name: 'nokey' }, 'junk', { key: 'X'.repeat(500), name: '<b>'.repeat(20), t: 'x', km: -5 }]);
+  ok(rows.length === 2 && rows[0].km === 120.4 && rows[1].key.length === 120 && rows[1].km === null && rows[1].t === 0, 'page rows trusted for nothing: keys required, strings bounded, a bad distance dropped');
+  const tr = pageRowsAsTrack(rows, now);
+  ok(tr[0].range === '120 km' && tr[0].age === 'now' && tr[0].name === 'G4ABC' && tr[1].range === '', 'drawn as the cards\u2019 LIST rows (distance, age)');
+  ok(ageShort(now - 5 * 60_000, now) === '5 min' && ageShort(now - 3 * 3_600_000, now) === '3 h', 'ages read short');
+  ok(amSortRows(tr, 'nearest')[0].key === 'G4ABC|20m|FT8', 'nearest first sorts by the row\u2019s distance');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
