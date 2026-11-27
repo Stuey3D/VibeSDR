@@ -7,7 +7,9 @@
 export type FeedFmt = 'beast' | 'sbs' | 'uberhfdl';
 export type FeedDir = 'connect' | 'listen';
 export type FeedLabel = 'adsb' | 'hfdl' | 'vdl2' | 'acars';
-export interface FeedSource { fmt: FeedFmt; dir: FeedDir; host?: string; port: number; label: FeedLabel; name?: string }
+/** ★★ b96-2 `offsite`: "Not at this site" (vibe_feeds.h SourceCfg::offsite — on the maps, never in this server's range
+ *  outline). Only ever true, only on an ADS-B feed; absent = at this site (every older list). */
+export interface FeedSource { fmt: FeedFmt; dir: FeedDir; host?: string; port: number; label: FeedLabel; name?: string; offsite?: true }
 export const FEED_MAX = 8;
 export const FEED_LABEL_WORD: Record<FeedLabel, string> = { adsb: 'ADS-B', hfdl: 'HFDL', vdl2: 'VDL2', acars: 'ACARS' };
 
@@ -37,9 +39,18 @@ export function parseFeeds(json: string | null | undefined): FeedSource[] {
     const f: FeedSource = { fmt, dir, port, label };
     if (dir === 'connect') { const h = typeof o.host === 'string' ? o.host.trim().slice(0, 253) : ''; if (!h) continue; f.host = h; }
     if (typeof o.name === 'string' && o.name.trim()) f.name = o.name.trim().slice(0, 40);
+    if (o.offsite === true && feedIsAdsb(f)) f.offsite = true;   // ★★ b96-2
     out.push(f);
   }
   return out;
+}
+/** ★★ b96-2 is this source ADS-B — the only kind the range outline counts (the Setup page's feedsIsAdsb)? */
+export function feedIsAdsb(f: FeedSource): boolean { return f.fmt === 'beast' || f.label === 'adsb'; }
+/** ★★ b96-2 the add form's "Not at this site" tick on a source being added (the Setup page's feedsWithSite): offsite on an
+ *  ADS-B feed when ticked, else no key at all. A copy. */
+export function feedWithSite(src: FeedSource, offsite: boolean): FeedSource {
+  const { offsite: _o, ...f } = src;
+  return offsite && feedIsAdsb(f) ? { ...f, offsite: true } : f;
 }
 /** The list → the stored text ('' = none, as the Setup page writes it). */
 export function feedsBlob(list: FeedSource[]): string { return list.length ? JSON.stringify(list) : ''; }

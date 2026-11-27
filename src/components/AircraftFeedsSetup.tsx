@@ -8,7 +8,7 @@
  */
 import React, { useState } from 'react';
 import { Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { feedAddrWhy, feedDefaults, feedFindWords, feedFmtWord, feedFromForm, feedKey, feedTestWords, feedTitle, mapCostLine, FEED_LABEL_WORD, FEED_MAX,
+import { feedAddrWhy, feedDefaults, feedFindWords, feedFmtWord, feedFromForm, feedIsAdsb, feedKey, feedTestWords, feedTitle, feedWithSite, mapCostLine, FEED_LABEL_WORD, FEED_MAX,
          type FeedDir, type FeedFmt, type FeedHit, type FeedLabel, type FeedSource } from '../utils/aircraftFeeds';
 
 type Ink = { text: string; textDim: string; border: string; trackOff: string; trackOn: string; thumb: string; accent?: string; warn?: string };
@@ -49,6 +49,7 @@ export default function AircraftFeedsSetup({ C, F, list, onChange, status, error
   const [advanced, setAdvanced] = useState(!test);
   const [pending, setPending] = useState<FeedSource | null>(null);
   const [tested, setTested] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [offsite, setOffsite] = useState(false);   // ★★ b96-2 "Not at this site" for the feed being added
   const hint = { color: C.textDim, fontFamily: F, fontSize: 12, marginTop: 6 } as const;
   const input = { color: C.text, borderColor: C.border, borderWidth: 1, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 6, fontFamily: F, fontSize: 13 } as const;
   const btn = (primary: boolean) => ({ alignSelf: 'flex-start' as const, borderWidth: 1, borderColor: primary ? (C.accent || C.trackOn) : C.border, borderRadius: 6,
@@ -56,10 +57,12 @@ export default function AircraftFeedsSetup({ C, F, list, onChange, status, error
   const btnText = (primary: boolean) => ({ color: primary ? (C.accent || C.text) : C.text, fontFamily: F, fontSize: 13, fontWeight: '700' as const });
   const lbl = (t: string) => <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12, marginTop: 10 }}>{t}</Text>;
   const pickFmt = (v: FeedFmt) => { setFmt(v); const d = feedDefaults(v); setDir(d.dir); setPort(String(d.port)); if (v === 'sbs') setLabel(d.label); };
-  const addOne = (src: FeedSource, say: (t: string) => void, lead = '') => {
+  const addOne = (src0: FeedSource, say: (t: string) => void, lead = '') => {
+    const src = feedWithSite(src0, offsite);   // ★★ b96-2 the tick (ADS-B feeds only — the outline is ADS-B only)
     if (list.length >= FEED_MAX) { say(`Not added — at most ${FEED_MAX} aircraft feeds.`); return false; }
     if (list.some((x) => feedKey(x) === feedKey(src))) { say('That feed is already in the list.'); return false; }
     onChange([...list, src]);
+    setOffsite(false);   // ★ one feed's tick: the next starts at this site
     say(`${lead ? lead + ' ' : ''}Added. Saved when the server next starts.`);
     return true;
   };
@@ -103,7 +106,10 @@ export default function AircraftFeedsSetup({ C, F, list, onChange, status, error
           <View key={`f${i}`} style={{ marginTop: 8 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={{ color: C.text, fontFamily: F, fontSize: 14, flex: 1 }}>
-                {feedTitle(f)} <Text style={{ color: C.textDim, fontSize: 12 }}>{`${feedFmtWord(f.fmt)} · ${f.dir === 'listen' ? `listens on ${f.port}` : `${f.host}:${f.port}`} · ${FEED_LABEL_WORD[f.label]}`}</Text>
+                {feedTitle(f)} {f.offsite && feedIsAdsb(f) && (
+                  <Text accessibilityLabel="off-site: its aircraft are shown but not counted in this server’s range outline"
+                        style={{ color: C.accent || C.text, fontSize: 11, borderWidth: 1, borderColor: C.accent || C.border }}>off-site</Text>
+                )}{f.offsite && feedIsAdsb(f) ? ' ' : ''}<Text style={{ color: C.textDim, fontSize: 12 }}>{`${feedFmtWord(f.fmt)} · ${f.dir === 'listen' ? `listens on ${f.port}` : `${f.host}:${f.port}`} · ${FEED_LABEL_WORD[f.label]}`}</Text>
               </Text>
               {!!test && (
                 <TouchableOpacity onPress={() => void testRow(f)} accessibilityRole="button" accessibilityLabel={`Test ${feedTitle(f)}`}
@@ -124,6 +130,15 @@ export default function AircraftFeedsSetup({ C, F, list, onChange, status, error
       {list.length < FEED_MAX && (
         <View style={{ marginTop: 12, borderTopWidth: 1, borderTopColor: C.border, paddingTop: 8 }}>
           <Text style={{ color: C.text, fontFamily: F, fontSize: 14, fontWeight: '700' }}>+ Add aircraft feed</Text>
+          {/* ★★ b96-2 "NOT AT THIS SITE" (Stuart chose option 1, 11-27): one tick for the feed being added — FIND's ADD and
+              Advanced's ADD both read it; stored on an ADS-B feed only (the Setup page's #feedOffsite) */}
+          <TouchableOpacity onPress={() => setOffsite(!offsite)} accessibilityRole="checkbox" accessibilityState={{ checked: offsite }}
+                            accessibilityLabel="Not at this site — its aircraft are shown but not counted in this server’s range outline"
+                            style={{ flexDirection: 'row', alignItems: 'flex-start', marginTop: 10 }}>
+            <Text style={{ color: offsite ? (C.accent || C.trackOn) : C.textDim, fontFamily: F, fontSize: 16, marginRight: 8 }}>{offsite ? '☑' : '☐'}</Text>
+            <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>Not at this site — its aircraft are shown but not counted in this server{'’'}s range outline</Text>
+          </TouchableOpacity>
+          <Text style={hint}>For a receiver somewhere else (a friend{'’'}s PiAware across town). Only ADS-B draws the range outline, so this applies to ADS-B feeds; an aircraft this server also hears itself still counts.</Text>
           {!!test && (<>
             {lbl('THE OTHER RECEIVER’S ADDRESS')}
             <TextInput value={find} onChangeText={setFind} autoCapitalize="none" autoCorrect={false} maxLength={120} accessibilityLabel="The other receiver's address"
