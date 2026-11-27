@@ -982,7 +982,7 @@ export class TrackView {
     const g = this.fitGroups.find((x) => x.id === this.fitChoice());
     const b = this.root.querySelector('.fitOnce') as HTMLButtonElement;
     const what = g ? g.label : this.o.listTitle.toLowerCase();
-    b.title = g && g.n === 0 ? `Nothing on the map from ${what} yet — FIT will frame it once there is` : `Fit the map to ${what} (the furthest few per cent are left out, so one far outlier does not zoom the whole view out)`;
+    b.title = g && g.n === 0 ? `Nothing on the map from ${what} yet — FIT will frame it once there is` : `Fit the map to ${what} — far outliers (the furthest 5 %) are left out, so one far-off aircraft does not zoom the whole view out`;
     const note = this.root.querySelector('.fitNote') as HTMLElement;
     const t = this.fitGroups.length ? `AUTO and FIT frame ${what}, leaving out far outliers.` : '';
     if (note.textContent !== t) note.textContent = t;
