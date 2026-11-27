@@ -1025,6 +1025,14 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
             <div class="hint">This server looks for PiAware or dump1090 (Beast, port 30005), BaseStation text (30003) and an
               UberSDR&rsquo;s HFDL add-on (8080) there, and fills in the rest. An UberSDR needs no change: its HFDL add-on already
               shares its aircraft. Add <code>:port</code> for an unusual port.</div></label>
+          <!-- ★★ b96-2 "NOT AT THIS SITE" (Stuart chose option 1, 11-27; docs/v12/RANGE-FEED.md): one tick for the feed being
+               added (FIND's ADD and Advanced's ADD both read it); stored as "offsite":true on an ADS-B feed (vibe_feeds.h
+               SourceCfg::offsite) — the range outline is ADS-B only, so an HFDL / VDL2 / ACARS feed never carries it. -->
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px">
+            <input type="checkbox" id="feedOffsite" style="width:16px;height:16px;margin-top:2px;accent-color:var(--amber)">
+            <span><b>Not at this site</b> &mdash; its aircraft are shown but not counted in this server&rsquo;s range outline</span></label>
+          <div class="hint" style="margin-left:24px">For a receiver somewhere else (a friend&rsquo;s PiAware across town). Only ADS-B
+            draws the range outline, so this applies to ADS-B feeds; an aircraft this server also hears itself still counts.</div>
           <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
             <button type="button" class="btn" id="feedFindGo">FIND</button>
             <span class="hint" id="feedFindMsg" style="margin:0"></span></div>
@@ -9696,6 +9704,16 @@ function feedsFromForm(fmt, dir, addr, port, label, name, list) {
   return { src: f };
 }
 function feedsBlob(list) { return list && list.length ? JSON.stringify(list) : ""; }
+/** ★★ b96-2 "Not at this site": is this source ADS-B (the only kind the range outline counts)? */
+function feedsIsAdsb(f) { return !!f && (f.fmt === "beast" || f.label === "adsb"); }
+/** ★★ b96-2 the add form's tick on a source being added: "offsite":true on an ADS-B feed when ticked; otherwise no key at all
+ *  (an at-site feed is written exactly as before). Returns a copy. */
+function feedsWithSite(src, offsite) {
+  const f = Object.assign({}, src);
+  delete f.offsite;
+  if (offsite && feedsIsAdsb(f)) f.offsite = true;
+  return f;
+}
 function feedsWhy() { return feedsModel.length > 8 ? "at most 8 aircraft feeds" : ""; }
 function feedsFormRender() {
   const uber = $("feedFmt").value === "uberhfdl";
@@ -9721,7 +9739,10 @@ function feedsDraw() {
     const lbl = f.fmt === "beast" ? "ADS-B" : ({ adsb: "ADS-B", hfdl: "HFDL", vdl2: "VDL2", acars: "ACARS" }[f.label] || "");
     const how = feedsFmtWord(f.fmt) + " \u00b7 " + (f.dir === "listen" ? `listens on ${f.port}` : `from ${f.host}:${f.port}`) + " \u00b7 " + lbl;
     const t = feedsTested[feedsKey(f)];
-    return `<div class="row" style="gap:10px;align-items:center;margin-top:6px"><span style="flex:1"><b>${esc(f.name || feedsTitle(f))}</b>
+    // ★★ b96-2 the "off-site" tag: on the maps, not in this server's range outline
+    const off = f.offsite === true && feedsIsAdsb(f)
+      ? ` <span data-offsitetag="${i}" title="Not at this site: its aircraft are shown but not counted in this server&rsquo;s range outline" style="display:inline-block;border:1px solid var(--amber);color:var(--amber);border-radius:4px;padding:0 5px;font-size:11px;line-height:16px">off-site</span>` : "";
+    return `<div class="row" style="gap:10px;align-items:center;margin-top:6px"><span style="flex:1"><b>${esc(f.name || feedsTitle(f))}</b>${off}
       <span class="why" style="margin:0">${esc(how)}</span>${st ? `<div class="hint" style="margin:2px 0 0;color:${st.state === "down" || st.state === "error" ? "var(--red,#e55)" : "var(--amber)"}">Now: ${esc(st.line || st.state)}</div>` : ""}${t ? `<div class="hint" data-feedtested="${i}" style="margin:2px 0 0;color:${t.ok ? "var(--good)" : "var(--bad)"}">${esc(t.text)}</div>` : ""}</span>
       <button type="button" class="ghost" data-feedtest="${i}" style="flex:0 0 auto">TEST</button>
       <button type="button" class="ghost" data-feeddel="${i}" style="flex:0 0 auto">REMOVE</button></div>`;
@@ -9762,10 +9783,12 @@ function feedsLoad(cfg) {
       feedsFormRender();
     });
     $("feedDir").addEventListener("change", feedsFormRender);
-    const addOne = (src, msgEl, extra) => {
+    const addOne = (src0, msgEl, extra) => {
+      const src = feedsWithSite(src0, $("feedOffsite").checked);   // ★★ b96-2 the "Not at this site" tick
       if (feedsModel.length >= 8) { msgEl.textContent = "Not added \u2014 at most 8 aircraft feeds."; return false; }
       if (feedsModel.some(x => feedsKey(x) === feedsKey(src))) { msgEl.textContent = "That feed is already in the list."; return false; }
       feedsModel.push(src);
+      $("feedOffsite").checked = false;   // ★ one feed's tick: the next starts at this site
       msgEl.textContent = (extra ? extra + " " : "") + "Added \u2014 press Save to start it.";
       feedsDraw(); if (typeof afRender === "function") afRender();
       return true;

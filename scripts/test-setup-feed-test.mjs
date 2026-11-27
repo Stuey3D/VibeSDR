@@ -117,8 +117,8 @@ try {
   await val('feedFmt', 'beast'); await val('feedDir', 'connect');
   await val('feedAddr', `127.0.0.1:${beastSrv.address().port}`); await val('feedName', 'PiAware');
   // ★★ b96-2 the tick: "Not at this site"
-  ok(await js(`(() => { const e = document.getElementById("feedOffsite"); return !!e && e.type === "checkbox" && !e.checked && e.offsetParent !== null; })()`) === true, '"Not at this site" is a tick in the add form, unticked');
-  ok(/Not at this site — its aircraft are shown but not counted in this server.s range outline/.test(await js(`document.getElementById("feedOffsite").closest("label").textContent.replace(/\s+/g, " ")`)), '…with its words');
+  ok(await js(`(() => { const e = document.getElementById("feedOffsite"); return !!e && e.type === "checkbox" && !e.checked && !!e.closest("#feedsAdd") && !e.closest(".hide"); })()`) === true, '"Not at this site" is a tick in the add form (not hidden), unticked');
+  ok(/Not at this site — its aircraft are shown but not counted in this server.s range outline/.test(await js(`document.getElementById("feedOffsite").closest("label").textContent.replace(/\\s+/g, " ")`)), '…with its words');
   await js(`document.getElementById("feedOffsite").checked = true; 1`);
   await click('feedAddGo');
   ok(await until(async () => (await model()).length === 2, 12000), '★ a passing test: added');
