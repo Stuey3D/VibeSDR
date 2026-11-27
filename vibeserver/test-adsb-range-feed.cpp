@@ -10,6 +10,7 @@
 //   3. ★★ b96-2 "NOT AT THIS SITE" (Stuart chose option 1, 11-27), end to end: a feed ticked off-site ("offsite":true) puts its
 //      aircraft in the shared table — on every map, aircraft.json and the delta marking it "offsite":1 — but its positions
 //      leave the bins empty; the same feed at this site fills them; heard by an off-site AND an at-site feed it counts.
+//   4. The rule on the merge (vibeavshare::offsiteOnly): heard here within kAdsbNowSec of the fix counts; the record keeps it.
 // Silent: no radio, no audio.
 #include "vibe_feeds.h"
 #include "vibe_adsb_range_feed.h"
@@ -282,12 +283,56 @@ static void testOffsiteFeed() {
     if (std::system(rm.c_str()) != 0) std::printf("  (could not remove %s)\n", dir);
 }
 
+/** ★★ b96-2 the rule on the merge: Updates from off-site and at-site writers → the table's rows → offsiteOnly + the follower. */
+static void testOffsiteRule() {
+    std::printf("4. \"Not at this site\": the rule on the table's merge\n");
+    const int64_t t0 = 1795770000000LL;
+    auto up = [](uint32_t icao, double lat, double lon, int64_t ms, bool off, bool pos = true) {
+        vibeavshare::Update u;
+        u.icao = icao; u.offsite = off; u.srcMask = 1u << vibeavshare::kAdsb; u.srcMs[vibeavshare::kAdsb] = ms; u.heardMs = ms;
+        if (pos) { u.hasPos = true; u.lat = lat; u.lon = lon; u.posMs = ms; u.posSrc = vibeavshare::kAdsb; }
+        return u;
+    };
+    std::vector<vibeavshare::Row> rows(16);
+    vibeavshare::mergeInto(rows, { up(0x700001, 53.0, 1.0, t0, true), up(0x700002, 53.0, 2.0, t0, false), up(0x700003, 53.0, 3.0, t0, true),
+                                   up(0x700004, 53.0, 4.0, t0 - 300000, false, false) }, t0);
+    // 700003: an at-site radio heard it (no position of its own) 20 s after the off-site fix; 700004: an off-site fix 5 min after
+    // a radio here last heard it
+    vibeavshare::mergeInto(rows, { up(0x700003, 0, 0, t0 + 20000, false, false), up(0x700004, 53.0, 4.0, t0, true) }, t0 + 20000);
+    auto find = [&](uint32_t icao) { for (const auto& w : rows) if (w.used && w.icao == icao) return w; return vibeavshare::Row(); };
+    CHECK(vibeavshare::offsiteOnly(find(0x700001)), "an off-site feed's own fix: off-site only");
+    CHECK(!vibeavshare::offsiteOnly(find(0x700002)), "an at-site source's fix: counted");
+    CHECK(!vibeavshare::offsiteOnly(find(0x700003)), "an off-site fix of an aircraft a source here heard 20 s later: counted (heard by both)");
+    CHECK(vibeavshare::offsiteOnly(find(0x700004)), "an off-site fix 5 min after anything here heard it: off-site only (the at-site hearing has to be within %lld s)", (long long)vibeavshare::kAdsbNowSec);
+    // an at-site fix after an off-site one clears the mark
+    vibeavshare::mergeInto(rows, { up(0x700001, 53.001, 1.0, t0 + 30000, false) }, t0 + 30000);
+    CHECK(!vibeavshare::offsiteOnly(find(0x700001)), "the next fix from a source here clears it");
+    // the file's record carries both (toRec / fromRec), and an older writer's record (no bit, no time) counts
+    const vibeavshare::Row r4 = vibeavshare::fromRec(vibeavshare::toRec(find(0x700004)));
+    CHECK(vibeavshare::offsiteOnly(r4) && r4.siteMs == t0 - 300000, "the record on disk keeps the mark and the at-site time");
+    vibeavshare::Row old = find(0x700004); old.flags &= ~vibeavshare::kPosOffsite; old.siteMs = 0;
+    CHECK(!vibeavshare::offsiteOnly(old), "an older build's record (neither written): counted, as before");
+    // absorb (two rows found to be one aircraft) keeps the position's mark and the newest at-site time
+    vibeavshare::Row a = find(0x700002), b = find(0x700004); b.posMs = a.posMs + 1000; a.siteMs = 0;
+    vibeavshare::absorb(a, b);
+    CHECK(vibeavshare::offsiteOnly(a), "absorb: an off-site position taken over keeps its mark");
+    // the follower on these rows: only the counted ones are offered
+    vibeadsb::RangeStore st; st.setCentre(52.3125, -0.875, t0 / 1000);
+    vibeadsb::TableRangeFollower f;
+    auto fresh = rows; for (auto& w : fresh) if (w.used) w.posMs = t0 + 30000;   // ★ fresh enough to read (kFreshSec)
+    auto moved = fresh; for (auto& w : moved) if (w.used) { w.lat += 0.002; w.posMs += 1000; }
+    f.tick(fresh, 0, t0 + 30500, st, vibeadsb::kRangeAdsb);
+    const int n = f.tick(moved, 0, t0 + 31500, st, vibeadsb::kRangeAdsb);
+    CHECK(n == 3, "the follower offers the 3 counted aircraft, not the 1 off-site only (%d offered)", n);
+}
+
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     std::signal(SIGPIPE, SIG_IGN);   // ★ the fake dump writes to a reader the FeedSet has just closed (a feed reconfigured)
     testRule();
     testEndToEnd();
     testOffsiteFeed();
+    testOffsiteRule();
     std::printf("\ntest-adsb-range-feed: %d/%d passed\n", checks - fails, checks);
     return fails ? 1 : 0;
 }

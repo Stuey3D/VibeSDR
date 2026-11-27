@@ -99,6 +99,9 @@ struct Update {
     bool ground = false;
     uint32_t count = 0;                 ///< messages since this writer's last update (added)
     uint32_t radios = 0;                ///< ★ beta96 the writer's radio bit(s) — Table::write sets this process's own
+    /** ★★ b96-2 "NOT AT THIS SITE": the writer is a feed source the owner ticked off-site (vibe_feeds.h SourceCfg::offsite) —
+     *  its aircraft go on every map, but its positions say nothing about THIS server's range (offsiteOnly below). */
+    bool offsite = false;
 };
 struct GsHeard { int id = -1; int64_t ms = 0; double khz = 0; };
 
@@ -106,7 +109,7 @@ struct GsHeard { int id = -1; int64_t ms = 0; double khz = 0; };
 /** ★ ONE AIRCRAFT, 256 bytes on disk. Wall-clock milliseconds; positions 1e-7 degree. */
 struct Rec {
     uint32_t icao;
-    uint8_t used, srcMask, flags, posSrc;     ///< flags: 1 pos · 2 alt · 4 trk · 8 gs · 16 on the ground
+    uint8_t used, srcMask, flags, posSrc;     ///< flags: 1 pos · 2 alt · 4 trk · 8 gs · 16 on the ground · 32 pos from an off-site feed
     int64_t firstMs, lastMs, posMs;
     int64_t srcMs[kNSrc];
     int32_t lat, lon, altFt;
@@ -117,6 +120,10 @@ struct Rec {
      *  line n of <runtime dir>/radios.idx (vibe_log_radio.h's registry, kept beside this file). In what was padding: a
      *  record an older build wrote reads 0 = unknown (shown under every radio, the logs' rule); same layout, same version. */
     uint32_t radios;
+    /** ★★ b96-2 "NOT AT THIS SITE": when a source AT THIS SITE (a radio here, a feed not ticked off-site) last heard it, wall ms.
+     *  In what was padding: an older build's record reads 0. With Rec::flags 32 (the position came from an off-site feed)
+     *  it decides offsiteOnly — the range outline's rule. */
+    int64_t siteMs;
 };
 #pragma pack(pop)
 static_assert(sizeof(Rec) <= kRecSize, "an aircraft record is 256 bytes");
@@ -165,6 +172,7 @@ struct Row {
     uint32_t count = 0;
     std::string reg, flight, type, from, to, label, app, posTime, via;
     uint32_t radios = 0;   ///< ★ beta96 the radios that heard it (Rec::radios); 0 = unknown
+    int64_t siteMs = 0;    ///< ★★ b96-2 when a source at this site last heard it (Rec::siteMs); 0 = none / an older writer
 };
 inline Row fromRec(const Rec& r) {
     Row w;
@@ -173,7 +181,7 @@ inline Row fromRec(const Rec& r) {
     w.firstMs = r.firstMs; w.lastMs = r.lastMs; w.posMs = r.posMs;
     for (int s = 0; s < kNSrc; ++s) w.srcMs[s] = r.srcMs[s];
     w.lat = (r.flags & 1) ? r.lat / 1e7 : NAN; w.lon = (r.flags & 1) ? r.lon / 1e7 : NAN;
-    w.altFt = r.altFt; w.trk = r.trk; w.gs = r.gs; w.count = r.count; w.radios = r.radios;
+    w.altFt = r.altFt; w.trk = r.trk; w.gs = r.gs; w.count = r.count; w.radios = r.radios; w.siteMs = r.siteMs;
     w.reg = getStr(r.reg, sizeof r.reg); w.flight = getStr(r.flight, sizeof r.flight); w.type = getStr(r.type, sizeof r.type);
     w.from = getStr(r.from, sizeof r.from); w.to = getStr(r.to, sizeof r.to); w.label = getStr(r.label, sizeof r.label);
     w.app = getStr(r.app, sizeof r.app); w.posTime = getStr(r.posTime, sizeof r.posTime); w.via = getStr(r.via, sizeof r.via);
@@ -189,11 +197,23 @@ inline Rec toRec(const Row& w) {
     r.firstMs = w.firstMs; r.lastMs = w.lastMs; r.posMs = w.posMs;
     for (int s = 0; s < kNSrc; ++s) r.srcMs[s] = w.srcMs[s];
     if (w.flags & 1) { r.lat = (int32_t)std::lround(w.lat * 1e7); r.lon = (int32_t)std::lround(w.lon * 1e7); }
-    r.altFt = w.altFt; r.trk = w.trk; r.gs = w.gs; r.count = w.count; r.radios = w.radios;
+    r.altFt = w.altFt; r.trk = w.trk; r.gs = w.gs; r.count = w.count; r.radios = w.radios; r.siteMs = w.siteMs;
     putStr(r.reg, sizeof r.reg, w.reg); putStr(r.flight, sizeof r.flight, w.flight); putStr(r.type, sizeof r.type, w.type);
     putStr(r.from, sizeof r.from, w.from); putStr(r.to, sizeof r.to, w.to); putStr(r.label, sizeof r.label, w.label);
     putStr(r.app, sizeof r.app, w.app); putStr(r.posTime, sizeof r.posTime, w.posTime); putStr(r.via, sizeof r.via, w.via);
     return r;
+}
+
+/** ★★ b96-2 Rec::flags 32: the position came from a feed the owner ticked "Not at this site". */
+static constexpr uint8_t kPosOffsite = 32;
+/** ★★★ b96-2 "NOT AT THIS SITE" (Stuart chose option 1, 11-27; docs/v12/RANGE-FEED.md): is this row's position one that says
+ *  nothing about THIS server's range? Yes when it came from an off-site feed AND no source at this site (a radio here, a feed
+ *  not ticked) heard the aircraft within kAdsbNowSec of that fix — an aircraft also heard here counts. The range outline (the
+ *  radio's follower and the page's live one) skips such a position; every map still draws the aircraft. aircraft.json and
+ *  the delta mark it "offsite":1. An older writer's row (no bit, no siteMs) counts, as before. */
+inline bool offsiteOnly(const Row& w) {
+    if (!(w.flags & 1) || !(w.flags & kPosOffsite)) return false;
+    return !w.siteMs || w.posMs - w.siteMs > kAdsbNowSec * 1000;
 }
 
 /** ★ Apply one update to a row (newest wins field by field). */
@@ -207,6 +227,7 @@ inline void apply(Row& w, const Update& u) {
     if (!u.from.empty() || !u.to.empty()) { if (newer || w.from.empty()) { w.from = clean(u.from, 7); w.to = clean(u.to, 7); } }
     w.srcMask |= u.srcMask;
     w.radios |= u.radios;   // ★ beta96 every radio that heard it
+    if (!u.offsite) w.siteMs = std::max(w.siteMs, u.heardMs);   // ★★ b96-2 a source at this site heard it
     for (int s = 0; s < kNSrc; ++s) if ((u.srcMask >> s) & 1) w.srcMs[s] = std::max(w.srcMs[s], u.srcMs[s] ? u.srcMs[s] : u.heardMs);
     w.lastMs = std::max(w.lastMs, u.heardMs);
     if (!w.firstMs || u.heardMs < w.firstMs) w.firstMs = std::min(w.firstMs ? w.firstMs : u.heardMs, u.heardMs);
@@ -214,7 +235,8 @@ inline void apply(Row& w, const Update& u) {
     if (u.hasPos && std::isfinite(u.lat) && std::isfinite(u.lon) && std::fabs(u.lat) <= 90 && std::fabs(u.lon) <= 180
         && (!(w.flags & 1) || u.posMs >= w.posMs)) {
         w.lat = u.lat; w.lon = u.lon; w.posMs = u.posMs; w.posSrc = u.posSrc;
-        w.flags = uint8_t((w.flags & ~(1 | 2 | 4 | 8 | 16)) | 1 | (u.hasAlt ? 2 : 0) | (u.hasTrk ? 4 : 0) | (u.hasGs ? 8 : 0) | (u.ground ? 16 : 0));
+        w.flags = uint8_t((w.flags & ~(1 | 2 | 4 | 8 | 16 | kPosOffsite)) | 1 | (u.hasAlt ? 2 : 0) | (u.hasTrk ? 4 : 0) | (u.hasGs ? 8 : 0) | (u.ground ? 16 : 0)
+                          | (u.offsite ? kPosOffsite : 0));   // ★★ b96-2 whose position this is
         w.altFt = u.hasAlt ? u.altFt : 0; w.trk = u.hasTrk ? u.trk : 0; w.gs = u.hasGs ? u.gs : 0;
         w.posTime = clean(u.posTime, 11);
     } else if (u.hasAlt && newer && !(w.flags & 1)) { w.flags |= 2; w.altFt = u.altFt; }
@@ -228,6 +250,7 @@ inline void absorb(Row& a, const Row& b) {
     if (!b.from.empty() && (a.from.empty() || bNewer)) { a.from = b.from; a.to = b.to; }
     a.srcMask |= b.srcMask;
     a.radios |= b.radios;   // ★ beta96
+    a.siteMs = std::max(a.siteMs, b.siteMs);   // ★★ b96-2 (the position's own off-site bit travels with it in flags)
     for (int s = 0; s < kNSrc; ++s) a.srcMs[s] = std::max(a.srcMs[s], b.srcMs[s]);
     a.firstMs = std::min(a.firstMs ? a.firstMs : b.firstMs, b.firstMs ? b.firstMs : a.firstMs);
     a.lastMs = std::max(a.lastMs, b.lastMs);
@@ -506,6 +529,7 @@ inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHear
             if (w.flags & 8) { std::snprintf(b, sizeof b, ",\"gs\":%.0f", (double)w.gs); o += b; }
             if (w.flags & 16) o += ",\"ground\":1";
             str("posTime", w.posTime);
+            if (offsiteOnly(w)) o += ",\"offsite\":1";   // ★★ b96-2 not counted in this server's range outline
         } else if (w.flags & 2) { std::snprintf(b, sizeof b, ",\"alt\":%d", w.altFt); o += b; }
         if (!w.from.empty()) { str("from", w.from); str("to", w.to); }
         if (!w.label.empty()) { str("label", w.label); if (labelName) str("labelName", labelName(w.label)); }

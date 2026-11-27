@@ -18,8 +18,9 @@
 //    row heard ONLY by this radio is left to its own service (it already offered every one of those, at a second's rate).
 //    Everything else — a Beast / BaseStation ADS-B feed, the other radios of this server (the door's loopback ingest tags
 //    theirs "feed" too) — counts, centred on THIS SERVER'S location (the receiver location every radio here shares).
-//    ⚠ A feed's receiver is assumed to be AT this site. One elsewhere would stretch the outline toward it; the feed's
-//    settings could carry an "at this site" flag later (RANGE-FEED.md).
+//    ★★ b96-2 "NOT AT THIS SITE" (Stuart chose option 1, 11-27): a feed the owner ticked off-site (vibe_feeds.h
+//    SourceCfg::offsite) would stretch the outline toward a receiver somewhere else. Its positions are skipped here
+//    (vibeavshare::offsiteOnly) unless a source at this site heard the same aircraft too; its aircraft stay on every map.
 // ★ BOUNDED: one 264 KB pread of a tmpfs file every kEverySec while ADS-B is live (each radio's writer already reads the
 //   whole table every 2 s), and one small entry per aircraft for at most kForgetSec, never more than kMaxTracked.
 #pragma once
@@ -60,6 +61,7 @@ public:
             if (!w.icao || !(w.flags & 1) || w.posSrc != vibeavshare::kAdsb) continue;   // ★ ADS-B positions only
             if (!(w.lat == w.lat) || !(w.lon == w.lon) || std::fabs(w.lat) > 90 || std::fabs(w.lon) > 180) continue;
             if (ownBit && w.radios == ownBit) continue;                                  // ★ this radio's own: its service's
+            if (vibeavshare::offsiteOnly(w)) continue;                                   // ★★ b96-2 an off-site feed's only
             if (nowMs - w.posMs > kFreshSec * 1000 || w.posMs > nowMs + 5000) continue;
             auto it = last_.find(w.icao);
             if (it != last_.end() && w.posMs <= it->second.posMs) continue;              // ★ the same fix again

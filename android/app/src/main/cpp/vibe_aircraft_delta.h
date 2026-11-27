@@ -9,7 +9,7 @@
 //   A row is split in two:
 //     "s" STATIC  — what an aircraft IS: icao, reg, flight, type, the aircraft data's fields, route, from/to, label, app, via;
 //     "y" DYNAMIC — where it is and when it was heard: lat, lon, pt (position time, UTC s), posSrc, alt, trk, gs, ground,
-//                   posTime, src, st (each source's last-heard UTC s), lt (last heard UTC s), n.
+//                   posTime, offsite (b96-2: the position is an off-site feed's only), src, st (each source's last-heard UTC s), lt (last heard UTC s), n.
 //   ★★ TIMES ARE ABSOLUTE here (UTC seconds), never ages: an aircraft heard once and then silent changes NOTHING, so it is not
 //      re-sent every poll. The client turns them back into aircraft.json's ages (now − t) — so everything downstream
 //      (sharedSanitise, the maps, avNowRule) reads exactly the object it always did (src/services/aircraftDelta.ts).
@@ -91,6 +91,7 @@ inline Parts rowParts(const vibeavshare::Row& w, const LabelFn& labelName = null
         if (w.flags & 8) { std::snprintf(b, sizeof b, ",\"gs\":%.0f", (double)w.gs); y += b; }
         if (w.flags & 16) y += ",\"ground\":1";
         if (!w.posTime.empty()) { y += ",\"posTime\":\""; y += jsonEsc(w.posTime); y += '"'; }
+        if (vibeavshare::offsiteOnly(w)) y += ",\"offsite\":1";   // ★★ b96-2 toJson's mark: not in this server's range outline
         y += ',';
     } else if (w.flags & 2) { std::snprintf(b, sizeof b, "\"alt\":%d,", w.altFt); y += b; }
     y += "\"src\":[";

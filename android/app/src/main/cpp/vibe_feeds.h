@@ -74,9 +74,14 @@ struct SourceCfg {
     std::string label = "adsb";    ///< "adsb" | "hfdl" | "vdl2" | "acars"
     std::string name;              ///< the owner's name for it ("PiAware", "UberSDR HFDL"), optional
     bool internal = false;         ///< ★ the radios' own ADS-B coming in over loopback (never configured, never shown)
+    /** ★★ b96-2 "NOT AT THIS SITE" (JSON "offsite":true; absent = false = at this site, so every older config reads as before):
+     *  the receiver is somewhere else. Its aircraft go on every map; its positions are never counted in this server's range
+     *  outline (vibeavshare::offsiteOnly — the radio's follower and the page's live outline). Only ADS-B is ever counted there,
+     *  so on an HFDL / VDL2 / ACARS feed it changes nothing (the forms offer it on ADS-B feeds only). */
+    bool offsite = false;
 };
 inline bool labelOk(const std::string& l) { return l == "adsb" || l == "hfdl" || l == "vdl2" || l == "acars"; }
-inline std::string key(const SourceCfg& c) { return c.fmt + "|" + c.dir + "|" + c.host + "|" + std::to_string(c.port) + "|" + c.label + "|" + c.name; }
+inline std::string key(const SourceCfg& c) { return c.fmt + "|" + c.dir + "|" + c.host + "|" + std::to_string(c.port) + "|" + c.label + "|" + c.name + (c.offsite ? "|offsite" : ""); }
 /** What a source is called in a status line or banner: its name, else its label ("HFDL source"). */
 inline std::string title(const SourceCfg& c) { return c.name.empty() ? std::string(sbs::labelWords(c.label)) + " source" : c.name; }
 
@@ -94,6 +99,7 @@ inline bool parseSources(const std::string& text, std::vector<SourceCfg>& out, s
         SourceCfg c;
         c.fmt = e.str("fmt", "beast"); c.dir = e.str("dir", "connect"); c.label = e.str("label", c.fmt == "beast" ? "adsb" : "hfdl");
         c.name = sbs::trim(e.str("name"));
+        { const J* o = e.get("offsite"); c.offsite = o && o->kind == J::Bool && o->b; }   // ★★ b96-2 absent / false = at this site
         if (c.name.size() > 40) c.name.resize(40);
         for (char& ch : c.name) if ((unsigned char)ch < 0x20 || ch == '"' || ch == '\\') ch = ' ';
         if (c.fmt != "beast" && c.fmt != "sbs" && c.fmt != "uberhfdl") { err = "a feed's format is Beast, BaseStation (SBS) or UberSDR HFDL"; return false; }
@@ -128,6 +134,7 @@ inline std::string sourcesJson(const std::vector<SourceCfg>& v) {
         if (c.dir == "connect") o += ",\"host\":\"" + beast::jsonEsc(c.host) + "\"";
         o += ",\"port\":" + std::to_string(c.port) + ",\"label\":\"" + c.label + "\"";
         if (!c.name.empty()) o += ",\"name\":\"" + beast::jsonEsc(c.name) + "\"";
+        if (c.offsite) o += ",\"offsite\":true";   // ★★ b96-2 written only when ticked: an at-site list reads as it always did
         o += "}";
     }
     return o + "]";
@@ -359,7 +366,12 @@ public:
     void shareSince(int64_t sinceMs, std::vector<vibeavshare::Update>& out) {
         std::lock_guard<std::mutex> lk(m_);
         const int64_t nowMs = vibeavshare::wallMs();
-        if (c_.fmt != "beast") { tbl_.shareSince(sinceMs, nowMs, out, std::string(sbs::labelWords(c_.label)) + " feed" + (c_.name.empty() ? "" : " (" + c_.name + ")")); return; }
+        if (c_.fmt != "beast") {
+            const size_t from = out.size();
+            tbl_.shareSince(sinceMs, nowMs, out, std::string(sbs::labelWords(c_.label)) + " feed" + (c_.name.empty() ? "" : " (" + c_.name + ")"));
+            for (size_t i = from; i < out.size(); ++i) out[i].offsite = c_.offsite;   // ★★ b96-2
+            return;
+        }
         const double tn = now();
         auto wall = [&](double t) { return nowMs - (int64_t)std::llround((tn - t) * 1000); };
         for (const auto& kv : tr_.aircraft()) {
@@ -368,6 +380,7 @@ public:
             const int64_t heard = wall(a.seen);
             if (heard < sinceMs) continue;
             vibeavshare::Update u;
+            u.offsite = c_.offsite;   // ★★ b96-2 "Not at this site": on the maps, never in this server's range outline
             u.icao = a.icao; u.flight = a.callsign;
             u.srcMask = 1u << vibeavshare::kAdsb; u.srcMs[vibeavshare::kAdsb] = heard; u.heardMs = heard;
             if (a.hasPos && tn - a.seenPos <= 60) {
