@@ -143,6 +143,15 @@ Not gated: zoom/pan, chat itself, `state`.
   under the password card (which stays live); the audio sheet dims the shared DSP rows and gates their handlers.
 - **Web**, receiver settings: the gain row, each driver's row, RTL AGC, IF filter, sample rate, direct sampling,
   antenna and the shared DSP buttons are dimmed and shielded (`ASK_SHIELD_SEL`).
+- **Web and app, the mode menu and the decoders** (Stuart, 2026-11-27: "we want to prevent decoder/demodulator changing
+  but still need access to the maps/gallery"): the mode pill OPENS while locked — it is the only way to the decoders
+  panel, whose VIEWS (GALLERY, the maps, the DX LOG) are read-only. Inside, every demodulator, the width, every
+  whole-radio key, every decoder key and its option rows are dimmed and nudge (web: `askShielded` in main.ts stops every
+  key in `#mModeMenu` / `#decodersPanel` not marked `data-askok`; app: `dialChat.askGateControls` gates every on…()
+  handler of ModeSelector's decoder / spots rows but `ASK_SHEET_FREE`, and ModeSelector dims them). Free: DECODERS…,
+  the VIEWS keys, the band tabs, CLOSE, the links. With one decoder left (no DECODERS… door) the web menu carries the
+  VIEWS itself (`#mModeViews`). The DX LOG's TUNE is shielded. Tests: `scripts/test-web-ask-views.mjs` (real server,
+  muted Edge), `scripts/test_ask_before_tuning.ts` §5.
 - **Jr** (watch, direct): refuses to send a tune while locked and says why; its Radio page (gain, AGC, RSP / HF+
   rows, de-emphasis, the FM row) is dimmed and inert with a line saying why, and the socket drops the list.
   ★ Its admin password card is drawn ABOVE the dimmed region while locked and stays live (Stuart: "Jr needs to
