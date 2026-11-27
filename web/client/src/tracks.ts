@@ -960,14 +960,11 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab{top:0!important;right:0;left:auto;margin:0!important;width:var(--trk-tab-w,44px)!important;height:var(--trk-tab-h,48px)!important;padding:0 0 4px!important;
   flex-direction:column;align-items:center!important;justify-content:center!important;gap:2px;border:1.5px solid var(--hc)!important;border-top-width:0!important;border-radius:0 0 12px 12px!important;transform:none!important}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab>*{flex:none;margin:0!important}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTabChev{display:block;width:16px;height:16px;line-height:16px;text-align:center;transform-origin:50% 50%;transform:rotate(-90deg)}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{position:absolute;top:calc(var(--trk-tab-h,48px) + 4px);right:0;border-width:1.5px!important;border-radius:12px!important;
   transform:none!important;padding:4px 8px!important;z-index:3;white-space:nowrap}
 /* ★ Stuart 19:xx (iPhone: the TIME card opened sideways IN the row, HEALTH's tab on top of its digits, CHAT hidden under it):
  *  out, the card DROPS below its own tab like every card here; the tab stays in the row at its width, lit, and tucks it */
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock):not(.tucked) .hTab{visibility:visible!important;pointer-events:auto!important;background:var(--bar-bg-hi,#1d2a38)!important}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock):not(.tucked) .hTabChev{transform:rotate(90deg)}
-.trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard .hTuck{transform:rotate(-90deg)}
 /* the cards drop from under the row */
 .trkView[data-short] .trkCards .sideL{left:var(--trk-cl-left,96px)!important;right:auto!important;top:calc(var(--trk-tab-h,48px) + 4px)!important;bottom:calc(var(--sai-b) + 8px)!important;
   max-height:none;justify-content:flex-start;width:min(320px,calc(100% - var(--trk-cl-left,96px) - 8px))!important}
@@ -1164,6 +1161,13 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2>.ch{cursor:pointer;font:700 9px/1 system-ui,sans-serif;letter-spacing:.16em;color:#B9C0B4}
 .trkCard2>.ch:hover{background:rgba(255,255,255,.04)}
 .trkCard2>.ch .x{font:700 18px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);border:0;padding:0 6px}
+/* ★ Stuart 19:xx ("final tiny change"): no orientation system — EVERY card closes with one [×] at its header's top right,
+ *  the same everywhere; health / time's tabs carry only their icon, centred (the tab opens, the card's × closes) */
+.trkView .mChipsR>.edgeDock:not(.mDock) .hTabChev{display:none!important}
+.trkView .mChipsR>.edgeDock:not(.mDock) .hTab{justify-content:center!important;align-items:center!important}
+.trkView .mChipsR>.edgeDock:not(.mDock) .hCard{flex-direction:row}
+.trkView .mChipsR>.edgeDock:not(.mDock) .hCard .hTuck{order:9;align-self:flex-start;font-size:0!important;width:auto!important;margin:0 0 0 6px!important;padding:0 6px!important;border:0!important;transform:none!important;opacity:1}
+.trkView .mChipsR>.edgeDock:not(.mDock) .hCard .hTuck::before{content:"×";font:700 18px/1 system-ui,sans-serif;color:var(--hc,#5BE36B)}
 .trkCards .sideL>.trkCard2>.ch{flex-direction:row}
 .mDock .hTuck{width:15px!important;font-size:15px!important;opacity:.6}
 .mDock:not(.left) .hTuck{border-right:1px solid rgba(255,255,255,.14);margin-right:5px!important}
@@ -1734,10 +1738,6 @@ export class TrackView {
           const cb = c.querySelector('.cb') as HTMLElement | null; if (cb && st) cb.scrollTop = st;
         }
       });
-    }
-    for (const side of ['L', 'R', 'B', 'H'] as const) for (const id of place[side]) {
-      const x = this.root.querySelector(`.trkCard2[data-card="${id}"] > .ch .x`) as HTMLElement | null;
-      if (x) x.textContent = side === 'L' ? '‹' : '›';   // ★ points at the edge the chip lives on
     }
     if (focused && focused !== document.activeElement && this.root.contains(focused) && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
     this.cardsAnchor(place);
