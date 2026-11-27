@@ -154,7 +154,8 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   ok(await ev(`!!document.querySelector('.trkView:not([hidden]) .slot-share #mapChat') && !document.getElementById('mapChat').hidden`), 'CHAT sits beside the line in the map\'s top bar');
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.includes('adsb') && tune.includes('ais*'), `TUNE: ADS-B and AIS (AIS lit) — ${tune.join(' ')}`);
-  ok(await ev(`/^TUNE · AIS 161\\.975/.test(${CHIP}.textContent || '') && !${CHIP}.closest('.tune').hidden`), `ONE TUNE chip naming the live mode — "${await ev(`${CHIP}.textContent`)}"`);
+  // ★★★ beta96 map cards: TUNE is a card button now — the live mode is in its title and the TUNE card's first line
+  ok(await ev(`${CHIP}.textContent.trim() === 'TUNE' && !${CHIP}.hidden && /^TUNE · AIS 161\\.975/.test(${CHIP}.title || '')`), `ONE TUNE button, its title naming the live mode — "${await ev(`${CHIP}.title`)}"`);
   // the chip opens the list; Escape shuts it
   await ev(`${CHIP}.click(); true`);
   ok(await until(`!document.querySelector('.trkView:not([hidden]) .tunePop').hidden && document.activeElement?.classList.contains('tpRow')`, 2000), 'the chip opens the TUNE list, focus on a row (keyboard / pad)');
@@ -162,7 +163,7 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   ok(groups[0] === 'AVIATION' && groups.includes('MARITIME'), `grouped: ${groups.join(' / ')}`);
   ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tunePop .tpRow')].every(r => r.querySelector('svg path') && r.querySelector('.fq').textContent)`), 'every row has its icon and frequencies');
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
-  ok(await ev(`document.querySelector('.trkView:not([hidden]) .tunePop').hidden && (${AS}).open`), 'Escape shuts the list, the map stays');
+  ok(await ev(`${CHIP}.getAttribute('aria-expanded') === 'false' && !document.querySelector('.trkView:not([hidden]) .tunePop').getClientRects().length && (${AS}).open`), 'Escape shuts the TUNE card, the map stays');
   ok(!(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).exitLocked, 'EXIT is live (free)');
   await shot('free');
   // a second listener → the line follows live
@@ -215,7 +216,8 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   const n0 = await ev(`window.__sent.length`);
   await ev(`document.querySelector('.trkView:not([hidden]) .trkTop .exit').click(); true`);
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="adsb"]')?.click(); true`);
-  ok(await ev(`${CHIP}.classList.contains('dialLocked') && ${CHIP}.getAttribute('aria-disabled') === 'true'`), `the TUNE chip greyed with the reason — "${await ev(`${CHIP}.title`)}"`);
+  // ★★★ beta96 map cards: opening the TUNE card moves nothing (never greyed); its ROWS are, with the reason
+  ok(await ev(`!${CHIP}.classList.contains('dialLocked') && [...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune]')].every(b => b.classList.contains('dialLocked') && b.getAttribute('aria-disabled') === 'true' && b.title.length > 10)`), `the TUNE rows greyed with the reason — "${await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune]')?.title`)}"`);
   await sleep(1200);
   const sent = JSON.parse(await ev(`JSON.stringify(window.__sent.slice(${n0}))`));
   ok(!sent.some((s) => /"type":"(ais|adsb|avdata)"/.test(s)) && (JSON.parse(await ev(`JSON.stringify(${AS})`)) || {}).mode === 'ais', `EXIT and ADS-B refused while locked (no ais/adsb sent, still AIS)`);
@@ -255,7 +257,7 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   // pick → tune: ADS-B from the list
   await ev(`${CHIP}.click(); true`); await sleep(300);
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="adsb"]')?.click(); true`);
-  ok(await until(`(${AS})?.mode === 'adsb' && /^TUNE · ADS-B 1090/.test(${CHIP}.textContent || '')`, 12000), `a row picked tunes: ADS-B, the chip follows — "${await ev(`${CHIP}.textContent`)}"`);
+  ok(await until(`(${AS})?.mode === 'adsb' && /^TUNE · ADS-B 1090/.test(${CHIP}.title || '')`, 12000), `a row picked tunes: ADS-B, the TUNE button's title follows — "${await ev(`${CHIP}.title`)}"`);
 });
 
 console.log('── 3. a one-listener server ──');

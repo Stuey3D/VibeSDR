@@ -772,7 +772,7 @@ export class TrackView {
         + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
            + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
         + `</div>`)
-      + card('key', 'KEY', `<div class="trkKey kb">${o.legend || ''}</div>`)
+      + card('key', 'KEY', `<div class="trkKey"><div class="kb">${o.legend || ''}</div></div>`)
       + card('sources', 'SOURCES', `<div class="srcBody"></div>`)
       + `</div></div>`;
     this.root = r;
@@ -823,12 +823,15 @@ export class TrackView {
       this.rowPick(e);
     });
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
-    // ★★★ beta96 Escape shuts the TOP card first (the last opened), then the selection, then the map
+    /* ★★★ beta96 Escape (and the pad's BACK): inside a card — that card shuts, focus back on its button; else an item's
+     *  own card on the map (the selection) first, as before; else the TOP card (the last opened); else the map. */
     r.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
-      const top = this.cardOrder[this.cardOrder.length - 1];
-      if (top) { const inCard = (e.target as HTMLElement)?.closest?.('.trkCard2'); this.cardOpen(top, false, true); if (inCard) (r.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus(); }
+      const inCard = (e.target as HTMLElement)?.closest?.('.trkCard2') as HTMLElement | null;
+      const open = this.openCards.filter((id) => this.cardAvail.has(id));
+      const top = inCard ? inCard.dataset.card as CardId : open[open.length - 1];
+      if (inCard || (!this.sel && top)) { this.cardOpen(top, false, true); if (inCard) (r.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus(); }
       else if (this.sel) this.select('');
       else if (this.dialExit) this.onDialLocked?.(this.dialWhy);
       else o.onExit();
@@ -1330,7 +1333,7 @@ export class TrackView {
     this.keySig = html;
     const d = this.root.querySelector('.trkKey') as HTMLElement | null;
     if (!d) return;
-    d.innerHTML = html;
+    (d.querySelector('.kb') as HTMLElement).innerHTML = html;
     this.cardsAvail('key', !!html);   // ★ beta96 the KEY card, only with something to explain
     this.cardsLayout();
   }
