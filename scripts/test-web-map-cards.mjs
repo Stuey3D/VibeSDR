@@ -80,7 +80,6 @@ const OPEN = `JSON.stringify([...(${V}?.querySelectorAll('[data-cbtn][aria-expan
 // ★★★ tweak 3: each chip is an edge dock (.mDock) — offered = its dock is not hidden
 const SHOWN = `JSON.stringify([...(${V}?.querySelectorAll('.mDock') || [])].filter(d => !d.hidden).map(d => d.dataset.dock))`;
 const VISIBLE_CARDS = `JSON.stringify([...(${V}?.querySelectorAll('.trkCards .trkCard2') || [])].filter(c => !c.hidden && c.getClientRects().length).map(c => c.dataset.card))`;
-async function shutAll(p) { await p.ev(`[...(${V}?.querySelectorAll('[data-cbtn][aria-expanded="true"]') || [])].forEach(b => b.click()); 1`); await sleep(300); }
 async function radioDatalink(p, url) {
   await p.send('Page.navigate', { url });
   await p.until(`!![...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()))`, 20000);
@@ -94,6 +93,10 @@ async function radioDatalink(p, url) {
   return p.until(`!!${V}`, 10000);
 }
 /** The checks every size shares: the bar, each card, the window rule, Escape, scroll, the map's share. */
+const TRANSIENT = ['servers', 'tune', 'layers', 'map', 'help'];
+const SHOWN_T = `JSON.parse(${VISIBLE_CARDS}).filter(x => x !== 'list')`;
+async function shutTransients(p) { await p.ev(`[...(${V}?.querySelectorAll('.trkCards .trkCard2') || [])].filter(c => c.dataset.card !== 'list').forEach(c => c.querySelector(':scope > .ch').click()); 1`); await sleep(300); }
+/** The checks every size shares: the bar, each chip and its card, the window rule, Escape, scroll, the map's share. */
 async function sizeChecks(p, tag, w, h, o) {
   const narrow = w < 600;
   // ── always on ──
@@ -102,8 +105,7 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(await p.until(`!!document.getElementById('mapShLine')?.getClientRects().length`, 6000), `${tag} ${w}: the shared tuner line (listeners / ask) is on screen: ${await p.ev(`document.getElementById('mapShLine')?.textContent`)}`);
     ok(await p.ev(`!!document.getElementById('mapChat')?.getClientRects().length`), `${tag} ${w}: CHAT is on screen`);
     const r = await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`);
-    ok(/^VDL2 [\d.,]+ msg\/min$/.test(r), `${tag} ${w}: top right is only the message rate: "${r}"`);
-    // ★★★ tweak 2 (Stuart 11-27): the bar is EXACTLY EXIT | Shared VFO: … n/max | CHAT | the rate — in that order
+    ok(/^VDL2 [\d.,]+ msg\/min$/.test(r), `${tag} ${w}: the incoming messages: "${r}"`);
     const order = await p.ev(`(() => { const bar = ${V}.querySelector('.trkTop'); const els = [bar.querySelector('.exit'), document.getElementById('mapShLine'), document.getElementById('mapChat'), bar.querySelector('.rate')];
       if (els.some(e => !e || !bar.contains(e) || !e.getClientRects().length)) return 'missing';
       for (let i = 1; i < els.length; i++) if (!(els[i - 1].compareDocumentPosition(els[i]) & Node.DOCUMENT_POSITION_FOLLOWING)) return 'order';
@@ -114,71 +116,61 @@ async function sizeChecks(p, tag, w, h, o) {
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
   }
-  ok(await p.ev(`!${V}.querySelector('.trkTop [data-cbtn]') && ${V}.querySelectorAll('.trkMapHost .mDock.edgeDock [data-cbtn]').length >= 4`), `${tag} ${w}: the chips are edge docks on the map (the health pill's), not in the bar`);
-  // ★ the sides: TUNE / LAYERS on the left edge, SERVERS / MAP top right, LIST bottom right
-  const sides = await p.ev(`JSON.stringify(Object.fromEntries([...${V}.querySelectorAll('.mDock:not([hidden])')].map(d => { const b = d.getBoundingClientRect(); return [d.dataset.dock, b.left < ${w} / 2 ? 'L' : 'R']; })))`);
-  ok(/"layers":"L"/.test(sides) && /"map":"R"/.test(sides) && /"list":"R"/.test(sides) && /"servers":"R"/.test(sides) && (!/"tune"/.test(sides) || /"tune":"L"/.test(sides)), `${tag} ${w}: chips on their edges ${sides}`);
-  // ★ the LAYERS chip: a glyph and a count per family; a slim column on a phone-width window
-  const lay = JSON.parse(await p.ev(`JSON.stringify((() => { const es = [...${V}.querySelectorAll('.mDock[data-dock="layers"] .le')]; if (es.length < 1) return { n: 0 }; const a = es[0].getBoundingClientRect(), b = es[es.length - 1].getBoundingClientRect(); return { n: es.length, col: es.length > 1 && b.top > a.top + 4 && Math.abs(b.left - a.left) < 4, glyph: !!es[0].querySelector('svg') }; })())`));
-  ok(lay.n >= 1 && lay.glyph, `${tag} ${w}: the LAYERS chip shows a glyph and a count per family (${lay.n})`);
-  if (lay.n > 1) ok(narrow ? lay.col : !lay.col, `${tag} ${w}: LAYERS ${narrow ? 'stacks as a slim column' : 'stays a row'} on this window`);
-  // ★ tuck and back, as the health pill: › tucks it to a tab on its edge, the tab brings it back
-  await p.ev(`${V}.querySelector('.mDock[data-dock="map"] .hTuck').click(); 1`); await sleep(400);
-  const tucked = await p.ev(`(() => { const d = ${V}.querySelector('.mDock[data-dock="map"]'); const t = d.querySelector('.hTab').getBoundingClientRect(); return d.classList.contains('tucked') && t.right >= ${w} - 1 && t.width > 10; })()`);
-  ok(tucked, `${tag} ${w}: MAP tucks into a tab on the right edge`);
-  await p.ev(`${V}.querySelector('.mDock[data-dock="map"] .hTab').click(); 1`); await sleep(400);
-  ok(await p.ev(`!${V}.querySelector('.mDock[data-dock="map"]').classList.contains('tucked')`), `${tag} ${w}: …and its tab brings it back`);
-  ok(await p.ev(`!${V}.querySelector('.trkTop .ttl').getClientRects().length`), `${tag} ${w}: no title in the bar`);
   ok(await p.ev(`(() => { const s = ${V}.querySelector('.trkTop .st'); const r = s.getBoundingClientRect(); return r.width <= 1 && r.height <= 1; })()`), `${tag} ${w}: the status paragraph is not on screen`);
-  // ── the buttons ──
+  ok(await p.ev(`!${V}.querySelector('.trkTop .ttl').getClientRects().length`), `${tag} ${w}: no title in the bar`);
+  // ── the chips: edge docks (the health pill's), each its own glyph, on their edges ──
   const shown = JSON.parse(await p.ev(SHOWN));
-  for (const id of o.want) ok(shown.includes(id), `${tag} ${w}: the ${id.toUpperCase()} button is there`);
+  for (const id of o.want) ok(shown.includes(id), `${tag} ${w}: the ${id.toUpperCase()} chip is there`);
   for (const id of o.not) ok(!shown.includes(id), `${tag} ${w}: no ${id.toUpperCase()} chip (nothing to tune)`);
+  ok(await p.ev(`!${V}.querySelector('.trkTop [data-cbtn]') && [...${V}.querySelectorAll('.trkMapHost .mDock.edgeDock [data-cbtn]')].every(b => !!b.querySelector('svg'))`), `${tag} ${w}: the chips are edge docks on the map, each with its own glyph`);
+  const geo = JSON.parse(await p.ev(`JSON.stringify(Object.fromEntries([...${V}.querySelectorAll('.mDock:not([hidden])')].map(d => { const b = d.querySelector('.hCard').getBoundingClientRect(); return [d.dataset.dock, { l: Math.round(b.left), r: Math.round(b.right), t: Math.round(b.top), b: Math.round(b.bottom), w: Math.round(b.width) }]; })))`));
+  const mapH = await p.ev(`${V}.querySelector('.trkMapHost').clientHeight`);
+  ok(['servers', 'tune', 'layers', 'list'].filter((id) => geo[id]).every((id) => geo[id].l <= 1), `${tag} ${w}: SERVERS, TUNE, LAYERS and LIST on the left edge`);
+  ok(geo.servers && Object.values(geo).every((g) => g.t >= geo.servers.t || g === geo.servers || g.l > w / 2), `${tag} ${w}: SERVERS is the top-left chip`);
+  ok(geo.list && geo.list.b >= Object.values(geo).reduce((m, g) => Math.max(m, g.b), 0) - 1, `${tag} ${w}: LIST is the bottom-left chip`);
+  const mapLeft = geo.map && geo.map.l <= 1;
+  ok(mapLeft === (mapH >= 600), `${tag} ${w}: MAP CONTROLS ${mapLeft ? 'down the left (a tall map)' : 'top-right (a short map, flanking)'} — map ${mapH} px tall`);
+  ok(Object.values(geo).every((g) => g.w <= 48), `${tag} ${w}: every chip is a slim side tab at rest (${Object.values(geo).map((g) => g.w).join(',')} px)`);
+  const lay = JSON.parse(await p.ev(`JSON.stringify((() => { const es = [...${V}.querySelectorAll('.mDock[data-dock="layers"] .le')]; if (!es.length) return { n: 0 }; const a = es[0].getBoundingClientRect(), b = es[es.length - 1].getBoundingClientRect(); return { n: es.length, col: es.length < 2 || b.top > a.top + 4, glyph: !!es[0].querySelector('svg') }; })())`));
+  ok(lay.n >= 1 && lay.glyph && lay.col, `${tag} ${w}: the LAYERS tab stacks a glyph over a count per family (${lay.n})`);
   // ── no card: the map's share of the window ──
   await shutAll(p);
   const host = JSON.parse(await p.ev(`JSON.stringify(${V}.querySelector('.trkMapHost').getBoundingClientRect())`));
   const share = (host.width * host.height) / (w * h);
   ok(share >= 0.75, `${tag} ${w}: with no card open the map is ${(share * 100).toFixed(0)} % of the window (≥ 75 %)`);
-  // ── each card opens and shuts ──
-  for (const id of shown) {
+  // ── each chip: ONE press opens its card out of it; ONE press on its heading folds it back ──
+  for (const id of [...shown, 'help']) {
     await p.ev(`${BTN(id)}.click(); 1`); await sleep(350);
     const vis = JSON.parse(await p.ev(VISIBLE_CARDS));
-    ok(vis.includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'true'`), `${tag} ${w}: ${id.toUpperCase()} opens its card`);
-    if (narrow) ok(vis.length === 1, `${tag} ${w}: a phone-width window shows ONE card (${vis.join(',')})`);
+    ok(vis.includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'true'`), `${tag} ${w}: one press on ${id.toUpperCase()} opens its card`);
+    ok(JSON.parse(await p.ev(`JSON.stringify(${SHOWN_T})`)).length <= 1, `${tag} ${w}: one transient card at a time (${vis.join(',')})`);
     if (id === 'map') {
       ok(await p.ev(`!${V}.querySelector('.trkCard2[data-card="map"] .fitOnce').disabled && !${V}.querySelector('.trkCard2[data-card="map"] .fit').disabled`), `${tag} ${w}: MAP: AUTO and FIT are never greyed`);
       ok(/far outliers/.test(await p.ev(`${V}.querySelector('.fitOnce').title`) || ''), `${tag} ${w}: MAP: FIT says it leaves far outliers out`);
+      ok(await p.ev(`!!${V}.querySelector('.trkCard2[data-card="map"] .keySect summary')`), `${tag} ${w}: the KEY is a fold in MAP CONTROLS`);
+      if (o.multi) ok(await p.ev(`!${V}.querySelector('.srcSect').hidden && ${V}.querySelectorAll('.srcRow[data-src]').length >= 2`), `${tag} ${w}: MAP CONTROLS lists each source as a toggle (${await p.ev(`[...${V}.querySelectorAll('.srcRow b')].map(b => b.textContent).join(' · ')`)})`);
     }
-    if (id === 'map' && o.multi) ok(await p.ev(`!${V}.querySelector('.srcSect').hidden && ${V}.querySelectorAll('.srcRow[data-src]').length >= 2`), `${tag} ${w}: MAP CONTROLS lists each source as a toggle (${await p.ev(`[...${V}.querySelectorAll('.srcRow b')].map(b => b.textContent).join(' · ')`)})`);
-    if (id === 'map') ok(await p.ev(`!!${V}.querySelector('.trkCard2[data-card="map"] .keySect summary')`), `${tag} ${w}: the KEY is a fold in MAP CONTROLS`);
-    if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'tune') ok(await p.ev(`${V}.querySelectorAll('.tunePop [data-tune]').length`) >= 2, `${tag} ${w}: TUNE holds the TUNE rows`);
-    await p.ev(`${BTN(id)}.click(); 1`); await sleep(300);
-    ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: ${id.toUpperCase()} shuts again`);
+    if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
+    if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);
+    if (id === 'help') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="help"] .hRowH').length`) === 5, `${tag} ${w}: HELP has a line per chip`);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="${id}"] > .ch').click(); 1`); await sleep(300);
+    ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: one press on its heading folds ${id.toUpperCase()} back to its tab`);
   }
-  // ── several at once: the window decides ──
-  for (const id of shown) await p.ev(`${BTN(id)}.click(); 1`);
-  await sleep(500);
-  const vis = JSON.parse(await p.ev(VISIBLE_CARDS));
-  const lim = await p.ev(`${V}.querySelectorAll('[data-cbtn]').length && (${w} < 600 ? 1 : null)`);
-  if (narrow) ok(vis.length === 1 && vis[0] === shown[shown.length - 1], `${tag} ${w}: opening another shut the first — one card (${vis.join(',')})`);
-  else {
-    ok(vis.length >= 2, `${tag} ${w}: a wide window holds several cards (${vis.join(',')})`);
-    // ★ tweak 3: cards beside the chips on both edges — what they cover across the map's width (each x column once)
-    const cov = await p.ev(`(() => { const xs = new Set(); for (const x of ${V}.querySelectorAll('.trkCards .trkCard2')) { const b = x.getBoundingClientRect(); for (let i = Math.max(0, Math.floor(b.left)); i < Math.min(${w}, b.right); i++) xs.add(i); } return xs.size; })()`);
-    ok(cov <= w * 0.8, `${tag} ${w}: the cards never cover the map's width (${cov} of ${w} px)`);
-  }
-  void lim;
+  // ── the cards never cover the whole map; no sideways scroll ──
+  await p.ev(`${BTN('list')}.click(); 1`); await sleep(200); await p.ev(`${BTN('layers')}.click(); 1`); await sleep(400);
+  const cov = await p.ev(`(() => { const xs = new Set(); for (const x of ${V}.querySelectorAll('.trkCards .trkCard2')) { const b = x.getBoundingClientRect(); for (let i = Math.max(0, Math.floor(b.left)); i < Math.min(${w}, b.right); i++) xs.add(i); } return xs.size; })()`);
+  ok(cov <= w * (narrow ? 0.99 : 0.8), `${tag} ${w}: the cards never cover the map's width (${cov} of ${w} px)`);
   const sw = await p.ev(`document.documentElement.scrollWidth`);
   ok(sw <= w, `${tag} ${w}: no sideways scroll (${sw})`);
-  // ── Escape shuts the top card, one at a time ──
-  const before = JSON.parse(await p.ev(VISIBLE_CARDS)).length;
-  await p.ev(`${V}.querySelector('.trkCards .trkCard2 .x')?.focus(); 1`);
+  // ── Escape folds the transient card; LIST (sticky) stays ──
+  await p.ev(`${V}.querySelector('.trkCard2[data-card="layers"] .cb button')?.focus(); 1`);
   await p.key('Escape'); await sleep(350);
-  const after = JSON.parse(await p.ev(VISIBLE_CARDS)).length;
-  ok(after === before - 1 && await p.ev(`!!${V}`), `${tag} ${w}: Escape shut the top card (${before} → ${after}), the map stays`);
+  const after = JSON.parse(await p.ev(VISIBLE_CARDS));
+  ok(!after.includes('layers') && after.includes('list') && await p.ev(`!!${V}`), `${tag} ${w}: Escape folded LAYERS back; LIST stays (${after.join(',')})`);
   await shutAll(p);
 }
+async function shutAll(p) { await p.ev(`[...(${V}?.querySelectorAll('[data-cbtn][aria-expanded="true"]') || [])].forEach(b => b.click()); 1`); await sleep(300); }
 
 console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md) ──');
 // ═════ A. a front door: a Beast feed + a VDL2 radio ═════
@@ -216,7 +208,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     ok(await radioDatalink(p, `http://127.0.0.1:${P}/r/${rid}/`), 'the DATALINK map is up (the radio page, AIR & SEA LIVE)');
     ok(await p.until(`/msg\\/min/.test(${V}?.querySelector('.trkTop .rate')?.textContent || '')`, 30000), 'the datalink report came (the rate shows)');
     ok(await p.until(`!${V}?.querySelector('.srcSect')?.hidden`, 20000), 'two sources (the feed and the radio): SOURCES is offered in MAP CONTROLS');
-    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'DATALINK', w, h, { radio: true, multi: true, want: ['list', 'tune', 'layers', 'map', 'servers'], not: [] }); }
+    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'DATALINK', w, h, { radio: true, multi: true, want: ['servers', 'tune', 'layers', 'map', 'list'], not: [] }); }
     // ── the listener's CONTROL COLOURS (the web's skins: background, button, font, transparency — controlColours.ts) never
     //    reach the map's own chrome: the bar and the cards keep their palette, solid or glass ──
     const look = `JSON.stringify([...${V}.querySelectorAll('.trkTop .cbtn, .trkTop .exit, .trkTop .rate')].slice(0, 4).map(e => { const c = getComputedStyle(e); return c.backgroundColor + '|' + c.color; }))`;
@@ -225,15 +217,61 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await sleep(300);
     ok(await p.ev(look) === look0, 'the control colours (any skin, solid or glass) leave the map\'s bar and cards as they are');
     await p.ev(`(() => { const r = document.documentElement.style; for (const k of ['--btn-bg', '--btn-text', '--ctl-card-bg', '--btn-border', '--ov-chip']) r.removeProperty(k); return 1; })()`);
-    // ── remembered per viewer: wide and narrow separately ──
-    await p.size(1440, 900, false);
-    await p.ev(`${BTN('map')}.click(); 1`); await sleep(300);
+    // ── only LIST is remembered (per narrow / wide); the transient cards always start folded ──
+    await p.size(1440, 900, false); await shutAll(p);
+    await p.ev(`${BTN('list')}.click(); 1`); await sleep(200); await p.ev(`${BTN('map')}.click(); 1`); await sleep(300);
     const wide = await p.ev(`localStorage.getItem('vibesdr.mapCards.wide')`);
-    ok(/"map"/.test(wide || ''), `the wide window's cards are remembered (${wide})`);
+    ok(wide === '["list"]', `the wide window remembers LIST only (${wide})`);
     await p.size(390, 844, true);
-    ok(JSON.parse(await p.ev(VISIBLE_CARDS)).length === 0, 'a phone-width window starts with nothing open (its own memory)');
+    ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes('list'), 'a phone-width window has its own memory (LIST shut there)');
     await p.size(1440, 900, false);
-    ok(JSON.parse(await p.ev(VISIBLE_CARDS)).includes('map'), '…and back on the wide window, the MAP card is open again');
+    ok(JSON.parse(await p.ev(VISIBLE_CARDS)).includes('list'), '…and back on the wide window, LIST is open again');
+    // ── LIST stays put through the data ticks: the same node, the same scroll, no pop-out again ──
+    await shutTransients(p);
+    await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'); c.__mark = 'kept'; window.__anim = 0; c.addEventListener('animationstart', () => { window.__anim++; }); const cb = c.querySelector('.cb'); cb.scrollTop = 0; const rows = c.querySelector('.rows'); rows.scrollTop = 30; return 1; })()`);
+    const st0 = await p.ev(`${V}.querySelector('.trkCard2[data-card="list"] .rows').scrollTop`);
+    await sleep(10000);   // ★ the datalink report every second, aircraft.json every 3 s: well over three ticks
+    ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"]').__mark === 'kept' && window.__anim === 0`), `LIST through ten seconds of data: the same node, no pop-out again (${await p.ev('window.__anim')} animations)`);
+    ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"] .rows').scrollTop`) === st0, `…and the same scroll (${st0})`);
+    // ── AUTO on, LIST open: the fit keeps every fitted aircraft clear of the LIST (Stuart: "the map should shift over") ──
+    await p.ev(`(() => { const b = ${V}.querySelector('.trkCard2[data-card="map"] .fit'); if (!b.classList.contains('on')) b.click(); return 1; })()`);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="map"] .fitOnce').click(); 1`);
+    await sleep(3500);   // ★ the glide (2.2 s) and a tick
+    const clear = JSON.parse(await p.ev(`JSON.stringify((() => { const v = window.__vibeTrkView; const { pts, map } = v.fitPointsForTest(); if (!map || !pts.length) return { n: 0, under: 0 };
+      const l = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(), h = ${V}.querySelector('.trkMapHost').getBoundingClientRect();
+      let under = 0; for (const [lat, lon] of pts) { const q = map.latLngToContainerPoint([lat, lon]); const x = h.left + q.x, y = h.top + q.y; if (x > l.left && x < l.right && y > l.top && y < l.bottom) under++; }
+      return { n: pts.length, under }; })())`));
+    ok(clear.n > 0 && clear.under === 0, `AUTO on with LIST open: none of the ${clear.n} fitted points is under the LIST (${clear.under} under)`);
+    // ── on a small phone: LAYERS opens OVER the list, with a shadow; folding it back leaves the list as it was ──
+    await p.size(375, 550, true); await sleep(600);
+    await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(400);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="list"]').__mark = 'phone'; 1`);
+    await p.ev(`${BTN('layers')}.click(); 1`); await sleep(400);
+    const over = JSON.parse(await p.ev(`JSON.stringify((() => { const l = ${V}.querySelector('.trkCard2[data-card="list"]'), y = ${V}.querySelector('.trkCard2[data-card="layers"]');
+      const z = (el) => Number(getComputedStyle(el.parentElement).zIndex) || 0;
+      return { list: !l.hidden && !!l.getClientRects().length, layers: !y.hidden, zl: z(l), zy: z(y), shadow: getComputedStyle(y).boxShadow }; })())`));
+    ok(over.list && over.layers && over.zy > over.zl && /rgba?\(/.test(over.shadow), `375×550: LAYERS over the open LIST (z ${over.zy} > ${over.zl}) with a shadow`);
+    await p.ev(`${V}.querySelector('.trkCard2[data-card="layers"] > .ch').click(); 1`); await sleep(400);
+    ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"]').__mark === 'phone' && !${V}.querySelector('.trkCard2[data-card="list"]').hidden`), '…folding LAYERS back leaves the same LIST open');
+    // ── SERVERS over a full-height LIST: topmost where it is, with a shadow ──
+    await p.size(1440, 900, false); await sleep(600);
+    await p.ev(`${BTN('servers')}.click(); 1`); await sleep(500);
+    const top = await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="servers"]'); const b = c.getBoundingClientRect(); const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return !!at && c.contains(at) && getComputedStyle(c).boxShadow !== 'none'; })()`);
+    ok(top, 'with LIST open, SERVERS is the topmost thing where it stands, with a shadow');
+    // ── a tap on the map folds the transient card back; LIST stays ──
+    await p.ev(`(() => { const h = ${V}.querySelector('.trkMapHost'); const b = h.getBoundingClientRect(); const t = document.elementFromPoint(b.left + b.width * 0.7, b.top + b.height * 0.5); t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); return 1; })()`); await sleep(300);
+    const vis2 = JSON.parse(await p.ev(VISIBLE_CARDS));
+    ok(!vis2.includes('servers') && vis2.includes('list'), `a tap on the map folds SERVERS back, LIST stays (${vis2.join(',')})`);
+    // ── idle: a transient card folds back by itself (9 s untouched) ──
+    await p.ev(`${BTN('map')}.click(); 1`); await sleep(10500);
+    ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes('map'), 'MAP CONTROLS folds back by itself after 9 s untouched');
+    // ── one side or flanking, by the map's own height (Stuart's phones) ──
+    for (const [ww, hh, want] of [[375, 667, 'R'], [375, 550, 'R'], [430, 932, 'L'], [440, 760, 'L'], [932, 430, 'R'], [956, 400, 'R']]) {
+      await p.size(ww, hh, true); await sleep(700);
+      const side = await p.ev(`(() => { const b = ${V}.querySelector('.mDock[data-dock="map"] .hCard').getBoundingClientRect(); return b.left <= 1 ? 'L' : 'R'; })()`);
+      ok(side === want, `${ww}×${hh}: MAP CONTROLS ${want === 'L' ? 'down the left with the others' : 'top-right (flanking)'} — map ${await p.ev(`${V}.querySelector('.trkMapHost').clientHeight`)} px tall`);
+    }
+    await p.size(1440, 900, false);
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
     // ── the VIEWER from the door's landing: no TUNE, no rate ──
     await p.send('Page.navigate', { url: `http://127.0.0.1:${P}/` });
@@ -241,7 +279,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`document.getElementById('splashAirSea').click(); 1`);
     ok(await p.until(`!!${V}`, 10000), 'the viewer opens');
     await sleep(3000);
-    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'VIEWER', w, h, { radio: false, want: ['list', 'layers', 'map', 'servers'], not: ['tune'] }); }
+    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'VIEWER', w, h, { radio: false, want: ['servers', 'layers', 'map', 'list'], not: ['tune'] }); }
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
   } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
   finally { p.close(); feed.kill(); }

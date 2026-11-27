@@ -30,7 +30,7 @@
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
   | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
-  | 'servers' | 'list';
+  | 'servers' | 'list' | 'navtex';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -44,6 +44,16 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
   servers: [
     { c: [6, 7, 2], w: 1.7 }, { c: [18, 7, 2], w: 1.7 }, { c: [12, 18, 2], w: 1.7 },
     { d: 'M8 7h8M7.2 8.7 10.8 16.3M16.8 8.7 13.2 16.3', w: 1.7 },
+  ],
+  /* ★★★ beta96 THE NAVTEX GLYPH (Stuart 11-27 picked "C": "mast and sheet probably fits best as the icons for the
+   *  transmission stations are the same masts") — a coast-station mast (the station markers' own A-frame and crossbar,
+   *  navtexMap.ts navIcon) sending, its message coming out as a printed sheet with a torn edge: navigational telex.
+   *  Our own drawing. ONE source: the map's station markers, LAYERS, the LIST's NAVTEX tab — web and app. */
+  navtex: [
+    { d: 'M7 13 9.5 3l2.5 10M8 9.5h3' },
+    { d: 'M5.2 3.6a4.5 4.5 0 0 0 0 5.3M13.8 3.6a4.5 4.5 0 0 1 0 5.3', w: 1.6 },
+    { d: 'M11 13.5h9v6.6l-1.5-1-1.5 1-1.5-1-1.5 1-1.5-1-1.5 1Z' },
+    { d: 'M13 16h5', w: 1.5 },
   ],
   /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
   list: [

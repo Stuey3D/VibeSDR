@@ -702,6 +702,9 @@ const CSS = `
 .mDock .lsum{flex-direction:column!important;gap:6px!important}
 .mDock .le{flex-direction:column!important;gap:2px!important;font-size:10.5px!important}
 .mDock .lg svg{width:15px;height:15px}
+.lgI{width:16px;height:16px;display:block}
+.trkList .hd .tab .tg{display:inline-flex;vertical-align:-3px;margin-right:4px}
+.trkList .hd .tab .tg svg{width:14px;height:14px}
 .mChipsBL .mDock .mchip{flex-direction:column!important;min-height:44px!important}
 .mChipsBL .mDock .hCard{border-radius:12px 12px 0 0}
 /* ★★★ the ? HELP button and its card, bottom-right above the attribution */
@@ -783,8 +786,7 @@ const P16 = (d: string) => `<svg viewBox="0 0 16 16" width="16" height="16" fill
 const LAYER_GLYPH: Record<LayerGlyph, string> = {
   aircraft: P16(TUNE_ICON_PATH.aircraft), ship: P16(TUNE_ICON_PATH.ship), balloon: P16(TUNE_ICON_PATH.balloon),
   beacon: P16(TUNE_ICON_PATH.beacon), navaid: P16(TUNE_ICON_PATH.navaid),
-  navtex: '<svg viewBox="0 0 26 26" width="16" height="16" aria-hidden="true"><circle cx="13" cy="13" r="11" fill="currentColor" stroke="#0b1420" stroke-width="1.4"/>'
-    + '<path d="M13 7 L9.5 19 M13 7 L16.5 19 M10.6 15 H15.4" stroke="#0b1420" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>',
+  navtex: modeIconSvg('navtex', 'lgI'),   // ★★★ Stuart's NAVTEX glyph (modeIcons.ts — one source)
   dot: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor"/></svg>',
 };
 /** A SHOW toggle's layer id → its glyph (the maps whose host gives no summary: the ISM maps). */
@@ -1186,6 +1188,7 @@ export class TrackView {
     }
     this.cardsEl.classList.toggle('both', false);
     this.cardsEl.classList.toggle('lAndB', false);   // ★ tweak 5: a transient card simply lies OVER the list (its shadow says so)
+    this.listRefit();
     if (sig === this.layoutSig) { this.cardsAnchor(place); return; }   // ★ a data tick: only the anchors follow the chips
     this.layoutSig = sig;
     /* ★★★ tweak 5 (Stuart 11-27: "the list keeps popping open every refresh of data"): a card is MOVED only when its own
@@ -1623,7 +1626,8 @@ export class TrackView {
     if (sig === this.tabSig) return;
     this.tabSig = sig;
     if (tabs.length === 1) lt.textContent = tabs[0].label;
-    host.innerHTML = tabs.map((t) => `<button class="tab" type="button" role="tab" data-tab="${esc(t.id)}" aria-selected="${t.id === current}">${esc(t.label)}<span class="tn">${t.n}</span></button>`).join('');
+    const tg: Record<string, string> = { aircraft: LAYER_GLYPH.aircraft, ships: LAYER_GLYPH.ship, navtex: LAYER_GLYPH.navtex, sondes: LAYER_GLYPH.balloon, navaids: LAYER_GLYPH.navaid };
+    host.innerHTML = tabs.map((t) => `<button class="tab" type="button" role="tab" data-tab="${esc(t.id)}" aria-selected="${t.id === current}">${tg[t.id] ? `<span class="tg" aria-hidden="true">${tg[t.id]}</span>` : ''}${esc(t.label)}<span class="tn">${t.n}</span></button>`).join('');
     for (const b of Array.from(host.querySelectorAll('[data-tab]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onTab(b.dataset.tab || ''); };
   }
   get tab(): string { return (this.root.querySelector('.hd .tab[aria-selected="true"]') as HTMLElement | null)?.dataset.tab || ''; }
@@ -1834,6 +1838,7 @@ export class TrackView {
 
   show(rx: LatLon | null) {
     this.rx = rx;
+    (window as any).__vibeTrkView = this;   // ★ for drivers (scripts/test-web-map-cards.mjs): the view last shown
     if (this.open) return;
     this.root.hidden = false;
     // ★ the page under the map is not reachable while the map covers it (keyboard, a screen reader)
@@ -2057,24 +2062,32 @@ export class TrackView {
   }
   /** ★ beta96 the open cards' corner of the map (top-left; a phone's card spans the width) — the fits keep clear of it. */
   private cardsObstacle(): { corner: string; w: number; h: number } | null {
-    // ★ tweak 3: chips and cards down BOTH edges — the fits keep clear of the bigger group's corner
+    /* ★★★ Stuart 11-27: "when in fit mode if the list is opened the map should shift over to accommodate like it did before" —
+     *  the fits keep clear of the open LIST (bottom-left, where the old list sheet sat); the transient cards fold away on
+     *  their own and never move the map. No LIST: the slim left tabs only. */
     const m = this.mapHost.getBoundingClientRect();
     if (m.width <= 0) return null;
-    const group = (sels: string) => {
-      let l = Infinity, r = -Infinity, t = Infinity, b = -Infinity;
-      for (const el of Array.from(this.root.querySelectorAll(sels)) as HTMLElement[]) {
-        const x = el.getBoundingClientRect(); if (x.width <= 0 || x.height <= 0 || el.closest('[hidden]')) continue;
-        l = Math.min(l, x.left); r = Math.max(r, x.right); t = Math.min(t, x.top); b = Math.max(b, x.bottom);
-      }
-      return r > l ? { l, r, t, b } : null;
-    };
-    const L = group('.mChipsL .mDock:not(.tucked) .hCard, .trkCards .cL .trkCard2');
-    const R = group('.mChipsR .mDock:not(.tucked) .hCard, .trkCards .cR .trkCard2');
-    const aL = L ? (L.r - m.left) * (L.b - m.top) : 0, aR = R ? (m.right - R.l) * (R.b - m.top) : 0;
-    if (!aL && !aR) return null;
-    return aL >= aR ? { corner: 'top-left', w: L!.r - m.left + 8, h: Math.min(L!.b - m.top + 8, m.height) }
-                    : { corner: 'top-right', w: m.right - R!.l + 8, h: Math.min(R!.b - m.top + 8, m.height) };
+    const list = this.root.querySelector('.trkCards .cB .trkCard2[data-card="list"]') as HTMLElement | null;
+    const lb = list && !list.hidden ? list.getBoundingClientRect() : null;
+    if (lb && lb.width > 0 && lb.height > 0) return { corner: 'bottom-left', w: Math.round(lb.right - m.left + 8), h: Math.round(m.bottom - lb.top + 8) };
+    const col = this.root.querySelector('.mChipsL') as HTMLElement | null, cb = col?.getBoundingClientRect();
+    return cb && cb.width > 0 ? { corner: 'top-left', w: Math.round(cb.right - m.left + 6), h: Math.round(cb.bottom - m.top + 6) } : null;
   }
+  private listWasOpen: boolean | null = null;
+  /** LIST opened or shut: re-fit (a glide) to the room left — only while AUTO is on; never moves a map the person holds. */
+  private listRefit() {
+    const open = this.cardOrder.includes('list') && this.cardAvail.has('list');
+    if (this.listWasOpen === open) return;
+    const first = this.listWasOpen === null;
+    this.listWasOpen = open;
+    if (first) return;
+    setTimeout(() => {
+      this.placeAcObstacle();
+      try { const st = this.af?.state?.(); if (st?.on && !st.paused) this.af.fitNow(); } catch (e) { console.error('[tracks] list refit', e); }
+    }, 60);
+  }
+  /** For the drivers: the points the fit frames now (the chosen layer, outliers out) and the map to project them with. */
+  fitPointsForTest(): { pts: [number, number][]; map: any } { return { pts: this.fitPoints(this.fitAll), map: this.acMap }; }
   /** The list's corner of the map — the ADS-B layer keeps aircraft (and its fit) clear of it. */
   private placeAcObstacle() {
     if (!this.acLayer?.setObstacle) return;
