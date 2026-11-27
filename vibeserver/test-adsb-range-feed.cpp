@@ -7,9 +7,13 @@
 //   2. END TO END, one machine: a synthetic dump1090 (Beast on 127.0.0.1 — never Stuart's Pi) → the FeedSet (the front door's
 //      job) → the shared table in a runtime directory, tagged "feed" → this radio process's follower → its outline's JSON
 //      (/adsb/range's body) has the feed aircraft's bearing filled, around the server's location. No ADS-B live → not read.
+//   3. ★★ b96-2 "NOT AT THIS SITE" (Stuart chose option 1, 11-27), end to end: a feed ticked off-site ("offsite":true) puts its
+//      aircraft in the shared table — on every map, aircraft.json and the delta marking it "offsite":1 — but its positions
+//      leave the bins empty; the same feed at this site fills them; heard by an off-site AND an at-site feed it counts.
 // Silent: no radio, no audio.
 #include "vibe_feeds.h"
 #include "vibe_adsb_range_feed.h"
+#include "vibe_aircraft_delta.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -18,6 +22,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -190,10 +195,99 @@ static void testEndToEnd() {
     if (std::system(rm.c_str()) != 0) std::printf("  (could not remove %s)\n", dir);
 }
 
+/** One feed list naming the fake dump: each entry's "offsite" as given (-1 = the key left out: an old config). */
+static std::vector<feeds::SourceCfg> feedList(int port, std::vector<int> offsite, std::string& err) {
+    std::string t = "[";
+    for (size_t i = 0; i < offsite.size(); ++i) {
+        if (i) t += ',';
+        t += "{\"fmt\":\"beast\",\"dir\":\"connect\",\"host\":\"127.0.0.1\",\"port\":" + std::to_string(port) + ",\"name\":\"PiAware " + std::to_string(i) + "\"";
+        if (offsite[i] >= 0) t += std::string(",\"offsite\":") + (offsite[i] ? "true" : "false");
+        t += "}";
+    }
+    std::vector<feeds::SourceCfg> v;
+    if (!feeds::parseSources(t + "]", v, err)) v.clear();
+    return v;
+}
+/** Run the feed for `secs` (or until the bin fills when `untilFilled`), as the radio's follower does every 2 s, into a fresh
+ *  outline `st`. Returns the positions offered; `row` gets the aircraft's table row. */
+static int followFor(vibeadsb::RangeStore& st, double cLat, double cLon, double secs, bool untilFilled, int bin, vibeavshare::Row& row) {
+    vibeadsb::TableRangeFollower f;
+    int offered = 0;
+    waitFor([&] {
+        vibeavshare::sharer().flushNow();
+        const int64_t now = vibeavshare::wallMs();
+        const std::vector<vibeavshare::Row> rows = vibeavshare::table().read(now, now - 120000);
+        for (const auto& r : rows) if (r.icao == 0x40621D) row = r;
+        offered += f.tick(rows, vibeadsb::ownRadioBit(), now, st, vibeadsb::kRangeAdsb);
+        return untilFilled && kmAt(st.json(vibeadsb::kRangeAdsb, now / 1000), bin) > 0;
+    }, secs);
+    return offered;
+}
+static std::string rowJson(const vibeavshare::Row& w) { return vibeavshare::toJson({ w }, {}, vibeavshare::wallMs()); }
+static std::string rowDeltaY(const vibeavshare::Row& w) { return vibeacdelta::rowParts(w).y; }
+
+static void testOffsiteFeed() {
+    std::printf("3. \"Not at this site\" end to end: an off-site feed's aircraft are on the map, not in the outline\n");
+    char tmpl[] = "/tmp/vs-offsite-XXXXXX";
+    const char* dir = ::mkdtemp(tmpl);
+    CHECK(dir != nullptr, "a runtime directory");
+    if (!dir) return;
+    vibeavshare::table().setDir(dir);
+    vibe::logradio::setMine("59a1a7d0");
+    const double cLat = 52.3125, cLon = -0.875;
+    const int b = binOf(cLat, cLon, 52.2572, 3.9194);
+    FakeDump d; d.start();
+    auto& fs = feeds::FeedSet::shared();
+    fs.setDir(dir);
+    std::string e;
+
+    // (a) the feed ticked "Not at this site"
+    std::vector<feeds::SourceCfg> v = feedList(d.port, { 1 }, e);
+    CHECK(v.size() == 1, "an off-site feed's config is accepted: %s", e.c_str());
+    CHECK(feeds::sourcesJson(v).find("\"offsite\":true") != std::string::npos, "…and written back with its tick (%s)", feeds::sourcesJson(v).c_str());
+    fs.configure(v);
+    vibeadsb::RangeStore sa; sa.setCentre(cLat, cLon, std::time(nullptr));
+    vibeavshare::Row ra;
+    const int offA = followFor(sa, cLat, cLon, 6, false, b, ra);
+    CHECK(ra.used && (ra.flags & 1) && std::fabs(ra.lat - 52.2572) < 0.01, "its aircraft (40621D) is in the shared table with its position — on every map");
+    CHECK(offA == 0 && kmAt(sa.json(vibeadsb::kRangeAdsb, std::time(nullptr)), b) == 0, "…but its positions leave the range bins empty (%d offered, bin %d = %.1f km)", offA, b, kmAt(sa.json(vibeadsb::kRangeAdsb, std::time(nullptr)), b));
+    CHECK(rowJson(ra).find("\"offsite\":1") != std::string::npos, "aircraft.json marks it \"offsite\":1");
+    CHECK(rowDeltaY(ra).find("\"offsite\":1") != std::string::npos, "…and so does the delta's dynamic half");
+
+    // (b) the same feed at this site (an old config: no key at all)
+    fs.configure({}); vibeavshare::table().reset(); vibeavshare::table().setDir(dir);
+    v = feedList(d.port, { -1 }, e);
+    CHECK(v.size() == 1 && feeds::sourcesJson(v).find("offsite") == std::string::npos, "an old config (no \"offsite\") reads as at this site, and is written back unchanged");
+    fs.configure(v);
+    vibeadsb::RangeStore sb; sb.setCentre(cLat, cLon, std::time(nullptr));
+    vibeavshare::Row rb;
+    const int offB = followFor(sb, cLat, cLon, 12, true, b, rb);
+    CHECK(offB > 0 && kmAt(sb.json(vibeadsb::kRangeAdsb, std::time(nullptr)), b) > 0, "an at-site feed's aircraft fill the bin (%d offered, %.1f km)", offB, kmAt(sb.json(vibeadsb::kRangeAdsb, std::time(nullptr)), b));
+    CHECK(rb.used && rowJson(rb).find("offsite") == std::string::npos && rowDeltaY(rb).find("offsite") == std::string::npos, "…and is not marked off-site");
+
+    // (c) heard by BOTH an off-site and an at-site feed: it counts
+    fs.configure({}); vibeavshare::table().reset(); vibeavshare::table().setDir(dir);
+    v = feedList(d.port, { 1, 0 }, e);
+    CHECK(v.size() == 2, "two feeds, one ticked off-site: %s", e.c_str());
+    fs.configure(v);
+    vibeadsb::RangeStore sc; sc.setCentre(cLat, cLon, std::time(nullptr));
+    vibeavshare::Row rc;
+    const int offC = followFor(sc, cLat, cLon, 12, true, b, rc);
+    CHECK(offC > 0 && kmAt(sc.json(vibeadsb::kRangeAdsb, std::time(nullptr)), b) > 0, "an aircraft heard by an off-site AND an at-site feed counts (%d offered)", offC);
+    CHECK(rc.used && rowJson(rc).find("offsite") == std::string::npos, "…and is not marked off-site");
+
+    fs.configure({});
+    d.stop();
+    std::string rm = std::string("rm -rf '") + dir + "'";
+    if (std::system(rm.c_str()) != 0) std::printf("  (could not remove %s)\n", dir);
+}
+
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    std::signal(SIGPIPE, SIG_IGN);   // ★ the fake dump writes to a reader the FeedSet has just closed (a feed reconfigured)
     testRule();
     testEndToEnd();
+    testOffsiteFeed();
     std::printf("\ntest-adsb-range-feed: %d/%d passed\n", checks - fails, checks);
     return fails ? 1 : 0;
 }
