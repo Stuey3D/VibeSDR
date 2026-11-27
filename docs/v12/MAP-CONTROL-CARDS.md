@@ -18,6 +18,16 @@ how many cards can be open follows the window; a phone shows one at a time.
   seeded by `mapcards/seed.mjs`) and `mapcards/preview.mjs` (serves web/dist, proxies the rest, rebuilds through the
   build lock on every save).
 
+## Tweaks from Stuart (live preview, 11-27)
+
+1. NAVTEX stations: no line from the receiver (navtexMap.ts navItems — web and app); the distance stays on the label.
+   Other receiver lines left for him to decide: the AMATEUR map's beacons (always), NDB (tapped beacon), VOR radials
+   (the fix), mesh routes (on tap).
+2. The bar is EXACTLY `EXIT | Shared VFO: Ask before changing mode or exiting 2/5 | CHAT | VDL2 18 msg/min` — no title;
+   the card buttons moved to a small vertical RAIL at the map's top-right edge (`.trkMapHost .cardBtns`), the cards
+   open beside it (right to left), the fits keep clear of that corner. The line is `dialChat.mapBarLine` (six new
+   chat-words keys, 8 languages); the app's MapTopStrip keeps `mapSharedLine` until its port.
+
 ## What is where (web)
 
 | Always on (the bar) | |
