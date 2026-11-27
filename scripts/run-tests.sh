@@ -1105,6 +1105,9 @@ if npx tsx scripts/test_lrpt_app.ts; then pass=$((pass+1)); else fail=$((fail+1)
 # ★★ beta97 who a gallery item came from (src/utils/galleryOrigin.ts, web + app): an unattended satellite pass's items
 #   read BACKGROUND, a listener's LISTENER
 if npx tsx scripts/test_gallery_origin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ beta97 tuning inside a satellite pass (src/services/satTune.ts, web + app): the 500 Hz step and the listener's own
+#   step back on the way out; a waterfall tap with the lock live takes the Doppler shift off and never snaps out of the passband
+if npx tsx scripts/test_sat_tune.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ V12 METEOR LRPT's MAP OUTLINE, the clients' rule (src/utils/lrptOutline.ts): OFF by default, the switch remembered, the
 #   outline parsed defensively, "geo" / "gw", outline items never listed, DOWNLOAD following the switch.
 if npx tsx scripts/test_lrpt_outline.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
