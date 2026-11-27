@@ -259,7 +259,7 @@ console.log('── the GPU map (the compat adapter): easeTo with ADS-B\'s easin
 console.log('── every map uses it ──');
 {
   const app = readFileSync('src/components/MapOverlay.tsx', 'utf8');
-  const tracksWeb = readFileSync('web/client/src/tracks.ts', 'utf8');
+  const tracksWeb = readFileSync('web/client/src/tracks.ts', 'utf8') + readFileSync('web/client/src/mapChrome.ts', 'utf8');   // ★ the card system moved to mapChrome.ts
   const main = readFileSync('web/client/src/main.ts', 'utf8');
   const dsc = readFileSync('web/client/src/dsc.ts', 'utf8');
   const ndbWeb = readFileSync('web/client/src/ndb.ts', 'utf8');

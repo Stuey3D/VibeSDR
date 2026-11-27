@@ -1911,12 +1911,15 @@
       for (const o of obs) { xs.push(o.r - a.left + 6, o.l - a.right - 6); ys.push(o.b - a.top + 6, o.t - a.bottom - 6); }
       // ★ none clears everything (a tall card on a phone with the LIST open): the move that leaves the LEAST covered — the
       //   zoom keys and the chips first (they are what a finger needs), the drawer's edge after
-      const area = function (dx, dy) { let t = 0; for (const o of obs) { const w = Math.min(a.right + dx, o.r) - Math.max(a.left + dx, o.l), h = Math.min(a.bottom + dy, o.b) - Math.max(a.top + dy, o.t); if (w > 0 && h > 0) t += w * h * (o.w || 1); } return t; };
-      let best = null, bestA = Infinity;
+      //   ★ the controls a finger needs (weight 1: the zoom keys, the chips) are cleared FIRST — the drawer's edge (a low
+      //   weight) only breaks ties: a few px of zoom key under the card cost the 390 px avmap e2e its tap
+      const area = function (dx, dy, hard) { let t = 0; for (const o of obs) { const ow = o.w || 1; if (hard ? ow < 1 : ow >= 1) continue; const w = Math.min(a.right + dx, o.r) - Math.max(a.left + dx, o.l), h = Math.min(a.bottom + dy, o.b) - Math.max(a.top + dy, o.t); if (w > 0 && h > 0) t += w * h * ow; } return t; };
+      let best = null, bestH = Infinity, bestA = Infinity;
       for (const dx of xs) for (const dy of ys) {
         if (a.left + dx < m.left || a.right + dx > m.right || a.top + dy < m.top || a.bottom + dy > m.bottom) continue;
-        const ar = area(dx, dy);
-        if (ar < bestA - 1 || (Math.abs(ar - bestA) <= 1 && best && Math.hypot(dx, dy) < Math.hypot(best[0], best[1]))) { best = [dx, dy]; bestA = ar; }
+        const hd = area(dx, dy, true), ar = area(dx, dy, false);
+        const better = hd < bestH - 1 || (Math.abs(hd - bestH) <= 1 && (ar < bestA - 1 || (Math.abs(ar - bestA) <= 1 && best && Math.hypot(dx, dy) < Math.hypot(best[0], best[1]))));
+        if (better) { best = [dx, dy]; bestH = hd; bestA = ar; }
       }
       if (best && (best[0] || best[1])) gl.panBy([-best[0], -best[1]], { duration: 0 });
     }

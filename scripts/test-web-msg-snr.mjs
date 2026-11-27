@@ -40,7 +40,7 @@ await build({ entryPoints: [path.join(dir, 'entry.ts')], bundle: true, format: '
 const html = fs.readFileSync(path.join(root, 'web/client/index.html'), 'utf8');
 const between = (s, a, b) => { const i = s.indexOf(a); const j = s.indexOf(b, i + a.length); return i >= 0 && j > i ? s.slice(i + a.length, j) : ''; };
 const chipCss = html.slice(html.indexOf('/* ★★ beta96 THE MESSAGE SNR CHIP'), html.indexOf('.snrChip.green') + 200).split('\n').slice(0, 6).join('\n');
-const trkCss = between(fs.readFileSync(path.join(root, 'web/client/src/tracks.ts'), 'utf8'), 'const CSS = `', '`;');
+const trkCss = between(fs.readFileSync(path.join(root, 'web/client/src/mapChrome.ts'), 'utf8'), 'const CSS = `', '`;');
 const ismCss = between(fs.readFileSync(path.join(root, 'web/client/src/ism.ts'), 'utf8'), 'const CSS = `', '`;');
 ok(chipCss.includes('.snrChip.red') && trkCss.includes('.trkRow') && ismCss.includes('.ismSnr'), 'the CSS comes from the files');
 fs.writeFileSync(path.join(dir, 'page.html'), `<!doctype html><meta charset="utf-8"><style>

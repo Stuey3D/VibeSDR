@@ -338,7 +338,7 @@ eq('meshDist', [meshDist(16.09), meshDist(16.09, true), meshDist(5), meshDist(5,
   eq('gallery without a position: LATEST', keys(app.ismGalRows(g, null, false, 'nearest')), ['C', 'D', 'B', 'E', 'A']);
   // the wiring (source): the web's maps give the key (the AIR & SEA chip) only with a position, remembered per viewer
   const mt = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
-  const tk = readFileSync(new URL('../web/client/src/tracks.ts', import.meta.url), 'utf8');
+  const tk = readFileSync(new URL('../web/client/src/tracks.ts', import.meta.url), 'utf8') + readFileSync(new URL('../web/client/src/mapChrome.ts', import.meta.url), 'utf8');
   ok('web live map: the key + its order', mt.includes("ismMapView.setSort(meshSortOffered(meshSort, myPos()), (v) => meshSortSet(v, ismMapRender), 'nodes');") && mt.includes('ismMapRows(r, myPos(), mi, meshSort)'));
   ok('web gallery map: the key + its order', mt.includes("ismGalView?.setSort(meshSortOffered(meshSort, rx), (v) => meshSortSet(v, draw), 'nodes');") && mt.includes('ismGalRows(nodes, rx, mi, meshSort)'));
   ok('web: remembered in localStorage (lsGet / lsSet — try/catch)', mt.includes('let meshSort: MeshSort = meshSortParse(lsGet(MESH_SORT_KEY));') && mt.includes('lsSet(MESH_SORT_KEY, meshSort)'));
