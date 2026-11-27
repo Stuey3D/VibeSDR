@@ -630,6 +630,8 @@ const CSS = `
  *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
  *  and a chip's own lit / open state only */
 .trkView{--chip-rim:rgba(120,200,120,.45)}
+/* health / time's tabs: the muted rim like every tab; their colour lives in the ICON (the tab's text colour), as the pill's */
+.trkView .edgeDock:not(.crit) .hTab{border-color:var(--chip-rim)!important}
 .trkView{--sai-l:env(safe-area-inset-left,0px);--sai-r:env(safe-area-inset-right,0px);--sai-t:env(safe-area-inset-top,0px);--sai-b:env(safe-area-inset-bottom,0px)}
 .mChips{position:absolute;z-index:790;display:flex;flex-direction:column;gap:8px;pointer-events:none}
 /* ★ tweak 4: SERVERS top-left where the app has it, then TUNE, LAYERS; the zoom ± step over to the right, under MAP */
@@ -643,7 +645,10 @@ const CSS = `
 .mDock .mchip:focus-visible{outline:2px solid var(--hc);outline-offset:1px}
 .mDock .mchip .cap{font:700 9px/1 system-ui,sans-serif;letter-spacing:.16em;color:#B9C0B4;text-align:center}
 .mDock.open .mchip .cap{color:#fff}
-.mDock.open .hCard{border-color:var(--hc)}
+/* ★ Stuart 19:xx: OPEN / lit is not the focus green — a gold accent on a warmer ground, the rim staying muted (bright green
+ *  rims on the map = focus only: :focus-visible / gpFocus) */
+.mDock:not([data-dock="list"]).open .hCard{border-color:var(--chip-rim)!important;background:rgba(255,211,77,.16)!important}
+.mDock:not([data-dock="list"]).open .mchip{color:#ffd34d!important}
 .mDock .mchip .ic{display:flex;align-items:center;gap:5px;color:var(--hc);font:700 12px/1 ui-monospace,Menlo,monospace}
 .mDock .mchip .ic .cn{color:#e8eef5}
 .mDock .mchip .ic .cn:empty{display:none}
@@ -953,7 +958,6 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .mChipsL .mDock .mchip,.trkView[data-short] .mChipsR .mDock:not([data-dock="rate"]) .mchip{flex-direction:column!important;align-items:center;min-height:40px!important}
 .trkView[data-short] .mChipsL .mDock .mchip .cap,.trkView[data-short] .mChipsR .mDock:not([data-dock="rate"]) .mchip .cap{display:none}
 .trkView[data-short] .mChipsL .mDock .lsum{flex-direction:row!important;flex-wrap:nowrap!important;white-space:nowrap}
-.trkView[data-short] .mChipsL .mDock.open .hCard{border-color:var(--hc)!important}
 .trkView[data-short].famCompact .mChipsL .mDock .lsum .ln,.trkView[data-short].famCompact .mChipsL .mDock .mchip .cn{display:none!important}
 .trkView[data-short] .mDock[data-dock="rate"] .hCard{height:var(--trk-tab-h,48px)!important;box-sizing:border-box;border:1px solid var(--bar-border,#2c3a4a)!important;border-top-width:0!important;
   border-radius:0 0 12px 12px!important;padding:0 8px!important;align-items:center}
@@ -961,7 +965,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock){position:relative!important;top:auto!important;right:auto!important;margin:0!important;align-self:flex-start!important;transform:none!important;
   width:var(--trk-tab-w,44px);height:var(--trk-tab-h,48px);flex:none}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab{top:0!important;right:0;left:auto;margin:0!important;width:var(--trk-tab-w,44px)!important;height:var(--trk-tab-h,48px)!important;padding:0 0 4px!important;
-  flex-direction:column;align-items:center!important;justify-content:center!important;gap:2px;border:1.5px solid var(--hc)!important;border-top-width:0!important;border-radius:0 0 12px 12px!important;transform:none!important}
+  flex-direction:column;align-items:center!important;justify-content:center!important;gap:2px;border:1.5px solid var(--chip-rim)!important;border-top-width:0!important;border-radius:0 0 12px 12px!important;transform:none!important}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hTab>*{flex:none;margin:0!important}
 .trkView[data-short] .mChipsR>.edgeDock:not(.mDock) .hCard{position:absolute;top:calc(var(--trk-tab-h,48px) + 4px);right:0;border-width:1.5px!important;border-radius:12px!important;
   transform:none!important;padding:4px 8px!important;z-index:3;white-space:nowrap}
@@ -1090,7 +1094,9 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mHelp{all:unset;box-sizing:border-box;position:absolute;right:10px;bottom:calc(var(--trk-attrib-h,0px) + 8px);z-index:790;width:30px;height:30px;
   border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font:800 15px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);
   background:rgba(8,12,8,.86);border:1.5px solid rgba(120,200,120,.45);box-shadow:0 2px 8px rgba(0,0,0,.45)}
-.mHelp:hover,.mHelp:focus-visible,.mHelp.on{border-color:var(--hc,#5BE36B);outline:none;background:#16231a}
+.mHelp:focus-visible{border-color:var(--hc,#5BE36B);outline:none;background:#16231a}
+.mHelp:hover{background:#16231a}
+.mHelp.on{background:rgba(255,211,77,.16);color:#ffd34d}
 .trkCards .sideH{right:10px;bottom:calc(var(--trk-attrib-h,0px) + 48px);top:20%;justify-content:flex-end;width:min(340px,calc(100% - 20px))}
 .trkCards .sideH>.trkCard2{border:1.5px solid var(--chip-rim);border-radius:12px;transform-origin:bottom right;background:rgba(8,12,8,.94)}
 .helpBody{padding:6px 10px 10px}
