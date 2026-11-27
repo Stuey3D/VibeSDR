@@ -136,9 +136,13 @@ try {
   await ev(`document.getElementById('mMode').click()`);
   ok(await until(`!!document.querySelector('#mModeMenu .mModeOpt')`, 4000), 'the mode menu opened');
   const opts = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#mModeMenu .mModeOpt')].map(b => b.textContent.trim()))`));
-  for (const [k, label] of [['adsb', 'ADS-B'], ['ism', 'ISM'], ['ndb', 'NDB'], ['ais', 'AIS']]) {
+  for (const [k, label] of [['ism', 'ISM']]) {
     ok(opts.includes(label) === (st[k] === true), `${label}: ${st[k] === true ? 'can run here — drawn' : `refused or absent (${st[k]}${st[k + 'Why'] ? ': ' + st[k + 'Why'] : ''}) — not drawn`}`);
   }
+  // ★★★ beta96 (b96-mapchat menu consolidation) ADS-B, NDB and AIS are rows of ONE AIR & SEA LIVE key: drawn when any can run
+  { const any = ['adsb', 'ndb', 'ais'].some((k) => st[k] === true);
+    ok(opts.includes('AIR & SEA LIVE') === any && !opts.includes('ADS-B') && !opts.includes('NDB') && !opts.includes('AIS'),
+       `AIR & SEA LIVE: ${any ? 'one of ADS-B / NDB / AIS can run here — drawn' : 'none can run — not drawn'} (adsb ${st.adsb}, ndb ${st.ndb}, ais ${st.ais}); no separate keys`); }
   ok(await ev(`!document.querySelector('#mModeMenu .mModeOpt.dis')`), `nothing in the menu is drawn greyed (${opts.join(' ')})`);
   await ev(`(() => { const m = document.getElementById('mModeMenu'); const x = m && [...m.querySelectorAll('button')].find(b => /CLOSE|DONE|✕/.test(b.textContent)); if (x) x.click(); else m?.remove(); })()`);
   await sleep(300);
@@ -348,8 +352,8 @@ try {
       ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
       // ★★ beta90 THE DIGI MODES MAP: the server's station store answered (the window keys), one layer = no layer keys,
       //    the scale bar, and the store itself holds the stations this listener's Band run heard (origin live)
-      ok(await mev(`(() => { const w = document.getElementById('wins'); return !!w && !w.hidden && [...w.querySelectorAll('button')].map(b => b.textContent).join(' ') === '1H 24H 7D 30D ALL'; })()`),
-         'beta90: the time window keys (1H 24H 7D 30D ALL) — the server keeps stations');
+      ok(await mev(`(() => { const w = document.getElementById('wins'); return !!w && !w.hidden && [...w.querySelectorAll('button')].map(b => b.textContent).join(' ') === '1H 24H 7D 30D ALL THIS SESSION'; })()`),
+         'beta90: the time window keys (1H 24H 7D 30D ALL) — the server keeps stations — and beta96 THIS SESSION (a map on a radio)');
       ok(await mev(`document.getElementById('layers').hidden === true`), 'beta90: one layer (no APRS here) draws no layer keys');
       ok(/VibeSDR — Amateur Map/.test(await mev(`document.title`) || ''), 'beta90: titled Amateur Map (the DIGI MODES MAP grown, beta96 adcc50806)');
       const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
