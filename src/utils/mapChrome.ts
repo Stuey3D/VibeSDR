@@ -381,7 +381,7 @@ export function mwfCrop(bins: ArrayLike<number>, centreHz: number, spanHz: numbe
 export function mwfX(hz: number, lo: number, hi: number): number | null { return hi > lo && hz >= lo && hz <= hi ? (hz - lo) / (hi - lo) : null; }
 
 /** ★★ THE SHARED-TUNER PILL'S WORDS for the room it has: the whole line, else the short form "Ask · 3/4" — never an
- *  ellipsis through the count (Stuart). `maxChars` is what fits (≈ the pill's width / 6.5 pt). */
+ *  ellipsis through the count (Stuart). `maxChars` is what fits (≈ the pill's width / 7.2 pt). */
 export function pillWords(text: string, maxChars: number): string {
   const t = String(text || '').trim();
   if (t.length <= maxChars) return t;
