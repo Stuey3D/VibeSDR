@@ -3,7 +3,7 @@
 // the defaults, FIT's outlier rule and its default layer.   npx tsx scripts/test_map_cards.ts
 import { mapBarLine } from '../src/services/dialChat';
 import { acTagsFor, acTagHtml } from '../src/utils/acTags';
-import { CARD_IDS, cardDefaults, cardLimit, cardPlace, cardSide, cardToggle, fitDefault, oneSide, rateWords, trimOutliers, MAP_HELP, MAP_HELP_NOTES, type CardId } from '../src/utils/mapCards';
+import { CARD_IDS, cardDefaults, cardLimit, cardPlace, cardSide, cardToggle, fitDefault, oneSide, rateWords, trimOutliers, MAP_HELP, MAP_HELP_NOTES, shortMap, type CardId } from '../src/utils/mapCards';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -72,5 +72,8 @@ ok(L({ said: 'Tuning now' }).text === 'Tuning now', 'a tuning line in the chat i
 ok(acTagsFor({ mil: true }).join() === 'mil' && acTagsFor({ squawk: '7700' }).join() === 'emerg' && acTagsFor({ squawk: 7600 }).join() === 'radio' && acTagsFor({ squawk: '7500', mil: true }).join() === 'hijack,mil', 'MIL, and 7700 EMERG · 7600 RADIO · 7500 HIJACK first');
 ok(acTagsFor({ emergency: 'general' }).join() === 'emerg' && acTagsFor({ emergency: 'none', squawk: '1200' }).length === 0, 'the ADS-B emergency status counts too; none and 1200 wear nothing');
 ok(/class="tag mil"[^>]*>MIL</.test(acTagHtml('mil')) && /class="tag em"[^>]*>EMERG</.test(acTagHtml('emerg')), 'the box is the ADS-B list\'s own .tag (mil / em)');
+// ── ★★★ V12 short landscape: the side-panel layout by the map's own size, never the device ──
+ok(shortMap(932, 370) && shortMap(667, 320) && shortMap(852, 340) && shortMap(932, 430), 'short landscape: 932×370, 932×430, 852×340, 667×320');
+ok(!shortMap(390, 844) && !shortMap(1440, 900) && !shortMap(932, 480) && !shortMap(400, 420), 'not: a portrait phone, a desktop, 480 high or more, a window taller than wide');
 console.log(`test_map_cards: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

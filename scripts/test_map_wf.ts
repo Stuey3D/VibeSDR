@@ -23,7 +23,7 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  $
 {
   const vdl = [136.7e6, 136.725e6, 136.75e6, 136.775e6, 136.8e6, 136.825e6, 136.85e6, 136.875e6, 136.9e6, 136.925e6, 136.95e6, 136.975e6];
   const m = wfModelChannels({ id: 'vdl2', name: 'VDL2', chans: vdl })!;
-  ok(m.marks.length === 12 && m.marks[0].label === 'VDL2 Ch1 136.700' && m.marks[11].label === 'VDL2 Ch12 136.975', `VDL2: 12 markers, Ch1…Ch12 (${m.marks[0].label} … ${m.marks[11].label})`);
+  ok(m.marks.length === 12 && m.marks[0].label === 'Ch1 136.700' && m.marks[11].label === 'Ch12 136.975', `VDL2: 12 markers, Ch1…Ch12 (${m.marks[0].label} … ${m.marks[11].label})`);
   ok(m.lo < 136.7e6 && m.hi > 136.975e6 && m.lo >= 136.7e6 - 30e3, `the span covers every channel plus a margin (${m.lo}–${m.hi})`);
   const both = wfModelChannels({ id: 'both', name: 'ACARS+VDL2', chans: [131.525e6, 131.725e6, 136.975e6] })!;
   ok(both.marks.map((x) => x.label).join() === 'ACARS Ch1 131.525,ACARS Ch2 131.725,VDL2 Ch1 136.975', `the combined band names each channel by its kind (${both.marks.map((x) => x.label).join(' · ')})`);

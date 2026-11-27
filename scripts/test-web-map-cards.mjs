@@ -278,6 +278,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
   const p = await browser(dir);
   try {
     ok(await radioDatalink(p, `http://127.0.0.1:${P}/r/${rid}/`), 'the DATALINK map is up (the radio page, AIR & SEA LIVE)');
+    ok(await p.until(`!!${V}?.querySelector('.lSwapC') && !${V}.querySelector('.lSwapC').hidden`, 5000), 'a live map over a radio: the ≋ waterfall tab is offered');
     ok(await p.until(`/msg\\/min/.test(${V}?.querySelector('.trkTop .rate')?.textContent || '')`, 30000), 'the datalink report came (the rate shows)');
     ok(await p.until(`!${V}?.querySelector('.srcSect')?.hidden`, 20000), 'two sources (the feed and the radio): SOURCES is offered in MAP CONTROLS');
     for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'DATALINK', w, h, { radio: true, multi: true, want: ['servers', 'tune', 'layers', 'map', 'list'], not: [] }); }
@@ -639,6 +640,8 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     ok(await p.until(`!!${V}`, 10000), 'the viewer opens');
     await sleep(3000);
     for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'VIEWER', w, h, { radio: false, want: ['servers', 'layers', 'map', 'list'], not: ['tune'] }); }
+    // ★★★ V12 the HISTORY viewer has no radio under it: no list ↔ waterfall tab, on the drawer or the collapsed chip (Stuart 11-27)
+    ok(await p.ev(`(() => { const v = ${V}; const t = [...v.querySelectorAll('.lSwap, .lSwapC')]; return t.length > 0 && t.every((e) => e.hidden || !e.getClientRects().length); })()`), 'the viewer: no list ↔ waterfall tab');
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
   } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
   finally { p.close(); feed.kill(); }

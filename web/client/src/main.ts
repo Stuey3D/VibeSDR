@@ -291,7 +291,7 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
 // ★★ V12 M17 digital voice (src/services/m17.ts — the rules the app and the R36S share)
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
 // ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
-import { MapWf } from './mapWf';
+import { MapWf, type MapWfFrame } from './mapWf';
 import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, type MapWfModel } from '../../../src/utils/mapWfModel';   // ★★★ V12 the map drawer's live waterfall
 import { rankCard } from '../../../src/utils/spotRanks';   // ★ V12 beta90 the gallery's ranking card
 import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
@@ -1707,8 +1707,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onBins: (bins, centerHz, bwHz) => {
       noteFrame();
       linkFrames++;   // ★ the DATA control's AUTO controller counts what arrives
+      specFramesSeen++;   // ★ for the drivers: every spectrum frame this page received (__vibeSpecFrames)
       wf!.push(bins, centerHz, bwHz);
-      if (mapWfInst) mapWfFeed(bins, centerHz, bwHz);   // ★★★ V12 the map drawer's waterfall, only while it shows
+      if (mapWfOn && mapWfInst) wf!.tick();   // ★★★ V12 the map drawer's waterfall: the page's rows are processed now (nothing is drawn under the map) — Waterfall.onProcessed feeds it
       updateSignal(bins, centerHz, bwHz);
       syncNfmVoiceRow();
       // ★ Auto squelch's reference: how far the channel stands above its empty neighbours on THIS
@@ -4297,7 +4298,7 @@ function mapChromeAdopt(on: boolean) {
     v.onWaterfall = mapWfShow;
     if (on && v.open) v.setWaterfall(!!spec);
   }
-  if (!on && mapWfInst) mapWfShow(null);
+  if (!on && mapWfInst) { mapWfShow(null); mapWfEnd(); }
   const h = document.getElementById('srvHealth');
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
   const col = v?.querySelector('.mChipsR') as HTMLElement | null;
@@ -4324,26 +4325,37 @@ function mapChromeAdopt(on: boolean) {
  *  it appears, on:0 as it goes) and it starts FRESH each time (no backfill). Passive: its canvas takes no input, so no tap
  *  on it can tune — the ask-before-tuning lock never comes into it. The span and markers fit the MODE (mapWfModel). */
 let mapWfInst: MapWf | null = null;
+let specFramesSeen = 0;
+(window as any).__vibeSpecFrames = () => specFramesSeen;
 let mapWfSeen = new Map<string, string>();   // a station's last ident reading — a new one is stamped
 let mapWfInfoAt = 0;
-function mapWfShowing(): boolean { return !!mapWfInst; }
+function mapWfShowing(): boolean { return mapWfOn; }
 function mapWfShow(pane: HTMLElement | null) {
+  /* ★★ Stuart 11-27: the history is KEPT for the map's session — swapping to the list and back shows what was drawn before,
+   *  with a grey line for the gap (no spectrum flows while hidden). The map's close ends it (mapWfEnd). */
   if (pane) {
-    mapWfInst?.destroy();
-    mapWfInst = new MapWf(String(prefs().palette || 'gqrx'));
-    pane.appendChild(mapWfInst.el);
-    mapWfSeen = new Map(); mapWfModel(true);   // ★ what was decoded before it opened is not stamped as if it were now
+    if (!mapWfInst) { mapWfInst = new MapWf(); mapWfSeen = new Map(); mapWfModel(true); }
+    else mapWfInst.resumeGap();
+    if (wf) wf.onProcessed = mapWfFeed;
+    if (mapWfInst.el.parentElement !== pane) pane.appendChild(mapWfInst.el);
+    mapWfOn = true;
     specUnderMap(false);
   } else {
-    mapWfInst?.destroy(); mapWfInst = null;
+    mapWfOn = false;
+    if (wf) wf.onProcessed = null;
+    mapWfInst?.el.remove();
     specUnderMap(trackViewUp());
   }
 }
-(window as any).__vibeMapWf = () => (mapWfInst ? { ...mapWfInst.stats, spec: !specOffSent } : null);
-function mapWfFeed(bins: Float32Array, centerHz: number, bwHz: number) {
+/** The map closed: its waterfall and history go with it. */
+function mapWfEnd() { mapWfOn = false; if (wf) wf.onProcessed = null; mapWfInst?.destroy(); mapWfInst = null; }
+let mapWfOn = false;
+(window as any).__vibeMapWf = () => (mapWfInst && mapWfOn ? { ...mapWfInst.stats, histRows: mapWfInst.history.rows, histCap: mapWfInst.history.cap, spec: !specOffSent } : null);
+(window as any).__vibeMapWfStrip = (y: number) => (mapWfInst ? mapWfInst.strip(y) : null);
+function mapWfFeed(fr: MapWfFrame) {
   const m = mapWfModel(false);
-  if (!m || !mapWfInst) return;
-  mapWfInst.push(bins, centerHz, bwHz, m);
+  if (!m || !mapWfInst || !mapWfOn || !wf) return;
+  mapWfInst.push(fr, wf.mapLook(), m);   // ★ the page's look read fresh each frame: a palette change shows on the next row
   const now = performance.now();
   if (now - mapWfInfoAt > 250) { mapWfInfoAt = now; for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setWaterfallInfo(escapeHtml(m.info)); }
 }

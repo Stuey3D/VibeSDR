@@ -185,6 +185,18 @@ export function planeFromLive(a: AvAircraft, i: number): AvPlane {
     posApp: a.posSrc, from: a.from, to: a.to, oooi: a.oooi, oooiTime: a.oooiTime, label: a.label, labelName: a.labelName, app: a.app, via: a.via, src, srcAge, age: a.age, n: a.n, live: true,
   };
 }
+/** ★★ WHICH FIX WINS (Stuart 16:31, "an aircraft kept bouncing back and forth … repeatedly flies over my house"): D-AIJH
+ *  (3C6548) was heard LIVE by ADS-B and, on the preview, also in the sim's datalink clip as an ADS-C report at a fixed
+ *  place. Newest-by-age alone flipped between them every few seconds (both "0 s old"), and the sparse glide carried the
+ *  plane ~80 NM back and forth. A fresh ADS-B fix (≤ AV_ADSB_NOW_SEC) is the aircraft's real place: a datalink report
+ *  (FMS / label 16 / ADS-C — a report of where it was, coarser and often minutes behind) never replaces it; between two
+ *  of the same kind the newer wins. */
+export function avFixBetter(a: { posSrc?: string; posAge?: number }, b: { posSrc?: string; posAge?: number }): boolean {
+  const live = (p: { posSrc?: string; posAge?: number }) => p.posSrc === 'ADS-B' && (p.posAge ?? Infinity) <= AV_ADSB_NOW_SEC;
+  const la = live(a), lb = live(b);
+  if (la !== lb) return la;
+  return (a.posAge ?? 1e9) < (b.posAge ?? 1e9);
+}
 /** ★★ ONE AIRCRAFT ONCE: the live report's rows (this radio, now) and the shared table's (every radio), joined by ICAO
  *  address, else registration, else flight — the live row's fields win, the table adds the sources the other radios heard
  *  and a newer position. Newest first. */
@@ -206,7 +218,7 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
     hit.icao = hit.icao || s.icao; hit.reg = hit.reg || s.reg; hit.flight = hit.flight || s.flight; hit.type = hit.type || s.type;
     if (s.info) hit.info = { ...s.info, ...(hit.info ?? {}) };   // ★ beta91 the aircraft data (the live row has none)
     if (!hit.from && s.from) { hit.from = s.from; hit.to = s.to; }
-    if (s.lat != null && (hit.lat == null || (s.posAge ?? 1e9) < (hit.posAge ?? 1e9))) {
+    if (s.lat != null && (hit.lat == null || avFixBetter(s, hit))) {
       hit.lat = s.lat; hit.lon = s.lon; hit.alt = s.alt; hit.trk = s.trk; hit.gs = s.gs; hit.ground = s.ground; hit.posSrc = s.posSrc; hit.posAge = s.posAge; hit.posTime = s.posTime;
     }
     if (s.icao && !hit.key.match(/^[0-9A-F]{6}$/)) hit.key = s.icao;

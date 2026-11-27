@@ -5,7 +5,7 @@
 //   npx tsx scripts/test_aviation_map.ts
 import { avLayersOf, avLayersPresent, avToggles, avOn, avProfile, sharedSanitise, avMerge, avHave, avVisible, avPlaneItems, avPlaneRows,
          avPlaneCard, avStationItems, avMapStatus, avLegendRows, avCompose, planeFromLive, AVIATION_TITLE, avNowRule, avAdsbNote, AV_ADSB_NOW_SEC, AV_ADSB_EXPIRE_SEC, avPlaneAdsb, avShowsData, avCreditHtml, AV_DATA_CREDIT,
-         type AvHave } from '../src/services/aviationMap';
+         type AvHave, avFixBetter } from '../src/services/aviationMap';
 import { parseAvReport } from '../src/services/aviation';
 
 let passes = 0, fails = 0;
@@ -232,5 +232,21 @@ console.log('── b96-rangefeed: an ADS-B position is never sparse, whoever he
   eq('an ADS-C position over HFDL: sparse', shape('A1B2C3').sparse, true);
 }
 
+// ── ★★ Stuart 16:31: a fresh ADS-B fix is never replaced by a datalink report of the same aircraft (no bouncing) ──
+{
+  ok(!avFixBetter({ posSrc: 'ADS-C', posAge: 0 }, { posSrc: 'ADS-B', posAge: 1 }), 'an ADS-C report (0 s) does not replace a live ADS-B fix (1 s)');
+  ok(!avFixBetter({ posSrc: 'VDL2', posAge: 0 }, { posSrc: 'ADS-B', posAge: 30 }), 'nor an FMS / label-16 one');
+  ok(avFixBetter({ posSrc: 'ADS-B', posAge: 2 }, { posSrc: 'ADS-C', posAge: 0 }), 'a live ADS-B fix replaces a datalink report');
+  ok(avFixBetter({ posSrc: 'ADS-C', posAge: 5 }, { posSrc: 'ADS-B', posAge: 600 }), 'an ADS-B fix gone stale (10 min) gives way to a newer report');
+  ok(avFixBetter({ posSrc: 'ADS-B', posAge: 1 }, { posSrc: 'ADS-B', posAge: 4 }) && !avFixBetter({ posSrc: 'ADS-B', posAge: 4 }, { posSrc: 'ADS-B', posAge: 1 }), 'two ADS-B fixes: the newer');
+  // interleaved: the track never flips back to the report while ADS-B is live
+  let cur = { posSrc: 'ADS-B', posAge: 0, at: 'adsb' };
+  let flips = 0;
+  for (let t = 0; t < 40; t++) {
+    const nxt = t % 3 === 0 ? { posSrc: 'ADS-C', posAge: 0, at: 'report' } : { posSrc: 'ADS-B', posAge: t % 2, at: 'adsb' };
+    if (avFixBetter(nxt, cur)) { if (nxt.at !== cur.at) flips++; cur = nxt; } else cur = { ...cur, posAge: (cur.posAge ?? 0) + 1 };
+  }
+  ok(flips === 0 && cur.at === 'adsb', `interleaved ADS-B and ADS-C reports: the position never leaves ADS-B (${flips} flips)`);
+}
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

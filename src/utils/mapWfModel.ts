@@ -5,7 +5,7 @@
  *
  *  • a single channel: a modest slice centred on the dial, ~5× the filter wide (12 kHz … 1.2 MHz), one marker + passband
  *  • a multichannel decoder (VDL2, ACARS): every channel the SERVER's table lists (hwinfo avdataBands[].chans) plus a
- *    margin, one labelled marker each ("VDL2 Ch1 136.700") — never a frequency of our own
+ *    margin, one labelled marker each ("Ch1 136.700") — never a frequency of our own
  *  • a scan (the VOR / ILS map): the radio's WHOLE window for this dwell, fresh at each step (`key` changes → the history
  *    breaks; Stuart reversed a band-wide composite — a 2 MHz step only leaves narrow smears); the stations heard in it,
  *    and each DECODED ident stamped into the history as it is read (never a listed ident: the list is never the judge)
@@ -84,7 +84,8 @@ export function wfModelChannels(band: { id: string; name: string; chans?: number
   const combined = /\+|&/.test(band.name) || band.id === 'both';
   const kind = (hz: number) => (combined ? (hz >= 136e6 ? 'VDL2' : 'ACARS') : band.name);
   const n = new Map<string, number>();
-  const marks = ch.map((hz) => { const k = kind(hz), i = (n.get(k) ?? 0) + 1; n.set(k, i); return { hz, label: `${k} Ch${i} ${mhz3(hz)}`, active: true }; });
+  // ★ Stuart 16:11: the bar already says "VDL2 · 12 channels" — a label is "Ch1 136.700"; only the combined band names its kind
+  const marks = ch.map((hz) => { const k = kind(hz), i = (n.get(k) ?? 0) + 1; n.set(k, i); return { hz, label: `${combined ? k + ' ' : ''}Ch${i} ${mhz3(hz)}`, active: true }; });
   return { lo: a - pad, hi: z + pad, marks, key: `ch${band.id}`, stamps: [],
            info: `${band.name} · ${ch.length} channel${ch.length === 1 ? '' : 's'} · ${mhz3(a)}–${mhz3(z)} MHz` };
 }

@@ -19,6 +19,37 @@ how many cards can be open follows the window; a phone shows one at a time.
   seeded by `mapcards/seed.mjs`) and `mapcards/preview.mjs` (serves web/dist, proxies the rest, rebuilds through the
   build lock on every save).
 
+## The live waterfall in the drawer + short landscape (beta97 work, 11-27 afternoon)
+
+- **Where:** a live map over a radio (not the history viewer) offers a folder tab at the LIST drawer's top-LEFT (`.lSwap`,
+  the mirror of the maximise tab `.lMax`) carrying the OTHER view's glyph, and the same tab on the collapsed chip
+  (`.lSwapC`). W toggles. `TrackView.setWaterfall(on)` offers it; `onWaterfall(pane | null)` tells the host when it shows.
+- **What it draws** (`web/client/src/mapWf.ts`, model `src/utils/mapWfModel.ts`, unit `scripts/test_map_wf.ts`):
+  passive (no pointer handlers); a MINIATURE of the page's waterfall — the page's own processed frames
+  (`Waterfall.onProcessed`: row palette indices, smoothed trace, peak hold) in the page's look (`Waterfall.mapLook()`:
+  LUT, `specGradientFor`, outline, peak colour), the slice re-levelled the way auto levels do (floor → index 70).
+  Span by mode: dial slice 5× the filter (12 kHz–1.2 MHz); the datalink's channels from hwinfo `avdataBands[].chans`
+  (server change) labelled `Ch1 136.700`; the VOR window, fresh per dwell; NDB band; decoded idents stamped into the
+  history (never a listed ident). Cropped client-side (a per-listener view change can move a shared IF filter).
+- **History:** a ring of palette indices, 1024 columns × the screen's longer side (≤ 1600 rows), re-rendered on any
+  resize (small ↔ maximised, rotation, the side panel), kept across list ↔ waterfall (a grey gap line), freed when the
+  map closes; only a retune clears it. Light: DPR 1, ≤ 10 rows/s.
+- **Spectrum on only while it shows** (`spec` on:1 / on:0). **Server** (`recomputeEngineRate`, `vsMapMode`): in a map
+  mode the display FFT runs at the 1 fps housekeeping floor with nobody's waterfall open, ≤ 10 fps with one open; the FFT
+  size is untouched (a change restarts the engine and dips everyone's audio).
+- **Short landscape** (`mapCards.shortMap`: map height < 480 and wider than tall): the drawer is a LEFT SIDE PANEL at full
+  height under the ✕ (300–360 px), its two tabs on its right edge; the left family a row of tabs along the BOTTOM edge right
+  of it, cards popping up; the right column as ever, the scale hidden when there is no room under the zoom.
+- **Safe areas:** `viewport-fit=cover` only while a map is up (`TrackView.coverOn`); every map control stands in by
+  `--sai-l/r/t/b`; iOS's equal landscape insets resolved by the orientation angle (`web/client/src/islandSide.ts`, the
+  same mapping as the app's `islandSideFor`): the island side the full inset, the other a 20 px corner allowance.
+  ★ The radio page itself has NOT had a safe-area pass — it keeps Safari's letterbox (its deck, VTS, edge chips, menus).
+- **e2e:** `scripts/test-web-map-waterfall.mjs` (swap, spec on/off and server frame rates, markers per channel, passive,
+  palette follows the page, lit + bursts, history kept across maximise / rotation, drawer never grows, tabs clear),
+  `scripts/test-web-map-landscape.mjs` (932×370, 932×430, 852×340, 667×320; insets; `PREVIEW_URL=` drives the preview).
+- **App port:** the same model (`mapWfModel.ts`) and rules; the app's waterfall view takes the processed frames the same
+  way; the island side from `useIslandSide`.
+
 ## Tweaks from Stuart (live preview, 11-27)
 
 1. NAVTEX stations: no line from the receiver (navtexMap.ts navItems — web and app); the distance stays on the label.

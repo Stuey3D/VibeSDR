@@ -59,6 +59,11 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★★★ V12 beta97 2026-11-27 — THE MAP DRAWER'S LIVE WATERFALL + SHORT LANDSCAPE (web only so far; web/client/src/mapWf.ts,
+  //     src/utils/mapWfModel.ts, tracks.ts setWaterfall / data-short). Locations checked against the code: the swap tab =
+  //     .lSwap at the drawer's top-left (the mirror of .lMax), .lSwapC on the collapsed LIST chip; short landscape = the
+  //     drawer as a left side panel (.sideB), the left family as a bottom row (.mChipsL), tabs on the panel's right edge.
+  { v: 'V12 (experimental)', detail: 'A LIVE WATERFALL ON THE MAP \u2014 on a live map over a radio (not the history viewer) the small tab at the top-left of the LIST drawer (the mirror of its maximise tab), or the one on its chip when the drawer is shut, swaps the list for a small live waterfall of what the radio is hearing: on the aircraft datalink every channel marked and labelled (\u201cCh1 136.700\u201d), on a single channel a slice a few times its filter wide, on the VOR / ILS map the window being searched with each station\u2019s ident stamped into the history as it is read. It is a miniature of your own waterfall (your palette) and it only shows \u2014 tapping it tunes nothing. The spectrum runs only while it is showing, so a map costs the server and your data allowance nothing extra the rest of the time. And on a phone on its side the map lays out for the short window: the list (or the waterfall) runs down the left side under the \u2715, and SERVERS, TUNE, LAYERS, STATS and MAP sit along the bottom edge, their cards popping up; the map runs under the rounded corners, its controls kept clear of the island.' },
   // ★★★ V12 beta96 2026-11-27 — THE MAP CONTROL CARDS (docs/v12/MAP-CONTROL-CARDS.md; src/utils/mapCards.ts; web tracks.ts
   //     TrackView cards + main.ts asCardsSync; the bar line dialChat mapBarLine; the card rail .trkMapHost .cardBtns). WEB PAGE ONLY so far — the app's map keeps its top strip until the port (the
   //     note says so). Locations checked against the code 11-27 13:10 (no top bar): ✕ = .trkTop .exit as a corner piece

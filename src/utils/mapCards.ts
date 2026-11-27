@@ -37,6 +37,12 @@ export const ONE_SIDE_MIN_H = 600;
 export const ONE_SIDE_ROOM = 160;
 /** Every chip down the left fits: the map is at least ONE_SIDE_MIN_H tall and holds the stack (SERVERS, TUNE, LAYERS, MAP
  *  CONTROLS, LIST and their gaps — `stackH`, measured) with ONE_SIDE_ROOM to spare. */
+/** ★★★ V12 SHORT LANDSCAPE (Stuart 11-27, iPhone 17 Pro Max landscape in Safari ≈ 932 × 370): under this map height, in a
+ *  window wider than tall, the LIST / waterfall drawer is a LEFT SIDE PANEL at full height under the ✕, and the left family
+ *  (SERVERS, TUNE, LAYERS, STATS, MAP CONTROLS) a row of edge tabs along the BOTTOM edge right of it, their cards popping
+ *  UP. The right column stays. Portrait and tall windows are unchanged. */
+export const SHORT_MAP_H = 480;
+export function shortMap(w: number, h: number): boolean { return h > 0 && h < SHORT_MAP_H && w > h; }
 export function oneSide(mapH: number, stackH: number): boolean { return mapH >= Math.max(ONE_SIDE_MIN_H, stackH + ONE_SIDE_ROOM); }
 /** The side a chip and its card stand on: MAP CONTROLS joins the left when `one`. */
 export function cardSide(id: CardId, one = false): 'L' | 'R' | 'B' | 'H' { return id === 'map' && one ? 'L' : CARD_SIDE[id]; }
@@ -105,7 +111,7 @@ export const MAP_HELP: Array<{ id: Exclude<CardId, 'help'>; name: string; words:
   { id: 'tune', name: 'TUNE', words: 'Change mode and gain. Faded when you must ask in chat first.' },
   { id: 'layers', name: 'LAYERS', words: 'What is on the map. Tap a row to show or hide it.' },
   { id: 'map', name: 'MAP', words: 'Time filter, fit, rings, range, labels, sources and the key.' },
-  { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message, nearest or latest.' },
+  { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message. On a live map its top-left tab swaps in the live waterfall.' },
   { id: 'stats', name: 'STATS', words: 'Per mode: newest, furthest, furthest tracked (distance) and longest tracked (time). Tap one to show it.' },
   { id: 'rate', name: 'RATE', words: 'Messages a minute (ADS-B a second). With several sources, tap for each one.' },
   { id: 'chat', name: 'CHAT', words: 'The shared radio\u2019s canned messages \u2014 how listeners agree who tunes next.' },
@@ -117,6 +123,8 @@ export const MAP_HELP_NOTES: string[] = [
   'SERVER HEALTH (right edge): the server\u2019s processor, memory and temperature \u2014 tap it for the details.',
   'TIME (right edge, only when the server limits sessions): how long you have left here.',
   'On a phone-sized window one card opens at a time.',
+  'WATERFALL (live maps over a radio): the small tab at the list’s top-left — or on its chip — shows what the radio hears instead of the list: the decoder’s channels marked, idents stamped as they are read. It only shows; tapping it tunes nothing.',
+  'A short landscape window (a phone on its side) puts the list down the left side and SERVERS, TUNE, LAYERS, STATS and MAP along the bottom.',
 ];
 
 /** ★★★ Stuart 11-27 (tweak 5): "list is the only one that stays open the others collapse back". LIST is STICKY (open until
