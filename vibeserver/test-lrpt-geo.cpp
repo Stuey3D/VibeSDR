@@ -240,6 +240,56 @@ int main() {
     /* ★★★ beta96 NORTH UP (Stuart 11-26, Meteor-M2-4 with MAP OUTLINE on: a northbound pass came out south-up). A northbound
      *  pass's pictures are turned round ONCE (renderPictures), say so (PNG Comment, name, outline "rot"), and the outline
      *  is drawn for the turned picture — the same ground at the turned pixel. A southbound pass is left as scanned. */
+    /* ★★★ b96-satgrace (Mac Ha, a phone server running a pass + VDL2 + the ORBCOMM sky plot: "no map outline: the
+     *  satellite's clock reads 5.5 s behind ours"). The check took OUR time when the decode thread got to the frame — a
+     *  busy decode queue's lag read as "satellite behind" and a correct on-board clock was refused. It now takes the
+     *  block's CAPTURE time (DecoderHost IqBlock::utc). Here: a correct on-board clock decoded 8 s behind the air → the
+     *  outline; the same lag with no capture time (the old behaviour) → refused; an on-board clock 30 s out → refused with
+     *  the reason, lag or no lag. */
+    std::printf("── the clock check reads the CAPTURE time, not the decode time (8 s of queue lag) ──\n");
+    for (int k = 0; k < 3; k++) {
+        const bool passCapture = k != 1;              // k 1: no capture time — what beta96 did
+        const double boardOff = k == 2 ? 30.0 : 0.0;  // k 2: the satellite's clock 30 s out
+        tx::TxConfig tc; tc.esn0Db = 25; tc.startMs = uint32_t(ms0);
+        const auto iq = tx::modulate(tc, tx::codeBits(tc, tx::buildVcdus(tc, 8)));
+        Run::Opts o; o.symbolRate = 72000;
+        double fed = 0;
+        o.geoCandidates = [&] { return cands; };
+        o.geoObserver = [&](vibe::sat::Observer& ob) { ob = obs; return true; };
+        // the decode thread runs 8 s behind the air: "now" there is the capture time + 8 s
+        const double lag = 8.0;
+        /* ★ The synthetic stream packs its 8 scan periods tighter than real time, so "the air" is placed by its LAST
+         *  period: stamped ms0 + 8620 ms and heard at the stream's end — a correct satellite clock then reads ~0 s at the
+         *  end of the pass (the newest stamp is what the check compares; error ≤ one period's air time). */
+        const double airEnd = double(iq.size() / 2) / tc.sampleRate;
+        const double air0 = day + ms0 / 1000.0 + 8.620 - airEnd;   // our clock at the stream's first sample
+        o.nowUnix = [&] { return air0 + boardOff + fed + lag; };
+        std::vector<Picture> got;
+        o.pictures = [&](const std::vector<Picture>& ps, bool) { got = ps; };
+        o.json = [](const std::string&) {};
+        o.frame = [](const uint8_t*, size_t) {};
+        {
+            Run run(o);
+            const size_t blk = size_t(tc.sampleRate / 20);
+            for (size_t at = 0; at < iq.size() / 2; at += blk) {
+                const size_t n = std::min(blk, iq.size() / 2 - at);
+                // the block's capture time: its LAST sample on our (correct) clock
+                const double cap = air0 + boardOff + fed + n / tc.sampleRate;
+                run.feedIq(reinterpret_cast<const std::complex<float>*>(&iq[at * 2]), int(n), tc.sampleRate, 0, passCapture ? cap : NAN);
+                fed += n / tc.sampleRate;
+            }
+            run.finish(false);
+        }
+        CHECK(!got.empty(), "pictures at the end (%zu)", got.size());
+        if (got.empty()) continue;
+        if (k == 0) CHECK(!got[0].geoJson.empty() && got[0].geoWhy.empty(), "★ a correct on-board clock, decoded 8 s late, read at capture: the outline (%s)", got[0].geoWhy.c_str());
+        if (k == 1) CHECK(got[0].geoJson.empty() && got[0].geoWhy.find("s behind ours") != std::string::npos, "…read at decode time (beta96): refused, \"%s\"", got[0].geoWhy.c_str());
+        auto readsSec = [](const std::string& w) { const size_t p = w.find("reads "); return p == std::string::npos ? -1.0 : std::strtod(w.c_str() + p + 6, nullptr); };
+        if (k == 1) CHECK(readsSec(got[0].geoWhy) > 6.5 && readsSec(got[0].geoWhy) < 9.5, "…the lag itself is what it read (%.1f s)", readsSec(got[0].geoWhy));
+        if (k == 2) CHECK(got[0].geoJson.empty() && readsSec(got[0].geoWhy) > 28.5 && readsSec(got[0].geoWhy) < 31.5 && got[0].geoWhy.find("behind ours") != std::string::npos,
+                          "★ an on-board clock 30 s out is still refused, with the reason: \"%s\"", got[0].geoWhy.c_str());
+    }
+
     std::printf("── north up: a northbound pass turned round once, a southbound one not ──\n");
     {
         const double tN = day + ms0 / 1000.0 + 50;

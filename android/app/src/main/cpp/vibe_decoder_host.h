@@ -2589,7 +2589,7 @@ private:
                     if (b.gapN == 0 && b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.aim);
                     if (b.gapN == 0 && b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && rttySkim_) rttySkim_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
-                    if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, lrptCaptureUtc_(b.utc));   // ★★★ b96-satgrace the CAPTURE time (its clock check)
                     if (b.gapN == 0 && b.slice == 0 && orbcomm_) orbcomm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && xpdr_) xpdr_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && fctlm_ && fctlmIq_) fctlm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.aim, fctlmIqOffHz_);   // ★★★ beta94
@@ -2890,6 +2890,14 @@ private:
     std::unique_ptr<RttySkimRun> rttySkim_;   // ★ the RTTY skimmer (buildRttySkimLocked_) — shares cwIq_/cwWidth_, owns its workers
     std::unique_ptr<vibexpdr::Run> xpdr_;      // ★★★ beta94 the transponder finder (buildXpdrLocked_) — shares cwIq_/cwWidth_/iqFixed_
     std::unique_ptr<vibeorb::Run> orbcomm_;    // ★ V12 ORBCOMM (buildOrbcommLocked_) — shares cwIq_/cwWidth_
+    /** ★★★ b96-satgrace the LRPT clock check's "our time" for a block: its CAPTURE time on the clock the run reads — the
+     *  block's stamp (vibeUtcNow at the cut) when that is the run's clock, else the run's clock less the queue lag
+     *  measured on vibeUtcNow (a host given its own clock, env_.nowUnix). Either way the decode-queue lag is gone. */
+    double lrptCaptureUtc_(double blockUtc) const {
+        if (!(blockUtc > 0)) return NAN;
+        if (!env_.nowUnix) return blockUtc;
+        return env_.nowUnix() - std::max(0.0, vibeUtcNow() - blockUtc);
+    }
     std::unique_ptr<vibelrpt::Run> lrpt_;      // ★ V12 METEOR-M LRPT (buildLrptLocked_) — shares cwIq_/cwWidth_
     int   sstvDecim_ = 0; float sstvAcc_ = 0.0f;
     int   textSlot_ = -1;

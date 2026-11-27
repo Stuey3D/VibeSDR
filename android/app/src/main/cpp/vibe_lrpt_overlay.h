@@ -12,8 +12,11 @@
 //    · the strips' stamps sit on ONE line: each within kMaxStampResidualMs of the least-squares fit (whole-ms stamps of a
 //      ~1231.1 ms period step 1228 / 1232: a residual of ≤ 3 ms is normal), at least kMinStrips heard;
 //    · the period is MSU-MR's (kPeriodMinMs … kPeriodMaxMs for 8 lines);
-//    · the satellite's time agrees with OURS when the frames arrived, within kMaxClockSkewSec (the receiver's own queue
-//      is ≤ 2 s; METEOR-M2 3 sent wrong on-board times in Oct 2023 — that is what this catches);
+//    · the satellite's time agrees with OURS when the frames were CAPTURED, within kMaxClockSkewSec (METEOR-M2 3 sent wrong
+//      on-board times in Oct 2023 — that is what this catches). ★★★ b96-satgrace: the capture time (DecoderHost's block
+//      stamp, vibe_lrpt_run.h feedIq), never the decode time — a busy phone's decode queue lagged the air by 5+ s and a
+//      correct satellite clock was refused as "behind" (Mac Ha). Left: the stamp's frame inside one block (tens of ms) and
+//      our own clock's error (vibe_clock.h: the system clock + our SNTP offset);
 //    · the orbit: an element set no older than kMaxElementDays, and — with this server's location known — the satellite
 //      above our horizon at the picture's middle time. With two METEORs up at once and no pick naming one: refused.
 //
@@ -63,7 +66,7 @@ inline std::string spanWords(double sec) {
 }
 
 /** ★★ The clock checks. `stripMs[i]` = strip i's stamp (ms of day, −1 = not heard); `wallUnix` = OUR clock (UTC) when
- *  the frame carrying stamp `wallStampMs` was decoded. */
+ *  the IQ carrying stamp `wallStampMs` was CAPTURED (b96-satgrace — not when the decode thread reached it). */
 inline bool checkClock(const std::vector<int32_t>& stripMs, double wallUnix, int32_t wallStampMs, Clock& c, std::string& why) {
     c = Clock{};
     std::vector<std::pair<double, double>> pts;

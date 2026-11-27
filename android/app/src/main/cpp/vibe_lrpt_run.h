@@ -225,8 +225,10 @@ public:
     };
     ~Run() { finish(true); }
 
-    /** One IQ block from the host's queue (decode thread). */
-    void feedIq(const std::complex<float>* iq, int n, double rate, double /*centreRfHz*/) {
+    /** One IQ block from the host's queue (decode thread). `captureUtc`: OUR clock when the block's LAST sample was
+     *  captured (DecoderHost's IqBlock::utc — stamped where the DSP thread cut it, before the decode queue); NaN = not
+     *  known (a direct caller with no queue: the replay tool, tests) — then "now" when the stamp lands. */
+    void feedIq(const std::complex<float>* iq, int n, double rate, double /*centreRfHz*/, double captureUtc = NAN) {
         if (n <= 0 || !(rate > 0)) return;
         if (!rx_ || std::fabs(rate - rate_) > 0.5) {
             const double sMax = o_.rateAuto ? 80000 : o_.symbolRate, sMin = o_.rateAuto ? 72000 : o_.symbolRate;
@@ -245,8 +247,14 @@ public:
         // ── progressive preview: every new strip that has landed ──
         if (rx_->version() != seenVersion_) {
             seenVersion_ = rx_->version(); lastFrameSec_ = fedSec_;
-            // ★ the overlay's clock check: OUR time when the newest stamp arrived (vibe_lrpt_overlay.h checkClock)
-            wallStamp_ = rx_->lastStampMs(); wallAt_ = now();
+            /* ★ the overlay's clock check: OUR time when the newest stamp arrived (vibe_lrpt_overlay.h checkClock).
+             *  ★★★ b96-satgrace (Mac Ha, a phone server: "the satellite's clock reads 5.5 s behind ours") — the time the
+             *  block was CAPTURED, not when the decode thread got round to it: a busy decode queue (a pass + VDL2 + the
+             *  ORBCOMM sky plot on one phone) lags the air by seconds, and that lag always read as "satellite behind", so a
+             *  correct on-board clock was refused. The stamp's frame ends somewhere inside this block, so the error left is
+             *  at most the block's length (tens of ms). */
+            wallStamp_ = rx_->lastStampMs();
+            wallAt_ = std::isfinite(captureUtc) && captureUtc > 0 ? captureUtc : now();
         }
         // ★ at most once a second: the version moves with every packet, and each preview resends its last strips
         if (seenVersion_ != previewVersion_ && fedSec_ - lastPreview_ >= 1.0) { previewVersion_ = seenVersion_; lastPreview_ = fedSec_; preview(); }
