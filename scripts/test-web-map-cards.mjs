@@ -125,7 +125,7 @@ async function sizeChecks(p, tag, w, h, o) {
   ok(await p.ev(`!${V}.querySelector('.trkTop [data-cbtn]') && [...${V}.querySelectorAll('.trkMapHost .mDock.edgeDock [data-cbtn]')].every(b => !!b.querySelector('svg'))`), `${tag} ${w}: the chips are edge docks on the map, each with its own glyph`);
   const geo = JSON.parse(await p.ev(`JSON.stringify(Object.fromEntries([...${V}.querySelectorAll('.mDock:not([hidden])')].map(d => { const b = d.querySelector('.hCard').getBoundingClientRect(); return [d.dataset.dock, { l: Math.round(b.left), r: Math.round(b.right), t: Math.round(b.top), b: Math.round(b.bottom), w: Math.round(b.width) }]; })))`));
   const mapH = await p.ev(`${V}.querySelector('.trkMapHost').clientHeight`);
-  ok(['servers', 'tune', 'layers', 'list'].filter((id) => geo[id]).every((id) => geo[id].l <= 1), `${tag} ${w}: SERVERS, TUNE, LAYERS and LIST on the left edge`);
+  ok(['servers', 'tune', 'layers'].filter((id) => geo[id]).every((id) => geo[id].l <= 1) && geo.list && geo.list.l <= 16, `${tag} ${w}: SERVERS, TUNE and LAYERS on the left edge, LIST at the bottom-left`);
   ok(geo.servers && Object.values(geo).every((g) => g.t >= geo.servers.t || g === geo.servers || g.l > w / 2), `${tag} ${w}: SERVERS is the top-left chip`);
   ok(geo.list && geo.list.b >= Object.values(geo).reduce((m, g) => Math.max(m, g.b), 0) - 1, `${tag} ${w}: LIST is the bottom-left chip`);
   const mapLeft = geo.map && geo.map.l <= 1;
@@ -158,7 +158,7 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: one press on its heading folds ${id.toUpperCase()} back to its tab`);
   }
   // ── the cards never cover the whole map; no sideways scroll ──
-  await p.ev(`${BTN('list')}.click(); 1`); await sleep(200); await p.ev(`${BTN('layers')}.click(); 1`); await sleep(400);
+  await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(200); await p.ev(`${BTN('layers')}.click(); 1`); await sleep(400);
   const cov = await p.ev(`(() => { const xs = new Set(); for (const x of ${V}.querySelectorAll('.trkCards .trkCard2')) { const b = x.getBoundingClientRect(); for (let i = Math.max(0, Math.floor(b.left)); i < Math.min(${w}, b.right); i++) xs.add(i); } return xs.size; })()`);
   ok(cov <= w * (narrow ? 0.99 : 0.8), `${tag} ${w}: the cards never cover the map's width (${cov} of ${w} px)`);
   const sw = await p.ev(`document.documentElement.scrollWidth`);
@@ -219,7 +219,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`(() => { const r = document.documentElement.style; for (const k of ['--btn-bg', '--btn-text', '--ctl-card-bg', '--btn-border', '--ov-chip']) r.removeProperty(k); return 1; })()`);
     // ── only LIST is remembered (per narrow / wide); the transient cards always start folded ──
     await p.size(1440, 900, false); await shutAll(p);
-    await p.ev(`${BTN('list')}.click(); 1`); await sleep(200); await p.ev(`${BTN('map')}.click(); 1`); await sleep(300);
+    await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(200); await p.ev(`${BTN('map')}.click(); 1`); await sleep(300);
     const wide = await p.ev(`localStorage.getItem('vibesdr.mapCards.wide')`);
     ok(wide === '["list"]', `the wide window remembers LIST only (${wide})`);
     await p.size(390, 844, true);
@@ -258,6 +258,19 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`${BTN('servers')}.click(); 1`); await sleep(500);
     const top = await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="servers"]'); const b = c.getBoundingClientRect(); const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return !!at && c.contains(at) && getComputedStyle(c).boxShadow !== 'none'; })()`);
     ok(top, 'with LIST open, SERVERS is the topmost thing where it stands, with a shadow');
+    // ★ its size and place are its own — the same with LIST open and shut; its "Back to…" row is the thing under the pointer
+    const srv = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="servers"]'); const b = c.getBoundingClientRect(); const r = c.querySelector('[data-srv="back"]').getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { h: Math.round(b.height), t: Math.round(b.top), l: Math.round(b.left), row: !!at && !!at.closest('[data-srv="back"]') }; })())`));
+    const sOpen = await srv();
+    await p.ev(`${BTN('list')}.click(); 1`); await sleep(400);
+    await p.ev(`(() => { const b = ${BTN('servers')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(400);
+    const sShut = await srv();
+    ok(Math.abs(sOpen.h - sShut.h) <= 2 && Math.abs(sOpen.t - sShut.t) <= 2 && Math.abs(sOpen.l - sShut.l) <= 2, `SERVERS the same size and place with LIST open (${JSON.stringify(sOpen)}) and shut (${JSON.stringify(sShut)})`);
+    ok(sOpen.row, '…and with LIST open, its "Back to…" row is what a press there hits');
+    await p.ev(`${BTN('list')}.click(); 1`); await sleep(300);
+    await p.ev(`(() => { const b = ${BTN('servers')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(400);
+    // ★ the LIST stops below the left chips: no overlap with any of them
+    const clash = await p.ev(`(() => { const l = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); return [...${V}.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard')].some(c => { const b = c.getBoundingClientRect(); return b.right > l.left && b.left < l.right && b.bottom > l.top && b.top < l.bottom; }); })()`);
+    ok(!clash, 'the LIST never overlaps the left chips');
     // ── a tap on the map folds the transient card back; LIST stays ──
     await p.ev(`(() => { const h = ${V}.querySelector('.trkMapHost'); const b = h.getBoundingClientRect(); const t = document.elementFromPoint(b.left + b.width * 0.7, b.top + b.height * 0.5); t.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); return 1; })()`); await sleep(300);
     const vis2 = JSON.parse(await p.ev(VISIBLE_CARDS));

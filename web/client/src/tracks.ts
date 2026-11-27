@@ -672,15 +672,15 @@ const CSS = `
 .trkView .trkCards{position:absolute;inset:0;left:0;right:0;top:0;bottom:0;max-width:none;display:block;z-index:795;pointer-events:none}   /* ★ an open card above the other chips */
 .trkCards .cSide{position:absolute;display:flex;flex-direction:column;gap:8px;width:var(--trk-card-w,340px);pointer-events:none;min-height:0}
 .trkCards .cSide>.trkCard2{pointer-events:auto}
-.trkCards .cL{left:var(--trk-chip-l,70px);top:84px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
-.trkCards .cR{right:var(--trk-chip-r,70px);top:8px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
-.trkCards .cB{right:var(--trk-chip-rb,70px);top:40%;bottom:calc(var(--trk-attrib-h,0px) + 8px);justify-content:flex-end}
-.trkCards.both .cR{bottom:62%}
+.trkCards .sideL{left:var(--trk-chip-l,70px);top:84px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
+.trkCards .sideR{right:var(--trk-chip-r,70px);top:8px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
+.trkCards .sideB{right:var(--trk-chip-rb,70px);top:40%;bottom:calc(var(--trk-attrib-h,0px) + 8px);justify-content:flex-end}
+.trkCards.both .sideR{bottom:62%}
 .trkCards .cSide>.trkCard2{max-height:100%}
-.trkCards .cB>.trkCard2{flex:0 1 auto}
-.trkView[data-narrow] .trkCards .cL{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto;top:6px}
-.trkView[data-narrow] .trkCards .cR,.trkView[data-narrow] .trkCards .cB{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto}
-.trkView[data-narrow] .trkCards .cB{right:var(--trk-chip-rb,64px);top:30%}
+.trkCards .sideB>.trkCard2{flex:0 1 auto}
+.trkView[data-narrow] .trkCards .sideL{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto;top:6px}
+.trkView[data-narrow] .trkCards .sideR,.trkView[data-narrow] .trkCards .sideB{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto}
+.trkView[data-narrow] .trkCards .sideB{right:var(--trk-chip-rb,64px);top:30%}
 .trkView[data-narrow] .trkCard2{max-height:100%}
 /* ★★★ TWEAK 4 (Stuart 11-27): a press on a chip EXPANDS it in place into its card (flush to the same edge, the dock's
  *  rim); its header shrinks it back. The tuck › stays the separate, deliberate action — smaller, set off by a rule. */
@@ -688,9 +688,9 @@ const CSS = `
 /* ★★★ tweak 5 (Stuart 11-27: "other cards can cover the list with a drop shadow to show they are the top layer"): ONE rule —
  *  the LIST's side is the bottom layer, every transient card's side above it (whatever the order they opened in), with a
  *  shadow in the map chrome's own dark. The LIST's top stops under the left chips (--trk-cb-top), so they stay pressable. */
-.trkCards .cB{z-index:1;top:max(30%,var(--trk-cb-top,0px))!important}
-.trkCards .cL,.trkCards .cR,.trkCards .cH{z-index:2}
-.trkCards .cL>.trkCard2,.trkCards .cR>.trkCard2,.trkCards .cH>.trkCard2{box-shadow:0 10px 28px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.45)}
+.trkCards .sideB{z-index:1;top:max(30%,var(--trk-cb-top,0px))!important}
+.trkCards .sideL,.trkCards .sideR,.trkCards .sideH{z-index:2}
+.trkCards .sideL>.trkCard2,.trkCards .sideR>.trkCard2,.trkCards .sideH>.trkCard2{box-shadow:0 10px 28px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.45)}
 /* ★★★ TWEAK 5 (Stuart 11-27): at rest every chip is the SLIM SIDE TAB — the health pill's tucked tab (26 px of edge, its
  *  rim, its rounding), wearing only its own icon (LAYERS: each family's glyph over its count; LIST: the icon over its
  *  count). One press grows the card straight out of it; its heading sends it back. */
@@ -712,8 +712,8 @@ const CSS = `
   border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font:800 15px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);
   background:rgba(8,12,8,.86);border:1.5px solid rgba(120,200,120,.45);box-shadow:0 2px 8px rgba(0,0,0,.45)}
 .mHelp:hover,.mHelp:focus-visible,.mHelp.on{border-color:var(--hc,#5BE36B);outline:none;background:#16231a}
-.trkCards .cH{right:10px;bottom:calc(var(--trk-attrib-h,0px) + 48px);top:20%;justify-content:flex-end;width:min(340px,calc(100% - 20px))}
-.trkCards .cH>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-radius:12px;transform-origin:bottom right;background:rgba(8,12,8,.94)}
+.trkCards .sideH{right:10px;bottom:calc(var(--trk-attrib-h,0px) + 48px);top:20%;justify-content:flex-end;width:min(340px,calc(100% - 20px))}
+.trkCards .sideH>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-radius:12px;transform-origin:bottom right;background:rgba(8,12,8,.94)}
 .helpBody{padding:6px 10px 10px}
 .hRowH{display:flex;gap:10px;align-items:flex-start;padding:6px 0;font-size:12.5px;line-height:1.35;color:#dfe7ef;border-bottom:1px solid #151f29}
 .hRowH b{font:700 10.5px/1 system-ui,sans-serif;letter-spacing:.12em;color:#fff}
@@ -741,33 +741,32 @@ const CSS = `
 .mDock .tCn{font:700 8.5px/1 ui-monospace,Menlo,monospace;color:#e8eef5;letter-spacing:0}
 .mDock .tCn:empty{display:none}
 .mDock .hTab:has(.tCn:not(:empty)){height:62px}
-.trkCards .cL{left:0;top:var(--trk-cl-top,8px)}
-.trkCards .cR{right:0;top:var(--trk-cr-top,8px)}
+.trkCards .sideL{left:0;top:var(--trk-cl-top,8px)}
+.trkCards .sideR{right:0;top:var(--trk-cr-top,8px)}
 /* ★ tweak 4: the LIST grows UP out of its chip at the bottom-left, where the old list sheet sat */
-.mChipsBL{left:12px;bottom:var(--trk-list-bottom,0px);overflow:hidden;padding-top:12px;margin-top:-12px}
-.trkView[data-narrow] .mChipsBL{--trk-list-bottom:var(--trk-attrib-h,0px)}
+.mChipsBL{left:12px;bottom:var(--trk-attrib-h,0px);overflow:hidden;padding-top:12px;margin-top:-12px}   /* ★ the LIST stands on the attribution line, never over it */
 .mChipsBL .mDock .mchip{flex-direction:row;gap:8px;min-height:34px}
 .trkMapHost .maplibregl-ctrl-bottom-left,.trkMapHost .leaflet-bottom.leaflet-left{left:var(--trk-list-w,0px)}
-.trkCards .cB{left:12px;right:auto;bottom:var(--trk-cb-bottom,0px);top:30%;justify-content:flex-end;width:min(var(--trk-card-w,340px),calc(100% - 24px))}
-.trkCards.lAndB .cL{bottom:47%}
-.trkCards.lAndB .cB{top:55%}
-.trkCards .cB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-radius:12px 12px 0 0;transform-origin:bottom left}
+.trkCards .sideB{left:12px;right:auto;bottom:var(--trk-cb-bottom,0px);top:30%;justify-content:flex-end;width:min(300px,calc(100% - 24px))}   /* ★ the LIST: as wide as its rows need, no wider */
+.trkCards.lAndB .sideL{bottom:47%}
+.trkCards.lAndB .sideB{top:55%}
+.trkCards .sideB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-radius:12px 12px 0 0;transform-origin:bottom left}
 .trkCards .cSide>.trkCard2{border:1.5px solid var(--hc,#5BE36B);background:rgba(8,12,8,.92)}
-.trkCards .cL>.trkCard2{border-left-width:0;border-radius:0 12px 12px 0;transform-origin:top left}
-.trkCards .cR>.trkCard2{border-right-width:0;border-radius:12px 0 0 12px;transform-origin:top right}
+.trkCards .sideL>.trkCard2{border-left-width:0;border-radius:0 12px 12px 0;transform-origin:top left}
+.trkCards .sideR>.trkCard2{border-right-width:0;border-radius:12px 0 0 12px;transform-origin:top right}
 @keyframes trkCardIn{from{opacity:.2;transform:scale(.35)}to{opacity:1;transform:none}}
 .trkCard2>.ch{cursor:pointer;font:700 9px/1 system-ui,sans-serif;letter-spacing:.16em;color:#B9C0B4}
 .trkCard2>.ch:hover{background:rgba(255,255,255,.04)}
 .trkCard2>.ch .x{font:700 18px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);border:0;padding:0 6px}
-.trkCards .cL>.trkCard2>.ch{flex-direction:row}
+.trkCards .sideL>.trkCard2>.ch{flex-direction:row}
 .mDock .hTuck{width:15px!important;font-size:15px!important;opacity:.6}
 .mDock:not(.left) .hTuck{border-right:1px solid rgba(255,255,255,.14);margin-right:5px!important}
 .mDock.left .hTuck{border-left:1px solid rgba(255,255,255,.14);margin-left:5px!important}
 .mDock .hTuck:hover{opacity:1}
 .mDock .mchip{padding:2px 6px;min-height:40px}
-.trkView[data-narrow] .trkCards .cL{left:0;right:var(--trk-chip-r,64px);top:var(--trk-cl-top,8px)}
-.trkView[data-narrow] .trkCards .cR{left:var(--trk-chip-l,64px);right:0}
-.trkView[data-narrow] .trkCards .cB{left:6px;right:6px;width:auto}
+.trkView[data-narrow] .trkCards .sideL{left:0;right:var(--trk-chip-r,64px);top:var(--trk-cl-top,8px)}
+.trkView[data-narrow] .trkCards .sideR{left:var(--trk-chip-l,64px);right:0}
+.trkView[data-narrow] .trkCards .sideB{left:6px;right:6px;width:auto}
 `;
 function addCss() {
   if (document.getElementById('trk-style')) return;
@@ -938,7 +937,7 @@ export class TrackView {
       + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
       + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
-      + `<div class="trkCards"><div class="cSide cL"></div><div class="cSide cR"></div><div class="cSide cB"></div><div class="cSide cH"></div></div><div class="trkPark" hidden>`
+      + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
       + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
         + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
@@ -1201,7 +1200,7 @@ export class TrackView {
       if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c);
     }
     for (const side of ['L', 'R', 'B', 'H'] as const) {
-      const host = this.cardsEl.querySelector(`.c${side}`) as HTMLElement;
+      const host = this.cardsEl.querySelector(`.side${side}`) as HTMLElement;
       place[side].forEach((id, i) => {
         const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement;
         c.hidden = false;
@@ -2067,7 +2066,7 @@ export class TrackView {
      *  their own and never move the map. No LIST: the slim left tabs only. */
     const m = this.mapHost.getBoundingClientRect();
     if (m.width <= 0) return null;
-    const list = this.root.querySelector('.trkCards .cB .trkCard2[data-card="list"]') as HTMLElement | null;
+    const list = this.root.querySelector('.trkCards .sideB .trkCard2[data-card="list"]') as HTMLElement | null;
     const lb = list && !list.hidden ? list.getBoundingClientRect() : null;
     if (lb && lb.width > 0 && lb.height > 0) return { corner: 'bottom-left', w: Math.round(lb.right - m.left + 8), h: Math.round(m.bottom - lb.top + 8) };
     const col = this.root.querySelector('.mChipsL') as HTMLElement | null, cb = col?.getBoundingClientRect();
