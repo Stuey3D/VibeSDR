@@ -157,6 +157,11 @@ async function sizeChecks(p, tag, w, h, o) {
     if (id === 'tune') ok(await p.ev(`${V}.querySelectorAll('.tunePop [data-tune]').length`) >= 2, `${tag} ${w}: TUNE holds the TUNE rows`);
     if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);
+    if (id === 'layers' || id === 'map') {
+      // ★ Stuart 12:00: the ON / OFF tags in one column — every row's count column (just before its tag, a fixed width) ends at one edge
+      const edges = JSON.parse(await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="${id}"] [data-tgl] .n, .trkCard2[data-card="${id}"] [data-src] .n')].filter(n => n.getClientRects().length).map(n => Math.round(n.getBoundingClientRect().right)))`));
+      if (edges.length > 1) ok(Math.max(...edges) - Math.min(...edges) <= 1, `${tag} ${w}: ${id.toUpperCase()}: the ON / OFF tags line up (${[...new Set(edges)].join(',')})`);
+    }
     if (id === 'help') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="help"] .hRowH').length`) === 5, `${tag} ${w}: HELP has a line per chip`);
     await p.ev(`${V}.querySelector('.trkCard2[data-card="${id}"] > .ch').click(); 1`); await sleep(300);
     ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: one press on its heading folds ${id.toUpperCase()} back to its tab`);

@@ -747,7 +747,11 @@ const CSS = `
   border-radius:0;background:none;padding:10px 12px;font:600 13px/1.2 system-ui,sans-serif;color:#e8eef5;opacity:1;text-align:left}
 .trkCard2[data-card="layers"] .tgl .btn.chip:hover,.trkCard2[data-card="layers"] .tgl .btn.chip:focus-visible{background:#1a2632;outline:none}
 .trkCard2[data-card="layers"] .tgl .btn.chip .dot{width:10px;height:10px;flex:none}
-.trkCard2[data-card="layers"] .tgl .btn.chip .n{margin-left:auto;font:700 13px/1 ui-monospace,Menlo,monospace;opacity:1;color:#ffd34d}
+.trkCard2[data-card="layers"] .tgl .btn.chip .n{margin-left:auto;font:700 13px/1 ui-monospace,Menlo,monospace;opacity:1;color:#ffd34d;display:inline-block!important;min-width:4.5ch;text-align:right}
+/* ★ Stuart 12:00 ("the on buttons are misaligned when no numbers are there"): one grid for every row — the count a fixed,
+ *  right-aligned column (empty when none), the ON / OFF tag a fixed column after it */
+.trkCard2[data-card="layers"] .tgl .btn.chip::after,.trkCard2 .mRow::after{min-width:3.2ch;text-align:center;box-sizing:content-box}
+.trkCard2 .mRow .n{min-width:4.5ch;text-align:right}
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"]{color:#7f93a7}
 .trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"] .n{color:#7f93a7}
 .trkCard2[data-card="layers"] .tgl .btn.chip::after{content:"ON";flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787;margin-left:8px}
