@@ -74,15 +74,18 @@ try {
   const ch = await ev(`JSON.stringify(window.__vibeAirSea())`);
   ok(/AVIATION & MARITIME · NDB/.test(ch) && /"exit":"EXIT NDB"/.test(ch) && /"tab":"navaids"/.test(ch), `its title, EXIT NDB and the NAVAIDS tab: ${ch}`);
   ok(await ev(`document.getElementById('app').inert === true`), 'the page under the map is inert');
-  ok(await ev(`!!${V}?.querySelector('.slot-head #ndbList') && !!${V}?.querySelector('.slot-top #ndbRings') && !${V}?.querySelector('.slot-top #ndbFit')`), 'the beacon list under the header, RINGS in the top bar, the map\'s own FIT (no second one)');
-  ok(await until(`[...document.querySelectorAll('#ndbList .ndbRow .c.conf')].map(x => x.textContent).join() === '✓ CAM,✓ WOD'`, 120000),
-     `✓ CAM and ✓ WOD in the list, lowest frequency first: ${await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].map(r => r.innerText.replace(/\\n/g, ' ')).join(' | ')`)}`);
-  const row = await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD'))?.innerText.replace(/\\n/g, ' ') || ''`);
-  ok(/Woodley/.test(row) && /\d+ NM S/.test(row), `WOD's row (NM, bearing): ${row}`);
-  ok(await ev(`!![...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD'))?.querySelector('.sig.l3')`), 'its 3-bar meter shows three bars');
-  ok(await until(`!!document.querySelector('#ndbList .ndbRow .tx .q-high')`, 15000), `the live readings stream in, coloured by confidence: ${await ev(`[...document.querySelectorAll('#ndbList .ndbRow .tx')].map(x => x.innerHTML).join(' | ').slice(0, 200)`)}`);
-  const tiles = await ev(`[...document.querySelectorAll('#ndbTiles .ndbTile')].map(t => t.textContent).join(' | ')`);
-  ok(/IDENTIFIED 2/.test(tiles || '') && /FURTHEST WOD \d+ NM/.test(tiles || ''), `the tiles in the list's header: ${tiles}`);
+  // ★★★ beta97 ONE LIST (Stuart 11-27): the beacons are rows of the map's LIST (NAVAIDS); no list of NDB's own; RINGS,
+  //     UNHEARD and HEARD LOG · FIND NDB · STATS in MAP CONTROLS; the tiles are STATS' NDB section
+  ok(await ev(`!document.getElementById('ndbList') && !document.getElementById('ndbTiles') && !!${V}?.querySelector('.slot-ctl #ndbRings') && !!${V}?.querySelector('.slot-ctl #ndbTools #ndbLogBtn') && !${V}?.querySelector('.slot-top #ndbFit')`), 'no list of NDB\'s own; RINGS and HEARD LOG · FIND NDB · STATS in MAP CONTROLS; the map\'s own FIT (no second one)');
+  ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].map(r => r.querySelector('.nmT')?.textContent).filter(t => /^✓/.test(t || '')).join() === '✓ CAM,✓ WOD'`, 120000),
+     `✓ CAM and ✓ WOD are rows of the ONE LIST, lowest frequency first: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].map(r => r.innerText.replace(/\\n/g, ' ')).join(' | ')`)}`);
+  const row = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].find(r => r.textContent.includes('WOD'))?.innerText.replace(/\\n/g, ' ') || ''`);
+  ok(/Woodley/.test(row) && /\d+ NM S/.test(row) && /\d+ dB/.test(row), `WOD's row (NM, bearing, SNR): ${row}`);
+  ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].some(r => /“[^”]+”/.test(r.textContent))`, 15000), `the live readings stream into the rows: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].map(x => x.querySelector('small')?.textContent).join(' | ').slice(0, 200)`)}`);
+  await ev(`${V}.querySelector('[data-cbtn="stats"]')?.click(); 1`); await sleep(600);
+  const tiles = await ev(`${V}.querySelector('.trkCard2[data-card="stats"]')?.textContent || ''`);
+  ok(/NDB/.test(tiles) && /IDENTIFIED/.test(tiles) && /FURTHEST/.test(tiles), `the tiles are STATS' NDB section: ${tiles.slice(0, 200)}`);
+  await ev(`${V}.querySelector('.trkCard2[data-card="stats"] > .ch .x')?.click(); 1`); await sleep(300);
   const MH = `${V}.querySelector('.trkMapHost')`;
   ok(await until(`[...${MH}.querySelectorAll('.leaflet-marker-icon, canvas')].length > 0`, 20000), 'the map draws (GPU, or Leaflet without WebGL 2)');
   // ★ the beacon layer is on the map's OWN map (one WebGL context): its sources there (GPU), or WOD's marker (Leaflet)
@@ -92,11 +95,12 @@ try {
   ok(await until(`/NDB/.test(${V}.querySelector('.trkKey')?.textContent || '')`, 3000), 'the KEY has the NDB rows');
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === true`), 'zoom is held');
   console.log('   screenshot', await shot('map'));
-  await ev(`[...document.querySelectorAll('#ndbList .ndbRow')].find(r => r.textContent.includes('WOD')).click()`);
+  await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].find(r => r.textContent.includes('WOD')).click()`);
   ok(await until(`!document.getElementById('ndbCard').hidden && /WOD/.test(document.getElementById('ndbCard').textContent) && /Woodley/.test(document.getElementById('ndbCard').textContent) && /NM/.test(document.getElementById('ndbCard').textContent)`, 4000),
      `a tapped row opens its card: ${await ev(`document.getElementById('ndbCard').innerText.replace(/\\n/g, ' / ')`)}`);
-  ok(await ev(`[...document.querySelectorAll('#ndbList .ndbRow.sel')].length === 1`), 'and is selected in the list');
+  ok(await until(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow.ndbR')].filter(r => r.classList.contains('sel')).length === 1`, 3000), 'and is selected in the list');
   console.log('   screenshot', await shot('card'));
+  await ev(`${V}.querySelector('[data-cbtn="map"]')?.click(); 1`); await sleep(400);   // ★ MAP CONTROLS holds NDB's keys
   await ev(`document.getElementById('ndbRings').click()`);
   ok(await until(`!document.getElementById('ndbRings').classList.contains('on')`, 2000), 'RINGS toggles');
   await ev(`document.getElementById('ndbRings').click()`);
@@ -120,7 +124,7 @@ try {
   await ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b.getAttribute('aria-expanded') !== 'true') b.click(); })()`);   // ★ a phone opens with no card
   await sleep(500);
   const fit = JSON.parse(await ev(`JSON.stringify(${V}.querySelector('.trkList').getBoundingClientRect())`));
-  ok(fit.left >= 4 && fit.right <= 390 - 4, `the list fits a phone (the map's own list margins): ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
+  ok(fit.left >= -2 && fit.right <= 390 + 1, `the list fits a phone (the LIST drawer joins the left edge — map cards): ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
   ok(await ev(`document.documentElement.scrollWidth <= 390`), `nothing scrolls sideways (${await ev('document.documentElement.scrollWidth')})`);
   ok(await ev(`(() => { const e = ${V}.querySelector('.exit').getBoundingClientRect(); return e.left >= 0 && e.right <= 390 && e.width > 0; })()`), 'EXIT NDB stays on screen');
   console.log('   screenshot', await shot('phone'));
@@ -128,7 +132,7 @@ try {
   await sleep(800);
   await ev(`${V}.querySelector('.exit').click()`);
   ok(await until(`!window.__vibeAirSea?.()?.open`, 6000), 'EXIT NDB closes the map');
-  ok(await ev(`document.getElementById('ndbView').contains(document.getElementById('ndbList')) && document.getElementById('ndbView').hidden`), 'its pieces are parked again');
+  ok(await ev(`document.getElementById('ndbView').contains(document.getElementById('ndbRings')) && document.getElementById('ndbView').contains(document.getElementById('ndbTools')) && document.getElementById('ndbView').hidden`), 'its pieces are parked again');
   ok(await until(`/7[.,]074/.test(document.getElementById('mFreq')?.textContent || '')`, 6000), `the dial is back: ${await ev(`document.getElementById('mFreq')?.textContent`)}`);
   ok(await ev(`document.getElementById('mZoomIn')?.disabled === false && document.getElementById('app').inert === false`), 'zoom and the page are given back');
 } catch (e) { ok(false, `driver: ${e}`); }

@@ -190,6 +190,8 @@ export interface NdbHost {
   pokeFit(): void;
   pauseFit(): void;
   note(text: string, ms?: number): void;
+  /** ★ beta97 a beacon chosen on the map: its LIST row lit (TrackView.markRow) */
+  markRow?(key: string): void;
   readonly root: HTMLElement;
 }
 
@@ -237,7 +239,9 @@ interface Track { words: NdbCopy[]; snr: [number, number][] }
 
 /** The pieces moved into the map (by id) and where each goes. */
 // ★★★ beta96 map cards: RINGS / UNHEARD are map controls — the MAP card's ('ctl'), not the bar
-const PIECES: Array<[string, 'top' | 'head' | 'over' | 'ctl']> = [['ndbRings', 'ctl'], ['ndbUnheard', 'ctl'], ['ndbTiles', 'head'], ['ndbTools', 'head'], ['ndbList', 'head'], ['ndbListFoot', 'head'], ['ndbCard', 'over']];
+// ★★★ beta97 ONE LIST (Stuart 11-27): the beacons are rows of the map's LIST (NAVAIDS — rowsHtml), the tiles are STATS'
+//     NDB section (statsSection), HEARD LOG · FIND NDB · STATS sit in MAP CONTROLS; no list of NDB's own any more
+const PIECES: Array<[string, 'top' | 'head' | 'over' | 'ctl']> = [['ndbRings', 'ctl'], ['ndbUnheard', 'ctl'], ['ndbTools', 'ctl'], ['ndbCard', 'over']];
 
 export class NdbView {
   private last: NdbReport | null = null;
@@ -249,7 +253,6 @@ export class NdbView {
   private found: NdbFound[] = [];
   private prefs = loadPrefs();
   private dlg = '';
-  private rowsKey = '';
   private shown = true;   // ★ the layer's chip (NDB on / off)
   constructor(private h: NdbHooks) {}
 
@@ -261,7 +264,7 @@ export class NdbView {
     if (this.host) this.park();
     this.host = host;
     for (const [id, where] of PIECES) { const el = document.getElementById(id); if (el) { el.classList.add('ndbPiece'); host.slot(where).appendChild(el); } }
-    for (const id of ['ndbRings', 'ndbUnheard']) $(id).classList.add('btn');
+    for (const id of ['ndbRings', 'ndbUnheard', 'ndbLogBtn', 'ndbFindBtn', 'ndbStatsBtn']) $(id).classList.add('btn');
     $('ndbRings').onclick = () => { this.prefs.rings = !this.prefs.rings; this.savePrefs(); this.map?.with((l) => l.setPrefs({ rings: this.prefs.rings })); this.syncToggles(); };
     $('ndbUnheard').onclick = () => { this.prefs.unheard = !this.prefs.unheard; this.savePrefs(); if (this.prefs.unheard) this.h.find(''); this.map?.with((l) => l.setPrefs({ unheard: this.prefs.unheard })); this.syncToggles(); };
     $('ndbLogBtn').onclick = () => this.openLog();
@@ -283,13 +286,7 @@ export class NdbView {
     if (this.host) this.host.morePoints = null;
     this.host = null;
     this.closeDlg(); this.closeCard();
-    const list = document.getElementById('ndbList'); if (list) list.innerHTML = '';
-    this.rowsKey = '';
     this.last = null; this.tracks.clear(); this.seenSeq = 0; this.sel = 0;
-  }
-  /** ★ The list's pieces show on the NAVAIDS tab only (the map's other tabs have their own rows). */
-  setTab(navaids: boolean) {
-    for (const [id, where] of PIECES) if (where === 'head') { const el = document.getElementById(id); if (el) el.hidden = !navaids; }
   }
   /** ★ The NDB chip: off = no beacons on the map (the list stays — it is the mode's). */
   setShown(on: boolean) {
@@ -335,48 +332,45 @@ export class NdbView {
   private render() {
     const r = this.last;
     if (!r || !this.up) return;
-    const t = ndbTiles(r);
-    $('ndbTiles').innerHTML = [['CARRIERS', t.carriers], ['IDENTIFIED', t.identified], ['FURTHEST', t.furthest], ['COVERAGE', t.coverage]]
-      .map(([k, v]) => `<span class="adsbChip ndbTile" title="${k === 'COVERAGE' ? 'Of the published beacons in this band no further away than the furthest one heard, how many are heard now' : ''}"><span class="k">${k}</span> ${esc(v)}</span>`).join('');
+    /* ★★★ beta97 the tiles are STATS' (statsSection) and the rows the LIST's (rowsHtml) */
     const NO_POS = 'This server has no position set — beacons are placed, but distances are unknown.';
     if (r.pos === false) this.note(NO_POS);
-    this.renderList(r);
     this.renderMap(r);
     if (this.sel) this.renderCard();
   }
-  /** ★★ THE LIVE LIST — the CW skimmer's: lowest frequency first, a row per carrier, the readings streaming in at its
-   *  end coloured by confidence (the health pill's four colours). Rows are updated IN PLACE, so the list stays where the
-   *  listener scrolled it; rebuilt only when the set of carriers changes. */
-  private renderList(r: NdbReport) {
-    const host = $('ndbList');
+  /** ★★★ beta97 THE BEACONS AS ROWS OF THE MAP'S ONE LIST (NAVAIDS): the CW skimmer's order (lowest frequency first),
+   *  a row per carrier — its ident (✓ / ≈ / ? coloured by confidence), the station and kHz, the distance, the SNR, the
+   *  last few readings; quiet ones dimmed. Keyed `ndb:<id>`; a tap chooses the beacon (main.ts → select). */
+  rowsHtml(): string {
+    const r = this.last;
+    if (!r) return '';
     const rows = ndbRows(r);
-    if (!rows.length) { host.innerHTML = `<div class="adsbEmpty">${r.starting || !r.beacons.length ? 'Skimming the whole beacon band — carriers appear as they are found; an ident once several of its repeats agree (about half a minute for a clear one).' : 'No beacons heard yet.'}</div>`; this.rowsKey = ''; return; }
-    const key = rows.map((b) => b.id).join(',');
-    if (key !== this.rowsKey) {
-      this.rowsKey = key;
-      host.innerHTML = rows.map((b) => `<div class="ndbRow" role="button" tabindex="0" data-id="${b.id}"></div>`).join('');
-      host.querySelectorAll('.ndbRow').forEach((el) => {
-        const id = Number((el as HTMLElement).dataset.id);
-        (el as HTMLElement).onclick = () => this.select(id, true);
-        (el as HTMLElement).onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.select(id, true); } };
-      });
-    }
+    if (!rows.length) return `<div class="trkEmpty">${r.starting || !r.beacons.length ? 'Skimming the whole beacon band — carriers appear as they are found; an ident once several of its repeats agree (about half a minute).' : 'No beacon carriers heard yet.'}</div>`;
     const nowMs = (r.now || Date.now() / 1000) * 1000;
-    for (const b of rows) {
-      const el = host.querySelector(`.ndbRow[data-id="${b.id}"]`) as HTMLElement | null;
-      if (!el) continue;
+    const COL: Record<string, string> = { conf: '#5BE36B', near: '#E8C547', unl: '#ffb000', cand: '#9fb0c2', sus: '#8fc3ff', unlikely: '#9fb0c2', harm: '#c9a0ff', none: '#9fb0c2' };
+    const out = rows.map((b) => {
       const c = ndbIdentCell(b), st = ndbStation(b);
       const live = b.active && (b.lastId === 0 ? true : nowMs - b.last < 60000);
-      const words = this.tracks.get(b.id)?.words ?? [];
-      const tx = words.length ? words.map((w) => `<span class="q-${w.q}">${esc(w.text)}</span>`).join(' ') : `<span class="dim">${b.read ? esc(`reading ${b.read}…`) : 'listening for the ident…'}</span>`;
-      const html = `<span class="f">${khz(b.hz)}</span><span class="c ${c.cls}" title="${esc(c.title)}">${esc(c.text)}</span>`
-        + `<span class="n">${esc(st.name)}</span><span class="d">${esc(st.dist)}</span>${barsHtml(ndbBars(b.snr, live))}`
-        + `<span class="tx"><bdi>${tx}</bdi></span>`;
-      if (el.innerHTML !== html) el.innerHTML = html;
-      el.classList.toggle('gone', !b.active);
-      el.classList.toggle('sel', b.id === this.sel);
-      el.title = `${khz(b.hz)} kHz${b.tone ? ` · tone ${Math.round(b.tone)} Hz` : b.a1a ? ' · A1A (keyed carrier)' : ''} · ${b.snr.toFixed(0)} dB${ndbOnMap(b) ? ' — show on the map' : ' — not in the published list, so not on the map'}`;
-    }
+      const words = (this.tracks.get(b.id)?.words ?? []).slice(-5).map((w) => w.text).join(' ');
+      const second = [st.name, `${khz(b.hz)} kHz`, b.a1a ? 'A1A' : b.tone ? `tone ${Math.round(b.tone)} Hz` : '', words ? `“${words}”` : b.read ? `reading ${b.read}…` : ''].filter(Boolean).join(' · ');
+      const ago = b.last ? Math.max(0, Math.round((nowMs - b.last) / 1000)) : -1;
+      const age = ago < 0 ? '' : ago < 5 ? 'now' : ago < 60 ? `${ago} s` : ago < 3600 ? `${Math.round(ago / 60)} min` : `${Math.floor(ago / 3600)} h`;
+      const cls = c.cls.split(' ')[0] || 'none';
+      return `<div class="trkRow kvRow ndbR${b.active ? '' : ' nopos'}${b.id === this.sel ? ' sel' : ''}" role="button" tabindex="0" data-nofocus="1" data-key="ndb:${b.id}" title="${esc(c.title)}">`
+        + `<span class="id"><b><i class="sw" style="background:${COL[cls] ?? '#ffb000'}"></i><span class="nmT">${esc(c.text)}</span>`
+        + (st.dist ? `<span class="kv"><span>${esc(st.dist)}</span></span>` : '') + `</b><small>${esc(second)}</small></span>`
+        + `<span class="rg">${live ? `<span class="snrChip">${b.snr.toFixed(0)} dB</span>` : ''}</span><span class="ag"><span class="agL">${esc(age)}</span><span class="agS">${esc(age.replace(/^(\d+)\s*([a-z]).*$/i, '$1$2'))}</span></span></div>`;
+    }).join('');
+    // ★ once, at the foot (Stuart, 2026-10-29) — not on every unnamed beacon. Same words as NdbLiveList.tsx.
+    return out + `<div class="trkEmpty ndbFoot">A beacon shown by its ident alone isn’t in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</div>`;
+  }
+  /** ★★★ beta97 the old tiles as STATS' NDB section (CARRIERS · IDENTIFIED · FURTHEST · COVERAGE) */
+  statsSection(): { mode: string; rows: Array<{ key: string; label: string; value: string; name: string }> } | null {
+    const r = this.last;
+    if (!r) return null;
+    const t = ndbTiles(r);
+    return { mode: 'NDB', rows: [['CARRIERS', t.carriers], ['IDENTIFIED', t.identified], ['FURTHEST', t.furthest], ['COVERAGE', t.coverage]]
+      .filter(([, v]) => v).map(([k, v]) => ({ key: `ndb:tile:${k}`, label: k, value: String(v), name: '' })) };
   }
 
   private renderMap(r: NdbReport) {
@@ -400,8 +394,7 @@ export class NdbView {
   select(id: number, fromList: boolean) {
     this.sel = id;
     if (fromList && id) { this.host?.pauseFit(); this.map?.with((l) => l.focus(String(id))); }
-    $('ndbList').querySelectorAll('.ndbRow').forEach((el) => el.classList.toggle('sel', Number((el as HTMLElement).dataset.id) === id));
-    if (!fromList && id) ($('ndbList').querySelector(`.ndbRow[data-id="${id}"]`) as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
+    if (!fromList) this.host?.markRow?.(id ? `ndb:${id}` : '');   // ★ beta97 its row in the ONE LIST lit
     if (id) this.renderCard(); else this.closeCard();
   }
   private closeCard() { const c = document.getElementById('ndbCard'); if (c) c.hidden = true; }

@@ -2712,6 +2712,8 @@ export class TrackView {
   }
   /** A pan or zoom by hand while AUTO waited for a card: it stays off when the card folds (the person took the map). */
   private movedWhilePaused = false;
+  /** ★ beta97 a host's item chosen on the map (NDB's beacons): its LIST row lit and brought into view */
+  markRow(k: string) { this.markSel(k); if (k) (this.rowsEl.querySelector('.trkRow.sel') as HTMLElement | null)?.scrollIntoView({ block: 'nearest' }); }
   private markSel(k: string) {
     if (k && k !== this.sel) this.selPause(); else if (!k && this.sel) this.selResume();
     if (k !== this.sel) try { this.onSel?.(k); } catch (e) { console.error('[tracks] onSel', e); }

@@ -11078,6 +11078,8 @@ function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; 
   if (!wasOpen) { asSessSt = sessionStart(null, asMode(), Math.floor(Date.now() / 1000), true); asSess = false; asFirst.clear(); }
   if (!asView) {
     asView = new TrackView(asViewOpts());
+    // ★★★ beta97 NDB's beacons are LIST rows (ndb:<id>): a tap chooses the beacon — its marker, its card
+    asView.onRow = (k) => { if (k.startsWith('ndb:') && !k.startsWith('ndb:tile:')) ndbView?.select(Number(k.slice(4)) || 0, true); };
     // ★★ tap an aircraft (its row or its icon) → MESSAGES shows its messages only; a message row finds its aircraft
     asView.onSel = (k) => { if (k.startsWith('a:') && k !== asMsgKey) { asMsgKey = k; if (asView?.tab === 'messages') asRender(); } };
   }
@@ -11425,8 +11427,8 @@ function asRender() {
   v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
   // ★★ ADS-B live: one list like every other (Stuart 16:53) — nearest / latest
   if (adsbOn) { adsbChromeMount(v, tab); adsbRender(); }
-  // ★★ beta96 stage 8 NDB live: its pieces in the map's slots (the list under NAVAIDS), its layer on the map
-  if (ndbOn && ndbView) { ndbView.mount(v); ndbView.setTab(tab === 'navaids'); ndbView.setShown(on('ndb')); }
+  // ★★ beta96 stage 8 NDB live: its controls in MAP CONTROLS, its layer on the map; beta97 its beacons in the ONE LIST
+  if (ndbOn && ndbView) { ndbView.mount(v); ndbView.setShown(on('ndb')); }
   v.setSort(tab === 'aircraft' ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
   const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
@@ -11467,8 +11469,9 @@ function asRender() {
     rows = shc.by(['stations', 'weather', 'warnings']);
   } else if (tab === 'navaids') {
     // ★ stage 8 the VOR map's list (the FIX's words first), keyed as its map items
-    rows = vmOn ? vorMapRows(vmR).replace(/data-key="/g, 'data-key="vor:')   // ★ NDB's list is its own (#ndbList, under the header)
-      : on('vor') && vmSt.length ? asSec('VOR STATIONS — REMEMBERED') + storedVorRows(vmSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
+    rows = vmOn ? vorMapRows(vmR).replace(/data-key="/g, 'data-key="vor:')
+      : (ndbOn && ndbView ? asSec('NDB — BEACONS HEARD') + ndbView.rowsHtml() : '')   // ★★★ beta97 the beacons are rows of the ONE LIST
+        + (on('vor') && vmSt.length ? asSec('VOR STATIONS — REMEMBERED') + storedVorRows(vmSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '');
   } else if (tab === 'sondes') {
     rows = sdOn ? sondeRows(sdR).replace(/data-key="/g, 'data-key="sd:')
       : on('sondes') ? storedSondeRows(sdSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
@@ -11550,6 +11553,7 @@ function asStatsSync(v: TrackView, rx: { lat: number; lon: number } | null) {
     if (old) { const mins = Math.round((now - (old[1].first || asStatsOpened)) / 60000); if (mins >= 1) pick('LONGEST TRACKED', old, `${mins} min${old[1].first ? '' : '+'}`); }
     if (rows.length) sections.push({ mode, rows });
   }
+  { const ns = ndbOn ? ndbView?.statsSection() : null; if (ns && ns.rows.length) sections.push(ns); }   // ★★★ beta97 NDB's tiles
   v.setStats(sections);
 }
 /** ★★★ tweak 3 the SOURCES the viewer hid (this browser's own view, never sent) — radio ids and 'feed'. */
