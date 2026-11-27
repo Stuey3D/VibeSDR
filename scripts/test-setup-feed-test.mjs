@@ -6,6 +6,8 @@
 //     ADD ANYWAY, which adds it.
 //   · TEST beside a source in the list says how it is now.
 //   · Save: config.json holds the three sources the server's own parser accepts.
+//   · ★★ b96-2 "Not at this site": the tick in the add form marks the ADS-B feed ("offsite":true) and its row in the list
+//     ("off-site"); not the HFDL one (the outline is ADS-B only); it saves, and the page signed in again shows it.
 // Fakes on 127.0.0.1 only (never Stuart's receivers). Needs VIBESERVER_BIN and Microsoft Edge; SILENT (--mute-audio).
 import net from 'node:net';
 import fs from 'node:fs';
@@ -114,8 +116,16 @@ try {
   await js(`document.getElementById("feedAdv").open = true; 1`);
   await val('feedFmt', 'beast'); await val('feedDir', 'connect');
   await val('feedAddr', `127.0.0.1:${beastSrv.address().port}`); await val('feedName', 'PiAware');
+  // ★★ b96-2 the tick: "Not at this site"
+  ok(await js(`(() => { const e = document.getElementById("feedOffsite"); return !!e && e.type === "checkbox" && !e.checked && e.offsetParent !== null; })()`) === true, '"Not at this site" is a tick in the add form, unticked');
+  ok(/Not at this site — its aircraft are shown but not counted in this server.s range outline/.test(await js(`document.getElementById("feedOffsite").closest("label").textContent.replace(/\s+/g, " ")`)), '…with its words');
+  await js(`document.getElementById("feedOffsite").checked = true; 1`);
   await click('feedAddGo');
   ok(await until(async () => (await model()).length === 2, 12000), '★ a passing test: added');
+  m = await model();
+  ok(m[1].offsite === true && m[0].offsite === undefined, `★ the ticked ADS-B feed is off-site, the HFDL one found before is not: ${JSON.stringify(m.map((f) => f.offsite))}`);
+  ok(await js(`(() => { const t = [...document.querySelectorAll("#feedsList [data-offsitetag]")]; return t.length === 1 && t[0].dataset.offsitetag === "1" && /off-site/.test(t[0].textContent); })()`) === true, '★ the list tags it "off-site" (that row only)');
+  ok(await js(`document.getElementById("feedOffsite").checked`) === false, '…and the tick is cleared for the next feed');
   ok(/^✓ Connected — [\d,]+ Beast messages in \d s, \d+ aircraft Added — press Save/.test(await text('feedAddMsg')), `…with what it found: ${await text('feedAddMsg')}`);
   await val('feedAddr', `127.0.0.1:${closed}`); await val('feedName', 'Pi off');
   await click('feedAddGo');
@@ -139,6 +149,14 @@ try {
   ok(await until(() => { try { return JSON.parse(JSON.parse(fs.readFileSync(cfgPath, 'utf8')).aircraftFeeds || '[]').length === 3; } catch { return false; } }, 10000), '★ saved: config.json holds the three feeds');
   const saved = JSON.parse(JSON.parse(fs.readFileSync(cfgPath, 'utf8')).aircraftFeeds || '[]');
   ok(saved[0].fmt === 'uberhfdl' && saved[1].fmt === 'beast' && saved[2].port === closed, `…as added: ${saved.map((f) => f.fmt + ':' + f.port).join(', ')}`);
+  ok(saved[1].offsite === true && saved[0].offsite === undefined && saved[2].offsite === undefined, `★★ b96-2 saved: only the PiAware is off-site (${saved.map((f) => f.offsite ? 'off-site' : 'here').join(', ')})`);
+  // …and LOADS: the page opened again reads it back from the server
+  await call('Page.navigate', { url: `http://127.0.0.1:${P}/setup` });
+  await until(async () => await js(`(() => { const c = document.getElementById("signinCard"); return !!c && c.offsetParent !== null; })()`), 10000);
+  await js(`document.getElementById("pass").value = ${JSON.stringify(ADMIN)}; document.getElementById("signinBtn").click(); 1`);
+  ok(await until(async () => (await model()).length === 3, 15000) && (await model())[1].offsite === true
+     && await js(`(() => { const t = [...document.querySelectorAll("#feedsList [data-offsitetag]")]; return t.length === 1 && t[0].dataset.offsitetag === "1"; })()`) === true,
+     '★★ b96-2 loaded: the page signed in again shows the PiAware off-site');
   ok(await up(P) && await until(async () => { try { const j = await (await fetch(`http://127.0.0.1:${P}/vibeserver/aircraft.json`)).json(); return (j.aircraft || []).some((a) => a.icao === '4521BF' && (a.src || []).includes('HFDL')); } catch { return false; } }, 25000),
      '★★ the server reads the UberSDR: its aircraft are on the map as HFDL');
 } catch (e) {
