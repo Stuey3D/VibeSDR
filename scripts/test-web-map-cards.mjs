@@ -109,11 +109,11 @@ async function sizeChecks(p, tag, w, h, o) {
       const m = ${V}.querySelector('.trkMapHost').getBoundingClientRect();
       return { map: { t: m.top, h: m.height }, vh: innerHeight, x: r(${V}.querySelector('.trkTop .exit')), pill: r(document.getElementById('mapShLine')), rate: r(${V}.querySelector('.mDock[data-dock="rate"] .hCard')),
         chat: r(${V}.querySelector('.mDock[data-dock="chat"] .hCard')), zoom: r(${V}.querySelector('.maplibregl-ctrl-top-left, .leaflet-top.leaflet-left')), servers: r(${V}.querySelector('.mDock[data-dock="servers"] .hCard')),
-        rateTxt: ${V}.querySelector('.mDock[data-dock="rate"] .ru')?.textContent || '', rateStatic: ${V}.querySelector('.mDock[data-dock="rate"]').classList.contains('static') }; })())`));
+        rateTxt: ${V}.querySelector('.mDock[data-dock="rate"] .ru')?.textContent || '', rateName: ${V}.querySelector('.mDock[data-dock="rate"] .rn')?.textContent || '', rateStatic: ${V}.querySelector('.mDock[data-dock="rate"]').classList.contains('static') }; })())`));
     ok(L.map.t <= 1 && Math.abs(L.map.h - L.vh) <= 1, `${tag} ${w}: no header — the map runs the full height (${L.map.t}, ${L.map.h} of ${L.vh})`);
     ok(L.x && L.x.l <= 1 && L.x.t <= 1 && L.x.r - L.x.l >= 44, `${tag} ${w}: the X is the top-left corner piece, ≥ 44 px (${JSON.stringify(L.x)})`);
     ok(L.servers && L.x && L.servers.t >= L.x.b + 8, `${tag} ${w}: SERVERS under the X with a gap`);
-    ok(L.rate && L.rate.t <= 1 && L.rate.r >= w - 1 && /\/min$/.test(L.rateTxt), `${tag} ${w}: RATE the top-right corner piece, a rate (${L.rateTxt})`);
+    ok(L.rate && L.rate.t <= 1 && L.rate.r >= w - 1 && /\/min$/.test(L.rateTxt) && (narrow || /VDL2/.test(L.rateName)), `${tag} ${w}: RATE the top-right corner piece — THIS radio's mode first (${L.rateName}${L.rateTxt})`);
     ok(L.chat && L.rate && L.chat.t >= L.rate.b - 1, `${tag} ${w}: CHAT under RATE`);
     const hit = (a, b) => a && b && a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
     ok(!hit(L.pill, L.x) && !hit(L.pill, L.rate) && !hit(L.pill, L.chat) && !hit(L.zoom, L.rate) && !hit(L.zoom, L.chat) && !hit(L.zoom, L.pill),

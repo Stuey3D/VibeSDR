@@ -11582,9 +11582,10 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   mapGainRender();
   { // ★★★ the RATE chip (Stuart 12:52): this radio's live rate, then each feed (aircraft and live / stalled — a feed's
     //     message rate is not in the server's table, so its aircraft stand in)
-    const rr: Array<{ name: string; rate: string; live: boolean; words?: string }> = [];
+    const rr: Array<{ name: string; rate: string; live: boolean; words?: string; mine?: boolean }> = [];
     const m = /^(.*?)\s+([\d.,]+)\s*(?:msg\/)?(\/?s|\/?min)$/.exec(rate.text);
-    if (rate.text) rr.push({ name: m ? m[1] : rate.text, rate: m ? `${m[2]}/${m[3].replace('/', '')}` : '', live: true, words: rate.title });
+    // ★ Stuart 15:40: on a live map the chip is THIS radio's mode — first, and marked as yours; the others follow
+    if (rate.text) rr.push({ name: m ? m[1] : rate.text, rate: m ? `${m[2]}/${m[3].replace('/', '')}` : '', live: true, words: rate.title, mine: true });
     // ★ Stuart 13:00 ("needs to be messages per min, not a simple counter"): a feed's own messages a second, never a count;
     //   a feed without one is left out, and no rate at all hides the chip
     for (const f of avShared?.feeds ?? []) if (typeof f.perSec === 'number') rr.push({ name: f.title, rate: `${fmtRate(f.perSec)}/s`, live: /connected|listening|live|ok/i.test(f.state), words: `${(f.label || 'adsb').toUpperCase()} feed \u00b7 ${f.state || 'unknown'} \u00b7 messages a second` });

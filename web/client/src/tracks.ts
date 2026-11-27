@@ -864,6 +864,8 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="rate"] .rateRow{display:grid;grid-template-columns:10px 1fr auto;align-items:center;gap:8px;padding:7px 10px;font:600 12px/1.2 system-ui,sans-serif}
 .trkCard2[data-card="rate"] .rateRow .dot{width:8px;height:8px;border-radius:50%;background:#5BE36B}
 .trkCard2[data-card="rate"] .rateRow.down .dot{background:#e0a040}
+.trkCard2[data-card="rate"] .rateRow:not(.mine) .dot{background:transparent;border:1.5px solid #5BE36B;box-sizing:border-box}
+.trkCard2[data-card="rate"] .rateRow.down:not(.mine) .dot{border-color:#e0a040}
 .trkCard2[data-card="rate"] .rateRow .v{font:700 12px/1 ui-monospace,Menlo,monospace;color:#ffd34d;font-variant-numeric:tabular-nums}
 .trkCard2[data-card="rate"] .rateRow.down .v{color:#e0a040}
 /* the CHAT chip: a glyph and the unread badge; a single gentle pulse on a new message */
@@ -1846,7 +1848,7 @@ export class TrackView {
    *  in place. Monitoring only: showing and hiding a source stays in MAP → SOURCES. */
   private rateStatic = true;
   private rateRowsHost = false;
-  setRateRows(rows: Array<{ name: string; rate: string; live: boolean; words?: string }>, host = true) {
+  setRateRows(rows: Array<{ name: string; rate: string; live: boolean; words?: string; mine?: boolean }>, host = true) {
     if (host) this.rateRowsHost = true;
     const d = this.root.querySelector('.mDock[data-dock="rate"]') as HTMLElement | null;
     if (!d) return;
@@ -1872,6 +1874,7 @@ export class TrackView {
       let row = body.children[i] as HTMLElement | undefined;
       if (!row) { row = document.createElement('div'); row.className = 'mRow rateRow'; row.setAttribute('role', 'listitem'); row.innerHTML = '<span class="dot"></span><span class="nm"></span><span class="v"></span>'; body.appendChild(row); }
       row.classList.toggle('down', !r.live);
+      row.classList.toggle('mine', !!r.mine);   // ★ filled dot = this radio, outlined = another source (as the LIVE badges)
       const nm = row.querySelector('.nm') as HTMLElement, v = row.querySelector('.v') as HTMLElement;
       if (nm.textContent !== r.name) nm.textContent = r.name;
       const vt = r.live ? r.rate : `${r.rate} \u00b7 stalled`;
