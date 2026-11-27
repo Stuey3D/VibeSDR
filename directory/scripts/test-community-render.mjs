@@ -35,7 +35,7 @@ const listen = (srv) => new Promise((r) => srv.listen(0, '127.0.0.1', () => r(sr
 // ── the receivers (10: the first three are the named ones) ──
 const N = 10;
 const A = answers(N);
-const hits = {}, asked = {}, sizes = {}, front = {}, byRadio = {};
+const hits = {}, asked = {}, sizes = {}, front = {}, byRadio = {}, tableHits = {}, trailHits = [];
 const ports = {};
 const MULTI = new Set(contributors(() => '', N).servers.filter((s) => s.radios).map((s) => s.id));   // ★ the Pi 500 and its copies
 const want = (id) => (MULTI.has(id) ? PI500_RADIOS.length : 1);   // requests per load: one per radio, ONE for a single-radio server
@@ -52,6 +52,18 @@ for (const id of Object.keys(A)) {
       const body = JSON.stringify(answerFor(rebase(ans, Math.floor(Date.now() / 1000)), u.searchParams.get('s')));
       sizes[id] = Math.max(sizes[id] || 0, body.length);
       res.writeHead(200, h); res.end(body);
+    } else if (u.pathname === '/vibeserver/aircraft.json') {
+      // ★ the machine's aircraft table (the route): the XCover has the HFDL aircraft's own datalink from/to; nobody a route for BAW69x
+      tableHits[id] = (tableHits[id] || 0) + 1;
+      const rows = id === 'xcover' ? [{ key: '4CA000', flight: 'BAW696' }, { key: 'A1B2C3', flight: 'UAL917', from: 'EGLL', to: 'KIAD' }] : [{ key: '4CA000', flight: 'BAW696' }];
+      res.writeHead(200, h); res.end(JSON.stringify({ now: Math.floor(Date.now() / 1000), count: rows.length, aircraft: rows }));
+    } else if (/^(?:\/r\/[A-Za-z0-9_-]+)?\/adsb\/trail\/[0-9a-f]{6}$/.test(u.pathname)) {
+      // ★ the ADS-B trail is per RADIO: only the Pi 500's last V4 decodes ADS-B; everyone else knows nothing (empty pts)
+      trailHits.push(id + u.pathname);
+      const mine = id === 'pi500' && u.pathname.startsWith('/r/' + PI500_RADIOS[2] + '/') && u.pathname.endsWith('/4ca000');
+      // 0.3 NM steps west of Cambridge, a 60 NM hole (lost behind the hills — dashed), then on to the position
+      const pts = mine ? [...Array.from({ length: 20 }, (_, i) => [51.2, -3.5 + i * 0.008, 30000 + i * 100]), ...Array.from({ length: 20 }, (_, i) => [51.95, -1.0 + i * 0.05, 35000])] : [];
+      res.writeHead(200, h); res.end(JSON.stringify({ type: 'adsb_trail', hex: u.pathname.slice(-6), pts }));
     } else if (u.pathname === '/vibeserver/community/navtex') {
       res.writeHead(200, h); res.end(JSON.stringify({ f: u.searchParams.get('f'), txt: `ZCZC TEST\nTHE MESSAGE TEXT FROM ${id.toUpperCase()} (${u.searchParams.get('f')})\nNNNN\n` }));
     } else { res.writeHead(404); res.end(); }
@@ -85,6 +97,21 @@ const dirSrv = http.createServer((req, res) => {
   } else { res.writeHead(200, { 'content-type': type, 'content-length': size }); fs.createReadStream(f).pipe(res); }
 });
 const DP = await listen(dirSrv);
+
+// ── a stand-in for adsbdb.com (NO live calls in a test — the real one is blocked below): its own answer shapes ──
+const routeAsks = [];
+const APT = { LHR: ['EGLL', 51.4706, -0.461941, 'London', 'London Heathrow Airport'], FRA: ['EDDF', 50.0333, 8.57046, 'Frankfurt am Main', 'Frankfurt am Main Airport'],
+              MAD: ['LEMD', 40.4719, -3.56264, 'Madrid', 'Adolfo Suárez Madrid–Barajas Airport'], LIS: ['LPPT', 38.7813, -9.13592, 'Lisbon', 'Humberto Delgado Airport'] };
+const apt = (k) => ({ iata_code: k, icao_code: APT[k][0], latitude: APT[k][1], longitude: APT[k][2], municipality: APT[k][3], name: APT[k][4], country_iso_name: 'XX' });
+const ROUTES_MOCK = { BAW696: ['LHR', 'FRA'], BAW698: ['MAD', 'LIS'] };   // BAW697: unknown
+const routeSrv = http.createServer((req, res) => {
+  const cs = decodeURIComponent(req.url.replace(/^\/v0\/callsign\//, ''));
+  routeAsks.push(cs);
+  const r = ROUTES_MOCK[cs];
+  res.writeHead(r ? 200 : 404, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
+  res.end(JSON.stringify(r ? { response: { flightroute: { callsign: cs, airline: { name: 'British Airways' }, origin: apt(r[0]), destination: apt(r[1]) } } } : { response: 'unknown callsign' }));
+});
+const RP = await listen(routeSrv);
 const PAGE = `http://127.0.0.1:${DP}/community-map`;
 
 // ── the browser ──
@@ -106,12 +133,15 @@ const shot = async (name) => { if (!SHOTS) return; const r = await call('Page.ca
 const cm = () => js('window.__cm');
 const resetHits = () => { for (const k of Object.keys(hits)) { hits[k] = 0; asked[k] = []; front[k] = 0; byRadio[k] = {}; } listHits = 0; };
 await call('Runtime.enable'); await call('Page.enable');
+await call('Network.enable'); await call('Network.setBlockedURLs', { urls: ['*adsbdb.com*', '*hexdb.io*'] });   // ★ never the live route source
+const mockRoutes = () => js(`CommunityMap.ROUTE.api = 'http://127.0.0.1:${RP}/v0/callsign/'; true`);
 
 try {
   console.log('── 3 receivers: the page reads them directly; all three groups on together ──');
   await call('Page.navigate', { url: PAGE });
   ok(await until(`window.__cm && window.__cm.up === 3`, 25000), `all three receivers read (${await js('window.__cm && window.__cm.up')})`);
   let c = await cm();
+  await mockRoutes();
   ok(JSON.stringify(c.groups) === JSON.stringify(['aviation', 'maritime', 'misc']), 'AVIATION, MARITIME and MISC all on by default');
   ok(await js(`[...document.querySelectorAll('#groups [data-group]')].map(b => b.getAttribute('aria-pressed')).join()`) === 'true,true,true', 'three independent group toggles');
   ok(JSON.stringify(c.modes) === JSON.stringify(['adsb', 'hfdl', 'ndb', 'ais', 'dsc', 'navtex', 'sondes', 'aprs', 'mesh']), `a chip only for what is shared (${c.modes})`);
@@ -221,6 +251,81 @@ try {
     if (r.found) ok(r.html && !/Drawn as an area/.test(r.html), 'a point over an area opens the POINT\'s card (' + r.id + '), not the area\'s');
     else console.log('   note: no point over an area in this view (fixture) — click priority not exercised');
     await js(`document.querySelector('.maplibregl-popup-close-button')?.click(); true`);
+  }
+
+  console.log('── an aircraft\'s ROUTE in its card and its TRACK while the card is open ──');
+  {
+    // ★ BAW696 (ADS-B, heard by the XCover and the Pi 500): no route in either server's data → adsbdb (mocked) LHR → FRA, on it
+    const ll = (k) => js(`(() => { const i = ITEM_BY_KEY.get('${k}'); return i && [i.lon, i.lat]; })()`);
+    await js(`gl.jumpTo({ center: [-1.6, 51.7], zoom: 7.6 }); true`); await sleep(800);   // ★ past the clusters (zoom 7+)
+    trailHits.length = 0; for (const k of Object.keys(tableHits)) delete tableHits[k];
+    await js(`showCard('a:4CA000', ${JSON.stringify(await ll('a:4CA000'))}); true`);
+    ok(await until(`window.__cmRoute && window.__cmRoute.key === 'a:4CA000'`, 10000), 'the card opens and its route is looked up');
+    let rt = await js('window.__cmRoute');
+    ok(rt.src === 'adsbdb' && /London \(LHR\) → Frankfurt am Main \(FRA\)/.test(rt.line) && !rt.struck, `BAW696: "${rt.line}" from the route source`);
+    ok(/adsbdb\.com/.test(rt.words) && /David Taylor & Jim Mason/.test(rt.words) && /on it/.test(rt.words), `…credited, small, and judged against its position (${rt.words})`);
+    ok(tableHits.xcover === 1 && tableHits.pi500 === 1, `★ the servers' own data asked FIRST — each heard-by receiver's table once (${JSON.stringify(tableHits)})`);
+    ok(routeAsks.filter((x) => x === 'BAW696').length === 1, `one route request (${routeAsks.join(',')})`);
+    ok(await until(`window.__cmTrail && window.__cmTrail.src === 'server'`, 10000), '★★ its TRACK: the ADS-B trail from the radio that decoded it');
+    let tr = await js('window.__cmTrail');
+    ok(tr.n >= 40 && tr.gaps === 1 && tr.solid === 2 && tr.colour === '#ffb000', `…drawn solid, a 60 NM hole DASHED, in ADS-B's colour (${JSON.stringify(tr)})`);
+    ok(trailHits.length <= 4 && trailHits.some((h) => h.startsWith('pi500/r/' + PI500_RADIOS[2] + '/adsb/trail/4ca000')) && trailHits.every((h) => !/vibeserver\.vibesdr/.test(h)),
+       `…asked radio by radio, at most 4, over each server's own tunnel (${trailHits.join(' | ')})`);
+    ok(/Pi 500/.test(await js(`document.querySelector('.maplibregl-popup [data-trk]').textContent`)), `the card says whose trail it is: "${await js(`document.querySelector('.maplibregl-popup [data-trk]').textContent`)}"`);
+    await sleep(1200);
+    const drawn = await js(`({ line: gl.queryRenderedFeatures({ layers: ['cm-trail-line'] }).length, gap: gl.queryRenderedFeatures({ layers: ['cm-trail-gap'] }).length })`);
+    ok(drawn.line > 0 && drawn.gap > 0, `on the GPU map: the solid line and the dash both rendered (${JSON.stringify(drawn)})`);
+    const order = await js(`gl.getStyle().layers.map(l => l.id)`);
+    ok(order.indexOf('cm-trail-line') < order.indexOf('cm-dense-pts') && order.indexOf('cm-trail-gap') < order.indexOf('cm-pts'), '…under the markers');
+    await shot('community-aircraft-route-trail.png');
+    // ★ the click rule still holds with the trail drawn: a click on the aircraft opens the aircraft, not anything under the trail
+    //   (zoomed in so BAW696's glyph is not under its two neighbours' — three aircraft 0.1° apart in the fixture)
+    await js(`(() => { const i = ITEM_BY_KEY.get('a:4CA000'); gl.jumpTo({ center: [i.lon, i.lat], zoom: 10 }); return true; })()`); await sleep(900);
+    const hit = await js(`(() => { const i = ITEM_BY_KEY.get('a:4CA000'); const p = gl.project([i.lon, i.lat]); gl.fire('click', { point: p, lngLat: gl.unproject(p), originalEvent: {} });
+      return document.querySelector('.maplibregl-popup')?.textContent || ''; })()`);
+    ok(/BAW696/.test(hit) && /Route/.test(hit), `a click on the aircraft (its trail drawn under it) opens ITS card (${hit.slice(0, 60)}…)`);
+    await until(`window.__cmTrail && window.__cmTrail.src === 'server'`, 6000);
+    ok(trailHits.length <= 4 && (await js('window.__cmTrail')).src === 'server', `…its trail back at once, not asked again within ${30} s (${trailHits.length} requests in all)`);
+    await js(`gl.jumpTo({ center: [-1.6, 51.7], zoom: 7.6 }); true`);
+    await js(`document.querySelector('.maplibregl-popup-close-button').click(); true`); await sleep(300);
+    ok(await js(`window.__cmTrail === null && gl.getSource('cm-trail').serialize().data.features.length === 0`), '★ the card closed: the track CLEARED');
+
+    // ★ BAW697: adsbdb says "unknown callsign" — said plainly; asked once however many times the card opens
+    await js(`showCard('a:4CA001', ${JSON.stringify(await ll('a:4CA001'))}); true`);
+    ok(await until(`window.__cmRoute && window.__cmRoute.key === 'a:4CA001'`, 8000) && /^unknown$/.test((await js('window.__cmRoute')).line) && /nothing for BAW697/.test((await js('window.__cmRoute')).words),
+       `BAW697: "route unknown", plainly (${(await js('window.__cmRoute')).words})`);
+    await js(`document.querySelector('.maplibregl-popup-close-button').click(); window.__cmRoute = null; showCard('a:4CA001', ${JSON.stringify(await ll('a:4CA001'))}); true`);
+    await until(`window.__cmRoute && window.__cmRoute.key === 'a:4CA001'`, 8000);
+    ok(routeAsks.filter((x) => x === 'BAW697').length === 1, `…opened again: from the session's cache, no second request (${routeAsks.join(',')})`);
+    ok(await js(`(() => { try { return 'BAW697' in JSON.parse(sessionStorage.getItem(CommunityMap.ROUTE.cacheKey)); } catch { return false; } })()`), '…kept in sessionStorage for the visit');
+
+    // ★ BAW698: a route that does not fit where the aircraft is (MAD → LIS, aircraft over Cambridge) — struck through, said why
+    await js(`showCard('a:4CA002', ${JSON.stringify(await ll('a:4CA002'))}); true`);
+    ok(await until(`window.__cmRoute && window.__cmRoute.key === 'a:4CA002'`, 8000), 'BAW698 looked up');
+    rt = await js('window.__cmRoute');
+    ok(rt.struck && /far from it/.test(rt.words), `★ a route the aircraft is nowhere near is struck through and SAID to be doubtful ("${rt.words.slice(0, 90)}…")`);
+
+    // ★ UAL917 (HFDL — no ADS-B trail anywhere): the route from the XCover's OWN datalink data; the track from this page's fixes
+    const now = Math.floor(Date.now() / 1000);
+    await js(`TRACKS.set('a:A1B2C3', [[54.0, -36.0, ${now - 1700}], [54.2, -34.5, ${now - 1500}], [54.5, -30.2, ${now - 240}]]); true`);
+    const n0 = routeAsks.length, th0 = trailHits.length;
+    await js(`gl.jumpTo({ center: [-33, 54.3], zoom: 5 }); showCard('a:A1B2C3', ${JSON.stringify(await ll('a:A1B2C3'))}); true`);
+    ok(await until(`window.__cmRoute && window.__cmRoute.key === 'a:A1B2C3'`, 8000), 'UAL917 looked up');
+    rt = await js('window.__cmRoute');
+    ok(rt.src === 'datalink' && /EGLL → KIAD/.test(rt.line) && /datalink messages, heard by XCover/.test(rt.words) && routeAsks.length === n0,
+       `★ the SERVER's route wins and says where it came from ("${rt.line}" — ${rt.words}); the outside source not asked`);
+    await sleep(400);
+    tr = await js('window.__cmTrail');
+    ok(tr && tr.src === 'client' && tr.n === 3 && tr.gaps === 1 && tr.solid === 1 && tr.colour === '#c084fc' && trailHits.length === th0,
+       `no server trail for a datalink aircraft (none asked): the fixes since the map opened, the 21-min gap dashed, in HFDL's colour (${JSON.stringify(tr)})`);
+    ok(/since you opened the map/.test(await js(`document.querySelector('.maplibregl-popup [data-trk]').textContent`)), '…and the card says that is all it is');
+    await sleep(1200);
+    await shot('community-aircraft-datalink-track.png');
+    await js(`document.querySelector('.maplibregl-popup-close-button').click(); true`); await sleep(200);
+    ok(await js(`window.__cmTrail === null`), '…cleared on close');
+    await js(`document.getElementById('keyBtn').click(); true`); await sleep(200);
+    ok(/dashed across a gap of over five minutes/.test(await js(`document.getElementById('key').textContent`)), 'the KEY explains the track line and its dash');
+    await js(`document.getElementById('keyBtn').click(); true`);
   }
 
   console.log('── the pills\' totals ──');
@@ -342,6 +447,18 @@ try {
   ok(sheet.w === 390 && sheet.top > 200, `RECEIVERS opens as a sheet (${JSON.stringify(sheet)})`);
   await sleep(400);
   await shot('community-receivers-390.png');
+  await js(`document.querySelector('[data-close=rx]').click(); true`);
+  {
+    await mockRoutes();
+    const ll = await js(`(() => { const i = ITEM_BY_KEY.get('a:4CA000'); return i && [i.lon, i.lat]; })()`);
+    await js(`window.__cmRoute = null; gl.jumpTo({ center: [-1.3, 51.4], zoom: 5.6 }); showCard('a:4CA000', ${JSON.stringify(ll)}); true`);
+    ok(await until(`window.__cmRoute && window.__cmRoute.key === 'a:4CA000' && window.__cmTrail && window.__cmTrail.src === 'server'`, 10000), 'a phone: the aircraft card with its route and track');
+    await sleep(1500);
+    ok(await js(`(() => { const r = document.querySelector('.maplibregl-popup').getBoundingClientRect(); return r.left >= 0 && r.right <= 390 && document.documentElement.scrollWidth <= 390; })()`),
+       `…the card fits a phone (${JSON.stringify(await js(`(() => { const r = document.querySelector('.maplibregl-popup').getBoundingClientRect(); return [Math.round(r.left), Math.round(r.right)]; })()`))})`);
+    await shot('community-aircraft-route-390.png');
+    await js(`document.querySelector('.maplibregl-popup-close-button').click(); true`);
+  }
   await call('Emulation.clearDeviceMetricsOverride');
 
   console.log(`── ${N} receivers: layered loading, clustering, the numbers ──`);

@@ -98,6 +98,8 @@
   .row.down .listen { background: transparent; color: var(--dim); border: 1px solid var(--line); }
   .onlyBtn { font-size: 10px; letter-spacing: .08em; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
   .onlyBtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  /* ★ an open card sits OVER the status line (it hid an aircraft card's track line and its receivers on a phone) */
+  .maplibregl-popup { z-index: 6; }
   .maplibregl-popup-content { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 60vh; overflow: auto; }
   .maplibregl-popup-tip { border-top-color: var(--line) !important; border-bottom-color: var(--line) !important; }
   .maplibregl-popup-close-button { color: var(--dim); font-size: 16px; }
@@ -621,13 +623,24 @@ function cardOf(it, now) {
   return `<div class="pc"><div class="t">${esc(it.title)}</div>${rows.join('')}</div>`;
 }
 let popup = null;
+/** ★ A phone: a card near the edge hung off the screen (MapLibre centres it on the point, and an aircraft's grows when its
+ *  route arrives) — the map slides sideways so the whole card is on screen. Called when it opens and when it grows. */
+function cardFit(p) {
+  requestAnimationFrame(() => {
+    const el = p && p.isOpen() && p.getElement();
+    if (!el || !gl) return;
+    const r = el.getBoundingClientRect(), m = gl.getContainer().getBoundingClientRect();
+    const dx = r.left < m.left + 8 ? r.left - m.left - 8 : r.right > m.right - 8 ? r.right - m.right + 8 : 0;
+    if (dx) gl.panBy([dx, 0], { duration: 0 });
+  });
+}
 function showCard(key, ll) {
   const it = ITEM_BY_KEY.get(key);
   if (!it || !gl) return;
   const now = Math.floor(Date.now() / 1000);
   if (popup) popup.remove();
-  popup = new maplibregl.Popup({ maxWidth: '340px' }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
-  if (it.kind === 'aircraft') openAircraft(it, popup);
+  popup = new maplibregl.Popup({ maxWidth: `${Math.min(340, window.innerWidth - 24)}px` }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
+  cardFit(popup);  if (it.kind === 'aircraft') openAircraft(it, popup);
   // ★ a NAVTEX card's message: fetched now, from the receiver that holds its cleanest copy (never in the poll)
   const pre = popup.getElement().querySelector('.nvTx');
   if (pre) fillText(pre, CM.textSource(it));
@@ -736,9 +749,10 @@ function trailDraw() {
 function trailWords() {
   const el = OPEN && OPEN.popup.getElement() && OPEN.popup.getElement().querySelector('[data-trk]');
   if (!el) return;
-  const n = OPEN.pts ? OPEN.pts.length : 0;
+  const n = OPEN.pts ? OPEN.pts.length : 0, was = el.textContent;
   el.textContent = OPEN.src === 'server' ? `drawn: ${OPEN.who}’s ADS-B trail (${n} points)`
     : n > 1 ? `drawn: the track since you opened the map (${n} fixes)` : 'none yet: drawn from the positions that arrive while the map is open';
+  if (el.textContent !== was) cardFit(OPEN.popup);
 }
 /** The open card's track follows the data: the fixes this page sees, or the server's trail with the newest position on its end. */
 function trailRefresh() {
@@ -765,6 +779,7 @@ function openAircraft(it, p) {
     const a = el.querySelector('[data-rt]'), b = el.querySelector('[data-rts]');
     if (a) a.innerHTML = line;
     if (b) b.innerHTML = src;
+    cardFit(p);
     window.__cmRoute = { key: it.key, src: res.r ? res.r.src : '', line: a ? a.textContent : '', words: b ? b.textContent : '', struck: !!(a && a.querySelector('.off')) };
   });
   if (CM.trailUrls(it, SERVERS, location.protocol).length) serverTrail(it).then((t) => {
