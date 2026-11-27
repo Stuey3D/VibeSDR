@@ -28680,6 +28680,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return false;
     }
 
+    /** ★★★ V12 beta96 THE SERVER'S PIN, FOR WHAT BELONGS TO THE WHOLE SERVER (Stuart 11-27: "if a server has a pin on the
+     *  entire server not just specific radios then the pin applies to gallery and maps on the landing screen too"). The
+     *  gallery (and the ship store under it), the shared aircraft table and the AIR & SEA viewer's tickets are the
+     *  MACHINE's — one per server, every radio writes into them, the landing page reads them with no radio. So:
+     *    · a SERVER PIN (the master) gates them exactly as vsPinHttpOk does — master, admin, loopback, the same backoff;
+     *      a request with this radio's own PIN, through this radio's /r/<id>/, is let in too (that listener may use a radio
+     *      here, and inside it the GALLERY key reads the same gallery);
+     *    · a PER-RADIO PIN alone guards THAT RADIO (its sockets, its spectrogram, its DX log — vsPinHttpOk) and NOT these:
+     *      a club that locks one receiver has not locked its server's gallery or map. Before this, a radio's own PIN made
+     *      its process refuse the server-level reads while the door answered them, so the same gallery was open or shut
+     *      depending on which path a page asked through. */
+    bool vsServerPinHttpOk(const std::shared_ptr<net::Socket>& sock, const std::string& reqLine) {
+        { std::lock_guard<std::mutex> lk(g_vsMtx); if (g_vsSecret.empty()) return true; }
+        return vsPinHttpOk(sock, reqLine);
+    }
+
     void handleConnection(std::shared_ptr<net::Socket> sock) {
         vibeThreadName("vibe-conn");
         std::string reqLine, line, wsKey, userAgent, xffHeader, xRealIpHeader;
@@ -31506,7 +31522,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★★ V12 beta96 THE STANDALONE AIR & SEA MAP's VIEWER TICKETS (vibe_airsea_viewers.h, docs/v12/ADSB-FEED.md): join
              *  → {"ok":true,"vt","n","max","limit","left"} or {"ok":false,"full":true,"n","max"} / {"ok":false,"ended":true,
              *  "back"}; leave?vt= ends one. The PIN gates it like aircraft.json; the admin is counted, never refused. */
-            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            if (!vsServerPinHttpOk(sock, reqLine)) { sock->close(); return; }
             const int64_t now = vibeavshare::wallMs();
             std::string body;
             if (reqLine.rfind("GET /vibeserver/airsea/join", 0) == 0) {
@@ -31538,7 +31554,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  a cursor to come back with) — the AIR & SEA viewer's poll. ?vt=<ticket> (vibe_airsea_viewers.h): the standalone
              *  viewer's ticket — refreshed here; an unknown one answers {"viewer":"unknown"} (join again), a used-up turn
              *  {"viewer":"ended"}. gzip where the client takes it (the full table is ~45 KB at 150 aircraft). */
-            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            if (!vsServerPinHttpOk(sock, reqLine)) { sock->close(); return; }
             const int64_t now = vibeavshare::wallMs();
             std::string viewer;
             {
@@ -31723,7 +31739,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sock->close();
             return;
         } else if (reqLine.rfind("GET /vibeserver/gallery", 0) == 0) {
-            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            if (!vsServerPinHttpOk(sock, reqLine)) { sock->close(); return; }
             auto reply = [&](const char* status, const char* ctype, const std::string& body, const std::string& extra = "") {
                 sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: " + ctype
                               + "\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" + extra

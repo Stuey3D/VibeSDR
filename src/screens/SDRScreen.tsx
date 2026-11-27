@@ -239,6 +239,7 @@ import FkaSplash from '../components/FkaSplash';
 import { shortcutsSuppressed, regionCaptured, noteTouchInteraction, useKeyboardMode, noteKeyForFka, useNavFocus, useListNav, NavRing, revealIn, useOverlay, useOverlayOpen, overlayOpenNow } from '../components/PanelNav';
 import { chooserItems, chooserRowOf, chooserStart, chooserActivate, type ChooserRadio } from '../utils/radioChooserNav';
 import { airSeaOffer, type AirSeaOffer } from '../services/airSeaViewer';
+import { galleryOffer, type GalleryOffer } from '../services/galleryOffer';   // ★★★ beta96 the chooser's GALLERY
 import { AircraftDeltaStore } from '../services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★★ beta96 the landing's AIR & SEA MAP (the standalone map)
 import { openAirSeaScreen } from './AirSeaScreen';
 import { useScreenHighlight, screenNavRef } from '../components/ScreenNav';
@@ -15351,7 +15352,26 @@ export default function SDRScreen({ route, navigation }: Props) {
   const openAirSea = useCallback(() => {
     openAirSeaScreen(navigation, { baseUrl, name: door?.name ?? instanceName ?? '', authSuffix: radioAuthSuffix || route.params.authSuffix || '', tab: asOffer?.tab });
   }, [navigation, baseUrl, door?.name, instanceName, radioAuthSuffix, asOffer?.tab]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const pickItems = chooserItems(pickRadios, pickShowPin, !!asOffer);
+  /* ★★★ beta96 THE GALLERY ON THE LANDING (Stuart 11-27: "we could put the servers gallery there too so a user who just
+   *  wants to look at meteor pics doesnt tie up the entire radio") — the web's #splashGallery: the same GalleryOverlay,
+   *  opened from the chooser with NO radio (no session, no slot, no socket — its own HTTP reads). Shown only where the
+   *  gallery has something (galleryOffer: one small read when the chooser opens, never polled). With the server's PIN
+   *  the reads carry the proof the picker asked for; without it they are refused and no key (or count) is drawn. In this
+   *  viewer the MAP keys are not offered — each opens a live map behind a radio. */
+  const [galOffer, setGalOffer] = useState<GalleryOffer | null>(null);
+  const [galleryViewer, setGalleryViewer] = useState(false);
+  useEffect(() => {
+    if (!pickOn) { setGalOffer(null); return; }
+    let live = true;
+    const auth = radioAuthSuffix || route.params.authSuffix || '';
+    void galleryOffer(async (path) => {
+      try { const r = await fetch(withReadAuth(`${baseUrl.replace(/\/+$/, '')}${path}`, auth), { cache: 'no-store' } as any); return r.ok ? await r.json() : null; }
+      catch { return null; }
+    }).then((o) => { if (live) setGalOffer(o.show ? o : null); }).catch(() => {});
+    return () => { live = false; };
+  }, [pickOn, baseUrl]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const openGalleryViewer = useCallback(() => { setGalleryViewer(true); setGalleryOpen(true); }, []);
+  const pickItems = chooserItems(pickRadios, pickShowPin, !!asOffer, !!galOffer);
   const pickScrollRef = useRef<ScrollView | null>(null);
   const pickScrollY = useRef(0);
   const pickRowViews = useRef<Record<string, View | null>>({});
@@ -15381,7 +15401,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   pickNavRef.current = { items: pickItems, radios: pickRadios };
   useOverlay(pickOn, { name: 'radio chooser', onBack: () => navigation.goBack() });
   const pickFocus = useListNav(
-    pickOn,
+    pickOn && !galleryOpen,   // ★★★ beta96 the chooser's GALLERY is over it: the list stops listening until it closes
     pickItems.length,
     (i) => {
       const { items, radios } = pickNavRef.current;
@@ -15389,6 +15409,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       switch (a.do) {
         case 'back': navigation.goBack(); return;
         case 'airsea': openAirSea(); return;   // ★★★ beta96 the standalone AIR & SEA map
+        case 'gallery': openGalleryViewer(); return;   // ★★★ beta96 the landing's GALLERY (no radio)
         case 'choose': {
           const r = door?.radios.find((x) => x.id === a.id);
           if (r) pressPickRadio(r);
@@ -16198,6 +16219,22 @@ export default function SDRScreen({ route, navigation }: Props) {
                   <Text style={sdrMs.radioPickDetail}>{asOffer.line ? `${asOffer.line} · ` : ''}live, no radio used</Text>
                 </Pressable>
                 <NavRing on={pickItems[pickFocus]?.k === 'airsea'} color={navRing.ring} />
+              </View>
+            )}
+            {/* ★★★ beta96 THE GALLERY — under the map, where the gallery has something. It takes no radio. */}
+            {!!galOffer && (
+              <View style={{ marginBottom: 10 }}>
+                <Pressable /* nav-registered: the chooser list (pickItems 'gallery') */
+                  style={[sdrMs.radioPickRow, { marginBottom: 0 }]}
+                  onPress={openGalleryViewer}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open this server's gallery — no radio is used"
+                  testID="pickGallery"
+                >
+                  <Text style={sdrMs.radioPickName}>GALLERY</Text>
+                  <Text style={sdrMs.radioPickDetail}>{galOffer.line ? `${galOffer.line} · ` : ''}no radio used</Text>
+                </Pressable>
+                <NavRing on={pickItems[pickFocus]?.k === 'gallery'} color={navRing.ring} />
               </View>
             )}
             {/* ★ Predicted vs actual band conditions and where the receiver is — the web's block. */}
@@ -17988,11 +18025,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         readAuth={radioAuthSuffix || route.params.authSuffix || ''}
         translateTo={txTarget}
         radioNow={skyRadioFromBase(connectBase)}
-        onClose={() => setGalleryOpen(false)}
-        onNodesMap={IS_APPLE_TV ? null : (title, nodes, rx, refresh) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx, refresh }); }}
-        onNavtexMap={IS_APPLE_TV ? null : () => { setGalleryOpen(false); openShipMap('navtex', '', true); }}
-        onShipMap={IS_APPLE_TV ? null : (focus, key) => { setGalleryOpen(false); openShipMap(focus, key, true); }}
-        onDigiMap={IS_APPLE_TV || IS_TV ? null : (w) => { setGalleryOpen(false); openDigiModesMap({ layer: 'spots', window: w }); }}   /* ★ beta92 the web's SPOTS row */
+        onClose={() => { setGalleryOpen(false); setGalleryViewer(false); }}
+        /* ★★★ beta96 the chooser's GALLERY (galleryViewer, no radio): no MAP keys — each opens a live map behind a radio */
+        onNodesMap={IS_APPLE_TV || galleryViewer ? null : (title, nodes, rx, refresh) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx, refresh }); }}
+        onNavtexMap={IS_APPLE_TV || galleryViewer ? null : () => { setGalleryOpen(false); openShipMap('navtex', '', true); }}
+        onShipMap={IS_APPLE_TV || galleryViewer ? null : (focus, key) => { setGalleryOpen(false); openShipMap(focus, key, true); }}
+        onDigiMap={IS_APPLE_TV || IS_TV || galleryViewer ? null : (w) => { setGalleryOpen(false); openDigiModesMap({ layer: 'spots', window: w }); }}   /* ★ beta92 the web's SPOTS row */
       />
       <RecordingsOverlay
         visible={recordingsOpen}

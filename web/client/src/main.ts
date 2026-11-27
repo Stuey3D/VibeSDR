@@ -71,6 +71,7 @@ import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '..
 import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
 import { airSeaOffer, AirSeaViewer, type AirSeaOffer } from '../../../src/services/airSeaViewer';
+import { galleryOffer, type GalleryOffer } from '../../../src/services/galleryOffer';   // ★★★ beta96 the landing's GALLERY key
 import { AircraftDeltaStore } from '../../../src/services/aircraftDelta';   // ★★ beta96 the shared aircraft table as deltas   // ★★ beta96 the standalone AIR & SEA map: its gate, tickets, deltas
 import { vorMapItems, vorMapRows, vorMapStatus, VORMAP_LEGEND, VORMAP_ROW_CSS } from './vormap';   // ★ V12 the VOR / ILS map
 import { storedLoader, storedSondeItems, storedVorItems, storedSondeRows, storedVorRows, storedStatus, STORED_SONDE_LEGEND, STORED_VOR_LEGEND,
@@ -113,7 +114,7 @@ import { nrStrength, nrPercent, nrSliderFromReport, ReportedControl, vfoBDspOf, 
 import { balanceGains, clampBalance } from '../../../src/services/dualMix';   // ★★★ the A ⟷ B balance: the two-server rule, one copy
 import { FrameClock, renderEvery } from './wfPacing';
 import { tickStep, fmtTick } from './freqScale';
-import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
+import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth, readAuthHeld,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
@@ -7328,8 +7329,118 @@ window.addEventListener('pagehide', () => {
 });
 (window as any).openAirSeaViewer = openAirSeaViewer;
 (window as any).__vibeOpenAirSeaViewer = openAirSeaViewer;
-async function showSplashRadios(): Promise<void> {
+
+/* ★★★ V12 beta96 THE GALLERY ON THE LANDING (Stuart 11-27: "along with the air/sea maps on the landing screen we could put
+ *  the servers gallery there too so a user who just wants to look at meteor pics doesnt tie up the entire radio").
+ *  GALLERY beside AIR & SEA MAP opens the SAME gallery panel (renderGallery, openGalleryItem, the sky plot, the pages) over
+ *  the landing with NO radio: no session, no listener slot, no spectrum or audio socket — only the gallery's own HTTP
+ *  reads. CLOSE (or back / Escape / a click away) returns to the landing. What needs a radio or a live map is not drawn
+ *  there (galStandalone: the MAP keys and the NAVTEX / SPOTS / DSC map rows).
+ *  ★★ NO VIEWER TICKET (the AIR & SEA "Map viewers" pool is for the map's 3-second aircraft poll): the gallery polls
+ *     nothing — a page is one read of the server's cached index (vibe_gallery.h, at most 100 rows), a picture one static
+ *     file, and the connection ceiling bounds a crowd. docs/v12/LANDING-GALLERY.md. */
+let galStandalone = false;
+/** The key only where there is something (AGENTS.md): one small read when the landing draws (galleryOffer), never polled. */
+async function splashGalleryOffer(): Promise<void> {
+  const b = document.getElementById('splashGallery') as HTMLButtonElement | null;
+  if (!b) return;
+  let o: GalleryOffer | null = null;
+  try { o = await galleryOffer(asGet); } catch { o = null; }
+  b.hidden = !o?.show;
+  b.textContent = o?.line ? `GALLERY · ${o.line}` : 'GALLERY';
+  b.onclick = () => openGalleryViewer();
+}
+function openGalleryViewer(): void {
+  initGalleryPanel();
+  galStandalone = true;
+  document.body.classList.add('galViewer');
+  $('splash').classList.add('hidden');
+  for (const id of PANELS) document.getElementById(id)?.classList.remove('open');
+  $('galleryPanel').classList.add('open');
+  galPage = 1; galScroll = 0; galOpenedRow = -1;
+  void renderGallery(1);
+  ($('galClose') as HTMLButtonElement).focus({ preventScroll: true });
+}
+/** ★ Back to the landing — from CLOSE, and from closePanels (back, Escape, a click away all land there). */
+function closeGalleryViewer(): void {
+  if (!galStandalone) return;
+  galStandalone = false;
+  document.body.classList.remove('galViewer');
+  $('galleryPanel').classList.remove('open');
+  galTrReset(); galSkySeq++; galTlmSeq++;
+  $('splash').classList.remove('hidden');
+  (document.getElementById('splashGallery') as HTMLButtonElement | null)?.focus({ preventScroll: true });
+}
+(window as any).__vibeOpenGalleryViewer = openGalleryViewer;
+
+/* ★★★ V12 beta96 A SERVER PIN COVERS THE LANDING'S VIEWERS TOO (Stuart 11-27: "if a server has a pin on the entire server
+ *  not just specific radios then the pin applies to gallery and maps on the landing screen too"). The server refuses the
+ *  gallery, the aircraft table, the ship store and the viewer tickets without it (vsServerPinHttpOk); here, on a server
+ *  whose /vibeserver/auth says a PIN is required (the master — a radio's own PIN guards only that radio), the two keys are
+ *  drawn with NO count (nothing is read until the PIN is given) and a press asks for the PIN first (#splashViewPin). The
+ *  proof is kept for this page's reads (setReadAuth), as connecting keeps it; a wrong PIN says the door's one sentence. */
+let landingAuthReq: Promise<boolean> | null = null;
+async function landingPinLocked(): Promise<boolean> {
+  if (readAuthHeld()) return false;
+  const pp = pinProof();   // ★ the directory's proof for this page (its server PIN path), when it brought one
+  if (pp) { setReadAuth(pp); return false; }
+  landingAuthReq ??= fetchAuthChallenge(P('')).then((c) => c.required).catch(() => false);
+  return landingAuthReq;
+}
+let viewPinThen: (() => Promise<void> | void) | null = null;
+function askViewerPin(then: () => Promise<void> | void): void {
+  viewPinThen = then;
+  const f = document.getElementById('splashViewPin') as HTMLFormElement | null;
+  if (!f) return;
+  f.hidden = false;
+  $('splashViewPinMsg').textContent = '';
+  if (!f.dataset.wired) {
+    f.dataset.wired = '1';
+    f.addEventListener('submit', (ev) => { ev.preventDefault(); void tryViewerPin(); });
+  }
+  ($('splashViewPinInput') as HTMLInputElement).focus();
+}
+async function tryViewerPin(): Promise<void> {
+  const input = $('splashViewPinInput') as HTMLInputElement, go = $('splashViewPinGo') as HTMLButtonElement, msg = $('splashViewPinMsg');
+  const pin = input.value.trim();
+  input.value = '';   // ★ off the screen before anything else happens (the door's PIN box rule)
+  if (!pin) return;
+  go.disabled = true; msg.textContent = 'Checking…';
+  let q = '';
+  try { q = (await resolveAuth(P(''), pin)).query; }
+  catch (e) { go.disabled = false; msg.textContent = e instanceof Error && /locked out/.test(e.message) ? e.message : 'That PIN does not open anything here.'; return; }
+  // ★ one read the server PIN gates; 401 = not this server's PIN (a private gallery's 403 still means the PIN fitted)
+  let status = 0;
+  try {
+    const u = P('/vibeserver/gallery.json?offset=0&limit=1');
+    status = (await fetch(`${u}${u.includes('?') ? '&' : '?'}${q}`, { cache: 'no-store' })).status;
+  } catch { status = 0; }
+  go.disabled = false;
+  if (!q || status === 401 || status === 0 || status === 429) {
+    msg.textContent = status === 429 ? 'Too many tries — wait a little, then try again.' : status === 0 ? 'Could not reach the server.' : 'That PIN does not open anything here.';
+    return;
+  }
+  setReadAuth(q);
+  msg.textContent = '';
+  ($('splashViewPin') as HTMLFormElement).hidden = true;
+  await Promise.all([splashAirSeaOffer(), splashGalleryOffer()]);
+  const then = viewPinThen; viewPinThen = null;
+  if (then) await then();
+}
+/** The landing's two viewer keys: behind a server PIN with none given, both plain and asking; otherwise each by its offer. */
+async function splashViewersOffer(): Promise<void> {
+  if (await landingPinLocked()) {
+    const as = document.getElementById('splashAirSea') as HTMLButtonElement | null;
+    const gb = document.getElementById('splashGallery') as HTMLButtonElement | null;
+    if (as) { as.hidden = false; as.textContent = 'AIR & SEA MAP'; as.onclick = () => askViewerPin(() => openAirSeaViewer()); }
+    if (gb) { gb.hidden = false; gb.textContent = 'GALLERY'; gb.onclick = () => askViewerPin(() => openGalleryViewer()); }
+    return;
+  }
   void splashAirSeaOffer();
+  void splashGalleryOffer();
+}
+async function showSplashRadios(): Promise<void> {
+  void splashViewersOffer();
   const host = document.getElementById('splashRadios');
   if (!host) return;
   let dir: any;
@@ -14066,6 +14177,7 @@ function closePanels(reopenChat = true) {
   if (ae instanceof HTMLElement && PANELS.some((id) => document.getElementById(id)?.contains(ae))) ae.blur();
   for (const id of PANELS) $(id).classList.remove('open');
   if (!keepSharePick) endSharePick(reopenChat);
+  if (galStandalone) closeGalleryViewer();   // ★★★ beta96 the landing's gallery: every way out goes back to the landing
 }
 
 /* ★★★ PICK A STATION FOR THE CHAT (Stuart, 2026-10-01): "[Bookmark] opens up a slightly modified version of the
@@ -20977,7 +21089,8 @@ async function renderGallery(page = galPage) {
       }
       row.appendChild(f); row.appendChild(n);
       // ★ A position the item is about (a DSC distress call): MAP, on this server's own map.
-      if (typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
+      // ★★★ beta96 the landing's gallery (galStandalone): no MAP keys — each opens a live map behind a radio
+      if (!galStandalone && typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
         mb.title = 'Show the position this call sent';
         // ★ V12 2026-11-02: on the SHIPPING MAP, DSC first, on this call (beside the ships and the NAVTEX layers)
@@ -20985,7 +21098,7 @@ async function renderGallery(page = galPage) {
         row.appendChild(mb);
       }
       // ★ V12 2026-11-02 an AIS day (its log or its card): MAP opens the SHIPPING MAP with the ships first
-      if (it.k === 'ais') {
+      if (it.k === 'ais' && !galStandalone) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
         mb.title = 'The ships, on the AVIATION & MARITIME map'; mb.setAttribute('aria-label', 'Show the ships on the aviation and maritime map');
         mb.onclick = (e) => { e.stopPropagation(); void navMapOpen('ships'); };
@@ -20994,7 +21107,7 @@ async function renderGallery(page = galPage) {
       }
       // ★★ V12 beta90 a digital-spots / CW / PSK / RTTY summary card: MAP opens the DIGI MODES MAP — every station kept, by
       //    window (the card's own hour is inside 24 H; an older card's day is inside 7 D / 30 D)
-      if (it.k === 'ft8' || it.k === 'cw' || it.k === 'psk' || it.k === 'rttyskim') {
+      if (!galStandalone && (it.k === 'ft8' || it.k === 'cw' || it.k === 'psk' || it.k === 'rttyskim')) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
         const w = digiGalItemWindow(it.t, Date.now() / 1000);
         mb.title = 'The stations heard, on the DIGI MODES MAP'; mb.setAttribute('aria-label', `Show the stations heard on the digi modes map: ${it.title}`);
@@ -21003,7 +21116,7 @@ async function renderGallery(page = galPage) {
         row.appendChild(mb);
       }
       // ★ V12 a day's "stations received" (LoRa / MeshCore nodes with positions): MAP, on the ISM map
-      if (ismIsNodeCard(it)) {
+      if (ismIsNodeCard(it) && !galStandalone) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
         mb.title = 'Every node this card holds, on the map'; mb.setAttribute('aria-label', `Show the nodes heard on the map: ${it.title}`);
         mb.onclick = (e) => { e.stopPropagation(); void ismGalMapOpen(it); };
@@ -21017,7 +21130,7 @@ async function renderGallery(page = galPage) {
     });
     /* ★★ V12 2026-11-01 THE NAVTEX MAP in the gallery (Nick's 24/7 background NAVTEX): on the first page of ALL or
      *  NAVTEX, a standing row "NAVTEX · stations received" with MAP — every station in the gallery's NAVTEX messages. */
-    if ((galKind === '' || galKind === 'navtex') && galPage === 1) {
+    if ((galKind === '' || galKind === 'navtex') && galPage === 1 && !galStandalone) {
       void navFetch('all').then((nr) => {
         if (!nr || !nr.stations.length || host.querySelector('.galNav')) return;
         const row = document.createElement('div'); row.className = 'sres galNav'; row.tabIndex = 0; row.setAttribute('role', 'button');
@@ -21042,7 +21155,7 @@ async function renderGallery(page = galPage) {
     /* ★★★ V12 beta90 THE DIGI MODES MAP in the gallery — a standing row on the first page of ALL and of the spots kinds:
      *  every station this server's station store holds (background decoding and every listener), MAP opens it. Drawn
      *  only when the store answers with a station (an older server, or one that heard nothing: no row). */
-    if ((galKind === '' || galKind === 'ft8' || galKind === 'cw' || galKind === 'psk' || galKind === 'rttyskim') && galPage === 1) {
+    if ((galKind === '' || galKind === 'ft8' || galKind === 'cw' || galKind === 'psk' || galKind === 'rttyskim') && galPage === 1 && !galStandalone) {
       const kindAt = galKind;
       void fetch(galUrl(digiGalQuery(Date.now() / 1000) + radioQuery(galRadio)), { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : null)).then((j) => {
@@ -21071,7 +21184,7 @@ async function renderGallery(page = galPage) {
     /* ★★ beta88 THE DSC CALLS WITH A POSITION (Stuart, 2026-11-20: "i have no map button to view them from the gallery on
      *  the pi500") — NAVTEX's standing row's shape, on the first page of ALL or DSC: MAP opens the SHIPPING MAP, DSC first.
      *  Drawn only when the gallery holds a pinned DSC call (dscGalSummary; no dead control). */
-    if ((galKind === '' || galKind === 'dsc') && galPage === 1) {
+    if ((galKind === '' || galKind === 'dsc') && galPage === 1 && !galStandalone) {
       const kindAt = galKind;
       void dscGalFetch().then((pins) => {
         const words = dscGalSummary(pins);
@@ -21330,11 +21443,27 @@ async function translateSetup(o: { kind: string; title: string; body: string; bt
     } finally { busy = false; }
   };
 }
-function initGallery() {
-  $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) { galPage = 1; void renderGallery(1); } };
-  $('galClose').onclick = () => $('galleryPanel').classList.remove('open');
+/** ★★★ beta96 the gallery panel's own keys — once, whoever opens it first: the receiver's GALLERY key (initGallery, at
+ *  connect) or the landing's (openGalleryViewer, before any radio). */
+let galPanelInited = false;
+function initGalleryPanel() {
+  if (galPanelInited) return;
+  galPanelInited = true;
+  $('galClose').onclick = () => { if (galStandalone) closeGalleryViewer(); else $('galleryPanel').classList.remove('open'); };
   $('galBack').onclick = () => { galTrReset(); galleryBack(); };
   $('galOutline').onclick = () => galOutlineToggle();   // ★ V12 METEOR LRPT's MAP OUTLINE switch
+  for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      galKind = b.dataset.kind || '';
+      for (const o of Array.from($('galFilter').querySelectorAll('[data-kind]'))) o.classList.toggle('on', o === b);
+      galPage = 1; galScroll = 0; galOpenedRow = -1;   // ★ a new filter starts at its newest page
+      void renderGallery(1);
+    };
+  }
+}
+function initGallery() {
+  $('galleryBtn').onclick = () => { togglePanel('galleryPanel'); if (isPanelOpen('galleryPanel')) { galPage = 1; void renderGallery(1); } };
+  initGalleryPanel();
   $('decChan').onclick = () => lrptChanNext();   // ★★★ beta96 METEOR: the picture's channel (AUTO, composite, CH 1, 2, 4 …)
   $('decOutline').onclick = () => { setOutlineOn(!outlineOn()); decOutlinePaint(); };   // ★ …and the live picture's (the same choice)
   // ★★★ beta96 METEOR in the SATELLITE box: a click on the picture flips WHOLE PASS / FOLLOW (lrptGaps.ts)
@@ -21347,14 +21476,6 @@ function initGallery() {
     decOutlinePaint();
   });
   decOutlineWatch();
-  for (const b of Array.from($('galFilter').querySelectorAll('[data-kind]')) as HTMLButtonElement[]) {
-    b.onclick = () => {
-      galKind = b.dataset.kind || '';
-      for (const o of Array.from($('galFilter').querySelectorAll('[data-kind]'))) o.classList.toggle('on', o === b);
-      galPage = 1; galScroll = 0; galOpenedRow = -1;   // ★ a new filter starts at its newest page
-      void renderGallery(1);
-    };
-  }
 }
 
 /* ── ★★★ V12 THE DX LOG (2026-11-04 — docs/v12/DX-SCANNER.md) ─────────────────────────────────────────────────────────

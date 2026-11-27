@@ -7,9 +7,10 @@
  * stopped listening) and had no key handling of its own (so nobody started). SDRScreen now runs a `useListNav` over
  * the items this builds, in the order they are drawn:
  *
- *   ‹ SERVERS · each radio · [AIR & SEA MAP] · [PIN field, UNLOCK] · [admin field, UNLOCK]
+ *   ‹ SERVERS · each radio · [AIR & SEA MAP] · [GALLERY] · [PIN field, UNLOCK] · [admin field, UNLOCK]
  *
- * ★★★ beta96 AIR & SEA MAP (the standalone map, AirSeaScreen) sits under the radios where the server has something to show.
+ * ★★★ beta96 AIR & SEA MAP (the standalone map, AirSeaScreen) sits under the radios where the server has something to show,
+ * and GALLERY (the server's gallery, no radio used — Stuart 11-27) under it where the gallery has something.
  *
  * ★ Blocked radios are FOCUSABLE — "listed and greyed, never hidden". Enter on one moves the highlight to the box that
  *   would open it (a PIN-locked radio → the PIN field; an occupied one → the admin field), so a member holding the
@@ -30,6 +31,7 @@ export type ChooserItem =
   | { k: 'back' }
   | { k: 'radio'; id: string }
   | { k: 'airsea' }
+  | { k: 'gallery' }
   | { k: 'pin' } | { k: 'pinGo' }
   | { k: 'admin' } | { k: 'adminGo' };
 
@@ -37,16 +39,18 @@ export type ChooserAct =
   | { do: 'back' }
   | { do: 'choose'; id: string }
   | { do: 'airsea' }
+  | { do: 'gallery' }
   | { do: 'focus'; index: number }
   | { do: 'field'; which: 'pin' | 'admin' }
   | { do: 'unlock'; which: 'pin' | 'admin' }
   | { do: 'none' };
 
 /** The focus order, top to bottom as drawn. `showPin` = the PIN row is on screen; `airSea` = the AIR & SEA MAP key is. */
-export function chooserItems(radios: readonly ChooserRadio[], showPin: boolean, airSea = false): ChooserItem[] {
+export function chooserItems(radios: readonly ChooserRadio[], showPin: boolean, airSea = false, gallery = false): ChooserItem[] {
   const out: ChooserItem[] = [{ k: 'back' }];
   for (const r of radios) out.push({ k: 'radio', id: r.id });
   if (airSea) out.push({ k: 'airsea' });
+  if (gallery) out.push({ k: 'gallery' });
   if (showPin) out.push({ k: 'pin' }, { k: 'pinGo' });
   out.push({ k: 'admin' }, { k: 'adminGo' });
   return out;
@@ -89,6 +93,7 @@ export function chooserActivate(items: readonly ChooserItem[], radios: readonly 
   switch (it.k) {
     case 'back': return { do: 'back' };
     case 'airsea': return { do: 'airsea' };
+    case 'gallery': return { do: 'gallery' };
     case 'pin': return { do: 'field', which: 'pin' };
     case 'admin': return { do: 'field', which: 'admin' };
     case 'pinGo': return { do: 'unlock', which: 'pin' };

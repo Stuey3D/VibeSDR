@@ -247,6 +247,9 @@ input, textarea, [contenteditable],
   border: 1px solid var(--amber); border-radius: 6px; font-size: 12px; letter-spacing: 3px;
   background: rgba(255,184,51,0.09); }
 #splash form { display: flex; flex-direction: column; gap: 10px; width: 320px; margin-top: 6px; }
+/* ★★★ beta96 the landing viewers' PIN ask (a row, not the form column; [hidden] has to win over display:flex) */
+#splash form#splashViewPin { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; width: auto; max-width: 340px; }
+#splash form#splashViewPin[hidden] { display: none; }
 #splash label { font-size: 11px; color: var(--text-dim); letter-spacing: 1px; }
 #hostRow, #pinRow { display: flex; flex-direction: column; gap: 6px; }
 #hostRow[hidden], #pinRow[hidden] { display: none; }
@@ -4308,7 +4311,23 @@ select.btn { padding: 6px 8px; }
   <div id="splashRadios" style="margin-top:14px"></div>
   <!-- ★★ V12 beta96 THE STANDALONE AIR & SEA MAP (openAirSeaViewer in main.ts): the server's aircraft and ships, live, with no
        radio taken — drawn only when the server has something to show (aircraft or an aircraft feed). -->
-  <button type="button" class="btn" id="splashAirSea" hidden style="margin-top:10px" title="This server's aircraft and ships, live — no radio is used">AIR &amp; SEA MAP</button>
+  <!-- ★★★ V12 beta96 THE LANDING'S VIEWERS (Stuart 11-27: "we could put the servers gallery there too so a user who just
+       wants to look at meteor pics doesnt tie up the entire radio"): the AIR & SEA MAP and the GALLERY, side by side, each
+       drawn only when the server has something to show (splashAirSeaOffer / splashGalleryOffer). Neither takes a radio, a
+       listener slot or a socket. ★★ Behind a SERVER PIN (Stuart: "the pin applies to gallery and maps on the landing screen
+       too") both keys are drawn with NO count and ask for the PIN first (#splashViewPin) — the server refuses the reads
+       without it (vsServerPinHttpOk). -->
+  <div id="splashViewers" style="margin-top:10px;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px;justify-content:center">
+    <button type="button" class="btn" id="splashAirSea" hidden title="This server's aircraft and ships, live — no radio is used">AIR &amp; SEA MAP</button>
+    <button type="button" class="btn" id="splashGallery" hidden title="What this server's decoders have kept — pictures, messages, logs; no radio is used">GALLERY</button>
+  </div>
+  <form id="splashViewPin" hidden autocomplete="off">
+    <span id="splashViewPinWhy" class="sub" style="flex-basis:100%;text-align:center;font-size:11px;opacity:.8">This server has a PIN — type it to open.</span>
+    <input id="splashViewPinInput" type="password" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="PIN" aria-label="This server's PIN"
+           style="flex:none;width:110px;height:32px;padding:0 8px;box-sizing:border-box;font-size:16px;line-height:32px;text-align:center">
+    <button type="submit" id="splashViewPinGo" style="flex:none;height:32px;padding:0 14px;box-sizing:border-box;font-size:12px;line-height:30px">OPEN</button>
+    <span id="splashViewPinMsg" class="sub" style="flex-basis:100%;text-align:center;font-size:11px;opacity:.75"></span>
+  </form>
   <!-- ★★ THE OWNER'S PERMANENT MESSAGE. Deliberately BELOW the radio list: it is standing context
        (rules, why the waterfall slows, a donation link), not something to read before choosing.
        The transient maintenance notice is a different mechanism and appears over the receiver. -->

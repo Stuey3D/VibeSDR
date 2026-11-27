@@ -119,3 +119,5 @@ export function setReadAuth(query: string): void { readSuffix = query || ''; }
 export function readAuthUrl(url: string): string {
   return withReadAuth(url, readSuffix, adminTicketQuery());
 }
+/** ★★★ beta96 the landing's viewers (GALLERY, AIR & SEA MAP): does this page already hold a PIN proof for its plain reads? */
+export function readAuthHeld(): boolean { return !!readSuffix; }

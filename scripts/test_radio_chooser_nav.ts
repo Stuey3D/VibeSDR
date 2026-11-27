@@ -37,4 +37,11 @@ ok(chooserActivate(withMap, radios, 6).do === 'airsea', 'Enter on AIR & SEA MAP 
 ok(chooserRowOf(withMap, 6) === 6 && chooserRowOf(withMap, 7) === chooserRowOf(withMap, 8), 'a row of its own; the PIN row still pairs');
 ok(chooserStart(withMap, radios) === 4, 'the highlight still starts on the first free radio, not the map');
 ok(JSON.stringify(chooserActivate(withMap, radios, 2)) === '{"do":"focus","index":7}', 'a PIN-locked radio still moves to the PIN field (past the map key)');
+// ★★★ beta96 the landing's GALLERY (Stuart 11-27): under AIR & SEA MAP, before the PIN row; Enter opens it; alone too
+const withGal = chooserItems(radios, true, true, true);
+ok(withGal.map((x) => x.k).join(',') === 'back,radio,radio,radio,radio,radio,airsea,gallery,pin,pinGo,admin,adminGo', 'GALLERY: under AIR & SEA MAP, before the PIN row');
+ok(chooserActivate(withGal, radios, 7).do === 'gallery', 'Enter on GALLERY opens the gallery');
+ok(chooserRowOf(withGal, 7) === 7 && chooserRowOf(withGal, 8) === chooserRowOf(withGal, 9), 'a row of its own; the PIN row still pairs');
+ok(JSON.stringify(chooserActivate(withGal, radios, 2)) === '{"do":"focus","index":8}', 'a PIN-locked radio still moves to the PIN field (past both keys)');
+ok(chooserItems(radios, false, false, true).map((x) => x.k).join(',') === 'back,radio,radio,radio,radio,radio,gallery,admin,adminGo', 'GALLERY without the map');
 process.exit(fails ? 1 : 0);
