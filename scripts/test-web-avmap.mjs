@@ -360,7 +360,7 @@ try {
           const underZoom = !!z && a.left < z.right - 1 && a.right > z.left + 1 && a.top < z.bottom - 1 && a.bottom > z.top + 1;   // ★ a real overlap (the zoom keys sit top-RIGHT since the map cards)
           return a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && !underZoom ? 'in'
             : 'out ' + Math.round(a.left) + '–' + Math.round(a.right) + ' × ' + Math.round(a.top) + '–' + Math.round(a.bottom) + ' of ' + Math.round(b.left) + '–' + Math.round(b.right) + ' × ' + Math.round(b.top) + (underZoom ? ' (under the zoom keys)' : ''); })()`);
-        ok(fit === 'in', `the ${pick} aircraft's card is inside the 390 px map (${fit})`);
+        ok(fit === 'in', `the ${pick} aircraft's card is inside the 390 px map (${fit})${fit === 'in' ? '' : ' obstacles ' + await ev(`JSON.stringify((window.__vibeTrkView?.chromeRects?.() || []).map(o => [Math.round(o.l), Math.round(o.t), Math.round(o.r), Math.round(o.b), o.w ?? 1]))`)}`);
       }
       console.log('   screenshot', await shot('adsb-mode-phone'));
       await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });

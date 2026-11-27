@@ -93,20 +93,21 @@ async function radioDatalink(p, url) {
     for (let i = 0; i < max; i++) { const h = await hl(); if (h && pred(h)) return h; await p.key(PAT[i % PAT.length]); await sleep(120); }
     return null;
   }
-  for (const [w, h, mobile, tag] of [[390, 844, true, 'portrait'], [956, 376, true, 'landscape'], [1440, 900, false, 'desktop']]) {
+  for (const [w, h, mobile, tag] of [[390, 844, true, 'portrait'], [956, 376, true, 'landscape'], [1440, 900, false, 'desktop']].filter(([, , , t]) => !process.env.PAD_ONLY || process.env.PAD_ONLY.split(',').includes(t))) {
     await p.size(w, h, mobile); await sleep(1500);
     // the LIST drawer open (BACK with nothing else up shuts the top card — the LIST counts)
     await p.ev(`(() => { const b = ${V}?.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(500);
     // ① the walk stays on the map, never the page under it, never a map item; it reaches chips, the LIST and the zoom keys
-    const seen = { chips: new Set(), list: false, zoom: false, out: 0, item: 0 };
+    const seen = { chips: new Set(), list: false, zoom: false, out: 0, item: 0, row: 0 };
     for (let i = 0; i < 80; i++) {
       await p.key(PAT[i % PAT.length]); await sleep(110);
       const x = await hl(); if (!x) continue;
       if (!x.inView) seen.out++; if (x.mapItem) seen.item++;
-      if (x.cbtn) seen.chips.add(x.cbtn); if (x.box && x.card === 'list') seen.list = true; if (x.zoomKey) seen.zoom = true;
+      if (x.cbtn) seen.chips.add(x.cbtn); if (x.box && x.card === 'list') seen.list = true; if (x.zoomKey) seen.zoom = true; if (x.row) seen.row++;
     }
     ok(!seen.out && !seen.item, `${tag}: the highlight stays on the map's chrome (outside ${seen.out}, map items ${seen.item})`);
     ok(seen.chips.size >= 3, `${tag}: it reaches the chips (${[...seen.chips].join(' ')})`);
+    ok(!seen.row, `${tag}: the LIST is ONE stop — the walk never visits a row (${seen.row}), so what lies past it is one press away`);
     // ② ENTER on a chip opens its card and the highlight goes INSIDE it; BACK shuts it and puts the highlight on the chip
     const chip = await walkTo((x) => ['layers', 'map', 'stats', 'servers', 'help'].includes(x.cbtn));
     if (chip) {
@@ -124,20 +125,35 @@ async function radioDatalink(p, url) {
       const shutIn = await p.ev(`${BTN(chip.cbtn)}?.getAttribute('aria-expanded')`);
       ok(shutIn !== 'true' && after?.cbtn === chip.cbtn, `${tag}: back shuts it, the highlight back on its chip (${shutIn} ${JSON.stringify(after)} ${await p.ev(`JSON.stringify({ sel: window.__vibeTrkView?.sel, pop: !!document.querySelector('.maplibregl-popup, .vsadsb-pop-dark') })`)})`);
     } else ok(false, `${tag}: no card chip reached`);
-    // ③ the LIST: one stop — enter takes its rows, back gives them up
+    // ③ ★★★ STUART'S LIST FLOW (the R36S's): one stop → ENTER into the rows → ENTER on a row opens ITS CARD with the
+    //    highlight inside it → BACK closes the card, the highlight on the SAME row → DOWN row by row, always in view →
+    //    BACK leaves the list, the highlight on the LIST stop
+    const CARD = `[...document.querySelectorAll('.trkView:not([hidden]) .maplibregl-popup, .trkView:not([hidden]) .leaflet-popup, #ndbCard:not([hidden])')].filter((c) => c.getClientRects().length)`;
     const box = await walkTo((x) => x.box && x.card === 'list');
     if (box) {
+      const pre = process.env.PAD_DIAG ? await p.ev(`JSON.stringify({ act: (document.activeElement?.className || document.activeElement?.tagName || '').slice(0, 50), hl: (document.querySelector('.gpFocus')?.className || '').slice(0, 50), scope: [...document.querySelectorAll('[data-navscope]')].map((e) => e.className.slice(0, 30)), grab: (document.querySelector('.gpGrab')?.className || '').slice(0, 30) })`) : '';
       await p.key('Enter'); await sleep(400);
+      if (pre) console.log('   ROWS', await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="list"] .trkRow')].slice(0, 2).map((e) => { const cs = getComputedStyle(e), b = e.getBoundingClientRect(); return { pe: cs.pointerEvents, vis: cs.visibility, w: b.width, h: b.height, skip: !!e.closest('[data-gpskip]'), inert: !!e.closest('[inert]') }; }))`));
+      if (pre) console.log('   PRE', pre, 'POST', await p.ev(`JSON.stringify({ act: (document.activeElement?.className || '').slice(0, 50), hl: (document.querySelector('.gpFocus')?.className || '').slice(0, 50), grab: (document.querySelector('.gpGrab')?.className || '').slice(0, 30), grabs: [...document.querySelectorAll('.gpGrab')].map((g) => g.dataset.card + ':' + Math.round(g.getBoundingClientRect().width) + ':' + g.querySelectorAll('.trkRow').length), open: [...document.querySelectorAll('[aria-expanded="true"]')].map((b) => b.dataset.cbtn) })`));
       const r = await hl();
-      ok(!!r && r.row, `${tag}: enter on the LIST puts the highlight on a row (${JSON.stringify(r)})`);
+      const rowKey = await p.ev(`document.querySelector('.gpFocus')?.dataset.key || ''`);
+      ok(!!r && r.row, `${tag}: ① ENTER on the LIST puts the highlight on a row (${rowKey || await p.ev(`JSON.stringify({ hl: (document.querySelector('.gpFocus')?.className || '-').slice(0, 60), rows: ${V}.querySelectorAll('.trkRow').length, pos: ${V}.querySelectorAll('.trkRow:not(.nopos)').length, pane: ${V}.querySelector('.trkList')?.dataset.pane, tab: window.__vibeAirSea?.()?.tab })`)})`);
       if (r?.row) {
-        await p.ev(`(() => { window.__padRowHit = ''; ${V}.querySelector('.trkCard2[data-card="list"] .rows').addEventListener('click', (e) => { window.__padRowHit = e.target.closest('.trkRow')?.dataset.key || 'x'; }, { once: true }); return 1; })()`);
-        await p.key('Enter'); await sleep(800);
-        ok(!!(await p.ev(`window.__padRowHit`)), `${tag}: enter on a row presses it, as a tap would (${await p.ev('window.__padRowHit')})`);
+        await p.key('Enter'); await sleep(1300);
+        const inCard = await p.ev(`(() => { const c = ${CARD}; const e = document.querySelector('.gpFocus'); return JSON.stringify({ cards: c.length, inCard: !!e && c.some((x) => x.contains(e)), sel: !!${V}.querySelector('.trkRow.sel') }); })()`);
+        ok(/"cards":[1-9]/.test(inCard) && /"inCard":true/.test(inCard), `${tag}: ② ENTER on a row opens its card and the highlight moves INTO it (${inCard})`);
+        await p.key('Escape'); await sleep(700);
+        const back1 = await p.ev(`JSON.stringify({ cards: ${CARD}.length, key: document.querySelector('.gpFocus')?.dataset.key || '', row: !!document.querySelector('.gpFocus.trkRow') })`);
+        ok(/"cards":0/.test(back1) && back1.includes(`"key":"${rowKey}"`), `${tag}: ③ BACK closes the card, the highlight back on the SAME row (${back1})`);
       }
-      await p.key('Escape'); await sleep(300); await p.key('Escape'); await sleep(300);
+      // ★ down through a long list: the highlighted row is always in view, with a margin
+      const inView = [];
+      for (let i = 0; i < 14; i++) { await p.key('ArrowDown'); await sleep(140);
+        inView.push(await p.ev(`(() => { const e = document.querySelector('.gpFocus'); if (!e || !e.classList.contains('trkRow')) return 'x'; let s = e.parentElement; while (s && s !== document.body && !(s.scrollHeight > s.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(s).overflowY))) s = s.parentElement; const a = e.getBoundingClientRect(), b = (s && s !== document.body ? s : document.documentElement).getBoundingClientRect(); return a.top >= b.top - 1 && a.bottom <= b.bottom + 1 ? 'in' : 'out ' + Math.round(a.top) + '–' + Math.round(a.bottom) + ' of ' + Math.round(b.top) + '–' + Math.round(b.bottom); })()`)); }
+      ok(inView.every((x) => x === 'in' || x === 'x') && inView.includes('in'), `${tag}: ④ DOWN row by row keeps the highlighted row in view (${inView.join(' ')})`);
+      await p.key('Escape'); await sleep(400);
       const b = await hl();
-      ok(!!b && b.box && b.card === 'list', `${tag}: back (once from the header, once more) gives the LIST up, the highlight on it (${JSON.stringify(b)})`);
+      ok(!!b && b.box && b.card === 'list', `${tag}: ⑤ BACK leaves the list in ONE press, the highlight on the LIST stop (${JSON.stringify(b)})`);
     } else ok(false, `${tag}: the LIST never reached`);
     ok(seen.zoom || !!(await walkTo((x) => x.zoomKey, 40)), `${tag}: the zoom keys are stops`);
     // ④ ZOOM = the MAP's zoom; TUNE on a locked dial = the ask pulse, never a tune

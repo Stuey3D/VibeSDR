@@ -514,7 +514,10 @@ function onKey(e: KeyboardEvent) {
   const focused = t instanceof HTMLElement && t !== document.body && t.matches(FOCUSABLE) ? t : null;
   // ★ A control holding real focus (reached with Tab) keeps the browser's own Enter — Tab users and screen readers
   //   press what they are on, and a control with its own Enter handler (the frequency box) is never pressed twice.
-  if (a === 'enter' && focused) return;
+  // ★ …unless the highlight stands somewhere else (a card shut by BACK hands real focus back to its chip while the ring
+  //   moved on): Enter presses what is HIGHLIGHTED (the map's LIST stop, found by test-web-map-pad)
+  if (a === 'enter' && focused && (!current || current === focused || !current.isConnected || !visible(current))) return;
+  if (a === 'enter' && focused && focused !== current) focused.blur();
   // ★ Arrows start from it, so Tab and the arrows share one place on the page…
   if (keyDir(a) && focused && focused !== current && visible(focused)) highlight(focused);
   e.preventDefault();

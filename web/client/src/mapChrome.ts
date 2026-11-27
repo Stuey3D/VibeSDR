@@ -12,7 +12,7 @@
  * ★ Everything shown came off the air or a server: every string is escaped where it meets HTML (esc).
  */
 import { wireIslandSide } from './islandSide';
-import { padHighlight, activePadLayout } from './gamepad';
+import { padHighlight, activePadLayout, driveInput, pushBack } from './gamepad';
 import { padFace } from './padFace';
 import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
@@ -23,7 +23,7 @@ import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
 import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { CARD_IDS, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId, shortMap } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
-import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT } from './healthTuck';
+import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT, edgeTabsLive } from './healthTuck';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
 
@@ -266,6 +266,8 @@ const CSS = `
  *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
  *  and a chip's own lit / open state only */
 .trkView{--chip-rim:rgba(120,200,120,.45)}
+/* ★ the pad / keyboard highlight scrolls a row or a card's control into view WITH a margin (gamepad.ts scrollIntoView nearest) */
+.trkView .trkRow,.trkView .trkCard2 .cb button,.trkView .trkCard2 .cb [role="button"],.trkView .trkCard2 .cb [tabindex="0"]{scroll-margin-block:12px}
 .trkCard2[data-card="help"] .hPad:empty{display:none}
 .trkCard2[data-card="help"] .hPad{padding:2px 0 8px;margin-bottom:8px;border-bottom:1px solid #22303d;font-size:12px}
 .trkCard2[data-card="help"] .hPadH{font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;color:#8fa2b5;margin:2px 0 6px}
@@ -1260,7 +1262,7 @@ export class TrackView {
   /** ★ short landscape: health / time's cards drop below the row like the cards — one transient out at a time, them included */
   private shortEdgeTuck(except: HTMLElement | null = null) {
     if (!this.root.hasAttribute('data-short')) return;
-    for (const o of Array.from(this.root.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked)')) as HTMLElement[]) if (o !== except) (o.querySelector('.hTuck') as HTMLElement | null)?.click();
+    for (const o of Array.from(this.root.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked):not([hidden])')) as HTMLElement[]) if (o !== except && o.getClientRects().length) (o.querySelector('.hTuck') as HTMLElement | null)?.click();
   }
   /** Shut every transient card (LIST stays). True when one was shut. */
   closeTransients(): boolean {
@@ -1353,7 +1355,7 @@ export class TrackView {
     const L = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
     if (L && !L.hasAttribute('data-navbox')) {
       L.setAttribute('data-navbox', ''); L.dataset.navstart = '.trkRow:not(.nopos)';   // ★ the first row that has a place on the map
-      const rows = L.querySelector('.rows') as HTMLElement | null; if (rows) rows.dataset.navlist = '.trkList .hd';
+      // ★ no data-navlist: BACK from a row leaves the list in one press (Stuart's flow — not its header bar first)
     }
   }
   /** ★★ the pad's / keyboard's ZOOM on a map: the map's own zoom keys (as a tap — AUTO steps aside the same way) */
@@ -1420,7 +1422,7 @@ export class TrackView {
           cover: /viewport-fit=cover/.test((document.querySelector('meta[name="viewport"]') as HTMLMetaElement | null)?.content || ''),
           geomErr: this.geomErr, ua: navigator.userAgent.slice(0, 120) };
       } catch { /* diagnostics only */ }
-      if (short !== this.shortNow) { this.shortNow = short; this.root.toggleAttribute('data-short', short); this.layoutSig = ''; }
+      if (short !== this.shortNow) { this.shortNow = short; this.root.toggleAttribute('data-short', short); this.layoutSig = ''; edgeTabsLive(this.root); }
       const one = short || oneSide(this.mapHost.clientHeight || 0, stackH);
       this.oneSideNow = one;
       const md = this.root.querySelector('.mDock[data-dock="map"]') as HTMLElement | null;
@@ -1792,7 +1794,16 @@ export class TrackView {
     if (!on) {   // resume: the newest order, the held rows in
       this.lastRows = '';
       const html = this.rowsPending;
-      if (html) { this.rowsEl.innerHTML = html; this.lastRows = html; if (this.sel) this.markSel(this.sel); }
+      if (html) {
+        // ★ the controller's highlight rides over the redraw (by key, else the row in its place) — scrolling a highlighted
+        //   row into view at the top resumes the list and redraws it (test-web-map-pad, landscape)
+        const hi = this.rowsEl.querySelector('.trkRow.gpFocus') as HTMLElement | null, hk = hi?.dataset.key || '';
+        const hIdx = hi ? Array.from(this.rowsEl.querySelectorAll('.trkRow')).indexOf(hi) : -1;
+        this.rowsEl.innerHTML = html; this.lastRows = html; if (this.sel) this.markSel(this.sel);
+        if (hk) { const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
+          const r2 = (this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(hk) : hk.replace(/["\\]/g, '')}"]`) as HTMLElement | null) ?? (this.rowsEl.querySelectorAll('.trkRow')[Math.max(0, hIdx)] as HTMLElement | undefined) ?? null;
+          if (r2) padRehighlight(r2); }
+      }
       this.rowsCountWas = -1; requestAnimationFrame(() => this.cardsLayout());
     }
     this.pauseShow(0);
@@ -2641,6 +2652,8 @@ export class TrackView {
     if (!row) return;
     const k = row.dataset.focus || row.dataset.key || '';
     try { this.onRow?.(row.dataset.key || ''); } catch (e) { console.error('[tracks] onRow', e); }
+    // ★★★ the controller's LIST flow (Stuart, the R36S's): ENTER on a row → the item's card, the highlight INTO it
+    if (driveInput() && (e as MouseEvent).detail === 0) this.padIntoCard(row.dataset.key || '');
     if (row.dataset.nofocus) { this.markSel(row.dataset.key || ''); return; }
     const hex = this.acKeys.get(k);
     // ★ beta96 a row chosen is where the person wants the map (mapAutoFit's own rule): the auto fit pauses, or its next
@@ -2648,6 +2661,34 @@ export class TrackView {
     if (!hex || !this.acLayer) this.selPause();
     if (!(hex && this.acLayer ? this.acLayer.focus(hex) : this.layer?.focus(k))) this.note('Not on the map — no position heard yet.', 2500);
     this.markSel(k);
+  }
+  /* ★★★ STUART'S LIST FLOW WITH A CONTROLLER (the R36S handheld UI's): the LIST is one stop → ENTER into the rows →
+   *  UP / DOWN row by row (scrolled into view) → ENTER on a row selects it (centred), OPENS ITS CARD and the highlight moves
+   *  INTO the card (its first control) → BACK closes that card and puts the highlight back on the SAME row → BACK again
+   *  leaves the list, the highlight on the LIST stop. The card (a map popup, NDB's card) is made reachable (data-gpkeep),
+   *  the pad's scope (data-navscope, raised) and a layer of BACK (gamepad.ts pushBack) for as long as it is open. */
+  private padCardOff: (() => void) | null = null;
+  private padIntoCard(key: string) {
+    this.padCardOff?.(); this.padCardOff = null;
+    let tries = 0;
+    const find = () => {
+      const card = Array.from(this.root.querySelectorAll('.maplibregl-popup, .leaflet-popup, #ndbCard:not([hidden])')).pop() as HTMLElement | undefined;
+      if (!card || !card.getClientRects().length) { if (++tries < 12) setTimeout(find, 100); return; }
+      card.setAttribute('data-gpkeep', ''); card.setAttribute('data-navscope', ''); card.style.zIndex = '801';
+      const ctl = Array.from(card.querySelectorAll('button, a[href], [role="button"], [tabindex="0"]')) as HTMLElement[];
+      const first = ctl.find((b) => !b.matches('.maplibregl-popup-close-button, .leaflet-popup-close-button, .x') && b.getClientRects().length) ?? ctl.find((b) => b.getClientRects().length) ?? null;
+      const rowOf = () => (this.rowsEl.querySelector(`.trkRow[data-key="${(globalThis as any).CSS?.escape ? (globalThis as any).CSS.escape(key) : key.replace(/["\\]/g, '')}"]`) as HTMLElement | null);
+      const off = pushBack(() => {
+        this.padCardOff = null;
+        card.removeAttribute('data-navscope'); card.style.zIndex = '';
+        if (card.isConnected && card.getClientRects().length) (card.querySelector('.maplibregl-popup-close-button, .leaflet-popup-close-button, .x') as HTMLElement | null)?.click();
+        const r = rowOf(); r?.scrollIntoView({ block: 'nearest' });
+        return r ?? undefined;
+      });
+      this.padCardOff = () => { off(); card.removeAttribute('data-navscope'); card.style.zIndex = ''; };
+      padHighlight(first);
+    };
+    setTimeout(find, 120);
   }
   /** ★ beta96 the selection changed (an icon tapped, a row pressed) — the AIR & SEA map filters its MESSAGES by it. */
   onSel: ((key: string) => void) | null = null;
@@ -3220,7 +3261,9 @@ export class TrackView {
       const top = this.rowsEl.scrollTop;
       /* ★ beta96 (ADS-B's live list, redrawn every second) the controller's highlight and the keyboard's focus are on an
        *  element about to be replaced: found again by its key */
-      const hiKey = (this.rowsEl.querySelector('.trkRow.gpFocus') as HTMLElement | null)?.dataset.key || '';
+      const hiRow = this.rowsEl.querySelector('.trkRow.gpFocus') as HTMLElement | null;
+      const hiKey = hiRow?.dataset.key || '';
+      const hiIdx = hiRow ? Array.from(this.rowsEl.querySelectorAll('.trkRow')).indexOf(hiRow) : -1;
       const act = document.activeElement as HTMLElement | null;
       const focusKey = act && this.rowsEl.contains(act) ? (act.closest('.trkRow') as HTMLElement | null)?.dataset.key || '' : '';
       this.rowsEl.innerHTML = rowsHtml; this.lastRows = rowsHtml;
@@ -3231,7 +3274,9 @@ export class TrackView {
       if (this.sel) this.markSel(this.sel);
       const cssEsc = (globalThis as any).CSS?.escape as ((v: string) => string) | undefined;
       const byKey = (k: string) => this.rowsEl.querySelector(`.trkRow[data-key="${cssEsc ? cssEsc(k) : k.replace(/["\\]/g, '')}"]`) as HTMLElement | null;
-      if (hiKey) { const r2 = byKey(hiKey); if (r2) padRehighlight(r2); }
+      // ★ its row gone from the list (a message scrolled past the cap, a key that moved): the row now in its PLACE — the
+      //   controller's highlight never falls out of the LIST it is in (test-web-map-pad, the MESSAGES tab)
+      if (hiKey) { const r2 = byKey(hiKey) ?? (this.rowsEl.querySelectorAll('.trkRow')[Math.max(0, hiIdx)] as HTMLElement | undefined) ?? null; if (r2) padRehighlight(r2); }
       if (focusKey) byKey(focusKey)?.focus({ preventScroll: true });
     }
     if (this.statEl.textContent !== status) this.statEl.textContent = status;

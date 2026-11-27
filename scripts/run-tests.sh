@@ -2217,7 +2217,13 @@ if [ -x "$OUT/test-vdl2" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   #     --mute-audio: the cards at three widths, the shared tuner on a map, the drawer's live waterfall (and the server's
   #     display rate in a map mode), short landscape + safe areas + Android, and no old mode panel inside the LIST.
   #     (The old ADS-B list's width test went with that list in the 11-27 map purge.)
-  for t in test-web-map-cards test-web-map-shared test-web-map-waterfall test-web-map-landscape test-web-map-leaks; do
+  #     map-cards runs in SHARDS (none past ~10 min): the front door at 390, at 820 + 1440, then one radio with no feed.
+  #     test-web-map-pad: the controller / keyboard on the maps (Stuart's scheme), portrait, landscape and desktop.
+  for shard in "A:390" "A:820,1440" "B:"; do
+    MAPCARDS_PART="${shard%%:*}" MAPCARDS_SIZES="${shard#*:}" VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_CLIP="$OUT/adsb-syn-clip.u8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/test-web-map-cards.mjs; rc=$?
+    if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  done
+  for t in test-web-map-shared test-web-map-waterfall test-web-map-landscape test-web-map-leaks test-web-map-pad; do
     VIBE_VDL2_CLIP="$OUT/vdl2-clip.cu8" VIBE_ADSB_CLIP="$OUT/adsb-syn-clip.u8" VIBE_ADSB_SYN_CLIP="$OUT/adsb-syn-clip.u8" node scripts/$t.mjs; rc=$?
     if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   done

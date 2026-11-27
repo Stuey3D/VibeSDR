@@ -1463,13 +1463,14 @@ async function sendAdminUnlock(pw: string) {
     // brute-force lockout rather than needing its own.
     const ch = await fetchAuthChallenge(httpBase(currentHost));
     const nonce = ch.nonce;
-    if (!nonce) { alert('This server did not offer a challenge.'); return; }
+    // ★ never a native alert(): it blocks the page (a map's gain-lock card hung the map-cards e2e for 25 min) and suspends audio in Safari
+    if (!nonce) { showPill('This server did not offer a challenge.', 4000); return; }
     adminPassword = pw;   // the admin page signs its own requests with it
     // ★ Bookmark writes are admin-gated on the server, so they need the same credential.
     setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(currentHost), adminPassword));
     spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
   } catch (e) {
-    alert(`Could not reach the server to unlock: ${(e as Error).message}`);
+    showPill(`Could not reach the server to unlock: ${(e as Error).message}`, 4000);
   }
 }
 
@@ -2283,7 +2284,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (pwRow) pwRow.hidden = ok;    // wrong password: leave it open to try again
       if (!ok) setStatus('error', 'admin');
       refreshAdminRow();
-      if (!ok) { alert('That admin password was not accepted.'); revealServerUnlock(); }
+      // ★ an in-page message, never alert(): a native dialog blocks the page — the map's gain-lock card hung under it
+      //   (map-cards e2e, 25 min) — and suspends audio in Safari; the card says "Not accepted" itself
+      if (!ok) { showPill('That admin password was not accepted.', 4000); revealServerUnlock(); }
     },
     // ★★ THE SERVER'S WORD ON ITS OWN DSP. These controls are GLOBAL and sticky —
     // whatever the last listener left is what the radio is doing — so rendering our

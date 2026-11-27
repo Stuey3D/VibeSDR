@@ -1806,6 +1806,10 @@
         p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.addTo(gl);
         setTimeout(() => cardClear(p), 60);
+        // ★ again once the camera settles (a row's choice glides to the aircraft — the clear at 60 ms was mid-glide) and once
+        //   its pictures have loaded (the card grows): the avmap e2e at 390 px found it under the zoom keys after both
+        gl.once('moveend', () => setTimeout(() => cardClear(p), 30));
+        setTimeout(() => cardClear(p), 900);
       } else {
         const p = LL.popup({ className: 'vsadsb-pop-' + th, maxWidth: 280, offset: [0, -10], autoPan: false, closeOnClick: false })
           .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);

@@ -27,7 +27,10 @@ const kids = [];
 const dirs = [];
 process.on('exit', () => { for (const k of kids) { try { k.kill('SIGKILL'); } catch {} } for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
 const watchdog = setTimeout(() => { console.log('   FAIL watchdog: 1800 s'); process.exit(1); }, 1_800_000);   // ★ the suite grew with the map work (widths, rows, stacks, pulses)
-const SIZES = [[390, 844, true], [820, 1180, true], [1440, 900, false]];
+// ★★ SHARDS (11-27: no run past ~10 min): MAPCARDS_SIZES=390 (or 820,1440) runs only those widths; MAPCARDS_PART=A|B one
+//    section (A: the front door — DATALINK and the VIEWER; B: one radio, no feed). Unset: everything, as before.
+const SIZES = [[390, 844, true], [820, 1180, true], [1440, 900, false]].filter(([w]) => !process.env.MAPCARDS_SIZES || process.env.MAPCARDS_SIZES.split(',').map(Number).includes(w));
+const PART = (process.env.MAPCARDS_PART || 'AB').toUpperCase();
 
 // ── a synthetic dump1090 (Beast): the Riddle's worked examples, re-sent with a rising counter (as test-server-aircraft-feeds) ──
 const FRAMES = ['8D4840D6202CC371C32CE0576098', '8D40621D58C382D690C8AC2863A7', '8D40621D58C386435CC412692AD6'];
@@ -66,7 +69,11 @@ async function browser(dir) {
   ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); }
     if (m.method === 'Runtime.exceptionThrown') errs.push(m.params.exceptionDetails?.exception?.description?.slice(0, 300) || 'exception'); };
   await new Promise((r) => { ws.onopen = r; });
-  const send = (method, params = {}) => new Promise((res) => { const i = ++id; pend.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
+  // ★ never wait for ever (the 25-min 0 % CPU hang, 11-27): a call the browser never answers fails the step after 30 s,
+  //   named, instead of stalling the whole suite on the watchdog
+  const send = (method, params = {}) => new Promise((res) => { const i = ++id;
+    const t = setTimeout(() => { if (pend.has(i)) { pend.delete(i); console.log(`   FAIL no answer in 30 s: ${method} ${String(params.expression || '').slice(0, 120).replace(/\s+/g, ' ')}`); fail++; res({ result: {} }); } }, 30_000);
+    pend.set(i, (m) => { clearTimeout(t); res(m); }); ws.send(JSON.stringify({ id: i, method, params })); });
   const ev = async (x) => { const r = await send('Runtime.evaluate', { expression: x, awaitPromise: true, returnByValue: true }); return r.result?.result?.value ?? r.result?.exceptionDetails?.exception?.description; };
   const until = async (x, ms) => { for (let i = 0; i < ms / 250; i++) { if (await ev(x)) return true; await sleep(250); } return false; };
   const size = async (w, h, mobile) => { await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile }); await sleep(1200); };
@@ -146,7 +153,7 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(pz.bar && pz.chat && pz.run > 0, `${tag} ${w}: a locked press pulses the shared-tuner bar and CHAT (${JSON.stringify(pz)})`);
     await sleep(4000);
     ok(await p.ev(`document.getAnimations().filter(a => a.playState === 'running' && /^trkAsk/.test(a.animationName || '')).length`) === 0, `${tag} ${w}: …and 4 s later the pulse has stopped (no trkAsk animation running)`);
-    ok(/^Shared VFO(: .+| · \w+ ·) \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
+    ok(/^(Shared VFO(: .+| · \w+ ·)|Ask|Free|Locked|ASK IN CHAT) ·? ?\d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max", or shorter where the room between ✕ and RATE is short — never cut through the count (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
     ok(await p.ev(`(() => { const d = ${V}.querySelector('.mDock[data-dock="rate"]'); return d.hidden || /\/s$|\/min$/.test(d.querySelector('.ru').textContent); })()`), `${tag} ${w}: RATE shows a rate or nothing — never a count`);
@@ -248,7 +255,7 @@ async function shutAll(p) { await p.ev(`[...(${V}?.querySelectorAll('[data-cbtn]
 
 console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md) ──');
 // ═════ A. a front door: a Beast feed + a VDL2 radio ═════
-{
+if (PART.includes('A')) {
   const dir = mkdir('door');
   const fport = await freePort();
   const feed = feeder(fport);
@@ -444,7 +451,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);
       await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(600);
       const fl = JSON.parse(await p.ev(`JSON.stringify((() => { const h = ${V}.querySelector('.trkMapHost').getBoundingClientRect(), c = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); return { l: Math.round(c.left - h.left), b: Math.round(h.bottom - c.bottom), lb: parseFloat(${V}.style.getPropertyValue('--trk-list-bottom')) || 0 }; })())`));
-      ok(fl.l === 0 && Math.abs(fl.b - fl.lb) <= 1, `${ww}×${hh}: the LIST drawer flush — left ${fl.l} px, bottom ${fl.b} px (the attribution's line ${fl.lb})`);
+      ok(fl.l <= 0 && fl.l >= -2 && Math.abs(fl.b - fl.lb) <= 2, `${ww}×${hh}: the LIST drawer flush — left ${fl.l} px, bottom ${fl.b} px (the attribution's line ${fl.lb}; its border sits just past the edge, Stuart 19:xx)`);
     }
     // ── whole rows follow the viewport (Stuart 12:38 / 12:40): 3 at 375×667, 3–4 at 390×844, ≥ 8 at 1440×900, never a part row ──
     const rowsAt = async (ww, hh, mob) => { await p.size(ww, hh, mob); await sleep(800); await shutTransients(p);
@@ -655,7 +662,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
   finally { p.close(); feed.kill(); }
 }
 // ═════ B. one radio, no feed: ONE source → no SOURCES ═════
-{
+if (PART.includes('B')) {
   const dir = mkdir('one');
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Map cards single', locator: 'IO92nh', adminPass: 'map-cards-admin', gainLock: true,
     radios: [{ serial: 'mc-one', label: 'Only radio', enabled: true, configured: true, users: 1, gainLock: true, gainLimits: '130M-140M:300' }] }));   // ★ the owner's gain lock: the 🔒 flow below
