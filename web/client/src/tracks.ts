@@ -891,11 +891,10 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkCard2[data-card="list"] .lSwap:focus-visible{outline:2px solid #ffd34d;outline-offset:-3px}
 .trkCards .trkCard2[data-card="list"][hidden] .lSwap,.trkCards .trkCard2[data-card="list"].stepAside .lSwap{display:none}
 /* the collapsed chip's own ≋ tab (opens the drawer on the waterfall); room above the chip for it */
-.trkView.wfOn .mChipsBL{padding-top:22px;margin-top:-22px}
 .mDock[data-dock="list"] .hCard{position:relative}
-.mDock[data-dock="list"] .lSwapC{all:unset;box-sizing:border-box;position:absolute;top:-19px;left:14px;width:40px;height:19px;display:flex;align-items:flex-start;justify-content:center;padding-top:3px;
-  background:var(--ctl-card-bg,#16202a);border:1px solid var(--bar-border,#2c3a4a);border-bottom:0;border-radius:9px 9px 0 0;color:var(--hc,#5BE36B);cursor:pointer}
-.mDock[data-dock="list"] .lSwapC svg{width:13px;height:13px}
+.mDock[data-dock="list"] .lSwapC{all:unset;box-sizing:border-box;display:flex;align-items:center;justify-content:center;align-self:stretch;flex:none;
+  padding:0 8px 0 9px;margin-left:2px;border-left:1px solid rgba(255,255,255,.16);color:var(--hc,#5BE36B);cursor:pointer}
+.mDock[data-dock="list"] .lSwapC svg{width:17px;height:17px}
 .mDock[data-dock="list"] .lSwapC[hidden],.mDock[data-dock="list"].open .lSwapC,.mDock[data-dock="list"].tucked .lSwapC{display:none}
 .mDock[data-dock="list"] .lSwapC:focus-visible{outline:2px solid #ffd34d;outline-offset:-3px}
 /* the waterfall's view: the list's rows and its bar's tools give way to the picture and the dial in words */
@@ -1026,6 +1025,12 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 /* ★ every layout: the collapsed LIST chip is an edge piece — its frame on the physical bottom, its content above the inset
  *  (Stuart's portrait check: ☰ n ⌃ sat in the 34 px gesture inset) */
 .trkView .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{padding-bottom:var(--sai-b)!important}
+/* ★ Stuart 19:xx: the collapsed LIST chip is ONE rounded rectangle with a full border — [☰ n ⌃ | ≋] (the waterfall beside
+ *  the list, live maps over a radio only). Portrait / desktop: it sits its border + corner radius PAST the left and bottom
+ *  edges (the joined-to-the-edge look, as the cards); short landscape: all four corners inside the safe rectangle. */
+.trkView .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{flex-direction:row!important;align-items:stretch!important;border:1.5px solid var(--hc,#5BE36B)!important;border-radius:12px!important;
+  margin:0 0 -13.5px -13.5px;padding-left:calc(6px + 13.5px + var(--sai-l))!important;padding-bottom:calc(13.5px + var(--sai-b))!important}
+.trkView[data-short] .mChipsBL .mDock[data-dock="list"]:not(.open) .hCard{margin:0;padding-left:6px!important;padding-bottom:0!important}
 .trkView .mChipsScale{right:var(--sai-r);margin-bottom:var(--sai-b)}
 .trkView .mHelp{right:calc(10px + var(--sai-r));margin-bottom:var(--sai-b)}
 .trkMapHost .maplibregl-ctrl-top-left,.trkMapHost .leaflet-top.leaflet-left{right:var(--sai-r)!important}
