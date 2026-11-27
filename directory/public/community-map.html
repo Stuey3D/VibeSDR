@@ -274,13 +274,54 @@ function iconOf(it) {
 }
 
 /* ══ DRAWING (GPU) ══ */
+/* ★★★ b97 ZOOMED OUT STAYS RICH (Stuart's recording 11-27: "the map starts looking barren as you zoom out" — one step out and
+ *  ~150 MeshCore squares round London became a few plain yellow discs, aircraft and mesh merged into one):
+ *   1. EACH DENSE LAYER CLUSTERS ON ITS OWN (a source per kind: mesh with mesh, aircraft with aircraft) — the same rule as
+ *      before (clusterMaxZoom 5, radius 22), so one busy layer never swallows the others;
+ *   2. A CLUSTER IS DRAWN AS ITS CONTENTS: the glyph of its commonest sub-kind (the MeshCore repeater square, the aircraft in
+ *      its mode's colour, the ship …) with a small count badge — never a blank disc;
+ *   3. ABOVE THE CLUSTERS, COLLISION THINS: individual icons use MapLibre's own placement (no overlap, the newest / the
+ *      repeaters first — symbol-sort-key) up to zoom 9, everything drawn from zoom 9 — the map thins, it never collapses;
+ *   4. LABELS FADE FIRST: names from zoom 7 (fading in to 8), always optional — a label never hides an icon. */
 const DENSE = new Set(['aircraft', 'ship', 'aprs', 'mesh']);
+const DENSE_KINDS = ['mesh', 'aprs', 'ship', 'aircraft'];   // ★ drawn bottom → top (aircraft placed first in a collision)
+const ALL_ZOOM = 9;                                         // ★ from here every icon is drawn, overlaps and all
+const MESH_TYPES = ['repeater', 'room server', 'companion', 'sensor'];
+/** Each dense kind's cluster glyphs: sub-kind id → the glyph (its own image), the commonest one draws the cluster. */
+function clusterGlyphs(kind) {
+  if (kind === 'aircraft') return ['adsb', 'acars', 'vdl2', 'hfdl'].map((m) => [m, acGlyph('jet', CM.MODE[m].colour, 30)]);
+  if (kind === 'mesh') return MESH_TYPES.map((t) => [t, KIT ? KIT.ismMapIcon({ kind: 'meshcore', ntype: t, seen: 0 }).html : `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2" fill="${CM.MODE.mesh.colour}" stroke="#000"/></svg>`]);
+  if (kind === 'ship') return [['ship', KIT ? KIT.aisIcon({ kind: 'vessel', family: 'cargo', sog: 10, cog: 0, mmsi: '0' }).html : `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1 L13 14 L3 14 Z" fill="${CM.MODE.ais.colour}" stroke="#000"/></svg>`]];
+  return [['aprs', `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.5" fill="${CM.MODE.aprs.colour}" stroke="#0b1014" stroke-width="1.4"/><text x="10" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="800" fill="#111">A</text></svg>`]];
+}
+/** A dense item's sub-kind (its cluster vote) — the mode an aircraft is drawn in, a mesh node's type. */
+function subKind(it) {
+  if (it.kind === 'aircraft') return CM.primaryMode(it, F.off);
+  if (it.kind === 'mesh') { const t = String(it.d.ntype || '').toLowerCase(); return MESH_TYPES.find((x) => t.includes(x.split(' ')[0])) || 'repeater'; }
+  return it.kind === 'ship' ? 'ship' : 'aprs';
+}
+/** Placement priority (symbol-sort-key: lower is placed first): repeaters / room servers over companions; then the newest. */
+function sortKey(it, now) {
+  const rank = it.kind === 'mesh' ? Math.max(0, MESH_TYPES.indexOf(subKind(it))) : 0;
+  return rank * 1e6 + Math.max(0, Math.min(999999, now - it.t));
+}
+/** A dense item's label (fades in from zoom 7): the flight / reg, the ship's name, the call, the node's name. */
+function labelOf(it) {
+  const d = it.d || {};
+  return String(it.kind === 'aircraft' ? d.flight || d.reg || '' : it.kind === 'ship' ? d.name || d.call || '' : it.kind === 'aprs' ? d.from || it.title || '' : it.title || '').trim().slice(0, 16);
+}
+const clusterLayers = () => DENSE_KINDS.map((k) => 'cm-cl-' + k);
+const densePtLayers = () => DENSE_KINDS.flatMap((k) => ['cm-dp-' + k, 'cm-dpa-' + k]);
 let layersReady = false;
 function ensureLayers() {
   if (!gl || layersReady || !gl.isStyleLoaded()) return layersReady;
   const empty = { type: 'FeatureCollection', features: [] };
   gl.addSource('cm-shapes', { type: 'geojson', data: empty });
-  gl.addSource('cm-dense', { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 5, clusterRadius: 22 });
+  for (const k of DENSE_KINDS) {
+    // ★ the cluster's votes: how many of each sub-kind it holds (the commonest draws it)
+    const props = Object.fromEntries(clusterGlyphs(k).map(([id], i) => ['v' + i, ['+', ['case', ['==', ['get', 'g'], id], 1, 0]]]));
+    gl.addSource('cm-d-' + k, { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 5, clusterRadius: 22, clusterProperties: props });
+  }
   gl.addSource('cm-pts', { type: 'geojson', data: empty });
   gl.addSource('cm-rx', { type: 'geojson', data: empty });
   gl.addLayer({ id: 'cm-area', type: 'fill', source: 'cm-shapes', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.16 } });
@@ -294,22 +335,43 @@ function ensureLayers() {
     paint: { 'line-color': ['get', 'c'], 'line-width': 2.6, 'line-opacity': 0.95 } });
   gl.addLayer({ id: 'cm-trail-gap', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 1],
     paint: { 'line-color': ['get', 'c'], 'line-width': 2, 'line-opacity': 0.8, 'line-dasharray': [2, 2.5] } });
-  gl.addLayer({ id: 'cm-clusters', type: 'circle', source: 'cm-dense', filter: ['has', 'point_count'],
-    paint: { 'circle-color': 'rgba(255,184,51,0.78)', 'circle-stroke-color': '#140d00', 'circle-stroke-width': 1.5,
-             'circle-radius': ['step', ['get', 'point_count'], 12, 20, 16, 100, 21, 500, 26] } });
-  gl.addLayer({ id: 'cm-cluster-n', type: 'symbol', source: 'cm-dense', filter: ['has', 'point_count'],
-    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 11, 'text-allow-overlap': true },
-    paint: { 'text-color': '#140d00' } });
   const sym = (id, src, extra) => gl.addLayer(Object.assign({ id, type: 'symbol', source: src,
     layout: { 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
     paint: { 'icon-opacity': ['get', 'op'] } }, extra || {}));
-  sym('cm-dense-pts', 'cm-dense', { filter: ['!', ['has', 'point_count']] });
+  const LABEL = { 'text-field': ['step', ['zoom'], '', 7, ['get', 'lb']], 'text-font': ['JetBrains Mono Bold'], 'text-size': 10, 'text-offset': [0, 1.25], 'text-anchor': 'top',
+                  'text-optional': true, 'text-max-width': 12 };
+  const LABEL_PAINT = { 'text-color': '#e8eef5', 'text-halo-color': 'rgba(8,10,12,0.85)', 'text-halo-width': 1.4, 'text-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 8, 1] };
+  for (const k of DENSE_KINDS) {
+    const src = 'cm-d-' + k, single = ['!', ['has', 'point_count']];
+    // the individuals: collision-thinned below ALL_ZOOM (the newest / repeaters first), all of them from there
+    gl.addLayer({ id: 'cm-dp-' + k, type: 'symbol', source: src, filter: single, maxzoom: ALL_ZOOM,
+      layout: Object.assign({ 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 0, 'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 0.72, 8, 1],   // ★ a touch smaller zoomed out: more of them fit
+                              'symbol-sort-key': ['get', 'sk'] }, LABEL), paint: Object.assign({ 'icon-opacity': ['get', 'op'] }, LABEL_PAINT) });
+    gl.addLayer({ id: 'cm-dpa-' + k, type: 'symbol', source: src, filter: single, minzoom: ALL_ZOOM,
+      layout: Object.assign({ 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
+                              'symbol-sort-key': ['get', 'sk'] }, LABEL), paint: Object.assign({ 'icon-opacity': ['get', 'op'] }, LABEL_PAINT) });
+  }
+  for (const k of DENSE_KINDS) {
+    // ★ the cluster drawn as its contents: the commonest sub-kind's glyph, a count badge at its top right
+    const gs = clusterGlyphs(k), names = gs.map(([, h]) => icon(h));
+    const v = (i) => ['get', 'v' + i];
+    const pick = gs.length === 1 ? names[0] : ['case'].concat(...gs.map((_, i) => [['all'].concat(gs.map((__, j) => (j === i ? true : [i < j ? '>=' : '>', v(i), v(j)]))), names[i]]), [names[0]]);
+    const src = 'cm-d-' + k, many = ['has', 'point_count'];
+    gl.addLayer({ id: 'cm-cl-' + k, type: 'symbol', source: src, filter: many,
+      layout: { 'icon-image': pick, 'icon-size': ['step', ['get', 'point_count'], 1.05, 10, 1.2, 50, 1.35], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
+    gl.addLayer({ id: 'cm-clb-' + k, type: 'circle', source: src, filter: many,
+      paint: { 'circle-color': CM.MODE[k === 'aircraft' ? 'adsb' : k === 'ship' ? 'ais' : k].colour, 'circle-stroke-color': '#0b1014', 'circle-stroke-width': 1.2,
+               'circle-radius': ['step', ['get', 'point_count'], 7, 10, 8, 100, 9.5], 'circle-translate': [11, -10] } });
+    gl.addLayer({ id: 'cm-cln-' + k, type: 'symbol', source: src, filter: many,
+      layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 9.5, 'text-allow-overlap': true, 'text-ignore-placement': true },
+      paint: { 'text-color': '#111', 'text-translate': [11, -10] } });
+  }
   sym('cm-pts', 'cm-pts');
   sym('cm-rx', 'cm-rx');
   // ★★ ONE click handler, in PRIORITY order (Stuart 11-26: an aircraft over a NAVTEX area opened the area's card — each layer's
   //    own handler fired and the area's, registered last, replaced the aircraft's). Receivers, then points (aircraft, ships,
   //    stations…) with a few px of slack so a small glyph is easy to hit, then lines, and areas only when nothing else is there.
-  const PICK_ORDER = [['cm-rx', 6], ['cm-pts', 6], ['cm-dense-pts', 6], ['cm-line', 3], ['cm-area', 0]];
+  const PICK_ORDER = [['cm-rx', 6], ['cm-pts', 6]].concat(densePtLayers().map((l) => [l, 6]), [['cm-line', 3], ['cm-area', 0]]);
   const pickAt = (pt) => {
     for (const [id, pad] of PICK_ORDER) {
       if (!gl.getLayer(id)) continue;
@@ -320,14 +382,14 @@ function ensureLayers() {
     return null;
   };
   gl.on('click', (e) => {
-    if (gl.queryRenderedFeatures(e.point, { layers: ['cm-clusters'].filter((l) => gl.getLayer(l)) }).length) return;   // the cluster's own handler
+    if (gl.queryRenderedFeatures([[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]], { layers: clusterLayers().filter((l) => gl.getLayer(l)) }).length) return;   // the cluster's own handler
     const f = pickAt(e.point);
     if (f) openCard({ features: [f], lngLat: e.lngLat });
   });
   gl.on('mousemove', (e) => { gl.getCanvas().style.cursor = pickAt(e.point) ? 'pointer' : ''; });
-  gl.on('click', 'cm-clusters', (e) => {
+  for (const k of DENSE_KINDS) gl.on('click', 'cm-cl-' + k, (e) => {
     const f = e.features[0];
-    gl.getSource('cm-dense').getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
+    gl.getSource('cm-d-' + k).getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
   });
   layersReady = true;
   return true;
@@ -433,13 +495,14 @@ async function render() {
     const { ic, rot } = iconOf(it);
     const sus = it.kind === 'mesh' && SUSPECT.has(it.key);   // ★★ b97 an implausible self-reported position: "?" and dimmed
     const f = { type: 'Feature', properties: { id: it.key, ic: sus ? icon(susSvg(it)) : ic, rot, op: sus ? op * 0.5 : op }, geometry: { type: 'Point', coordinates: [it.lon, it.lat] } };
-    (DENSE.has(it.kind) ? dense : pts).push(f);
+    if (DENSE.has(it.kind)) { Object.assign(f.properties, { k: it.kind, g: subKind(it), sk: sortKey(it, now), lb: labelOf(it) }); dense.push(f); }
+    else pts.push(f);
     if (it.kind === 'sonde' && it.d.track.length > 1) shapes.push({ type: 'Feature', properties: { id: it.key, c: it.d.climb < -2 ? '#ff8a4d' : '#7fd4ff', w: 2, op }, geometry: { type: 'LineString', coordinates: it.d.track.map((p) => [p[1], p[0]]) } });
   }
   for (const s of SERVERS) if (typeof s.lat === 'number') rx.push({ type: 'Feature', properties: { id: 'rx:' + s.id, ic: icon(RX_SVG(s, s.id === selected)), rot: 0, op: 1 }, geometry: { type: 'Point', coordinates: [s.lon, s.lat] } });
   ITEM_BY_KEY = byKey;
   await Promise.all(iconWaits.splice(0));
-  gl.getSource('cm-dense').setData({ type: 'FeatureCollection', features: dense });
+  for (const k of DENSE_KINDS) gl.getSource('cm-d-' + k).setData({ type: 'FeatureCollection', features: dense.filter((f) => f.properties.k === k) });   // ★ b97 a source per kind
   gl.getSource('cm-pts').setData({ type: 'FeatureCollection', features: pts });
   gl.getSource('cm-shapes').setData({ type: 'FeatureCollection', features: shapes });
   window.__cmShapes = shapes.map((f) => ({ id: f.properties.id, type: f.geometry.type }));
@@ -998,7 +1061,7 @@ function keyHtml() {
       + kr(`<svg width="24" height="12" viewBox="0 0 24 12"><path d="M1 9 L9 4 L14 6" fill="none" stroke="${kc}" stroke-width="2.4" stroke-linecap="round"/><path d="M15 6 L23 2" fill="none" stroke="${kc}" stroke-width="2" stroke-dasharray="2 2.5"/></svg>`,
            'A clicked aircraft’s track: solid where flown, dashed across a gap of over five minutes with no position')
       + kr(`<span style="opacity:.45;display:flex">${acGlyph('jet', CM.MODE.adsb.colour, 28)}</span>`, 'Faded: a datalink position (ACARS, VDL2, HFDL) over five minutes old, fading until it is dropped at 30 minutes — ADS-B positions are dropped at five')
-      + kr(`<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(255,184,51,0.78)" stroke="#140d00" stroke-width="1.5"/><text x="12" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="#140d00">12</text></svg>`, 'A number: aircraft, ships, APRS or MeshCore gathered when zoomed out — click to zoom in');
+      + kr(`<span style="position:relative;display:inline-flex">${acGlyph('jet', kc, 24)}<b style="position:absolute;right:-5px;top:-5px;min-width:13px;height:13px;border-radius:7px;background:${kc};color:#111;font:800 8px/13px system-ui,sans-serif;text-align:center">12</b></span>`, 'Zoomed out, where icons would sit on top of each other: one icon of what is there (aircraft with aircraft, MeshCore with MeshCore) and how many — click to zoom in');
   }
   const dia = (c) => `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L13 7 L7 13 L1 7 Z" fill="${c}" stroke="#0b1014" stroke-width="1.2"/></svg>`;
   if (on.has('ndb')) h += sec('NDB') + kr(dia(CM.MODE.ndb.colour), 'A non-directional beacon heard, placed from the published list');

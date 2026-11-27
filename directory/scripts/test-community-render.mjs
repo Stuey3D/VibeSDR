@@ -171,7 +171,7 @@ try {
   // ★★ beta96 EACH AIRCRAFT ITS OWN GLYPH (Stuart 11-26: "the correct icon for the aircraft type like the ADS-B map"): the
   //    ADS-B map's classes (KIT = adsblayer.js iconClassOf + its shapes), from a beta96 row's aircraft data (field 11) or, from
   //    an older server (the XCover's rows: no field 11), the type alone; the merge never blanks what another server knew
-  const acs = await js(`(() => { const rev = new Map([...iconNames].map(([svg, n]) => [n, svg])); const f = gl.getSource('cm-dense').serialize().data.features;
+  const acs = await js(`(() => { const rev = new Map([...iconNames].map(([svg, n]) => [n, svg])); const f = gl.getSource('cm-d-aircraft').serialize().data.features;
     const o = {}; for (const k of ['a:4CA000', 'a:4CA001', 'a:4CA002', 'a:A1B2C3']) { const it = ITEM_BY_KEY.get(k), ft = f.find((x) => x.properties.id === k);
       const col = CM.MODE[CM.primaryMode(it, F.off)].colour, cls = acClass(it.d);
       o[k] = { cls, glyph: !!ft && rev.get(ft.properties.ic) === KIT.aircraftIconSvg(cls, col, 34, 0), rot: ft && ft.properties.rot, type: it.d.type, wtc: it.d.wtc || '' }; }
@@ -195,7 +195,7 @@ try {
   ok(await until(`window.__cm.sea && window.__cm.sea.drawn`, 10000), `drawn: ${JSON.stringify(await js('window.__cm.sea && { areas: __cm.sea.areas, bytes: __cm.sea.bytes }'))}`);
   ok(seaHits === 1, `the sea-areas file fetched ONCE, from beside the page (${seaHits})`);
   const order = await js(`gl.getStyle().layers.map(l => l.id)`);
-  ok(order.indexOf('cm-sea-name-s') < order.indexOf('cm-area') && order.indexOf('cm-sea-line-s') < order.indexOf('cm-dense-pts') && order.indexOf('cm-sea-red') < order.indexOf('cm-rx'), 'its layers sit UNDER the warnings, the markers and the receivers');
+  ok(order.indexOf('cm-sea-name-s') < order.indexOf('cm-area') && order.indexOf('cm-sea-line-s') < order.indexOf('cm-dp-mesh') && order.indexOf('cm-sea-red') < order.indexOf('cm-rx'), 'its layers sit UNDER the warnings, the markers and the receivers');
   await hold(); await js(`gl.jumpTo({ center: [-4, 55.5], zoom: 4.6 }); true`); await sleep(2500);
   const seaIds = await js(`[...new Set(gl.queryRenderedFeatures({ layers: ['cm-sea-line-s', 'cm-sea-line-c', 'cm-sea-red', 'cm-sea-amber'] }).map(f => f.properties.id))]`);
   ok(['dogger', 'fisher', 'shannon', 'rockall', 'malin', 'irishsea', 'gbight'].every((x) => seaIds.includes(x)), `around the UK, Ireland and the North Sea: ${seaIds.length} areas outlined (${seaIds.slice(0, 12).join(', ')}…)`);
@@ -248,7 +248,7 @@ try {
     // ★ Stuart 11-26: an aircraft over a NAVTEX area opened the AREA's card. Find any point drawn over an area and click it.
     await js(`MC.fitNow(); true`); await sleep(3000); await hold();
     const r = await js(`(() => {
-      const pts = gl.queryRenderedFeatures({ layers: ['cm-pts', 'cm-dense-pts'].filter(l => gl.getLayer(l)) });
+      const pts = gl.queryRenderedFeatures({ layers: ['cm-pts'].concat(densePtLayers()).filter(l => gl.getLayer(l)) });
       for (const f of pts) {
         const p = gl.project(f.geometry.coordinates);
         if (!gl.queryRenderedFeatures(p, { layers: ['cm-area'] }).length) continue;
@@ -286,7 +286,7 @@ try {
     const drawn = await js(`({ line: gl.queryRenderedFeatures({ layers: ['cm-trail-line'] }).length, gap: gl.queryRenderedFeatures({ layers: ['cm-trail-gap'] }).length })`);
     ok(drawn.line > 0 && drawn.gap > 0, `on the GPU map: the solid line and the dash both rendered (${JSON.stringify(drawn)})`);
     const order = await js(`gl.getStyle().layers.map(l => l.id)`);
-    ok(order.indexOf('cm-trail-line') < order.indexOf('cm-dense-pts') && order.indexOf('cm-trail-gap') < order.indexOf('cm-pts'), '…under the markers');
+    ok(order.indexOf('cm-trail-line') < order.indexOf('cm-dp-mesh') && order.indexOf('cm-trail-gap') < order.indexOf('cm-pts'), '…under the markers');
     await shot('community-aircraft-route-trail.png');
     // ★ the click rule still holds with the trail drawn: a click on the aircraft opens the aircraft, not anything under the trail
     //   (zoomed in so BAW696's glyph is not under its two neighbours' — three aircraft 0.1° apart in the fixture)
@@ -513,17 +513,61 @@ try {
   const heap = await js(`performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : -1`);
   ok(c.perf.listDraw > 0 && c.perf.full > 0 && c.perf.firstDraw > 0, `receivers listed ${c.perf.listDraw} ms · first receiver's data ${c.perf.firstData} ms · all ${N} in ${c.perf.full} ms · GPU map's first draw ${c.perf.firstDraw} ms (software GL, headless) · JS heap ${heap} MB`);
   await hold(); await js(`gl.jumpTo({ center: [8, 52], zoom: 2.2 }); true`); await sleep(1500);
-  const clusters = await js(`gl.queryRenderedFeatures({ layers: ['cm-clusters'] }).length`);
+  const clusters = await js(`gl.queryRenderedFeatures({ layers: clusterLayers() }).length`);
   ok(clusters > 0, `zoomed out, the dense layers cluster (${clusters} clusters drawn)`);
   await shot('community-10-receivers-clustered.png');
   await js(`gl.jumpTo({ center: [-1.2, 51.9], zoom: 8 }); true`); await sleep(1200);
-  ok(await js(`gl.queryRenderedFeatures({ layers: ['cm-dense-pts'] }).length`) > 0, 'zoomed in, full markers');
+  ok(await js(`gl.queryRenderedFeatures({ layers: densePtLayers() }).length`) > 0, 'zoomed in, full markers');
   // ★ Stuart 11-27: "it drops to the grouped numbers quicker than i expected" — a county-to-region view (zoom 6, SE England
   //   in his recording) shows every aircraft; grouping is for the country/continent view only (clusterMaxZoom 5, radius 22).
   await js(`gl.jumpTo({ center: [0.5, 51.8], zoom: 6.0 }); true`); await sleep(1200);
-  ok(await js(`gl.queryRenderedFeatures({ layers: ['cm-clusters'] }).length`) === 0, 'zoom 6 (a region, e.g. SE England): no grouped numbers, every aircraft drawn');
+  ok(await js(`gl.queryRenderedFeatures({ layers: clusterLayers() }).length`) === 0, 'zoom 6 (a region, e.g. SE England): no grouped numbers, every aircraft drawn');
   ok(Object.entries(hits).every(([k, n]) => n === want(k)), `each of ${N} receivers asked once (per radio) (${Object.values(hits).join(',')})`);
   console.log(`   (largest answer per receiver, bytes: ${JSON.stringify(sizes)})`);
+  console.log('── ★★★ b97 zoomed out stays rich (Stuart 11-27: "the map starts looking barren as you zoom out") — SE England, ~150 mesh + ~100 aircraft ──');
+  {
+    await call('Page.navigate', { url: PAGE });
+    await until(`window.__cm && window.__cm.up >= 3`, 30000);
+    // ★ a synthetic receiver's answer, through the page's own reader (CM.itemsOf) — no network, the data rules untouched
+    await js(`(() => { const now = Math.floor(Date.now() / 1000), a = [], m = [];
+      let r = 7; const rnd = () => (r = (r * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 100; i++) a.push(['5' + (100000 + i).toString(16).toUpperCase(), 50.6 + rnd() * 2.2, -2.2 + rnd() * 4.2, 5, 30000, Math.round(rnd() * 360), 420, 1, 'TST' + i, '', 'A320']);
+      for (let i = 0; i < 150; i++) { const near = i < 110; m.push(['ab' + i.toString(16).padStart(4, '0'), 'Node ' + i, i % 4 === 3 ? 'companion' : 'repeater',
+        near ? 51.25 + rnd() * 0.75 : 51.6 + rnd() * 1.4, near ? -0.75 + rnd() * 1.3 : -2.0 + rnd() * 1.6, now - 60, 3, 0]); }
+      const items = CM.itemsOf({ on: true, now, a, m }, { id: 'syn', name: 'Synthetic', rid: '' });
+      DATA.set('syn', { radios: new Map([['', { sections: { a, m }, items }]]), items }); render(); return items.length; })()`);
+    await hold();
+    const rows = [];
+    for (const z of [8, 7, 6, 5]) {
+      await js(`gl.jumpTo({ center: [-0.3, 51.55], zoom: ${z} }); true`); await sleep(2200);
+      const r = await js(`(() => { const ind = gl.queryRenderedFeatures({ layers: densePtLayers() }), cl = gl.queryRenderedFeatures({ layers: clusterLayers() });
+        const kinds = (fs) => fs.reduce((o, f) => (o[f.layer.id.replace(/^cm-(dpa?|cl)-/, '')] = (o[f.layer.id.replace(/^cm-(dpa?|cl)-/, '')] || 0) + 1, o), {});
+        const glyphs = cl.map((f) => { const L = gl.getLayer(f.layer.id); return { k: f.layer.id, n: f.properties.point_count, img: gl.getLayoutProperty(f.layer.id, 'icon-image') ? 1 : 0, src: f.source }; });
+        const labels = gl.queryRenderedFeatures({ layers: densePtLayers() }).filter((f) => f.properties.lb).length;
+        return { z: ${z}, ind: ind.length, cl: cl.length, inK: kinds(ind), clK: kinds(cl), glyphs, labelOp: gl.getPaintProperty('cm-dp-mesh', 'text-opacity'), mixed: cl.filter((f) => !/^cm-d-/.test(f.source)).length }; })()`);
+      rows.push(r);
+      await shot(`community-zoom-${z}.png`);
+      console.log(`   (zoom ${z}: ${r.ind} individual icons ${JSON.stringify(r.inK)} · ${r.cl} clusters ${JSON.stringify(r.clK)})`);
+    }
+    const at = (z) => rows.find((r) => r.z === z);
+    // ★ what is DRAWN (an icon, or a cluster wearing its kind's glyph): each step out keeps at least 40 % — it thins, it never collapses
+    const marks = (z) => at(z).ind + at(z).cl;
+    for (const z of [7, 6, 5]) ok(marks(z) >= Math.round(marks(z + 1) * 0.4), `zoom ${z + 1} → ${z}: no collapse — ${marks(z)} drawn (${at(z).ind} icons + ${at(z).cl} glyph clusters) from ${marks(z + 1)} (≥ 40 %)`);
+    ok(at(7).ind >= 40 && at(6).ind >= 40, `zooms 7 and 6 (no clustering yet): ${at(7).ind} and ${at(6).ind} individual icons — collision thins, nothing collapses`);
+    ok([8, 7, 6, 5].every((z) => (at(z).inK.mesh || 0) + (at(z).clK.mesh || 0) >= 8 && (at(z).inK.aircraft || 0) + (at(z).clK.aircraft || 0) >= 8), 'mesh AND aircraft stay drawn at every zoom (icons or their own clusters)');
+    ok(at(5).ind + at(5).cl >= 40 && at(5).ind + at(5).cl >= Math.round(at(6).ind * 0.6), `zoom 5 (SE England and beyond): ${at(5).ind} icons + ${at(5).cl} kind-glyph clusters — not a few blank discs`);
+    ok([8, 7, 6].every((z) => at(z).cl === 0) && at(5).cl > 0, 'clusters only at zoom 5 and below (clusterMaxZoom 5)');
+    ok(rows.every((r) => r.glyphs.every((g) => /^cm-cl-(mesh|aircraft|ship|aprs)$/.test(g.k) && g.img && g.src === 'cm-d-' + g.k.slice(6))), 'every cluster is drawn as its kind\'s GLYPH from its own layer\'s source — mesh with mesh, aircraft with aircraft');
+    ok(await js(`clusterLayers().every((l) => gl.getLayer(l.replace('cm-cl-', 'cm-cln-')) && gl.getLayer(l.replace('cm-cl-', 'cm-clb-')))`), '…each with its count badge');
+    ok(await js(`(() => { const e = gl.getLayoutProperty('cm-cl-mesh', 'icon-image'); return Array.isArray(e) && e[0] === 'case'; })()`), '…the commonest sub-kind draws it (the repeater square for a repeater cluster)');
+    ok(await js(`DENSE_KINDS.every((k) => { const c = gl.getSource('cm-d-' + k).serialize(); return c.cluster === true && c.clusterMaxZoom === 5 && c.clusterRadius === 22; })`), 'per layer, the earlier rule: clusterMaxZoom 5, radius 22');
+    ok(await js(`gl.getLayoutProperty('cm-dp-mesh', 'icon-allow-overlap') === false && !!gl.getLayoutProperty('cm-dp-mesh', 'symbol-sort-key') && gl.getLayer('cm-dpa-mesh').minzoom === ALL_ZOOM`), 'collision thins the icons (sorted: repeaters, then the newest) below zoom 9; every icon from 9');
+    await js(`gl.jumpTo({ center: [-0.3, 51.55], zoom: 8.5 }); true`); await sleep(1500);
+    const lab85 = await js(`gl.queryRenderedFeatures({ layers: densePtLayers() }).filter((f) => f.properties.lb).length > 0`);
+    ok(JSON.stringify(rows[0].labelOp) === JSON.stringify(['interpolate', ['linear'], ['zoom'], 7, 0, 8, 1]) && lab85 && await js(`JSON.stringify(gl.getLayoutProperty('cm-dp-mesh', 'text-field')).includes('"step"')`) && await js(`gl.getLayoutProperty('cm-dp-mesh', 'text-optional') === true`),
+       'labels fade out first (7 → 8) and are optional — a label never hides an icon');
+    await js(`DATA.delete('syn'); render(); true`);
+  }
   ok(errors.length === 0, `no script errors (${errors.slice(0, 3).join(' | ')})`);
 } catch (e) { fail++; console.log('   FAIL ' + (e && e.stack || e)); }
 clearTimeout(deadline);
