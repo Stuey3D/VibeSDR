@@ -847,6 +847,12 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
    *  shuts it and the highlight is on the SAME row; BACK again leaves the list (the highlight back on the LIST stop). */
   const [inside, setInside] = useState(false);
   const [item, setItem] = useState<TrackRow | null>(null);
+  /* ★★★ beta97 (Stuart, build 587: "the enlarge button and the sort controls at the bottom need to be SEPARATE elements"):
+   *  the drawer's own controls — the folder tabs (≋ swap, ⌃ maximise), the side panel's mode tabs, × ALL, ROUTE, and the foot
+   *  bar (☰ hide, the mode tabs, ‖ +N, sort) — are their OWN stops in the chrome's walk, in visual order around the LIST
+   *  stop: … → the top tabs → LIST (Enter in / Back out) → the bar's controls → the bottom-right group. Inside, they are the
+   *  rows' scope's (Up from the first row reaches the top tabs, Down from the last the bar) — the rows only ever there. */
+  const outerNav = useContext(NavCtx);
   useEffect(() => { if (!shown) { setInside(false); setItem(null); } }, [shown]);
   const scope = usePanelNav(inside, { flat: true, onBack: () => { setInside(false); setItem(null); return true; } });
   const scrollRef = scope.scrollRef;
@@ -879,13 +885,14 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
     : { left: 0, bottom: 0, height: height + p.insets.bottom, paddingBottom: p.insets.bottom };
   const bodyH = (pos.height as number) - (g.list.side ? 0 : p.insets.bottom) - 34 * k - (sideTabs ? 38 * k : 0);
   const pickRow = (r: TrackRow) => { L.onPick(r); };
+  /* ★ the LIST stop (the chrome's walk): ENTER steps into the rows — a tap on it is nothing more than a tap on the drawer */
+  const listStop = !inside ? <NavRow><ListStop words={`The list, ${count} — Enter to step into the rows`} onEnter={() => setInside(true)} /></NavRow> : null;
   const enterRow = (r: TrackRow) => { L.onPick(r); setItem(r); };
   return (
     <>
     <View style={[styles.drawer, { width: w }, pos, !g.list.side && styles.drawerFlush, inside && styles.drawerIn]} onTouchStart={noteTouchInteraction}>
       {/* ★ the LIST stop (the chrome's walk): ENTER steps into the rows — a tap on it is nothing more than a tap on the drawer */}
-      {!inside && <NavRow><ListStop words={`The list, ${count} — Enter to step into the rows`} onEnter={() => setInside(true)} /></NavRow>}
-      <NavCtx.Provider value={inside ? scope.navCtx : null}>
+      <NavCtx.Provider value={inside ? scope.navCtx : outerNav}>
       {/* the folder tabs: swap (top-left), maximise (top-right) */}
       <NavRow>
         {wfOk && <ChipKey style={[styles.ftab, g.list.side ? { right: -34 * k, top: 0 } : { left: 8 * k, top: -26 * k }]} words={pane === 'wf' ? 'Show the list' : 'Show the live waterfall'}
@@ -898,9 +905,9 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
         {L.tabs!.map((t) => <Key key={t.id} label={`${t.label} ${t.n}`} on={L.tab === t.id} words={`${t.label}: ${t.n}`} onPress={() => L.onTab?.(t.id)} />)}
       </View></NavRow>}
       {pane === 'wf' && p.wf ? (
-        <View style={{ height: bodyH }}>
+        <>{listStop}<View style={{ height: bodyH }}>
           <MapMiniWaterfall width={w - 2} height={bodyH} screenW={winW} screenH={winH} model={p.wf.model} colormap={p.wf.colormap} store={p.wf.store} sinkRef={p.wf.sinkRef} />
-        </View>
+        </View></>
       ) : (
         <>
           {!!L.filter && <NavRow><View style={styles.listBar}><Text style={styles.status} numberOfLines={1}>{L.filter}</Text>
@@ -909,6 +916,8 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
           {!!L.route && <NavRow><View style={styles.listBar}>
             <Key label={L.route.on ? 'HIDE ROUTE' : 'ROUTE'} on={L.route.on} words={`${L.route.on ? 'Hide' : 'Show'} the route ${L.route.name}'s message came by, hop by hop`} onPress={() => L.onRoute?.()} />
             <Text style={styles.status} numberOfLines={1}>{L.route.name}</Text></View></NavRow>}
+          {listStop}
+          <NavCtx.Provider value={inside ? scope.navCtx : null}>
           <ScrollView ref={scrollRef} style={{ height: bodyH - ((L.filter ? 30 : 0) + (L.route ? 30 : 0) + (L.safety?.length ?? 0) * 18) * k }} contentContainerStyle={scrollLane} keyboardShouldPersistTaps="handled"
                       scrollEventThrottle={16}
                       onScroll={(e) => { scope.scrollProps.onScroll(e); const y = e.nativeEvent.contentOffset.y;
@@ -919,6 +928,7 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
             {!count && <Text style={styles.empty} numberOfLines={4}>{L.empty}</Text>}
             {L.foot}
           </ScrollView>
+          </NavCtx.Provider>
         </>
       )}
       {/* ── the foot bar: chip · tabs · ‖ +N · sort ── */}

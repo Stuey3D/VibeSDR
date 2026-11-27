@@ -3,8 +3,9 @@
 // LIST drawer's width and whole rows, a card's box, the LIVE badge rule, the RATE chip's pick, the gain row per driver,
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
+import { readFileSync } from 'node:fs';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, listStops, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -179,6 +180,26 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const g = chromeGeom({ w: 993, h: 621, insets: { top: 28, bottom: 0, left: 0, right: 0 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
   const cb = cardBox(g, 'map', 993, 621);
   ok(cb.yMin <= cb.y && cb.yMin >= g.boxes.exit!.y + g.boxes.exit!.h, 'a side card may rise to just under the ✕ corner, never over it');
+}
+
+// ── ★★★ beta97 the LIST's own controls are their OWN stops (Stuart, build 587) ──
+{
+  const tall = chromeGeom({ w: 402, h: 874, insets: { top: 62, bottom: 34, left: 0, right: 0 }, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[] });
+  const ls = listStops({ side: false, swap: true, tabs: ['aircraft', 'messages'], pause: true, sort: true });
+  const o = padOrder(tall, { br: true, pill: true, listTop: ls.top, listBar: ls.bar });
+  const i = (x: string) => o.indexOf(x);
+  ok(i('pill') < i('swap') && i('swap') < i('max') && i('max') < i('list'), `tall: … pill → ≋ swap → ⌃ maximise → LIST (${o.slice(i('pill')).join(' ')})`);
+  ok(i('list') < i('hide') && i('hide') < i('tab:aircraft') && i('tab:aircraft') < i('tab:messages') && i('tab:messages') < i('pause') && i('pause') < i('sort') && i('sort') < i('help'),
+     'tall: LIST → ☰ hide → the mode tabs → ‖ +N → sort → the bottom-right group');
+  ok(!o.some((x) => x.startsWith('row:')), 'the rows are never in the walk outside the list (Enter in, as now)');
+  const inside = padOrder(tall, { br: true, listInside: true, listRows: 3, listTop: ls.top, listBar: ls.bar });
+  ok(inside.join() === 'swap,max,row:0,row:1,row:2,hide,tab:aircraft,tab:messages,pause,sort', `inside: Up from the first row reaches ⌃, Down from the last the bar (${inside.join(' ')})`);
+  const sd = listStops({ side: true, swap: true, tabs: ['aircraft', 'messages'], pause: false, sort: true, filter: true });
+  ok(sd.top.join() === 'swap,tab:aircraft,tab:messages,all' && sd.bar.join() === 'hide,sort', `short landscape's side panel: no maximise; its tabs head it (${sd.top.join(' ')} | ${sd.bar.join(' ')})`);
+  ok(listStops({ side: false, swap: true, tabs: ['a', 'b'], sort: true, wf: true }).bar.join() === 'hide', 'the waterfall pane: the bar is ☰ only');
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  ok(/<NavCtx\.Provider value=\{inside \? scope\.navCtx : outerNav\}>/.test(mc) && /\{listStop\}\n\s*<NavCtx\.Provider value=\{inside \? scope\.navCtx : null\}>\n\s*<ScrollView/.test(mc),
+     'ListDrawer: its controls in the chrome walk (outerNav) when outside, the rows only inside; the LIST stop just above the rows');
 }
 
 // ── the pill's words ──

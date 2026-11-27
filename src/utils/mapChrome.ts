@@ -543,15 +543,26 @@ export const ASK_PULSE_MS = 2600;
  *  pill, then the LIST as ONE stop, then the bottom-right group — never through the rows. ENTER on the LIST steps INTO it
  *  (its rows, then its bar's keys; BACK steps out to the LIST stop). An open card is its own scope (ENTER on a chip opens
  *  it and the highlight goes inside; BACK shuts it and the highlight is back on its chip). */
-export function padOrder(g: ChromeGeom, opts: { cardOpen?: boolean; listInside?: boolean; listRows?: number; br: boolean; pill?: boolean }): string[] {
+/** ★★★ beta97 THE LIST'S OWN CONTROLS AS STOPS (Stuart, build 587: "the enlarge button and the sort controls at the bottom
+ *  need to be SEPARATE elements"), in the drawer's visual order: above the LIST stop the folder tabs (≋ swap, ⌃ maximise — the
+ *  side panel has no maximise; its mode tabs head it), × ALL and ROUTE; below it the foot bar (☰ hide, the mode tabs, ‖ +N,
+ *  sort). What MapChrome's ListDrawer renders, in the same order. */
+export function listStops(o: { side: boolean; swap: boolean; tabs: string[]; filter?: boolean; route?: boolean; pause?: boolean; sort?: boolean; wf?: boolean }): { top: string[]; bar: string[] } {
+  const tabs = o.wf ? [] : o.tabs.length >= 2 ? o.tabs.map((t) => `tab:${t}`) : [];
+  const top = [...(o.swap ? ['swap'] : []), ...(o.side ? [] : ['max']), ...(o.side ? tabs : []),
+               ...(!o.wf && o.filter ? ['all'] : []), ...(!o.wf && o.route ? ['route'] : [])];
+  const bar = ['hide', ...(o.side ? [] : tabs), ...(!o.wf && o.pause ? ['pause'] : []), ...(!o.wf && o.sort ? ['sort'] : [])];
+  return { top, bar };
+}
+export function padOrder(g: ChromeGeom, opts: { cardOpen?: boolean; listInside?: boolean; listRows?: number; br: boolean; pill?: boolean; listTop?: string[]; listBar?: string[] }): string[] {
   if (opts.cardOpen) return ['card'];
-  if (opts.listInside) return [...Array.from({ length: Math.max(0, opts.listRows ?? 0) }, (_, i) => `row:${i}`), 'bar'];
+  if (opts.listInside) return [...(opts.listTop ?? []), ...Array.from({ length: Math.max(0, opts.listRows ?? 0) }, (_, i) => `row:${i}`), ...(opts.listBar ?? ['bar'])];
   const chips = (Object.keys(g.boxes) as ChipId[]).sort((a, b) => {
     if (g.short) return (g.boxes[a]!.x - g.boxes[b]!.x);
     const side = (id: ChipId) => (g.cardFrom[id] === 'R' || id === 'rate' ? 1 : 0);
     return side(a) - side(b) || g.boxes[a]!.y - g.boxes[b]!.y;
   });
-  return [...chips.map((c) => `chip:${c}`), ...(opts.pill ? ['pill'] : []), 'list', ...(opts.br ? ['help'] : [])];
+  return [...chips.map((c) => `chip:${c}`), ...(opts.pill ? ['pill'] : []), ...(opts.listTop ?? []), 'list', ...(opts.listBar ?? []), ...(opts.br ? ['help'] : [])];
 }
 
 /** ★★★ STUART'S LIST FLOW (as the R36S handheld UI — the same spec the web follows), as a pure step function the LIST drawer
