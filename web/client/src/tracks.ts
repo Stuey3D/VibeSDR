@@ -512,6 +512,7 @@ const CSS = `
 .trkRow .id b .kv{display:inline-flex;align-items:stretch;flex:none;margin-left:6px;border:1px solid #33475a;border-radius:4px;font:600 9.5px/14px ui-monospace,Menlo,monospace;color:#b8c6d4;white-space:nowrap;vertical-align:1px}
 .trkRow .id b .kv span{padding:0 4px}
 .trkRow .id b .kv i{width:1px;background:#33475a}
+@media (max-width:359px){.trkRow .id b .kv .kt{display:none}}
 .trkRow .ag{text-align:right}
 .trkView[data-narrow] .trkRow .ag .agL{display:none}.trkView[data-narrow] .trkRow .ag .agS{display:inline}.trkView[data-narrow] .trkRow .brg{display:none}
 .trkView[data-narrow] .trkRow{grid-template-columns:minmax(0,1fr) auto auto auto;column-gap:7px}
@@ -740,6 +741,17 @@ const CSS = `
 /* a row's long title is a mouse's tooltip, never a touch's */
 @media (hover:none){.trkRow{-webkit-touch-callout:none}}
 .mHelp,.mChipsScale{transition:transform .2s ease}
+.trkCard2[data-card="stats"] .stTabs{display:flex;gap:4px;padding:6px 8px 2px;flex-wrap:wrap}
+.trkCard2[data-card="stats"] .stTabs[hidden]{display:none}
+.trkCard2[data-card="stats"] .stTab{all:unset;cursor:pointer;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#8fa2b5;padding:5px 8px;border-radius:999px;border:1px solid #2c3a4a}
+.trkCard2[data-card="stats"] .stTab[aria-selected="true"]{color:#111;background:#ffd34d;border-color:#ffd34d}
+.trkCard2[data-card="stats"] .stTab:focus-visible,.trkCard2[data-card="stats"] .stRow:focus-visible{outline:2px solid #ffd34d;outline-offset:-2px}
+.trkCard2[data-card="stats"] .stBody{display:flex;flex-direction:column;padding:4px 6px 8px}
+.trkCard2[data-card="stats"] .stRow{all:unset;cursor:pointer;display:grid;grid-template-columns:auto auto 1fr;gap:8px;align-items:baseline;padding:8px 8px;border-radius:8px;border:1px solid transparent}
+.trkCard2[data-card="stats"] .stRow:hover{background:#15202b;border-color:#2c3a4a}
+.trkCard2[data-card="stats"] .stRow .k{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;color:#8fa2b5}
+.trkCard2[data-card="stats"] .stRow .v{font:700 12px/1 ui-monospace,Menlo,monospace;color:#ffd34d;white-space:nowrap}
+.trkCard2[data-card="stats"] .stRow .n{font:600 12px/1.2 system-ui,sans-serif;color:#e8eef5;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trkList .hd .srt .srtT{display:inline-flex;align-items:center;gap:4px;border-radius:6px!important;margin:0!important;padding:3px 6px!important;background:#1e2a36;color:#ffd34d;border:1px solid #33475a}
 .trkList .hd .srt .srtT .sIco{width:14px;height:14px}
 .trkList .hd .srt .srtT .sw{font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
@@ -1025,7 +1037,7 @@ const LIST_SVG = modeIconSvg('list', 'mIco');
 /** ★ the HELP card's glyphs — each chip's own */
 const HELP_GLYPH: Record<string, string> = {
   servers: SERVERS_SVG.replace('mIco', 'tIco'), tune: modeIconSvg('radio', 'tIco'), layers: P16(TUNE_ICON_PATH.aircraft), map: modeIconSvg('map', 'tIco'),
-  list: LIST_SVG.replace('mIco', 'tIco'),
+  list: LIST_SVG.replace('mIco', 'tIco'), stats: modeIconSvg('stats', 'tIco'), rate: modeIconSvg('clock', 'tIco'), chat: modeIconSvg('spots', 'tIco'),
 };
 const FIT_KEY = 'vibesdr.mapFitTo';
 export { CARD_IDS, type CardId, trimOutliers };
@@ -1158,7 +1170,8 @@ export class TrackView {
       /* ★★★ TWEAK 3 (Stuart 11-27, live): the HEALTH CARDS' shape — chips FLANKING the map that pop out a card and shrink
        *  back: TUNE and LAYERS down the left edge, MAP CONTROLS on the right, LIST at the bottom (its card pops UP). */
       + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('servers', 'left', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card', false, SERVERS_SVG.replace('mIco', 'tIco'))}${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true, modeIconSvg('radio', 'tIco'))}`
-      + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card', false, LAYER_GLYPH.aircraft)}</div>`
+      + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card', false, LAYER_GLYPH.aircraft)}`
+      + `${dock('stats', 'left', 'STATS', `<span class="ic">${modeIconSvg('stats', 'mIco')}</span>`, 'the stats card')}</div>`
       + `<div class="mChips mChipsR">${dock('rate', 'right', 'RATE', `<span class="ic rateIc"><span class="rv"><span class="rn"></span><span class="ru"></span></span><span class="rmore"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'every source\u2019s message rate')}`
       + `${dock('chat', 'right', 'CHAT', `<span class="ic"><svg class="mIco" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="9" cy="10.5" r="1.1" fill="currentColor"/><circle cx="12" cy="10.5" r="1.1" fill="currentColor"/><circle cx="15" cy="10.5" r="1.1" fill="currentColor"/></svg><span class="unr" hidden></span></span>`, 'the chat')}`
       + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
@@ -1178,6 +1191,7 @@ export class TrackView {
         + `<button class="lMax" type="button" aria-pressed="false" aria-label="Maximise the list" title="Maximise the list (M)"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`)
       + card('servers', 'SERVERS', `<div class="srvBody" role="group" aria-label="Servers and radios"></div>`)
       + card('rate', 'RATE', `<div class="rateBody" role="list" aria-label="Message rate by source"></div>`)
+      + card('stats', 'STATS', `<div class="stTabs" role="tablist" aria-label="Modes"></div><div class="stBody" role="list"></div>`)
       + card('chat', 'CHAT', `<div class="chatBody"></div>`)
       + card('tune', 'TUNE', `<div class="facts"></div><div class="trkSlot slot-tune"></div><div class="tunePop" role="menu" aria-label="Tune the radio"></div>`)
       + card('layers', 'LAYERS', `<div class="facts"></div><div class="sect"><span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span></div>`
@@ -1814,6 +1828,38 @@ export class TrackView {
     this.chatUnread = n;
     b.title = b.getAttribute('aria-disabled') === 'true' ? (o.why || 'Chat is closed') : n ? `Chat \u2014 ${n} new` : 'Chat';
     b.setAttribute('aria-label', `CHAT \u2014 ${n ? n + ' new message' + (n === 1 ? '' : 's') + '. ' : ''}open the chat`);
+  }
+  /* ★★★ Stuart 14:20 THE STATS CARD: per MODE (ADS-B, HFDL, VDL2 …) — each its own NEWEST, FURTHEST, LONGEST TRACKED and
+   *  TRACKED LONGEST — so an HFDL aircraft followed 3 000 NM never competes with ADS-B's. A tab per mode present; a row
+   *  per stat; a press shows that aircraft (selected, its card open, the map moved to it). Rewritten only when it changes. */
+  private statsSig = '';
+  private statsMode = '';
+  private statsPick: ((key: string) => void) | null = null;
+  setStats(sections: Array<{ mode: string; rows: Array<{ key: string; label: string; value: string; name: string; lat?: number; lon?: number }> }>, onPick?: (key: string) => void) {
+    const live = sections.filter((x) => x.rows.length);
+    this.cardsAvail('stats', live.length > 0);
+    if (onPick) this.statsPick = onPick;
+    if (!live.length) return;
+    if (!live.some((x) => x.mode === this.statsMode)) this.statsMode = live[0].mode;
+    const sig = JSON.stringify([live, this.statsMode]);
+    if (sig === this.statsSig) return;
+    this.statsSig = sig;
+    const tabs = this.root.querySelector('.trkCard2[data-card="stats"] .stTabs') as HTMLElement, body = this.root.querySelector('.trkCard2[data-card="stats"] .stBody') as HTMLElement;
+    tabs.hidden = live.length < 2;
+    tabs.innerHTML = live.map((x) => `<button type="button" class="stTab" role="tab" data-st="${esc(x.mode)}" aria-selected="${x.mode === this.statsMode}">${esc(x.mode)}</button>`).join('');
+    for (const b of Array.from(tabs.querySelectorAll('[data-st]')) as HTMLElement[]) b.onclick = (e) => { e.stopPropagation(); this.statsMode = b.dataset.st || ''; this.statsSig = ''; this.setStats(live); this.idleArm(); };
+    const sec = live.find((x) => x.mode === this.statsMode)!;
+    body.innerHTML = sec.rows.map((r) => `<button type="button" class="stRow" role="listitem" data-key="${esc(r.key)}"${r.lat != null ? ` data-lat="${r.lat}" data-lon="${r.lon}"` : ''}><span class="k">${esc(r.label)}</span><span class="v">${esc(r.value)}</span><span class="n">${esc(r.name)}</span></button>`).join('');
+    for (const b of Array.from(body.querySelectorAll('.stRow')) as HTMLElement[]) b.onclick = (e) => {
+      e.stopPropagation();
+      const k = b.dataset.key || '';
+      this.select(k);
+      const lat = Number(b.dataset.lat), lon = Number(b.dataset.lon);
+      const m = (this.vm as any)?.map || (this.vm as any)?._gl || (this.vm as any)?.gl;
+      if (m?.easeTo && isFinite(lat) && isFinite(lon)) m.easeTo({ center: [lon, lat], duration: 600 });
+      this.statsPick?.(k);
+      this.closeTransients();
+    };
   }
   chatHost(): HTMLElement { return this.root.querySelector('.trkCard2[data-card="chat"] .chatBody') as HTMLElement; }
   /** The facts the old status paragraph carried, each in the card it belongs to ('' = none). */
@@ -2468,7 +2514,7 @@ export class TrackView {
     this.tuneOpen(false);
     this.cardsTell(new Set());   // ★ every card the host filled gives its nodes back (CHAT's log and replies)
     this.root.hidden = true;
-    if (!document.querySelector('.trkView:not([hidden])')) document.body.classList.remove('trkMapUp');
+    if (!document.querySelector('.trkView:not([hidden])')) { document.body.classList.remove('trkMapUp'); window.dispatchEvent(new Event('vibe:mapclosed')); }
     this.attribObs?.disconnect(); this.attribObs = null;
     for (const el of this.inerted) el.inert = false;
     this.inerted = [];

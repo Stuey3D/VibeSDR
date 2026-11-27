@@ -4153,9 +4153,22 @@ function loop(frameTs?: number) {
   /* ★★★ beta96 IDLE COST (Stuart 14:12): a full-screen map over the radio page draws nothing of it (trackViewUp), but this
    *  loop still asked for every display frame — 60–120 wake-ups a second for nothing, keeping Safari composing at the
    *  panel's rate. Under a map it runs 5 times a second (the rows are still taken in; only the drawing waits). */
-  if (trackViewUp()) setTimeout(() => requestAnimationFrame(loop), 200);
-  else requestAnimationFrame(loop);
+  /* ★ Stuart 14:24 ("the waterfall doesn't need to run at all under the map"): under a same-page map the loop STOPS and
+   *  the server sends this listener no spectrum ({"type":"spec","on":0}); the map's close restarts both (specUnderMap). */
+  if (trackViewUp()) { loopParked = true; specUnderMap(true); return; }
+  requestAnimationFrame(loop);
 }
+let loopParked = false, specOffSent = false;
+/** A same-page map covers the radio page (true) or has gone (false): the spectrum off / on at the server, the loop back. */
+function specUnderMap(covered: boolean) {
+  if (covered !== specOffSent) {
+    specOffSent = covered;
+    try { spec?.send({ type: 'spec', on: covered ? 0 : 1 }); } catch { /* not open: the next connect starts it on */ }
+  }
+  if (!covered && loopParked) { loopParked = false; requestAnimationFrame(loop); }
+}
+(window as any).__vibeSpecUnderMap = () => ({ off: specOffSent, parked: loopParked });
+window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderMap(false); });
 
 function renderFrame(frameTs: number) {
   if (!wf || !spec) return;
@@ -10292,18 +10305,19 @@ function trkFlagHtml(flag: string | undefined): string {
   return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
 }
 function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean;
-                     snr?: number; snrMode?: string; mil?: boolean }): string {   // ★ beta96 snr: the message's SNR chip (stored ships, sondes …)
+                     snr?: number; snrMode?: string; mil?: boolean; gs?: string }): string {   // ★ beta96 snr: the message's SNR chip (stored ships, sondes …)
   /* ★★★ Stuart 13:10 ("make the fl/dist a little pill next to the mil/emerg badge"): line 1 = the name, its tags and a
    *  small FL | distance pill (speed | distance for a ship); the right side only the SNR chip and the age; no bearing */
   return `<div class="trkRow kvRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}<span class="nmT">${escapeHtml(x.name)}</span>${acTagsFor({ mil: x.mil }).map(acTagHtml).join('')}${trkKvPill(x.sp, x.range)}</b><small>${escapeHtml(x.second)}</small></span>`
+    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}<span class="nmT">${escapeHtml(x.name)}</span>${acTagsFor({ mil: x.mil }).map(acTagHtml).join('')}${trkKvPill(x.sp, x.range, x.gs)}</b><small>${escapeHtml(x.second)}</small></span>`
     + `<span class="rg">${snrChipHtml(x.snrMode, x.snr)}${x.dx ? '<span class="dxTag">DX</span>' : ''}</span><span class="ag"><span class="agL">${escapeHtml(x.age)}</span><span class="agS">${escapeHtml(trkAgeShort(x.age))}</span></span></div>`;
 }
 /** The row's little FL | distance pill ("FL241 | 87nm", "12 kn | 4.2nm", "FL051 | no pos") — '' when it has neither. */
-function trkKvPill(a: string, b: string): string {
+function trkKvPill(a: string, b: string, c = ''): string {
   const d = b.trim().replace(/^no position$/i, 'no pos').replace(/\s+(NM|nm)$/, 'nm').replace(/\s+km$/, 'km');
-  const parts = [a.trim(), d].filter(Boolean);
-  return parts.length ? `<span class="kv">${parts.map((t) => `<span>${escapeHtml(t)}</span>`).join('<i></i>')}</span>` : '';
+  // ★ FL | distance | ground speed (Stuart 14:14); the speed is the first to go on a very narrow row
+  const parts = [[a.trim(), ''], [d, ''], [c.trim(), 'kt']].filter(([t]) => t);
+  return parts.length ? `<span class="kv">${parts.map(([t, k]) => `<span${k ? ` class="${k}"` : ''}>${escapeHtml(t)}</span>`).join('<i></i>').replace(/<i><\/i><span class="kt">/, '<i class="kt"></i><span class="kt">')}</span>` : '';
 }
 /** ★ the age's compact form for a narrow list: "13 s" → "13s", "2 min" → "2m", "1 h ago" → "1h"; "now" stays */
 function trkAgeShort(a: string): string { const m = /^(\d+)\s*([a-z])/i.exec(a.trim()); return m ? `${m[1]}${m[2].toLowerCase()}` : a.replace(/\s*ago$/, ''); }
@@ -11241,6 +11255,55 @@ function asRateText(): { text: string; title: string } {
   if (aisOn && aisReport) return { text: `AIS ${fmtRate(aisReport.msgRate)} msg/min`, title: 'AIS messages per minute on this radio' };
   return { text: '', title: '' };
 }
+/* ★★★ beta96 THE STATS CARD (Stuart 14:20): per mode, never competing — NEWEST (the latest to appear, named, after the
+ *  map opened), FURTHEST (from the receiver), LONGEST TRACKED (the distance flown while THIS mode heard it, since the map
+ *  opened — the live ADS-B report's own tracked_nm where it is longer) and TRACKED LONGEST (time). Bounded: ≤ 3 000 a mode,
+ *  forgotten 10 min after they were last heard. The old list's three chips only selected (no filter) — so do these. */
+const asStats = new Map<string, Map<string, { first: number; at: number; lat: number; lon: number; nm: number; name: string }>>();
+let asStatsOpened = 0;
+function asStatsSync(v: TrackView, rx: { lat: number; lon: number } | null) {
+  const now = Date.now();
+  if (!asStatsOpened) asStatsOpened = now;
+  const firstPass = asStats.size === 0;
+  const seen = (mode: string, key: string, lat: number, lon: number, name: string, trackedNm?: number) => {
+    let m = asStats.get(mode); if (!m) { m = new Map(); asStats.set(mode, m); }
+    let e = m.get(key);
+    if (!e) { if (m.size >= 3000) return; e = { first: firstPass ? 0 : now, at: now, lat, lon, nm: 0, name }; m.set(key, e); }
+    const d = adsbRangeBearing({ lat: e.lat, lon: e.lon }, lat, lon).nm;
+    if (d > 0.05 && d < 300) e.nm += d;   // ★ a jump of 300 NM is a bad fix, never distance flown
+    e.lat = lat; e.lon = lon; e.at = now; if (name) e.name = name;
+    if (trackedNm != null && trackedNm > e.nm) e.nm = trackedNm;
+  };
+  for (const p of avShared?.aircraft ?? []) {
+    if (p.lat == null || p.lon == null) continue;
+    for (const s of p.src) seen(s, `a:${p.key}`, p.lat, p.lon, avName(p));
+  }
+  if (adsbOn && adsbReport) for (const a of adsbReport.aircraft as any[]) {
+    const lat = Number(a.lat), lon = Number(a.lon), hex = String(a.hex || '').toLowerCase();
+    if (!isFinite(lat) || !isFinite(lon) || !hex) continue;
+    seen('ADS-B', `a:${hex}`, lat, lon, String(a.flight || '').trim() || String(a.r || '').trim() || hex.toUpperCase(), Number(a.tracked_nm) || undefined);
+  }
+  const sections: Array<{ mode: string; rows: Array<{ key: string; label: string; value: string; name: string; lat?: number; lon?: number }> }> = [];
+  const ORDER = ['ADS-B', 'HFDL', 'VDL2', 'ACARS', 'ADS-C'];
+  for (const mode of [...asStats.keys()].sort((a, b) => (ORDER.indexOf(a) + 99) % 99 - (ORDER.indexOf(b) + 99) % 99)) {
+    const m = asStats.get(mode)!;
+    for (const [k, e] of m) if (now - e.at > 600_000) m.delete(k);
+    const live = [...m.entries()].filter(([, e]) => now - e.at < 120_000);
+    if (!live.length) continue;
+    const rows: (typeof sections)[number]['rows'] = [];
+    const pick = (label: string, best: [string, typeof live[number][1]] | undefined, value: string) => { if (best) rows.push({ key: best[0], label, value, name: best[1].name, lat: best[1].lat, lon: best[1].lon }); };
+    const newest = live.filter(([, e]) => e.first > 0 && e.name).sort((a, b) => b[1].first - a[1].first)[0];
+    pick('NEWEST', newest, newest ? `${Math.max(1, Math.round((now - newest[1].first) / 60000))} min ago` : '');
+    if (rx) { const fur = live.map(([k, e]) => [k, e, adsbRangeBearing(rx, e.lat, e.lon).nm] as const).sort((a, b) => b[2] - a[2])[0];
+      if (fur) rows.push({ key: fur[0], label: 'FURTHEST', value: `${Math.round(fur[2])} NM`, name: fur[1].name, lat: fur[1].lat, lon: fur[1].lon }); }
+    const lng = live.filter(([, e]) => e.nm >= 1).sort((a, b) => b[1].nm - a[1].nm)[0];
+    pick('LONGEST TRACKED', lng, lng ? `${Math.round(lng[1].nm)} NM` : '');
+    const old = live.slice().sort((a, b) => (a[1].first || asStatsOpened) - (b[1].first || asStatsOpened))[0];
+    if (old) { const mins = Math.round((now - (old[1].first || asStatsOpened)) / 60000); if (mins >= 1) pick('TRACKED LONGEST', old, `${mins} min${old[1].first ? '' : '+'}`); }
+    if (rows.length) sections.push({ mode, rows });
+  }
+  v.setStats(sections);
+}
 /** ★★★ tweak 3 the SOURCES the viewer hid (this browser's own view, never sent) — radio ids and 'feed'. */
 const AS_SRC_KEY = 'vibesdr.mapSourcesHidden';
 const asSrcHidden = new Set<string>((() => { try { const j = JSON.parse(localStorage.getItem(AS_SRC_KEY) || '[]'); return Array.isArray(j) ? j.filter((x) => typeof x === 'string').slice(0, 64) : []; } catch { return []; } })());
@@ -11308,6 +11371,7 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
                                         adsbR: AdsbReport | null; aisR: AisReport | null; avh: any; sh: any; on: (id: LiveLayerId) => boolean; present: LiveLayerId[] }) {
   const rate = asRateText();
   v.setRate(rate.text, rate.title);
+  asStatsSync(v, x.rx);
   { // ★★★ the RATE chip (Stuart 12:52): this radio's live rate, then each feed (aircraft and live / stalled — a feed's
     //     message rate is not in the server's table, so its aircraft stand in)
     const rr: Array<{ name: string; rate: string; live: boolean; words?: string }> = [];

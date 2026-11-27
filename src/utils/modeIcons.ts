@@ -30,7 +30,7 @@
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
   | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
-  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest';
+  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest' | 'stats' | 'statsLine';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -64,6 +64,22 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
   noEntry: [ { c: [12, 12, 10.2], w: 2.2 }, { d: 'M4.8 19.2 19.2 4.8', w: 2.4 } ],
   // ★ the LIST's sort (Stuart 12:58): NEAREST — range rings round the receiver; LATEST is the house clock
   nearest: [ { c: [12, 12, 8.5], w: 1.6 }, { c: [12, 12, 4.5], w: 1.6 }, { c: [12, 12, 1.5], fill: true } ],
+  /* ★ STATS (Stuart 11-27: "a bar graph with a line graph over it … more rounded"): four bars, uneven and rising, their
+   *  tops rounded, and one smooth wave above them clear of every top. Our own drawing. 'statsLine' = the bars outlined. */
+  stats: [
+    { d: 'M3 21v-4.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M8 21v-9.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M13 21v-6.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M18 21v-11.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M2.5 11.5C5.5 9.2 7.2 6.2 10 6.6s4.2 2.4 6.6 0.6S19.5 2.8 21.6 2.6', w: 1.9 },
+  ],
+  statsLine: [
+    { d: 'M3.8 21v-4.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M8.8 21v-9.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M13.8 21v-6.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M18.8 21v-11.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M2.5 11.5C5.5 9.2 7.2 6.2 10 6.6s4.2 2.4 6.6 0.6S19.5 2.8 21.6 2.6', w: 1.9 },
+  ],
   /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
   list: [
     { d: 'M9 6h11M9 12h11M9 18h11' },

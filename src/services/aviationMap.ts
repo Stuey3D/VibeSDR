@@ -389,6 +389,7 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
       range: rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM` : p.lat == null ? 'no position' : '',
       brg: rb ? compass8(rb.brg) : '', noPos: p.lat == null, age: ago(Math.min(p.age, ...Object.values(p.srcAge))), em: false,
       mil: !!p.info?.mil,
+      gs: p.gs != null && p.gs >= 0 && !p.ground ? `${Math.round(p.gs)}kt` : '',   // ★ beta96 the pill's ground speed (Stuart 14:14)
     };
   });
 }

@@ -12,13 +12,13 @@
 /* ★★★ TWEAK 3 (Stuart 11-27, live): the HEALTH CARDS' shape — four chips FLANKING the map, each popping out a card and
  *  shrinking back: TUNE and LAYERS down the LEFT edge, MAP CONTROLS on the RIGHT, LIST at the BOTTOM (its card pops up).
  *  KEY and SOURCES live inside MAP CONTROLS now. */
-export const CARD_IDS = ['tune', 'layers', 'servers', 'map', 'list', 'help', 'rate', 'chat'] as const;
+export const CARD_IDS = ['tune', 'layers', 'servers', 'map', 'list', 'help', 'rate', 'chat', 'stats'] as const;
 export type CardId = typeof CARD_IDS[number];
-export const CARD_LABEL: Record<CardId, string> = { tune: 'TUNE', layers: 'LAYERS', servers: 'SERVERS', map: 'MAP', list: 'LIST', help: 'HELP', rate: 'RATE', chat: 'CHAT' };
+export const CARD_LABEL: Record<CardId, string> = { tune: 'TUNE', layers: 'LAYERS', servers: 'SERVERS', map: 'MAP', list: 'LIST', help: 'HELP', rate: 'RATE', chat: 'CHAT', stats: 'STATS' };
 /** Where each chip sits and its card opens: L = the left edge, R = the right edge, B = the bottom (the card pops up). */
 /* ★★★ Stuart 12:50–12:56 (no top bar): the big X top-left (above SERVERS), the shared-tuner pill top-centre, and down the
  *  RIGHT edge the RATE chip (static with one source; a card of every mode / source with several), CHAT, then the zoom. */
-export const CARD_SIDE: Record<CardId, 'L' | 'R' | 'B' | 'H'> = { tune: 'L', layers: 'L', servers: 'L', map: 'R', list: 'B', help: 'H', rate: 'R', chat: 'R' };
+export const CARD_SIDE: Record<CardId, 'L' | 'R' | 'B' | 'H'> = { tune: 'L', layers: 'L', servers: 'L', map: 'R', list: 'B', help: 'H', rate: 'R', chat: 'R', stats: 'L' };
 /** A window narrower than this is a phone's: ONE card at a time; the LAYERS chip stands as a slim column. */
 export const CARD_NARROW_W = 600;
 /** A card's width on a wide window (px / pt); narrower under CARD_ROOMY_W so a left and a right card leave the map. */
@@ -106,6 +106,7 @@ export const MAP_HELP: Array<{ id: Exclude<CardId, 'help'>; name: string; words:
   { id: 'layers', name: 'LAYERS', words: 'What is on the map. Tap a row to show or hide it.' },
   { id: 'map', name: 'MAP', words: 'Time filter, fit, rings, range, labels, sources and the key.' },
   { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message, nearest or latest.' },
+  { id: 'stats', name: 'STATS', words: 'Newest, furthest and longest tracked, per mode. Tap one to show it.' },
   { id: 'rate', name: 'RATE', words: 'Messages a minute (ADS-B a second). With several sources, tap for each one.' },
   { id: 'chat', name: 'CHAT', words: 'The shared radio\u2019s canned messages \u2014 how listeners agree who tunes next.' },
 ];

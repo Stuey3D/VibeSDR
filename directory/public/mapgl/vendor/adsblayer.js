@@ -1223,6 +1223,9 @@
       return true;
     }
     function liveHas() { return liveKm.some((v) => v > 0); }
+    // ★ for the drivers (scripts/test-web-map-cards.mjs, the range checks): the outline's state and the aircraft's fixes
+    global.__vsRange = () => ({ live: liveKm.slice(), stored: rangeData && rangeData.km ? rangeData.km.slice() : null, shaped: rangeShape(rangeMerge(rangeData && rangeData.km, liveKm)),
+      c: drawCentre(), liveC, ac: [...ac.values()].filter((s) => s.fix).map((s) => ({ hex: s.hex, name: labelName(s), lat: s.fix.lat, lon: s.fix.lon, rg: !!s.rg, sparse: !!(s.a && s.a.sparse) })) });
     function farOf(a, b) { return a && b ? (b.km > a.km ? b : a) : a || b || null; }
     /** Redraw soon (at most every 1.5 s) — the outline grows from 1 Hz reports. */
     function rangeSoon() {

@@ -10535,6 +10535,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Phase accumulator per listener, advanced once per emitted frame. Fractional, so a client
      *  asking 7 fps off a 20 fps engine gets 7 — not the nearest integer divisor. */
     std::map<net::Socket*, double> clientFpsAcc;
+    /** ★★ V12 beta96 SPECTRUM PAUSED for this listener (Stuart 11-27: "the waterfall doesn't need to run at all under the
+     *  map"): {"type":"spec","on":0} while a full-screen map covers the page, {"on":1} after. Frames are simply not due
+     *  for it — no pipeline rebuild (fftRate would rebuild it and dip the audio), nothing else touched; an older client
+     *  never sends it. Touched only under clientMtx; forgotten with the socket. */
+    std::set<net::Socket*> specPaused;
     /** ★★★ WHAT THE ENGINE ACTUALLY EMITS, measured — see dueForFrame. The smoothed gap between
      *  emitted frames (ms); 0 = not measured yet. Touched only in dueForFrame, under clientMtx. */
     double emitGapEmaMs = 0.0, lastEmitMs = 0.0;
@@ -13569,6 +13574,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         lastEmitMs = nowMs;
         const double made = emitGapEmaMs > 0.0 ? std::min(engine, 1000.0 / emitGapEmaMs) : engine;
         for (size_t i = 0; i < peers.size(); i++) {
+            if (specPaused.count(peers[i].sock.get())) { due[i] = 0; continue; }   // ★ a map covers its waterfall
             const double want = peers[i].fps > 0 ? peers[i].fps : baseFftRate;
             if (want <= 0 || want >= made) clientFpsAcc[peers[i].sock.get()] = 0.0;
             else {
@@ -25617,6 +25623,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★★ V12 PRESENCE (Stuart 11-24): the app says when it goes to the background and comes back — see "PRESENCE"
         //    by holdStartLocked. Not gated: it moves nothing.
+        // ★★ V12 beta96 the spectrum paused / resumed for THIS listener (a full-screen map over its waterfall) — see specPaused
+        if (type == "spec") {
+            double onV = 1; jsonNum(msg, "on", onV);
+            if (sock) { std::lock_guard<std::mutex> lk(clientMtx); if (onV != 0) specPaused.erase(sock.get()); else specPaused.insert(sock.get()); }
+            return;
+        }
         if (type == "presence") {
             if (sock) { const std::string st = jsonStr(msg, "state");
                         std::lock_guard<std::mutex> lk(clientMtx); presenceNoteLocked(sock.get(), st == "background"); }
@@ -33165,7 +33177,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     listener is actually registered — see the note there. */
         if (!isAudio) {
             std::lock_guard<std::mutex> lk(clientMtx);
-            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); clientSpecAudit.erase(sock.get());
+            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); clientSpecAudit.erase(sock.get()); specPaused.erase(sock.get());
         }
 
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
@@ -34055,6 +34067,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           clientFps.erase(sock.get());
           clientFpsAcc.erase(sock.get());
           clientSpecAudit.erase(sock.get());
+          specPaused.erase(sock.get());
           wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
           stampSubscribe(sock.get(), false);  // ★ V12 beta83 the span stamp (stampMtx_ is a leaf lock too)
           adsbDeltaSubscribe(sock.get(), false);   // ★ V12 beta96 ADS-B deltas (a leaf lock too)
