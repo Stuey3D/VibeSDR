@@ -4168,7 +4168,27 @@ function specUnderMap(covered: boolean) {
   if (!covered && loopParked) { loopParked = false; requestAnimationFrame(loop); }
 }
 (window as any).__vibeSpecUnderMap = () => ({ off: specOffSent, parked: loopParked });
-window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderMap(false); });
+window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderMap(false); mapChromeAdopt(false); });
+/* ★★ Stuart 14:38: the radio page's own SERVER HEALTH chip lent to the map's right column while a map is up (the same
+ *  element, so its card, its tuck and its alerts work as they do on the page), and the TIME LIMIT mirrored as a chip. */
+const healthHome: { parent: Node | null; next: Node | null } = { parent: null, next: null };
+function mapChromeAdopt(on: boolean) {
+  const h = document.getElementById('srvHealth');
+  const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
+  const col = v?.querySelector('.mChipsR') as HTMLElement | null;
+  if (h) {
+    if (on && col) { if (h.parentElement !== col) { healthHome.parent = h.parentNode; healthHome.next = h.nextSibling; col.insertBefore(h, col.querySelector('[data-dock="map"]')); } }
+    else if (!on && healthHome.parent && h.parentNode !== healthHome.parent) h.parentNode && (healthHome.parent as Element).insertBefore(h, healthHome.next && healthHome.next.parentNode === healthHome.parent ? healthHome.next : null);
+  }
+  mapTimeSync();
+}
+function mapTimeSync() {
+  const t = document.getElementById('rxTimeLeft');
+  const text = t && !t.hidden ? (t.textContent || '').trim() : '';
+  for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft(text, t?.className || '');
+}
+window.addEventListener('vibe:mapopened', () => mapChromeAdopt(true));
+{ const t = document.getElementById('rxTimeLeft'); if (t && typeof MutationObserver !== 'undefined') new MutationObserver(() => mapTimeSync()).observe(t, { attributes: true, childList: true, characterData: true, subtree: true }); }
 
 function renderFrame(frameTs: number) {
   if (!wf || !spec) return;

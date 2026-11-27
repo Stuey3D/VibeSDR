@@ -741,6 +741,11 @@ const CSS = `
 /* a row's long title is a mouse's tooltip, never a touch's */
 @media (hover:none){.trkRow{-webkit-touch-callout:none}}
 .mHelp,.mChipsScale{transition:transform .2s ease}
+/* ★★ the radio page's SERVER HEALTH chip, lent to the map's right column (main.ts mapChromeAdopt) — in the flow, not fixed */
+.trkView .mChipsR #srvHealth{position:relative!important;top:auto!important;right:auto!important;left:auto!important;bottom:auto!important;transform:none!important;pointer-events:auto;align-self:flex-end}
+.mTime .hCard{padding:6px 5px!important;min-width:30px}
+.mTime .tl{writing-mode:vertical-rl;transform:rotate(180deg);font:700 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#cfd9e3}
+.mTime.warn .tl{color:#ffd479}.mTime.crit .tl{color:#ff8a7d}
 .trkCard2[data-card="stats"] .stTabs{display:flex;gap:4px;padding:6px 8px 2px;flex-wrap:wrap}
 .trkCard2[data-card="stats"] .stTabs[hidden]{display:none}
 .trkCard2[data-card="stats"] .stTab{all:unset;cursor:pointer;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#8fa2b5;padding:5px 8px;border-radius:999px;border:1px solid #2c3a4a}
@@ -892,7 +897,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mDock .le{flex-direction:column!important;gap:2px!important;font-size:10.5px!important}
 .mDock .lg svg{width:15px;height:15px}
 /* ★ the SCALE chip: right edge, bottom, above the ? (and clear of the zoom ± up top) */
-.mChipsScale{right:0;bottom:calc(var(--trk-attrib-h,0px) + 50px)}
+.mChipsScale{right:0;bottom:calc(var(--trk-attrib-h,0px) + 48px)}   /* the bottom-right stack: (i) · 8 px · ? (30) · 10 px · the scale */
 .mScale .hCard{cursor:default!important;padding:6px 5px!important;min-width:0!important}
 .mScale[hidden]{display:none}
 .mScaleBody{display:flex;align-items:flex-start;gap:4px}
@@ -914,7 +919,7 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .mChipsBL .mDock .mchip{flex-direction:column!important;min-height:44px!important}
 .mChipsBL .mDock .hCard{border-radius:12px 12px 0 0}
 /* ★★★ the ? HELP button and its card, bottom-right above the attribution */
-.mHelp{all:unset;box-sizing:border-box;position:absolute;right:10px;bottom:calc(var(--trk-attrib-h,0px) + 10px);z-index:790;width:30px;height:30px;
+.mHelp{all:unset;box-sizing:border-box;position:absolute;right:10px;bottom:calc(var(--trk-attrib-h,0px) + 8px);z-index:790;width:30px;height:30px;
   border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font:800 15px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);
   background:rgba(8,12,8,.86);border:1.5px solid rgba(120,200,120,.45);box-shadow:0 2px 8px rgba(0,0,0,.45)}
 .mHelp:hover,.mHelp:focus-visible,.mHelp.on{border-color:var(--hc,#5BE36B);outline:none;background:#16231a}
@@ -1174,6 +1179,7 @@ export class TrackView {
       + `${dock('stats', 'left', 'STATS', `<span class="ic">${modeIconSvg('stats', 'mIco')}</span>`, 'the stats card')}</div>`
       + `<div class="mChips mChipsR">${dock('rate', 'right', 'RATE', `<span class="ic rateIc"><span class="rv"><span class="rn"></span><span class="ru"></span></span><span class="rmore"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'every source\u2019s message rate')}`
       + `${dock('chat', 'right', 'CHAT', `<span class="ic"><svg class="mIco" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="9" cy="10.5" r="1.1" fill="currentColor"/><circle cx="12" cy="10.5" r="1.1" fill="currentColor"/><circle cx="15" cy="10.5" r="1.1" fill="currentColor"/></svg><span class="unr" hidden></span></span>`, 'the chat')}`
+      + `<div class="edgeDock mDock mTime" data-dock="time" hidden><div class="hCard"><span class="tl" role="timer" aria-live="off"></span></div></div>`
       + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
       + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
@@ -1861,6 +1867,18 @@ export class TrackView {
       this.closeTransients();
     };
   }
+  /** ★★ Stuart 14:38 the TIME LIMIT on the map (the radio page's #rxTimeLeft, mirrored): shown only while a limit applies. */
+  setTimeLeft(text: string, cls = '') {
+    const d = this.root.querySelector('.mDock[data-dock="time"]') as HTMLElement | null;
+    if (!d) return;
+    d.hidden = !text;
+    const t = d.querySelector('.tl') as HTMLElement;
+    if (t.textContent !== text) t.textContent = text;
+    d.classList.toggle('warn', /\bwarn\b/.test(cls)); d.classList.toggle('crit', /\bcrit\b/.test(cls));
+    d.title = text ? `Time left on this server: ${text}` : '';
+  }
+  /** The right column, where the page's own chips (SERVER HEALTH) are lent while the map is up. */
+  rightColumn(): HTMLElement { return this.root.querySelector('.mChipsR') as HTMLElement; }
   chatHost(): HTMLElement { return this.root.querySelector('.trkCard2[data-card="chat"] .chatBody') as HTMLElement; }
   /** The facts the old status paragraph carried, each in the card it belongs to ('' = none). */
   setFacts(f: Partial<Record<'list' | 'tune' | 'layers', string>>) {
@@ -2493,6 +2511,7 @@ export class TrackView {
 
   show(rx: LatLon | null) {
     document.body.classList.add('trkMapUp');
+    queueMicrotask(() => window.dispatchEvent(new Event('vibe:mapopened')));   // ★ the page lends its health chip (main.ts)
     this.rx = rx;
     (window as any).__vibeTrkView = this;   // ★ for drivers (scripts/test-web-map-cards.mjs): the view last shown
     if (this.open) return;
@@ -2787,7 +2806,10 @@ export class TrackView {
     const at = this.mapHost.querySelector('.leaflet-control-attribution, .maplibregl-ctrl-attrib') as HTMLElement | null;
     if (!at || typeof ResizeObserver === 'undefined') return;
     const sync = () => {
-      const h = at.getBoundingClientRect().height;
+      // ★ Stuart 14:38 (the ? on the credits' (i)): the room the credits take is from their TOP to the map's foot — their
+      //   own height left out the control's margin, so the ? sat on the (i)
+      const ab = at.getBoundingClientRect(), mb = this.mapHost.getBoundingClientRect();
+      const h = ab.height > 0 ? Math.max(0, mb.bottom - ab.top) : 0;
       const wide = this.mapHost.clientWidth > 520;
       // ★ on a wide map the attribution is to the right of the list; only where they share the width does it push up
       // ★ beta96 the cards always stop above the attribution line (a tall KEY card ran under it on a wide window, Stuart 11-27)
