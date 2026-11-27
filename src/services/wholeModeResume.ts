@@ -60,9 +60,12 @@ export type ResumeStep =
 
 const NONE: ResumeStep = { do: 'none' };
 
-/** ★ The words when the server gave no reason (an older server that does not know `mode_resume`, or no answer). */
+/** ★ The words when the server gave no reason (an older server that does not know `mode_resume`, or no answer).
+ *  ★★★ b96-satgrace (Mac Ha): it said "The receiver left AIS while you were away" — a claim this app cannot know (the
+ *  answer may simply have been lost on a weak link, and a satellite pass may be what holds the radio). Only what we DO
+ *  know: the reports stopped and nothing answered. A server that knows why now says so (resumeWhyNot, modeResumeGated). */
 export function defaultGoneWhy(kind: WholeKind): string {
-  return `The receiver left ${WHOLE_LABEL[kind]} while you were away.`;
+  return `${WHOLE_LABEL[kind]} stopped on this receiver, and it did not answer when asked for it back.`;
 }
 
 /**
