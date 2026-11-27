@@ -656,6 +656,9 @@ interface ModeSelectorProps {
     /** Translation target ('' = off) and the phone's language, the one target offered beside OFF / EN. */
     translateTo: string; deviceLanguage: string; onTranslateTo: (code: string) => void;
   } | null;
+  /** ★★★ Held back by ask-before-tuning (or an owner's scan): the keys that change the room are drawn dimmed (Stuart,
+   *  2026-11-27: "we want to prevent decoder/demodulator changing but still need access to the maps/gallery"). */
+  askLocked?: boolean;
   spotsControls?: {
     label: string; spotsKind: string | null;
     onSpotsToggle: (k: 'digi' | 'cw') => void; onSpotsMap?: () => void;
@@ -673,7 +676,11 @@ interface ModeSelectorProps {
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose, freedv,
   filterLow: ownLow = 0, filterHigh: ownHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth, autoBw,
   showServerMaps = false, onServerMap, serverMapHide, owrxPages,
-  decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false, dialHz }: ModeSelectorProps) {
+  decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false, dialHz, askLocked = false }: ModeSelectorProps) {
+  /* ★★★ HELD BACK BY ASK-BEFORE-TUNING (or an owner's scan): what changes the room — the demodulators, the width, the
+   *  whole-radio keys, every decoder and its options, the spots — is DIMMED, locked and never missing; SDRScreen's gate
+   *  (askLockCtl) makes a press nudge. The VIEWS (GALLERY, the maps, the DX LOG), the band tabs and the links stay lit. */
+  const lockDim = askLocked ? st.askDim : null;
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const [dcInfoOpen, setDcInfoOpen] = useState(false);   // ★ V12 beta25 — the DC spike's explanation, opened by its key
   const [cwGuideOpen, setCwGuideOpen] = useState(false);   // ★ V12 — the CW terms guide (CwTermsGuide), over this sheet
@@ -2130,6 +2137,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         <Text style={[st.sheetLabel, secLbl]}>
           DEMODULATOR
         </Text>
+        <View style={lockDim}>
         <NavRow><View style={st.grid}>
           {common.map(m => (
             <NavItem key={m.id} onPress={() => pick(m.id)}>{(navFocused, navRef) => pt.metal ? (
@@ -2388,6 +2396,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </View>
         )}
 
+        </View>
+
         {/* CLIENT DECODERS — relocated from MenuSheet (§4.3). Below the mode grid + passband: a decoder rides on the demod you
             set above. Selecting one starts DecoderClient; ★ V12 its settings POP OUT OF ITS KEY onto the row below it
             (KeyGrid); tapping again tears it down. */}
@@ -2401,7 +2411,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 all when there is one. Within a band: Aviation · Maritime · Amateur · Utility / Broadcast / Sensors, each
                 with its glyph; an empty group is not drawn (utils/decoderBands — shared with the web). */}
             {wholeKeys.length > 0 && (
-              <View>
+              <View style={lockDim}>
                 <View style={dst.groupHead} accessible accessibilityRole="header">
                   <Text style={[dst.groupText, secLbl]}>{WHOLE_RADIO_LABEL}</Text>
                 </View>
@@ -2417,6 +2427,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 <SegBtn key={b} label={RADIO_BANDS.find(x => x.id === b)!.label} active={decTab === b} onPress={() => setBandTab(b)} />
               ))}</OptRow>
             )}
+            <View style={lockDim}>
             {DECODER_PLACES[decTab].map(({ group, ids }) => {
               const keys = ids.map(id => ({ id, node: decKeyFor(id) })).filter(k => !!k.node);
               if (!keys.length) return null;
@@ -2431,6 +2442,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </View>
               );
             })}
+            </View>
             {/* ★ beta92 SCANNER moved into TUNES THE RADIO ITSELF (wholeKeys). (GALLERY and TRANSCRIBE are in VIEWS.) */}
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
@@ -2461,7 +2473,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
               {spotsControls.label}
             </Text>
-            <KeyGrid items={spotItems} grid={keyGrid} shade={optShade} recess={optRecess} />
+            <View style={lockDim}><KeyGrid items={spotItems} grid={keyGrid} shade={optShade} recess={optRecess} /></View>
             {/* ★ Band's reason when it cannot run (the web's #spotsBandWhy), or what it covers. */}
             {!!spotsControls.band && !bandInWhole && spotsBandCaption()}
           </View>
@@ -2567,6 +2579,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
 }
 
 const st = StyleSheet.create({
+  askDim:       { opacity: 0.35 },   // ★★★ held back by ask-before-tuning: locked, never missing (the web's 0.35)
   backdrop:     { flex: 1 },
   sheet: {
     backgroundColor: 'rgba(8,6,1,0.97)',

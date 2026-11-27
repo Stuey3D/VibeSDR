@@ -5,7 +5,7 @@
 //   2. the banner says what to do now, and never runs longer than today's widest banner;
 //   3. both web and app gate their tuning sends on the same reader.
 import fs from 'node:fs';
-import { parseAsk, askLocked, askBannerText, ASK_NUDGE_TEXT, ASK_SHARED_SETTINGS, dialSummary, DIAL_PHRASES, bannerLine } from '../src/services/dialChat.ts';
+import { parseAsk, askLocked, askBannerText, ASK_NUDGE_TEXT, ASK_SHARED_SETTINGS, dialSummary, DIAL_PHRASES, bannerLine, askGateControls, ASK_SHEET_FREE } from '../src/services/dialChat.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -94,6 +94,45 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
   const appWs = read('src/services/VibeServerWsClient.ts'), web = read('web/client/src/spectrum.ts');
   ok(/_sendCtl\(obj[^)]*\) \{\s*\/\/[^\n]*\n\s*if \(this\.tuneLocked && ASK_SHARED_SETTINGS\.has/.test(appWs), 'app: the control sender drops a locked setting');
   ok(/_send\(obj[^)]*\) \{[\s\S]{0,400}if \(this\.tuneLocked && ASK_SHARED_SETTINGS\.has/.test(web), 'web: the one sender drops a locked setting');
+}
+
+// ── 5. ★★★ HELD BACK, YOU CAN STILL LOOK (Stuart, 2026-11-27: "i have no way of getting to the gallery" … "we want to
+//       prevent decoder/demodulator changing but still need access to the maps/gallery") — the app's mode sheet ──
+{
+  const read = (f: string) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  let locked = true, nudges = 0;
+  const gate = () => { if (!locked) return false; nudges++; return true; };
+  const ran: string[] = [];
+  const ctl = askGateControls({
+    decOn: false, label: 'x',
+    onDecToggle: (m: string) => { ran.push('dec:' + m); }, onDab: () => { ran.push('dab'); }, onScan: () => { ran.push('scan'); },
+    onRttySettings: () => { ran.push('rttyOpt'); },
+    onGallery: () => { ran.push('gallery'); }, onDxLog: () => { ran.push('dxlog'); }, onAirSeaView: () => { ran.push('airsea'); },
+    onDecWhy: () => { ran.push('why'); },
+    band: { ok: true, on: false, hint: '', onPress: () => { ran.push('band'); } },
+  }, gate)!;
+  ctl.onDecToggle('rtty'); ctl.onDab(); ctl.onScan(); ctl.onRttySettings(); ctl.band.onPress();
+  ok(ran.length === 0 && nudges === 5, `★ locked: a decoder toggle, its options, DAB, the scanner and BAND change nothing — each nudges (${nudges})`);
+  ctl.onGallery(); ctl.onDxLog(); ctl.onAirSeaView(); ctl.onDecWhy();
+  ok(ran.join() === 'gallery,dxlog,airsea,why' && nudges === 5, '★ locked: GALLERY, DX LOG, the AIR & SEA viewer and a reason key open, unasked');
+  ok(ctl.decOn === false && ctl.label === 'x', 'the values ride through untouched');
+  locked = false; ran.length = 0;
+  ctl.onDecToggle('navtex'); ctl.band.onPress();
+  ok(ran.join() === 'dec:navtex,band', 'let in: every handler runs as it always did');
+  ok(askGateControls(null, gate) === null, 'no row, no wrapping');
+  // ★ every free key is one the sheet is really given (a renamed prop would otherwise be gated without anyone noticing)
+  const ms = read('src/components/ModeSelector.tsx'), sdr = read('src/screens/SDRScreen.tsx');
+  for (const k of ASK_SHEET_FREE) ok(new RegExp(`\\b${k}\\??:`).test(ms), `${k} is a ModeSelector handler`);
+  ok(/decoderControls=\{askLockCtl\(/.test(sdr) && /spotsControls=\{askLockCtl\(/.test(sdr), 'SDRScreen gates the sheet\'s decoder and spots rows');
+  ok(/askLocked=\{askLocked\(dialState\) \|\| scanLockMine\}/.test(sdr) && /askLocked = false \}: ModeSelectorProps/.test(ms), '…and tells the sheet to dim them');
+  ok(/const onModeOpen *= *useCallback\(\(\) => setModeSelOpen\(true\)/.test(sdr), 'the mode key still OPENS the sheet while locked (it is the way to the views)');
+  // ★ the web's twin
+  const main = read('web/client/src/main.ts'), mob = read('web/client/src/mobile.ts'), html = read('web/client/index.html');
+  const shield = /const ASK_SHIELD_SEL = ([^;]+);/.exec(main)?.[1] ?? '';
+  ok(!!shield && !/#mMode\b/.test(shield), 'web: the mode pill is no longer shielded');
+  ok(/const ASK_MENU_SEL = '#mModeMenu, #decodersPanel'/.test(main) && /\[data-askok\]/.test(main), 'web: the menu and the decoders panel are shielded but for data-askok');
+  ok(/decRow\.dataset\.askok/.test(mob) && /id="viewsRow" data-askok/.test(html), 'web: DECODERS… and the VIEWS are marked free');
+  ok(/vg\.id = 'mModeViews'/.test(mob), 'web: with one decoder left (or none) the menu carries the VIEWS');
 }
 
 console.log(`test_ask_before_tuning: ${pass} passed, ${fail} failed`);

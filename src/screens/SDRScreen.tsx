@@ -273,7 +273,7 @@ import ChatDrawer,
   { type ChatMessage, type ShareItem, useHiddenChatUsers } from '../components/ChatDrawer';
 import { openWebPage } from '../utils/openWebPage';
 import { padPhrases, bannerLine, BannerGate, isQuestion, isAnswer, phraseWiki, phraseDecoder, ANSWER_WINDOW_MS, phraseText, dialSummary, speakerName,
-         askLocked, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, mapSharedLine, type DialState } from '../services/dialChat';
+         askLocked, askGateControls, ASK_NUDGE_TEXT, chatT, chatLang, chatLangDetected, onChatLang, joinedLine, dabFreePhase, mapSharedLine, type DialState } from '../services/dialChat';
 import { airSeaTuneRows, airSeaTuneChip } from '../services/airSeaTune';   // ★★★ beta96 the AIR & SEA map's TUNE chip
 import { radiosOf, otherRadiosOffered, sessionOffered, otherRadiosOf, radiosSeen, sessionStart, sessionWindow, withSession, FirstSeen, scopeRadioOk, OTHER_RADIOS_KEY_APP,
          OTHER_RADIOS_LABEL, OTHER_RADIOS_WORDS, OTHER_RADIOS_CHIP, SESSION_ID, SESSION_WORDS, type MapScope } from '../services/mapScope';   // ★★★ beta96 the maps' scope
@@ -5929,6 +5929,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  handler the SHEET calls is wrapped, so a restore on connect never nudges (the client drops those silently). */
   const askWrap = useCallback(<A extends unknown[]>(fn: (...a: A) => void) =>
     (...a: A) => { if (askGate()) return; fn(...a); }, [askGate]);
+  /** ★★★ THE MODE SHEET WHILE HELD BACK (Stuart, 2026-11-27: "we want to prevent decoder/demodulator changing but still
+   *  need access to the maps/gallery"). Every on…() handler the sheet's decoder / spots rows are given goes through the
+   *  gate — a decoder switched on or off (retuning or not), its options, the whole-radio keys, the scanner, BAND — so a
+   *  locked press nudges and changes nothing. dialChat.ASK_SHEET_FREE are the VIEWS (GALLERY, DX LOG, the maps) and the
+   *  reason keys: read-only, live while locked. ModeSelector dims the rest (askLocked). The web's twin: main.ts askShielded. */
+  const askLockCtl = useCallback(<T extends object>(o: T | null): T | null => askGateControls(o, askGate), [askGate]);
   /// ★ Read inside the watch command handlers, which are registered once — a captured boolean
   ///   would be whatever it was when the screen mounted, i.e. always false.
   const sharedDialRef = useRef(false);
@@ -17974,9 +17980,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         filterHigh={status.bandwidthHigh}
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
         bwEdgeMin={client.current ? filterEdgeMin(client.current.caps, status.mode) : 0}
-        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) || (status.mode === 'dvsig' && dvsigCap) ? undefined : onFilterBoth}   // ★ V12 DRM / FreeDV / M17: the width row is not offered
+        onFilterBoth={status.mode === 'drm' || (status.mode === 'freedv' && freedvCap.length) || (status.mode === 'm17' && m17Cap) || (status.mode === 'dvsig' && dvsigCap) ? undefined : askWrap(onFilterBoth)}   // ★ V12 DRM / FreeDV / M17: the width row is not offered · ★★ the width is the room's while held back
         /* ★ V12 FreeDV: AUTO and the server's sub-modes, in the width row's place, while the mode is FreeDV */
-        freedv={status.mode === 'freedv' && freedvCap.length ? { subs: freedvCap, sub: freedvState?.sub ?? 'auto', onSub: onFreedvSub, sb: freedvState?.sbSel ?? 'auto', onSb: onFreedvSb } : null}
+        freedv={status.mode === 'freedv' && freedvCap.length ? { subs: freedvCap, sub: freedvState?.sub ?? 'auto', onSub: askWrap(onFreedvSub), sb: freedvState?.sbSel ?? 'auto', onSb: askWrap(onFreedvSb) } : null}
         /* ★★ V12 AUTO above SYNC — only where this server lists the mode (autoBwModes); the sliders show what AUTO chose
          *  while it cuts; a drag is a manual override, so ModeSelector turns AUTO off first (onAutoBw(false)). */
         autoBw={autoBwOffered(icom ? [] : autoBwModes, status.mode)
@@ -17990,7 +17996,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           onMap:   () => { setModeSelOpen(false); onAdminLink('/map', 'Map'); },
           onFiles: () => { setModeSelOpen(false); onAdminLink('/files', 'Files'); },
         } : null}
-        decoderControls={((route.params.serverType ?? 'ubersdr') !== 'owrx' || scanPol.offered) && (!isLandscape || isTablet) ? {
+        askLocked={askLocked(dialState) || scanLockMine}
+        decoderControls={askLockCtl(((route.params.serverType ?? 'ubersdr') !== 'owrx' || scanPol.offered) && (!isLandscape || isTablet) ? {
           /* ★★ V12 THE SCANNER — a decoder-box item on every backend scanPolicy allows (absent where it does not). On
            *  OpenWebRX it is the row's only key: its own decoders are demodulators in this sheet. */
           scanAvail: scanPol.offered,
@@ -18279,7 +18286,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onAprsTune: () => { const t = packetTune(packetModeRef.current, aprsCap.hz) ?? aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onDecTuneHz(t.hz, t.mode as SDRMode); },
           // ★ V12 the packet choices only where the server says it has them (an older server: the two old keys)
           ...(packetCaps.fec || packetCaps.has9600 ? { packetCaps, packetMode, pktFx25: pktFec.fx25, pktIl2p: pktFec.il2p, onPacketMode, onPacketFec } : {}),
-        } : null}
+        } : null)}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',
           selected: selDecoder === 'transcribe' && activeDecoder !== 'transcribe',
@@ -18371,19 +18378,20 @@ export default function SDRScreen({ route, navigation }: Props) {
             if (activeDecRef.current === 'transcribe') openDecoder('transcribe');
           },
         } : null}
-        spotsControls={(route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
+        spotsControls={askLockCtl((route.params.serverType ?? 'ubersdr') !== 'owrx' ? {
           label: (isLocal || isKiwi) ? 'DECODED SPOTS' : 'SERVER EXTENSIONS',
           spotsKind, onSpotsToggle,
           /* ★★ V12 BAND — only where this radio's vibeserver.json lists spotBands (absent = no key); greyed with its why. */
           band: spotsBandCap ? { ok: spotsBandCap.ok, on: spotsBandOn, hint: spotsBandHint(spotsBandCap), onPress: onSpotsBand } : undefined,
           singleOn: spotsKind === 'digi' && !spotsBandOn,
-          onSpotsMap: () => { setModeSelOpen(false); if (spotsKindRef.current !== 'digi') onSpotsToggle('digi'); setLocalMapOpen(true); },
+          // ★★ a VIEW: held back by ask-before-tuning it opens the map as it is, never switching the spots on
+          onSpotsMap: () => { setModeSelOpen(false); if (spotsKindRef.current !== 'digi' && !askLocked(dialStateRef.current) && !scanLockRef.current) onSpotsToggle('digi'); setLocalMapOpen(true); },
           // ★★ beta90 on a VibeServer the MAP is the DIGI MODES MAP (its station store + APRS) — shown with APRS alone too
           showCwStt: !isLocal && !isKiwi, showMap: isLocal || isKiwi, mapLabel: (client.current as any)?.isVibe ? 'AMATEUR' : undefined,
           sttActive: selDecoder === 'whisper' && activeDecoder === 'whisper',
           sttSelected: selDecoder === 'whisper' && activeDecoder !== 'whisper',
           onSttToggle: () => onDecToggle('whisper'),
-        } : null}
+        } : null)}
       />
       </PanelBoundary>
 

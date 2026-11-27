@@ -272,6 +272,29 @@ export const ASK_SHARED_SETTINGS = new Set<string>([
 ]);
 
 
+/** ★★★ THE APP'S MODE SHEET WHILE HELD BACK (Stuart, 2026-11-27: "we want to prevent decoder/demodulator changing but still
+ *  need access to the maps/gallery"). These on…() handlers stay LIVE — the VIEWS (GALLERY, DX LOG, the maps; read-only,
+ *  they never move the radio or switch a decoder) and the keys that only explain why something is unavailable. Every
+ *  other on…() handler of the sheet's decoder / spots rows goes through the gate (askGateControls). The web's twin is
+ *  main.ts askShielded (data-askok marks the same doors). */
+export const ASK_SHEET_FREE: ReadonlySet<string> = new Set(['onGallery', 'onDxLog', 'onAirSeaView', 'onAvMap', 'onShipMap',
+  'onSpotsMap', 'onDecWhy']);
+
+/** A copy of `o` whose on…() handlers (and a nested `band.onPress`) ask `gate` first: true = refused (the gate has nudged),
+ *  and the handler does not run. ASK_SHEET_FREE's are passed through untouched. Unlocked, the gate says false and every
+ *  handler runs as it always did. */
+export function askGateControls<T extends object>(o: T | null, gate: () => boolean): T | null {
+  if (!o) return o;
+  const wrap = (fn: (...a: unknown[]) => unknown) => (...a: unknown[]) => { if (gate()) return undefined; return fn(...a); };
+  const out: Record<string, unknown> = { ...(o as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v === 'function' && /^on[A-Z]/.test(k) && !ASK_SHEET_FREE.has(k)) out[k] = wrap(v as (...a: unknown[]) => unknown);
+  }
+  const band = out.band as { onPress?: () => void } | undefined;   // ★ spots BAND's key carries its own press
+  if (band && typeof band.onPress === 'function') out.band = { ...band, onPress: wrap(band.onPress) };
+  return out as T;
+}
+
 /** ★★ The shared-tuner banner's standing words while locked — what to do NOW, not a rule to remember.
  *  ★ `tight` drops the "SHARED TUNER · " prefix first (SE in Display Zoom), never the words that matter.
  *  ★ A NO says WHEN it ends as a clock time, so the banner does not have to tick every second. */
