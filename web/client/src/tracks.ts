@@ -21,7 +21,7 @@ import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96
 import { flagEmoji } from '../../../src/services/adsbInfo';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
-import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
+import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
@@ -685,6 +685,25 @@ const CSS = `
 /* ★★★ TWEAK 4 (Stuart 11-27): a press on a chip EXPANDS it in place into its card (flush to the same edge, the dock's
  *  rim); its header shrinks it back. The tuck › stays the separate, deliberate action — smaller, set off by a rule. */
 .mDock.open{visibility:hidden}
+/* ★★★ tweak 5 (Stuart 11-27: "other cards can cover the list with a drop shadow to show they are the top layer"): ONE rule —
+ *  the LIST's side is the bottom layer, every transient card's side above it (whatever the order they opened in), with a
+ *  shadow in the map chrome's own dark. The LIST's top stops under the left chips (--trk-cb-top), so they stay pressable. */
+.trkCards .cB{z-index:1;top:max(30%,var(--trk-cb-top,0px))!important}
+.trkCards .cL,.trkCards .cR,.trkCards .cH{z-index:2}
+.trkCards .cL>.trkCard2,.trkCards .cR>.trkCard2,.trkCards .cH>.trkCard2{box-shadow:0 10px 28px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.45)}
+/* ★★★ TWEAK 5 (Stuart 11-27): at rest every chip is the SLIM SIDE TAB — the health pill's tucked tab (26 px of edge, its
+ *  rim, its rounding), wearing only its own icon (LAYERS: each family's glyph over its count; LIST: the icon over its
+ *  count). One press grows the card straight out of it; its heading sends it back. */
+.mDock .hCard{padding:6px 4px 6px 4px!important;min-width:30px;justify-content:center}
+.mDock .mchip{padding:0!important;min-height:44px!important;gap:5px}
+.mDock .mchip .cap{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.mDock .mchip .ic{flex-direction:column;gap:2px}
+.mDock .mIco{width:20px!important;height:20px!important}
+.mDock .lsum{flex-direction:column!important;gap:6px!important}
+.mDock .le{flex-direction:column!important;gap:2px!important;font-size:10.5px!important}
+.mDock .lg svg{width:15px;height:15px}
+.mChipsBL .mDock .mchip{flex-direction:column!important;min-height:44px!important}
+.mChipsBL .mDock .hCard{border-radius:12px 12px 0 0}
 /* ★★★ the ? HELP button and its card, bottom-right above the attribution */
 .mHelp{all:unset;box-sizing:border-box;position:absolute;right:10px;bottom:calc(var(--trk-attrib-h,0px) + 10px);z-index:790;width:30px;height:30px;
   border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font:800 15px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);
@@ -773,11 +792,9 @@ function glyphOf(id: string): LayerGlyph {
   return /^(adsb|acars|vdl2|hfdl|adsc|aircraft)/.test(id) ? 'aircraft' : /^(ships|ais|dsc)/.test(id) ? 'ship' : /^(navst|navtex)/.test(id) ? 'navtex'
     : /sonde/.test(id) ? 'balloon' : /^(ndb|beacon)/.test(id) ? 'beacon' : /^vor/.test(id) ? 'navaid' : 'dot';
 }
-/** ★ the SERVERS chip: a rack of two servers (the house line style) */
-const SERVERS_SVG = '<svg class="mIco" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
-  + '<rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.25h.01M7 16.75h.01M11 7.25h6M11 16.75h6"/></svg>';
-const LIST_SVG = '<svg class="mIco" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
-  + '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor"/></svg>';
+/** ★ the SERVERS and LIST chips' glyphs — the house set (modeIcons.ts): the servers glyph IS the app's ServersChip's */
+const SERVERS_SVG = modeIconSvg('servers', 'mIco');
+const LIST_SVG = modeIconSvg('list', 'mIco');
 /** ★ the HELP card's glyphs — each chip's own */
 const HELP_GLYPH: Record<string, string> = {
   servers: SERVERS_SVG.replace('mIco', 'tIco'), tune: modeIconSvg('radio', 'tIco'), layers: P16(TUNE_ICON_PATH.aircraft), map: modeIconSvg('map', 'tIco'),
@@ -975,6 +992,14 @@ export class TrackView {
     for (const c of [...Array.from(r.querySelectorAll('.trkCard2')), ...Array.from(r.querySelectorAll('.mChips'))] as HTMLElement[])
       for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) c.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     (r.querySelector('.fitOnce') as HTMLButtonElement).onclick = () => this.fitOnce();
+    // ★★★ tweak 5: a tap or a drag on the MAP folds the transient cards back (cards and chips stop their own presses)
+    this.mapHost.addEventListener('pointerdown', (e) => { if (!(e.target as HTMLElement).closest?.('.trkCard2, .mDock, .mHelp')) this.closeTransients(); });
+    for (const c of Array.from(r.querySelectorAll('.trkCard2')) as HTMLElement[]) {
+      if (STICKY_CARDS.has(c.dataset.card as CardId)) continue;
+      c.addEventListener('pointerenter', () => { this.overCard = true; });
+      c.addEventListener('pointerleave', () => { this.overCard = false; this.idleArm(); });
+      for (const ev of ['pointerdown', 'keydown', 'wheel', 'focusin']) c.addEventListener(ev, () => this.idleArm(), { passive: true });
+    }
     this.cardsLoad();
     this.setToggles(o.toggles ?? [], o.toggled ?? {});
     for (const id of CARD_IDS) this.cardsAvail(id, this.cardAvail.has(id));
@@ -1026,6 +1051,24 @@ export class TrackView {
   /** How many cards this window takes at once (the window's size, never the device). */
   cardLimit(): number { return cardLimitFor(this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight); }
   private cardClosedAt = -1e9;
+  /* ── ★★★ tweak 5 THE TRANSIENT CARDS fold back by themselves: after CARD_IDLE_MS untouched (not while the pointer rests on
+   *  one), on a tap or drag on the map, after their action (a mode picked in TUNE, a server picked). ── */
+  private idleT: ReturnType<typeof setTimeout> | null = null;
+  private overCard = false;
+  /** Shut every transient card (LIST stays). True when one was shut. */
+  closeTransients(): boolean {
+    const t = this.cardOrder.filter((x) => !STICKY_CARDS.has(x));
+    if (!t.length) return false;
+    this.cardOrder = this.cardOrder.filter((x) => STICKY_CARDS.has(x));
+    this.cardsLayout();
+    this.idleArm();
+    return true;
+  }
+  private idleArm() {
+    if (this.idleT) { clearTimeout(this.idleT); this.idleT = null; }
+    if (!this.cardOrder.some((x) => !STICKY_CARDS.has(x))) return;
+    this.idleT = setTimeout(() => { this.idleT = null; if (this.overCard) { this.idleArm(); return; } this.closeTransients(); }, CARD_IDLE_MS);
+  }
   /** ★ BACK / Escape on the map: the card holding `from` (focus), else — unless an item's own card is open (the selection
    *  goes first) — the top card. True = one was shut. The pad's BACK reaches it through main.ts hooks.back. */
   closeTopCard(from: EventTarget | null = document.activeElement): boolean {
@@ -1046,17 +1089,21 @@ export class TrackView {
   private cardsLoad() {
     let ids: CardId[] | null = null;
     try { const j = JSON.parse(localStorage.getItem(this.cardsKey()) || 'null'); if (Array.isArray(j)) ids = j.filter((x) => (CARD_IDS as readonly string[]).includes(x)); } catch { /* private window */ }
-    this.cardOrder = ids ?? cardDefaults(this.root.clientWidth || window.innerWidth);
+    // ★ tweak 5: only LIST is remembered; the transient cards always start shut
+    this.cardOrder = (ids ?? cardDefaults(this.root.clientWidth || window.innerWidth)).filter((x) => STICKY_CARDS.has(x));
     this.cardsNarrowWas = this.narrow();
   }
-  private cardsSave() { try { localStorage.setItem(this.cardsKey(), JSON.stringify(this.cardOrder)); } catch { /* private window */ } }
+  private cardsSave() { try { localStorage.setItem(this.cardsKey(), JSON.stringify(this.cardOrder.filter((x) => STICKY_CARDS.has(x)))); } catch { /* private window */ } }
   /** Open / shut a card. `save` = a person's press (remembered); the host's own opening (TUNE's list from elsewhere) too. */
   cardOpen(id: CardId, on: boolean, save = false) {
     if (on && !this.cardAvail.has(id)) return;
-    // ★ the oldest gives way past the window's limit (mapCards.ts cardToggle)
-    this.cardOrder = cardToggle(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on, this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight, this.oneSideNow);
+    // ★★★ tweak 5: LIST sticky, the rest transient — one transient at a time (mapCards.ts cardOpenRule); the window's limit
+    //     is the layout's (a phone shows the newest: LIST comes back when the transient one shuts)
+    void cardToggle;
+    this.cardOrder = cardOpenRule(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on);
     if (save) this.cardsSave();
     this.cardsLayout();
+    this.idleArm();
     if (on && save) {
       // ★ the pad / keyboard: into the card (its first control), so Escape / BACK come straight back out
       const el = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement | null;
@@ -1138,18 +1185,29 @@ export class TrackView {
       if (b.classList.contains('mHelp')) b.classList.toggle('on', on);
     }
     this.cardsEl.classList.toggle('both', false);
-    this.cardsEl.classList.toggle('lAndB', place.L.length > 0 && place.B.length > 0);   // ★ tweak 4: the left column and the LIST share the left edge
-    if (sig === this.layoutSig) return;
+    this.cardsEl.classList.toggle('lAndB', false);   // ★ tweak 5: a transient card simply lies OVER the list (its shadow says so)
+    if (sig === this.layoutSig) { this.cardsAnchor(place); return; }   // ★ a data tick: only the anchors follow the chips
     this.layoutSig = sig;
-    // ★ every card to the park first (moving an element keeps it and its state — never innerHTML over them)
+    /* ★★★ tweak 5 (Stuart 11-27: "the list keeps popping open every refresh of data"): a card is MOVED only when its own
+     *  place changes — one already where it belongs is never re-inserted (a re-insert restarts its pop-out animation and
+     *  resets its scroll). Closed ones go to the park; open ones to their side, in order, only if out of place. */
     const focused = document.activeElement as HTMLElement | null;
     for (const c of Array.from(this.root.querySelectorAll('.trkCard2')) as HTMLElement[]) {
-      if (!open.includes(c.dataset.card as CardId)) c.hidden = true;
+      if (open.includes(c.dataset.card as CardId)) continue;
+      c.hidden = true;
       if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c);
     }
     for (const side of ['L', 'R', 'B', 'H'] as const) {
       const host = this.cardsEl.querySelector(`.c${side}`) as HTMLElement;
-      for (const id of place[side]) { const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement; c.hidden = false; host.appendChild(c); }
+      place[side].forEach((id, i) => {
+        const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement;
+        c.hidden = false;
+        if (c.parentElement !== host || host.children[i] !== c) {
+          const st = (c.querySelector('.cb') as HTMLElement | null)?.scrollTop ?? 0;
+          host.insertBefore(c, host.children[i] ?? null);
+          const cb = c.querySelector('.cb') as HTMLElement | null; if (cb && st) cb.scrollTop = st;
+        }
+      });
     }
     for (const side of ['L', 'R', 'B', 'H'] as const) for (const id of place[side]) {
       const x = this.root.querySelector(`.trkCard2[data-card="${id}"] > .ch .x`) as HTMLElement | null;
@@ -1161,7 +1219,7 @@ export class TrackView {
   }
   /** ★★★ tweak 4: each side's cards open AT their chip — the left / right column's top is its first open chip's top, the
    *  bottom card's foot the LIST chip's foot — so the chip seems to grow into its card (the health pill's way). */
-  private cardsAnchor(place: Record<'L' | 'R' | 'B', CardId[]>) {
+  private cardsAnchor(place: Record<'L' | 'R' | 'B' | 'H', CardId[]>) {
     const m = this.mapHost.getBoundingClientRect();
     const dockTop = (id: CardId) => (this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null)?.getBoundingClientRect() ?? null;
     const top = (ids: CardId[]) => Math.min(...ids.map((id) => { const b = dockTop(id); return b ? b.top - m.top : 1e9; }));
@@ -1169,6 +1227,11 @@ export class TrackView {
     if (place.L.length) setv('--trk-cl-top', `${Math.max(6, Math.round(top(place.L)))}px`);
     if (place.R.length) setv('--trk-cr-top', `${Math.max(6, Math.round(top(place.R)))}px`);
     if (place.B.length) { const b = dockTop('list'); if (b) setv('--trk-cb-bottom', `${Math.max(0, Math.round(m.bottom - b.bottom))}px`); }
+    { /* ★★★ Stuart 11:48 "wrong layering": the LIST never grows over the chips on its edge — its top stops under the left
+       *  column of chips (SERVERS, TUNE, LAYERS …), so every tab stays visible and pressable */
+      const col = this.root.querySelector('.mChipsL') as HTMLElement | null, cb = col?.getBoundingClientRect();
+      setv('--trk-cb-top', `${cb && cb.height ? Math.round(cb.bottom - m.top + 8) : 0}px`);
+    }
   }
   /** ★★★ tweak 3 the LAYERS chip: a glyph and a count per layer present ([plane] 157 [ship] 3 [NAVTEX] 40); a slim column
    *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */
@@ -1189,7 +1252,7 @@ export class TrackView {
     // ★ its tucked tab: the main family's glyph in its colour (the aircraft where there are aircraft)
     const ti = this.root.querySelector('.mDock[data-dock="layers"] .hTabIco') as HTMLElement | null;
     if (ti) { const f = entries[0]; ti.innerHTML = LAYER_GLYPH[f?.glyph ?? 'aircraft'] ?? LAYER_GLYPH.dot; ti.style.color = f?.colour ?? ''; }
-    this.layoutSig = ''; this.cardsLayout();
+    this.cardsLayout();   // ★ tweak 5: measure and anchor only — an open card stays put (layoutSig untouched)
   }
   /** The live rate, top right ("ADS-B 1,425 msg/s" · "VDL2 153 msg/min") — '' = none (a viewer, nothing live). */
   setRate(text: string, title = '') {
@@ -1236,8 +1299,8 @@ export class TrackView {
     this.srvSig2 = sig;
     const body = this.root.querySelector('.srvBody') as HTMLElement;
     body.innerHTML = rows.map((x) => `<button type="button" class="srvPick" data-srv="${esc(x.id)}"><b>${x.id === 'back' ? '‹ ' : ''}${esc(x.label)}</b><small>${esc(x.sub)}</small></button>`).join('');
-    for (const b of Array.from(body.querySelectorAll('[data-srv]')) as HTMLButtonElement[]) b.onclick = () => this.onServer?.(b.dataset.srv || '');
-    this.layoutSig = ''; this.cardsLayout();
+    for (const b of Array.from(body.querySelectorAll('[data-srv]')) as HTMLButtonElement[]) b.onclick = () => { this.cardOpen('servers', false); this.onServer?.(b.dataset.srv || ''); };
+    this.cardsLayout();
   }
   private onServer: ((id: string) => void) | null = null;
   /* ── ★★★ beta96 FIT TO ONE LAYER (Stuart 11-27: "with this much data the fit button doesnt work, maybe the fit button
@@ -1420,6 +1483,7 @@ export class TrackView {
         b.onclick = () => {
           if (b.dataset.why) { this.o.onTuneRefused?.(b.dataset.why); return; }
           if (b.getAttribute('aria-checked') !== 'true') this.onTune?.(b.dataset.tune || '');
+          this.cardOpen('tune', false);   // ★ tweak 5: its action done, TUNE folds back
         };
       }
       if (this.dialWhy) this.setDialLock(this.dialWhy, this.dialExit);   // ★ new rows: the lock goes back on them

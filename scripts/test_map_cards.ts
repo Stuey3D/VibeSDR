@@ -2,7 +2,7 @@
 // window decides how many cards (one on a phone, never the whole width), the oldest gives way, LIST alone in its column,
 // the defaults, FIT's outlier rule and its default layer.   npx tsx scripts/test_map_cards.ts
 import { mapBarLine } from '../src/services/dialChat';
-import { CARD_IDS, cardColumns, cardDefaults, cardLimit, cardToggle, fitDefault, rateWords, trimOutliers, type CardId } from '../src/utils/mapCards';
+import { CARD_IDS, cardDefaults, cardLimit, cardPlace, cardSide, cardToggle, fitDefault, oneSide, rateWords, trimOutliers, MAP_HELP, MAP_HELP_NOTES, type CardId } from '../src/utils/mapCards';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -10,29 +10,33 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  $
 // ── how many: the window, not the device ──
 ok(cardLimit(390, 844) === 1, 'a 390 px phone: one card');
 ok(cardLimit(599, 1200) === 1, '599 px (still phone-width): one card');
-ok(cardLimit(820, 1180) === 2, `820 × 1180 (an iPad, or a phone unfolded): two — one column, two stacked (${cardLimit(820, 1180)})`);
-ok(cardLimit(1440, 900) === 4, `1440 × 900: four — two columns of two (${cardLimit(1440, 900)})`);
-ok(cardLimit(1440, 600) === 2, `1440 × 600 (short): one card per column (${cardLimit(1440, 600)})`);
-ok(cardLimit(2560, 1400) === 6, `2560 × 1400: every card (${cardLimit(2560, 1400)})`);
-for (const [w, h] of [[820, 1180], [1024, 768], [1440, 900], [1920, 1080], [2560, 1400]]) {
-  const cols = Math.ceil(cardLimit(w, h) / (h >= 700 ? 2 : 1));
-  ok(cols * 348 <= w * 0.72 + 1 || cols === 1, `${w} × ${h}: the columns never pass 72 % of the width (${cols} × 348 of ${w})`);
-}
-// ── opening: the oldest gives way ──
+ok(cardLimit(1440, 900) === 6 && cardLimit(1440, 600) === 4, `wide: every chip's card when tall, fewer when short (${cardLimit(1440, 900)} / ${cardLimit(1440, 600)})`);
+// ── opening: the oldest gives way; a short window keeps one card per side ──
 let open: CardId[] = [];
 for (const id of CARD_IDS) open = cardToggle(open, id, true, 390, 844);
-ok(open.length === 1 && open[0] === 'sources', `phone: six opened in turn leave the last (${open})`);
+ok(open.length === 1 && open[0] === 'help', `phone: every chip opened in turn leaves the last (${open})`);
 open = [];
-for (const id of ['list', 'view', 'map', 'key', 'sources'] as CardId[]) open = cardToggle(open, id, true, 1440, 900);
-ok(open.join() === 'view,map,key,sources', `1440 × 900: five opened leave the last four (${open})`);
-open = cardToggle(open, 'map', false, 1440, 900);
-ok(open.join() === 'view,key,sources', `shut one: ${open}`);
-open = cardToggle(open, 'view', true, 1440, 900);
-ok(open.join() === 'key,sources,view', `opening an open one brings it to the top: ${open}`);
-// ── columns: LIST alone ──
-ok(JSON.stringify(cardColumns(['view', 'list', 'map'], 1440, 900)) === '[["list"],["view","map"]]', `LIST has its own column: ${JSON.stringify(cardColumns(['view', 'list', 'map'], 1440, 900))}`);
-ok(JSON.stringify(cardColumns(['view', 'map'], 390, 844)) === '[["map"]]', 'a phone shows the newest only');
-ok(JSON.stringify(cardColumns(['view', 'map', 'key'], 1440, 600)) === '[["map"],["key"]]', `short and wide: one per column, the newest two (${JSON.stringify(cardColumns(['view', 'map', 'key'], 1440, 600))})`);
+for (const id of ['servers', 'tune', 'layers'] as CardId[]) open = cardToggle(open, id, true, 1440, 600);
+ok(open.join() === 'layers', `1440 × 600: the left edge holds one card (${open})`);
+open = cardToggle(open, 'map', true, 1440, 600); open = cardToggle(open, 'list', true, 1440, 600);
+ok(open.join() === 'layers,map,list', `…one on the right and the LIST beside it (${open})`);
+open = cardToggle(open, 'map', false, 1440, 600);
+ok(open.join() === 'layers,list', `shut one: ${open}`);
+// ── where they open: the sides ──
+const pl = cardPlace(['servers', 'tune', 'layers', 'map', 'list', 'help'], 1440, 900, false);
+ok(pl.L.join() === 'servers,tune,layers' && pl.R.join() === 'map' && pl.B.join() === 'list' && pl.H.join() === 'help', `flanking: ${JSON.stringify(pl)}`);
+const pl1 = cardPlace(['layers', 'map'], 1440, 900, true);
+ok(pl1.L.join() === 'layers,map' && !pl1.R.length, `one side: MAP CONTROLS joins the left (${JSON.stringify(pl1)})`);
+ok(cardSide('map', false) === 'R' && cardSide('map', true) === 'L' && cardSide('list') === 'B' && cardSide('servers') === 'L', 'the sides');
+// ── one side or flanking: the MAP's height against the measured stack (Stuart's phones, 11-27) ──
+const STACK = 5 * 56 + 16;   // ≈ SERVERS, TUNE, LAYERS, MAP, LIST and their gaps on a wide window
+ok(!oneSide(550 - 110, STACK), 'iPhone SE portrait in Safari (≈375×550, a map ≈440): flanks');
+ok(oneSide(830 - 110, STACK), 'iPhone 17 Pro Max portrait (≈440×830, a map ≈720): all on the left');
+ok(!oneSide(400 - 60, STACK), 'a phone in landscape (≈956×400): flanks');
+ok(oneSide(900 - 42, STACK), '1440 × 900: all on the left');
+ok(!oneSide(700, 600), 'a stack too tall for the map: flanks, whatever the window');
+// ── the help's words: one line per chip, in one place ──
+ok(MAP_HELP.map((h) => h.id).join() === 'servers,tune,layers,map,list' && MAP_HELP.every((h) => h.words.length > 10 && h.words.length < 90) && MAP_HELP_NOTES.length >= 2, 'MAP_HELP: a short line per chip, and the notes');
 // ── defaults ──
 ok(cardDefaults(390).length === 0, 'a phone opens with nothing (the map is the point)');
 ok(cardDefaults(1024).join() === 'list', 'a wide window opens with LIST');

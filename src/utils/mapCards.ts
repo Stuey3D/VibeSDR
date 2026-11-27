@@ -45,7 +45,8 @@ export function cardLimit(w: number, h: number): number {
 }
 /** The open cards by side, the window's limit applied (the newest kept); a short window keeps one on the left. */
 export function cardPlace(open: CardId[], w: number, h: number, one = false): Record<'L' | 'R' | 'B' | 'H', CardId[]> {
-  const shown = open.slice(-cardLimit(w, h));
+  // ★★★ tweak 5 (Stuart 11-27): LIST stays open UNDER the others — the window's limit counts the transient cards only
+  const shown = [...open.filter((x) => STICKY_CARDS.has(x)), ...open.filter((x) => !STICKY_CARDS.has(x)).slice(-cardLimit(w, h))];
   const out: Record<'L' | 'R' | 'B' | 'H', CardId[]> = { L: [], R: [], B: [], H: [] };
   for (const id of shown) out[cardSide(id, one)].push(id);
   if (h < CARD_TALL_H && out.L.length > 1) out.L = out.L.slice(-1);
@@ -107,3 +108,16 @@ export const MAP_HELP_NOTES: string[] = [
   'Tap a chip to open its card; tap the card\u2019s heading to close it. Escape or BACK closes it too.',
   'On a phone-sized window one card opens at a time.',
 ];
+
+/** ★★★ Stuart 11-27 (tweak 5): "list is the only one that stays open the others collapse back". LIST is STICKY (open until
+ *  closed, remembered per viewer; on a phone another card hides it only for as long as that card is open). The rest are
+ *  TRANSIENT: one at a time, back to their tab after their action, a tap or drag on the map, another transient card,
+ *  CARD_IDLE_MS without a touch (not while the pointer rests on it), Escape / BACK — and never remembered. */
+export const STICKY_CARDS: ReadonlySet<CardId> = new Set<CardId>(['list']);
+export const CARD_IDLE_MS = 9000;
+/** A card opened (or shut) under the sticky / transient rule: the new open list (the window's limit is the layout's). */
+export function cardOpenRule(open: CardId[], id: CardId, on: boolean): CardId[] {
+  let out = open.filter((x) => x !== id);
+  if (on) { if (!STICKY_CARDS.has(id)) out = out.filter((x) => STICKY_CARDS.has(x)); out.push(id); }
+  return out;
+}

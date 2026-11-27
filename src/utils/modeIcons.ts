@@ -29,7 +29,8 @@
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
+  | 'servers' | 'list';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -38,6 +39,17 @@ export type ModeIconPart =
   | { r: [number, number, number, number, number]; fill?: boolean; w?: number };
 
 export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
+  /* ★★★ beta96 the SERVERS glyph — network nodes — ONE source: the app's ServersChip (SectionIcon 'instance' draws these
+   *  parts) and the web map's SERVERS chip (Stuart 11-27: "servers glyph is not the one we use everywhere else") */
+  servers: [
+    { c: [6, 7, 2], w: 1.7 }, { c: [18, 7, 2], w: 1.7 }, { c: [12, 18, 2], w: 1.7 },
+    { d: 'M8 7h8M7.2 8.7 10.8 16.3M16.8 8.7 13.2 16.3', w: 1.7 },
+  ],
+  /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
+  list: [
+    { d: 'M9 6h11M9 12h11M9 18h11' },
+    { c: [4.5, 6, 1.2], fill: true }, { c: [4.5, 12, 1.2], fill: true }, { c: [4.5, 18, 1.2], fill: true },
+  ],
   aircraft: [
     { d: 'M12 1.8c.95 0 1.45.85 1.45 1.9v5.1l8 4.8v2.4l-8-2.45v4.95l2.3 1.75v1.85L12 21.1l-3.75 1v-1.85l2.3-1.75V13.55l-8 2.45v-2.4l8-4.8V3.7c0-1.05.5-1.9 1.45-1.9Z', fill: true },
   ],
