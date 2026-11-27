@@ -465,6 +465,43 @@ export function layerOthers(aircraft: ReadonlyArray<{ age: number; src: string[]
   return Object.fromEntries([...out].map(([k, v]) => [k, [...v]]));
 }
 
+/** ★★★ FIT TO ONE LAYER (Stuart 11-27: "with this much data the fit button doesnt work"): on the AIR & SEA map the shared
+ *  auto fit owns the camera and frames ONE layer — the viewer's pick, else mapCards.fitDefault (ADS-B where there is ADS-B,
+ *  else the live mode's, else whatever moves). Each item's layer, from its own fields (the web tags `_fg`; the app's keys
+ *  say it): adsb · datalink · ships · dsc · navst · warnings · weather · vor · sondes · other; null = never framed. */
+export const FIT_ORDER = ['adsb', 'datalink', 'ships', 'dsc', 'navst', 'warnings', 'weather', 'vor', 'sondes', 'other'] as const;
+export const FIT_LABEL: Record<string, string> = { adsb: 'ADS-B', datalink: 'DATALINK', ships: 'SHIPS', dsc: 'DSC', navst: 'NAVTEX STATIONS',
+  warnings: 'WARNINGS', weather: 'WEATHER', vor: 'VOR', sondes: 'SONDES', other: 'OTHER' };
+export function fitGroupOf(it: { key: string; _fg?: unknown; _adsb?: unknown; _nofit?: unknown; lat?: unknown; lon?: unknown }): string | null {
+  if (it._nofit || it.lat == null || it.lon == null || !Number.isFinite(Number(it.lat)) || !Number.isFinite(Number(it.lon))) return null;
+  if (typeof it._fg === 'string') return it._fg;
+  const k = String(it.key);
+  if (k.startsWith('adsb:')) return 'adsb';
+  if (it._adsb) return (it._adsb as { sparse?: boolean }).sparse ? 'datalink' : 'adsb';
+  if (k.startsWith('s:')) return 'ships';
+  if (k.startsWith('d:')) return 'dsc';
+  if (k.startsWith('w:')) return 'warnings';
+  if (k.startsWith('m:')) return 'weather';
+  if (k.startsWith('vor:') || k.startsWith('vos:')) return 'vor';
+  if (k.startsWith('sd:') || k.startsWith('sds:')) return 'sondes';
+  if (k.includes('|')) return 'navst';
+  return 'other';
+}
+/** The FIT TO rows (the layers drawn now with how many placed items each) and the layer FIT frames. */
+export function fitGroups(items: ReadonlyArray<Parameters<typeof fitGroupOf>[0]>, pick: string, main: string,
+                          fitDefault: (counts: Record<string, number>, main: string) => string): { groups: Array<{ id: string; label: string; n: number }>; use: string } {
+  const n: Record<string, number> = {};
+  for (const it of items) { const g = fitGroupOf(it); if (g) n[g] = (n[g] ?? 0) + 1; }
+  const groups = FIT_ORDER.filter((g) => g !== 'other' && (n[g] ?? 0) > 0).map((g) => ({ id: g, label: FIT_LABEL[g], n: n[g] }));
+  const use = pick && (n[pick] ?? 0) > 0 ? pick : fitDefault(n, main);
+  return { groups, use };
+}
+/** The live mode → its own layer (fitDefault's `main`). */
+export function fitMainOf(mode: string): string {
+  return mode === 'datalink' || mode === 'hfdl' ? 'datalink' : mode === 'ais' ? 'ships' : mode === 'sondes' ? 'sondes' : mode === 'vormap' ? 'vor'
+    : mode === 'navtex' ? 'navst' : mode === 'dsc' ? 'dsc' : mode === 'adsb' ? 'adsb' : '';
+}
+
 /** The layers' families for the LAYERS chip (icon over count): aircraft, ships, NAVTEX stations, sondes, beacons — each
  *  the sum of its shown layers' counts (the web's setLayerSummary families). */
 export const LAYER_FAMILY: Record<string, 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'> = {

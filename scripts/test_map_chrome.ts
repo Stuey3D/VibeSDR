@@ -4,9 +4,10 @@
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels } from '../src/utils/mapWfModel';
+import { fitDefault } from '../src/utils/mapCards';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -203,6 +204,22 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const sc = { mine: 'a', others: true, t0: 0, hidden: ['b'] };
   ok(!scopeRadioOk(['b'], sc) && scopeRadioOk(['a', 'b'], sc) && scopeRadioOk([], sc), 'scope: heard only by a hidden source → out; also heard by a shown one → in; unknown → in');
   ok(scopeList([{ r: ['b'] }, { r: ['a'] }], sc, (x) => x.r, () => null).length === 1, 'scopeList applies the hidden sources');
+}
+
+// ── FIT TO ONE LAYER ──
+{
+  const items = [{ key: 'adsb:abc', lat: 1, lon: 1 }, { key: 'a:x', lat: 1, lon: 1, _adsb: { sparse: true } }, { key: 'a:y', lat: 1, lon: 1, _adsb: {} }, { key: 's:123', lat: 1, lon: 1 },
+                 { key: 'd:1:2', lat: 1, lon: 1 }, { key: 'w:5:9', lat: 1, lon: 1 }, { key: 'm:3', lat: 1, lon: 1 }, { key: 'vor:1', lat: 1, lon: 1 }, { key: 'sds:R', lat: 1, lon: 1 },
+                 { key: 'GB|Niton', lat: 1, lon: 1 }, { key: 'g:5', lat: 1, lon: 1 }, { key: 'a:area', lat: 1, lon: 1, _nofit: true }, { key: 's:no', lat: null, lon: null }];
+  const gs = items.map((it) => fitGroupOf(it as never));
+  ok(gs.join() === 'adsb,datalink,adsb,ships,dsc,warnings,weather,vor,sondes,navst,other,,', `each item's layer from its own fields (${gs.join()})`);
+  ok(fitGroupOf({ key: 's:1', lat: 1, lon: 1, _fg: 'datalink' }) === 'datalink', 'a tagged _fg wins');
+  const f = fitGroups(items as never, '', fitMainOf('ais'), fitDefault);
+  ok(f.use === 'adsb' && f.groups[0].id === 'adsb' && f.groups[0].n === 2 && !f.groups.some((g) => g.id === 'other'), 'default: ADS-B where there is ADS-B; OTHER never a FIT TO row');
+  ok(fitGroups(items as never, 'ships', 'ais', fitDefault).use === 'ships', 'the viewer\u2019s pick wins');
+  ok(fitGroups(items as never, 'sondes', 'ais', fitDefault).use === 'sondes' && fitGroups([{ key: 's:1', lat: 1, lon: 1 }] as never, 'sondes', 'ais', fitDefault).use === 'ships', 'a pick with nothing left → the default (the live mode\u2019s: ships)');
+  ok(fitGroups([{ key: 'w:1', lat: 1, lon: 1 }] as never, '', '', fitDefault).use === '', 'only NAVTEX warnings: nothing framed (the map keeps where it is)');
+  ok(fitMainOf('datalink') === 'datalink' && fitMainOf('vormap') === 'vor' && fitMainOf('') === '', 'the live mode → its layer');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

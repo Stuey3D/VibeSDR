@@ -36,7 +36,8 @@ import MapChrome, { type MapSharedProps, type MapTuneProps, type MapCardsIn, typ
 import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
 import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
 import AircraftDataCredit from './AircraftDataCredit';
-import { adsbGainRow, layerFamilies, type GainRow } from '../utils/mapChrome';
+import { adsbGainRow, layerFamilies, fitGroupOf, fitGroups, fitMainOf, type GainRow } from '../utils/mapChrome';
+import { fitDefault } from '../utils/mapCards';
 import type { ModeIconName } from '../utils/modeIcons';
 import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
@@ -219,6 +220,8 @@ interface MapOverlayProps {
           title?: string; exitLabel?: string;
           /** ★★ beta96 whose camera: the ADS-B layer's (aviation live) or the shared auto fit's (ships, NAVTEX live) */
           camera?: 'aircraft' | 'track';
+          /** ★★★ beta97 the live mode (liveMaps LiveMode) — FIT TO's default layer (mapChrome fitMainOf) */
+          fitMode?: string;
           /** ★★ beta96 the list's tabs, the AIRCRAFT sort, the MESSAGES filter (TrackLiveList) */
           tabs?: Array<{ id: string; label: string; n: number }>; tab?: string; onTab?: (id: string) => void;
           sort?: string | null; onSort?: (s: string) => void; filter?: string; onFilterClear?: () => void;
@@ -1811,10 +1814,27 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
    *  they come and go; the FIT key is its AUTO key (on · paused by a touch · off). Not on the aviation map: its aircraft
    *  are the ADS-B layer's, whose own AUTO / FIT keys frame them. */
   var trkFit=null;
+  /* ★★★ beta97 FIT TO ONE LAYER (the AIR & SEA map — Stuart 11-27): the shared auto fit owns the camera and frames ONE layer, the
+   *  one React Native says (__cardsFitTo: the viewer's pick, else ADS-B where there is ADS-B, else the live mode's, else what
+   *  moves; '' = nothing — the map keeps where it is); the furthest 5 % (≥ 8 points) left out, measured from the receiver
+   *  (mapCards.ts trimOutliers, the same rule). Each item's layer is its _fg (mapChrome fitGroupOf, tagged by React Native). */
+  var trkAll=[],trkFitG='';
+  function trkTrim(p,rx){if(p.length<8)return p;var D=Math.PI/180;
+    var med=function(a){var s=a.slice().sort(function(x,y){return x-y;});return s[s.length>>1];};
+    var c=rx&&isFinite(rx.lat)&&isFinite(rx.lon)?rx:{lat:med(p.map(function(q){return q[0];})),lon:med(p.map(function(q){return q[1];}))};
+    var km=function(q){var dp=(q[0]-c.lat)*D,dl=(q[1]-c.lon)*D,h=Math.sin(dp/2)*Math.sin(dp/2)+Math.cos(c.lat*D)*Math.cos(q[0]*D)*Math.sin(dl/2)*Math.sin(dl/2);return 12742*Math.asin(Math.min(1,Math.sqrt(h)));};
+    var d=p.map(function(q){return{q:q,k:km(q)};}).sort(function(x,y){return x.k-y.k;});
+    var drop=Math.max(1,Math.ceil(p.length*0.05));return d.slice(0,d.length-drop).map(function(x){return x.q;});}
+  function trkFitPoints(l){if(!trkFitG)return[];var p=[];
+    for(var i=0;i<trkAll.length;i++){var it=trkAll[i];if(!it||it._fg!==trkFitG)continue;var la=Number(it.lat),lo=Number(it.lon);if(isFinite(la)&&isFinite(lo))p.push([la,lo]);}
+    if(trkFitG==='other'&&ndbLayer&&ndbLayer.points){var q=ndbLayer.points();if(q.length)p=p.concat(q);}
+    var rx=null;try{rx=l&&l.receiver?l.receiver():null;}catch(e){}
+    return trkTrim(p,rx);}
+  window.__cardsFitTo=function(g){var was=trkFitG;trkFitG=String(g||'');if(was!==trkFitG){var af=trkFitMake();if(af&&trkFitG)af.fitNow();}};
   function trkFitMake(){
     if(trkFit||KIND==='avdata'||!window.VibeAutoFit)return trkFit;
     var l=trkMake();if(!l)return null;
-    try{trkFit=VibeAutoFit.attach(map,{points:function(){var p=l.points();if(KIND==='airsea'&&ndbLayer&&ndbLayer.points){var q=ndbLayer.points();if(q.length)p=p.concat(q);}return p;},receiver:function(){return l.receiver();},
+    try{trkFit=VibeAutoFit.attach(map,{points:function(){if(KIND==='airsea')return trkFitPoints(l);var p=l.points();return p;},receiver:function(){return l.receiver();},
       button:null,what:${JSON.stringify(trkWhat(kind))}});}
     catch(e){console.error('auto fit could not start',e);trkFit=null;}
     return trkFit;
@@ -1845,6 +1865,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   window.__trkPush=function(json){
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
+      trkAll=a;   // ★★★ beta97 FIT TO's points (trkFitPoints)
       if(KIND==='ism'){trkRt={};for(var r0=0;r0<a.length;r0++)if(a[r0]&&a[r0]._rt)trkRt[String(a[r0].key)]=a[r0]._rt;}   // ★★ beta96
       if(KIND==='airsea'){var hv=false,hs=false,hvs=false,hss=false;for(var j2=0;j2<a.length;j2++){var kk=String(a[j2]&&a[j2].key||'');if(kk.indexOf('vor:')===0)hv=true;else if(kk.indexOf('sd:')===0)hs=true;else if(kk.indexOf('vos:')===0)hvs=true;else if(kk.indexOf('sds:')===0)hss=true;}
         legShow('vor',hv);legShow('sondes',hs);legShow('vos',hvs);legShow('sds',hss);}   // ★ maps2 the remembered ones' rows too
@@ -1867,7 +1888,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     if(trkCam==='track'){if(acAuto===null)acAuto=!!acLayer.prefs().autoZoom;acLayer.setPrefs({autoZoom:false});if(af){af.resume();}}
     else{if(acAuto!==null){acLayer.setPrefs({autoZoom:acAuto});acAuto=null;}if(af)af.pause();}
   }catch(e){console.error('tracks camera',e);}}
-  window.__trkCamera=function(o){trkCam=o==='track'?'track':'aircraft';trkCameraApply();};
+  /* ★★★ beta97 on the AIR & SEA map the shared auto fit ALWAYS owns the camera (FIT TO frames one layer, aircraft included) */
+  window.__trkCamera=function(o){trkCam=KIND==='airsea'||o==='track'?'track':'aircraft';trkCameraApply();};
   window.__trkFit=function(){try{var af=trkFitMake();if(af){af.fitNow();return;}var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
   /* ★ V12 2026-11-16 the AVIATION MAP's AIRPORTS layer: the basemap profile, live. A map pack that predates 'aero-plain'
    *  says no — then the airport layers are switched by name. */
@@ -1904,7 +1926,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
   trkFitMake();   // ★ the auto fit runs from the start (on), even before the first report
   /* ★★★ beta97 THE MAP CARDS' BRIDGE (MapChrome): React Native's MAP card keys, its zoom keys, its scale and the KEY.
    *  The aircraft camera is the ADS-B layer's keys (in their detached host); the track camera the shared auto fit. */
-  function useAc(){return !!acLayer&&!!acLayer.actions&&(KIND==='avdata'||trkCam==='aircraft');}
+  function useAc(){return !!acLayer&&!!acLayer.actions&&(KIND==='avdata'||(KIND!=='airsea'&&trkCam==='aircraft'));}
   window.__cardsCtl=function(k){try{
     var A=acLayer&&acLayer.actions;
     if(k==='auto'){if(useAc())A.auto();else{var af=trkFitMake();if(af){var st=af.state();if(st.on&&st.paused)af.resume();else af.set(!st.on);}}}
@@ -2769,6 +2791,8 @@ export default function MapOverlay(
   useEffect(() => { if (visible && kind === 'airsea' && trk?.camera) pageCall('__trkCamera', trk.camera); }, [visible, kind, trk?.camera, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pushTrk = (items?: TrackItem[]) => {
     if (!isTrkKind || !items) return;
+    // ★★★ beta97 FIT TO: each item says which layer it is (mapChrome fitGroupOf) — the page frames one layer
+    if (kind === 'airsea') items = items.map((it) => { const g = fitGroupOf(it as never); return g && (it as { _fg?: string })._fg !== g ? { ...it, _fg: g } : it; });
     const lit = JSON.stringify(JSON.stringify(items))
       .replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
       .replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
@@ -3240,6 +3264,11 @@ function MapCardsHost(p: {
   const ab = useAdsbBody(p.adsb, p.ink, listW);
   const nb = useNdbBody(p.ndb, p.ink, p.insets, p.winW);
   const [keyOn, setKeyOn] = useState(false);
+  // ── ★★★ FIT TO (the AIR & SEA map): the viewer's pick, remembered on this device; else the default layer ──
+  const [fitPick, setFitPick] = useState('');
+  useEffect(() => { AsyncStorage.getItem('lsv_map_fit_to').then((v) => { if (v && /^[a-z]{2,10}$/.test(v)) setFitPick(v); }).catch(() => {}); }, []);
+  const fit = useMemo(() => (p.kind === 'airsea' ? fitGroups(t.items as never, fitPick, fitMainOf(t.fitMode ?? ''), fitDefault) : null), [p.kind, t.items, fitPick, t.fitMode]);
+  useEffect(() => { if (fit) p.pageCall('__cardsFitTo', fit.use); }, [fit?.use]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ★ the credits' (i) sits just above the bottom-right group (? · scale · [− +]): its height by the layout (mapChrome br)
   const shortNow = p.winH < 480 && p.winW > p.winH;
   useEffect(() => { p.pageCall('__cardsBr', p.insets.bottom + (shortNow ? 52 : 84)); }, [shortNow, p.insets.bottom]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -3288,6 +3317,7 @@ function MapCardsHost(p: {
         stats={p.cards?.stats ? { ...p.cards.stats, onPick: (k: string) => { p.cards?.stats?.onPick(k); p.onFocus(p.adsb && /^a:[0-9a-f]{6}$/.test(k) ? `adsb:${k.slice(2)}` : k); } } : null}
         map={{ ctl: p.ctl, onCtl: (k) => p.pageCall('__cardsCtl', k),
                ranges: t.ranges, range: t.range,
+               fitTo: fit ? { groups: fit.groups, pick: fit.use, onPick: (id: string) => { setFitPick(id); AsyncStorage.setItem('lsv_map_fit_to', id).catch(() => {}); } } : undefined,
                onRange: t.onRange ? (id) => { t.onRange?.(id); setTimeout(() => p.pageCall('__trkFit'), 400); } : undefined,
                sources: p.cards?.sources, onSource: p.cards?.onSource,
                keyOn, onKey: (on) => { setKeyOn(on); p.pageCall('__cardsKey', on, p.insets.top + 64, p.insets.left + 64); },

@@ -13053,6 +13053,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       ...ship,
       title: chrome.title, exitLabel,
       camera: (live.layers.some((l) => shipLayerOf(l) != null || l === 'vor' || l === 'sondes' || l === 'ndb') ? 'track' : 'aircraft') as 'aircraft' | 'track',
+      fitMode: airSeaMode as string,   // ★★★ beta97 FIT TO's default layer
       items: [...(vmLive && on('vor') ? vmTrk.items.map((it) => ({ ...it, key: `vor:${it.key}`, _rk: (it._rk ?? 0) + 1e12 })) : []),
               ...(sdLive && on('sondes') ? sdTrk.items.map((it) => ({ ...it, key: `sd:${it.key}`, _rk: 1e12 })) : []),
               ...(vmMem && on('vor') ? storedVorItems(vmStoredS, nowStored) : []), ...(sdMem && on('sondes') ? storedSondeItems(sdStoredS, nowStored) : []),   // ★ maps2 remembered

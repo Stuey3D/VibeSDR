@@ -269,8 +269,17 @@ console.log('── every map uses it ──');
   // ★ beta96 stage 6: the ADS-B page is retired (ADS-B's screen is the AIR & SEA map, whose ADS-B layer keeps its own AUTO / FIT)
   ok(/\$\{!isHfdl \? `<script>\$\{MAP_AUTOFIT_JS\}<\/script>` : ''\}/.test(app), 'the app\'s map page carries it for every kind but HFDL (SNAP follows a flight)');
   // ★ beta96 stage 8 on the AIR & SEA map the NDB beacons heard are among its points (one camera, one FIT key)
-  ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{var p=l\.points\(\);if\(KIND==='airsea'&&ndbLayer&&ndbLayer\.points\)\{var q=ndbLayer\.points\(\);if\(q\.length\)p=p\.concat\(q\);\}return p;\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:null/.test(app) && /window\.__cardsCtl=function\(k\)\{[^]*?af\.set\(!st\.on\)/.test(app),
+  ok(/trkFit=VibeAutoFit\.attach\(map,\{points:function\(\)\{if\(KIND==='airsea'\)return trkFitPoints\(l\);var p=l\.points\(\);return p;\},receiver:function\(\)\{return l\.receiver\(\);\},\s*button:null/.test(app)
+     && /window\.__cardsCtl=function\(k\)\{[^]*?af\.set\(!st\.on\)/.test(app),
      'app: AIS · APRS · DSC · ISM · NAVTEX · sondes — the auto fit frames the items AND the receiver; ★★★ beta97 its AUTO / FIT are the MAP card\'s keys (no key in the page)');
+  // ★★★ beta97 FIT TO ONE LAYER on the AIR & SEA map: the auto fit owns the camera, one layer, the furthest 5 % left out
+  ok(/trkCam=KIND==='airsea'\|\|o==='track'\?'track':'aircraft'/.test(app) && /function useAc\(\)\{return !!acLayer&&!!acLayer\.actions&&\(KIND==='avdata'\|\|\(KIND!=='airsea'&&trkCam==='aircraft'\)\);\}/.test(app),
+     'app AIR & SEA: the shared auto fit ALWAYS owns the camera (never the ADS-B layer\'s own AUTO)');
+  ok(/function trkFitPoints\(l\)\{if\(!trkFitG\)return\[\];/.test(app) && /it\._fg!==trkFitG/.test(app) && /return trkTrim\(p,rx\);/.test(app) && /var drop=Math\.max\(1,Math\.ceil\(p\.length\*0\.05\)\)/.test(app),
+     'app AIR & SEA: FIT frames ONE layer (_fg), the furthest 5 % trimmed from the receiver; none = the map stays put');
+  ok(/if \(kind === 'airsea'\) items = items\.map\(\(it\) => \{ const g = fitGroupOf\(it as never\);/.test(app) && /p\.pageCall\('__cardsFitTo', fit\.use\)/.test(app) && /'lsv_map_fit_to'/.test(app),
+     'app AIR & SEA: items tagged with their layer; the pick (remembered) or the default told to the page');
+
   ok(/firstFit:\(KIND==='avdata'\|\|!window\.VibeAutoFit\)\?undefined:false/.test(app) && /VibeAdsbLayer\.create\(GLVM\?GLVM\.map:map,\{keys:false,/.test(app) && /if\(useAc\(\)\)A\.auto\(\)/.test(app),
      'app: the aviation map keeps the ADS-B layer\'s own AUTO / FIT — ★★★ beta97 driven by the MAP card through layer.actions (keys:false: no key in the page)');
   ok(/digiFit=window\.VibeAutoFit\?VibeAutoFit\.attach\(map,\{/.test(app), 'app: digi / CW spots maps');
