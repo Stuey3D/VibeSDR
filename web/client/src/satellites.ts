@@ -40,7 +40,8 @@ import {
 // ★★ 2026-11-24 ORBCOMM + the sky plot — the app's words and dome (src/services/orbcomm.ts, src/utils/skyPlot.ts)
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFollowChoice, orbFollowText, orbHeadText, orbNoteText, orbPktLine, orbSatLines, orbShownSats, orbViewMerge,
          parseOrbcommPkt, parseOrbcommStatus, type OrbFollow, type OrbView } from '../../../src/services/orbcomm';
-import { ORB_NO_TUNE } from '../../../src/utils/orbcommView';
+import { ORB_NO_TUNE, ORB_GUESS_COLOUR, orbLabelPlan, orbRowGuess } from '../../../src/utils/orbcommView';
+import type { SatLabelEntry } from '../../../src/utils/knownSignals';
 // ★★★ beta94 THE TRANSPONDER FINDER — the app's words and rules (src/services/xpdr.ts)
 // ★★★ beta96 SCHEDULE A PASS (src/services/satSchedule.ts — one set of rules with the app)
 import { SAT_SCHED_CANCEL_WHAT, SAT_SCHED_FULL, SAT_SCHED_IDLE, SAT_SCHED_KEY, SAT_SCHED_OVERLAP_RULE, SAT_SCHED_PRIO_WHAT, SAT_SCHED_REMIND_NOTE, SAT_SCHED_SET_WHAT,
@@ -100,6 +101,8 @@ export interface SatPanelDeps {
   /** ★★ 2026-11-24 ORBCOMM: the manual fallback under AUTO — carriers at most (0 = AUTO); main.ts re-attaches with
    *  "max_carriers". The sky plot: the server's stored dots read through `skyGet` for THIS radio (`skyRadio`). */
   orbMax?: (k: number) => void;
+  /** ★★ b97 the server's sat_labels now — the card's guesses come from them through orbLabelPlan, as the waterfall's do */
+  satLabels?: () => readonly SatLabelEntry[];
   skyGet?: (path: string) => Promise<string | null>;
   skyRadio?: () => string;
   /** ★★★ beta96 SCHEDULE: what decides SCHEDULE / REMIND (the server's words: dial, listeners, locked — pickPrivate is the
@@ -1146,8 +1149,13 @@ export class SatPanel {
     const counts = orbCountsText(st?.counts);
     if (counts) h += `<div class="sat-note">Packets: ${esc(counts)}</div>`;
     // ★★ the birds listed now, then the held ones (last heard a while ago) dimmed — a carrier drop no longer blanks a bird
-    for (const { sat: b, heldSecs } of orbShownSats(v))
-      h += `<div class="sat-bird${heldSecs != null ? ' held' : ''}">${orbSatLines(b, v?.clockOff[b.norad], heldSecs).map((l) => `<div>${esc(l)}</div>`).join('')}</div>`;
+    // ★★ b97 an unnamed row whose carrier sits on a predicted channel: "probably FM116?" in amber — the label's own guess
+    const plan = orbLabelPlan(this.deps.satLabels?.() ?? [], st);
+    for (const { sat: b, heldSecs } of orbShownSats(v)) {
+      const guess = !b.norad && heldSecs == null ? orbRowGuess(plan, b.carrier) : '';
+      h += `<div class="sat-bird${heldSecs != null ? ' held' : ''}">${orbSatLines(b, v?.clockOff[b.norad], heldSecs, guess)
+        .map((l, i) => (i === 0 && guess ? `<div class="sat-guess" style="color:${ORB_GUESS_COLOUR}">${esc(l)}</div>` : `<div>${esc(l)}</div>`)).join('')}</div>`;
+    }
     if (this.deps.orbMax)
       h += `<div class="sat-car" role="group" aria-label="Carriers the decoder follows at most"><span>CARRIERS</span>`
         + ORB_CARRIER_CHOICES.map((k) => `<button data-act="orbmax" data-v="${k}" class="${k === this.orbMaxK ? 'on' : ''}" aria-pressed="${k === this.orbMaxK}"`

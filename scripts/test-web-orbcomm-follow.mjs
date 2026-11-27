@@ -9,6 +9,7 @@
 //   3. nothing decoding: the next ORBCOMM bird to rise (FM119, before FM118 and never the ISS).
 //   4. FM115 picked from the list ("picked" for an ORBCOMM bird while the ORBCOMM box runs): the decoder's birds, packets and
 //      sky dots stay (the server kept the decoder), the view is not zoomed again; a non-ORBCOMM pick clears them.
+//   5. ★★ b97 an unnamed carrier on FM116's predicted channel: the card says "probably FM116?" in amber; named, no guess.
 // Screenshots to $SAT_SHOTS (default $TMPDIR).     node scripts/test-web-orbcomm-follow.mjs
 import * as esbuild from 'esbuild';
 import http from 'node:http';
@@ -93,6 +94,7 @@ try {
       track: (norad, aos, los) => window.__sent.push({ track: norad, aos, los }),
       rxName: () => 'Northampton', serverKey: () => 'test-server', connected: () => true, enter: () => {},
       skyGet: () => Promise.resolve(null),
+      satLabels: () => window.__satLabels || [],   // ★★ b97 the server's sat_labels (the card's guesses come from them)
     });
     window.__p.setCap({ ok: true, why: '' });
     window.__p.show();
@@ -149,6 +151,23 @@ try {
   b = await box();
   ok(/^ORBCOMM FM115/.test(b.name) && b.f.why === 'pick' && !/following/.test(b.st), `FM115 is the pick now: no "following" (${b.st})`);
   await shot('picked-fm115');
+
+  /* ★★ b97 CONFIRMED vs GUESSED on the card (src/utils/orbcommView.ts orbLabelPlan — the waterfall's labels read the same):
+   *  an unnamed carrier on FM116's PREDICTED channel reads "probably FM116?" in amber; once the decoder names it, the row is
+   *  FM116's own and no guess is left. */
+  console.log('— 5. b97 an unnamed carrier on a predicted channel: the card guesses, amber; confirmed, it does not');
+  await ev(`window.__satLabels = [{ id: 'ORBCOMM-FM116', n: 'ORBCOMM FM116', norad: 41187, tx: 'ORBCOMM', hz: 137800400, r: -20, el: 30, m: 'nfm', b: false }]; true`);
+  const unnamed = { norad: 0, how: '', carrier: 2, rf: 137800000, snr: 8, dop: 0, pred: 0, az: 0, el: -90, dcn: 0, nominal: 0, scId: -1, ok: 3, messages: 0, age: 1, name: 'ORBCOMM (not yet named)' };
+  await orbStatus({ sats: [bird(B, 'ORBCOMM FM115'), unnamed], carriers: [{ id: 2, rf: 137800000, snr: 8, lock: true, ok: 3, bad: 0, fixed: 0 }], ended: false, follow: 0 });
+  const g = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#satPanel .sat-guess')].map(e => ({ t: e.textContent, c: getComputedStyle(e).color })))`));
+  ok(g.length === 1 && g[0].t === 'ORBCOMM (not yet named) · not yet named · probably FM116?', `the unnamed row: "${g[0]?.t}"`);
+  ok(g[0]?.c === 'rgb(255, 184, 51)', `…in amber (${g[0]?.c})`);
+  await shot('guess-fm116');
+  await orbStatus({ sats: [bird(B, 'ORBCOMM FM115'), { ...unnamed, norad: 41187, how: 'position', name: 'ORBCOMM FM116' }],
+                    carriers: [{ id: 2, rf: 137800000, snr: 8, lock: true, ok: 9, bad: 0, fixed: 0, sat: 'ORBCOMM FM116', norad: 41187, how: 'position' }], ended: false, follow: 0 });
+  const g2 = JSON.parse(await ev(`JSON.stringify({ n: document.querySelectorAll('#satPanel .sat-guess').length, t: document.querySelector('#satPanel .sat-orb').textContent })`));
+  ok(g2.n === 0 && /ORBCOMM FM116 · named by its own position report/.test(g2.t) && !/probably/.test(g2.t), 'the decoder names that carrier: FM116\'s own row, no guess left');
+  await ev(`window.__satLabels = []; true`);
   await ev(`window.__p.onPicked(__Sat.parseSatPicked({ type: 'sat', state: 'picked', norad: 25544, tx: 0, decoder: '' })); true`);
   ok(await ev(`window.__p.orbNow() === null`), 'a non-ORBCOMM pick clears the ORBCOMM state');
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });

@@ -143,7 +143,7 @@ import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery,
          galleryRangeFooter } from '../../../src/utils/galleryPager';
 import { logRadioChoices, keepRadioPick, radioQuery, radioPasses, heardByText, radioChipLabel, type LogRadio } from '../../../src/utils/logRadio';
 import { orbAttachParams } from '../../../src/services/orbcomm';
-import { orbOverlayFrom } from '../../../src/utils/orbcommView';
+import { orbOverlayFrom, orbLabelPlan } from '../../../src/utils/orbcommView';
 import { xpdrListen, xpdrOverlayFrom } from '../../../src/services/xpdr';   // ★★★ beta94 the transponder finder (its slice + arrows, LISTEN)   // ★★ 2026-11-24 the ORBCOMM slice on the waterfall   // ★★ 2026-11-24 ORBCOMM (the SATELLITE pick's attach + max_carriers)
 import { parseSkyPlotJson, skyModeOf, skyModesHtml, skyPlotQuery, skyPlotSvg, skyRadioFromBase, skySceneFor, skySummaryFor, SKY_LEGEND, SKY_PLOT_WHAT, type SkyMode, type SkyPlotData } from '../../../src/utils/skyPlot';   // ★★ 2026-11-24 THE SKY PLOT
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
@@ -11407,6 +11407,7 @@ function satPanelGet(): SatPanel | null {
         satOrbMax = k;
         if (satDec === 'orbcomm' && activeDec === 'orbcomm' && decoders) decoders.attach('orbcomm', orbAttachParams(satOrbPrm, k) as DecoderParams, decVfo);
       },
+      satLabels: () => satLabelEntries,   // ★★ b97 the card's guesses: the labels' own (orbLabelPlan)
       skyGet: galleryText,
       skyRadio: () => skyRadioFromBase(BASE_PATH),
       /* ★★★ beta96 SCHEDULE (satSchedule.ts): the server's words on who else the dial moves — the dial message (only on a
@@ -11444,7 +11445,9 @@ function satFollow(d: SatPicked['decoder'], t: SatTx | null, prm?: Record<string
    *  alone: held apart (satPacketMode) and gone the moment the pick's decoder is no longer APRS. */
   if (d !== 'aprs') satPacketMode = null;
   if (d !== 'orbcomm' && d !== 'xpdr' && wf) wf.orbOverlay = null;   // ★★ 2026-11-24 the ORBCOMM slice goes with its pick (★★★ beta94 the finder's too)
+  const orbWas = satDec === 'orbcomm';
   satDec = d;
+  if (orbWas && d !== 'orbcomm' && satLabelEntries.length && knownLabelsOn) applyKnownSignals();   // ★★ b97 the decoder's names go with it
   if (!d || !t || !decoders) { satBeaconOn = false; return; }
   if (activeDec === satDecKey(d) && (d !== 'cwskim' || satBeaconOn)) return;
   if (activeDec) stopDecoder();
@@ -15954,7 +15957,9 @@ function initDecoders(host: string, auth: AuthState) {
       if (satDec !== 'orbcomm' || activeDec !== 'orbcomm') return;
       satPanel?.orbcomm(type, d);
       // ★★ 2026-11-24 the decoder's slice and its carriers on the waterfall (it follows the dial: drawn from each status)
-      if (type === 'orbcomm_status' && wf) wf.orbOverlay = orbOverlayFrom(satPanel?.orbNow()?.status);
+      if (type === 'orbcomm_status' && wf) wf.orbOverlay = orbOverlayFrom(satPanel?.orbNow()?.status, satLabelEntries);
+      // ★★ b97 the labels follow the decoder's names (confirmed sky blue on its carrier; a guess amber "?") — re-laid only on a change
+      if (type === 'orbcomm_status' && knownLabelsOn && orbPlanKey(satLabelsDrawn()) !== orbPlanSig) applyKnownSignals();
     },   // ★★ 2026-11-24 ORBCOMM   // ★★ SATELLITE 1.3 (fctlm, or aprs T# / SONATE-2)
     onLrptStatus: (d) => {   // ★ V12 METEOR LRPT: carrier, frames, lines and channels so far
       if (activeDec !== 'lrpt') return;
@@ -21716,7 +21721,9 @@ function applyKnownSignals() {
   // ★★ V12 + the server's signal tags (the VARA HF tag — identify only), clear of every label above
   const withTags = sigTagEntries.length ? withSigTags(withDx, sigTagSignals(sigTagEntries, withDx)) : withDx;
   // ★★ beta91 + the satellites in range (sat_labels), at their Doppler-shifted frequency
-  wf.knownSignals = withSkimLabels(satLabelEntries.length ? withSatLabels(withTags, satLabelSignals(satLabelEntries)) : withTags, marks);
+  const sats = satLabelsDrawn();
+  orbPlanSig = orbPlanKey(sats);
+  wf.knownSignals = withSkimLabels(sats.length ? withSatLabels(withTags, satLabelSignals(sats)) : withTags, marks);
   wf.knownGen++;
   if (hadDx || dxDialList.length) dabBlocksSync();
 }
@@ -21761,6 +21768,17 @@ function satLabelsReceived(msg: unknown) {
   if (sig === satLabelSig) return;
   satLabelSig = sig; satLabelEntries = es;
   if (knownLabelsOn) applyKnownSignals();
+}
+/* ★★ b97 CONFIRMED vs GUESSED (src/utils/orbcommView.ts orbLabelPlan — the app's SDRScreen does the same): the labels
+ *  drawn are the server's entries with ORBCOMM's reconciled against the running decoder — a bird on the carrier the decoder
+ *  NAMED (sky blue), a name only predicted amber with "?" (Stuart 11-27, XCover: "ORBCOMM FM116" on an unnamed carrier). */
+let orbPlanSig = '';
+function satLabelsDrawn(): SatLabelEntry[] {
+  if (!satLabelEntries.length) return satLabelEntries;
+  return orbLabelPlan(satLabelEntries, satDec === 'orbcomm' && activeDec === 'orbcomm' ? satPanel?.orbNow()?.status : null).entries;
+}
+function orbPlanKey(es: readonly SatLabelEntry[]): string {
+  return es.map(e => `${e.norad}:${Math.round(e.hz / 100)}:${e.g ? 'g' : ''}`).join(',');
 }
 function satLabelsClear() { if (satLabelEntries.length) { satLabelEntries = []; satLabelSig = ''; applyKnownSignals(); } }
 /* ★★★ V12 DX CATCHES ON THE DIAL (knownSignals.ts dxDialSignals — Stuart, 2026-11-16: "show DX catches on the dial as

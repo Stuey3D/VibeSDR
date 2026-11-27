@@ -295,7 +295,7 @@ import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay, { galleryReader } from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
 import { orbFollowChoice, orbViewMerge, type OrbView } from '../services/orbcomm';   // ★★ 2026-11-24 ORBCOMM in the SATELLITE box
-import { orbOverlayFrom } from '../utils/orbcommView';
+import { orbOverlayFrom, orbLabelPlan } from '../utils/orbcommView';
 import { xpdrListen, xpdrOverlayFrom, type XpdrStatus } from '../services/xpdr';   // ★★★ beta94 the transponder finder   // ★★ 2026-11-24 its slice and carriers on the waterfall
 import { skyRadioFromBase } from '../utils/skyPlot';
 import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
@@ -2863,7 +2863,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const satBoxFollow = satPicked?.decoder === 'orbcomm' ? orbFollowChoice(satPicked.norad, satOrb?.status, satList, Date.now() / 1000) : null;
   const satBoxNorad = satBoxFollow?.norad ?? satPicked?.norad ?? 0;
   const satBoxNoradRef = useRef(0); satBoxNoradRef.current = satBoxNorad;
-  const satOrbOverlay = useMemo(() => (satDec === 'orbcomm' ? orbOverlayFrom(satOrb?.status) : satDec === 'xpdr' ? xpdrOverlayFrom(satXp) : null), [satDec, satOrb?.status, satXp]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // (★★ b97 satOrbOverlay is made beside the satellite labels — it reads them: orbLabelPlan)
   /* ★★★ beta92 OPEN IN VFO B (docs/v12/SAT-VFOB.md): the server put VFO B on another downlink of the pick and started its
    *  decoder on the listener's VFO B host; the app follows it on a SECOND DecoderClient ("vfo":"B", the server's exact
    *  parameters — it JOINS that run; one socket parses one decoder's frames) whose output goes to the SATELLITE box only.
@@ -13868,8 +13868,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   const knownWithTags = useMemo(() => (!knownWithDx || !sigTags.length ? knownWithDx
     : withSigTags(knownWithDx, sigTagSignals(sigTags, knownWithDx))), [knownWithDx, sigTags]);
   // ★★ beta91 + the satellites in range, at their Doppler-shifted frequency (the same list the web client draws)
-  const knownWithSats = useMemo(() => (!knownWithTags || !satLabels.length ? knownWithTags
-    : withSatLabels(knownWithTags, satLabelSignals(satLabels))), [knownWithTags, satLabels]);
+  /* ★★ b97 CONFIRMED vs GUESSED (utils/orbcommView.ts orbLabelPlan — ONE source for the labels, the slice's carrier marks
+   *  and the SATELLITE card): an ORBCOMM label sits on the carrier the decoder NAMED, sky blue; a name only predicted is
+   *  amber with "?" (Stuart 11-27, XCover: "ORBCOMM FM116" on a carrier the decoder had not named). */
+  const orbPlan = useMemo(() => orbLabelPlan(satLabels, satDec === 'orbcomm' ? satOrb?.status : null), [satLabels, satDec, satOrb?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const satOrbOverlay = useMemo(() => (satDec === 'orbcomm' ? orbOverlayFrom(satOrb?.status, satLabels) : satDec === 'xpdr' ? xpdrOverlayFrom(satXp) : null), [satDec, satOrb?.status, satXp, satLabels]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const knownWithSats = useMemo(() => (!knownWithTags || !orbPlan.entries.length ? knownWithTags
+    : withSatLabels(knownWithTags, satLabelSignals(orbPlan.entries))), [knownWithTags, orbPlan]);
   /* ★★ beta92 + THE BAND SKIMMER'S MARKS (Stuart: "show where CW has been detected on the waterfall, like the real CW
    *  skimmer"): every CW / RTTY signal it follows, by call (or mode until one is read), in its mode's colour — while Band
    *  runs, whether or not the signal labels are on (the decoder's own output, as its list is). The web's applyKnownSignals. */
@@ -17441,6 +17446,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           orbit={satOrbit?.geo ?? null} tcaIdx={satOrbit?.tcaIdx}
           telemetry={satTlm}
           orbcomm={satDec === 'orbcomm' ? satOrb : null}
+          orbPlan={satDec === 'orbcomm' ? orbPlan : null}
           follow={satBoxFollow}
           xpdr={satDec === 'xpdr' ? satXp : null}
           onXpdrListen={(r) => {   // ★★★ beta94 LISTEN: VFO A to the voice (USB) — an ordinary tune — then the finder follows it

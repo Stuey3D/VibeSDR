@@ -26,11 +26,16 @@ export interface OrbSat {
   down?: { part: number; of: number; hz: number[] };
   up?: { hz: number[]; retries: number; slots: number };
   elements?: { sc: number; ma: number; mm: number };
+  /** ★★ b97 every open carrier the decoder names as this bird, when more than one (a bird has several downlinks) */
+  rfs?: number[];
 }
 export interface OrbCarrier {
   id: number; rf: number; snr: number; lock: boolean; ok: number; bad: number; fixed: number;
-  /** ★ 2026-11-24 the bird on this carrier once named ('' = not yet) — the waterfall's carrier mark */
+  /** ★ 2026-11-24 the bird on this carrier once named ('' = not yet) — the waterfall's carrier mark.
+   *  ★★ b97 named only when the decoder named THIS carrier (vibe_orbcomm_run.h who_) — CONFIRMED; a guess is never sent. */
   sat: string;
+  /** ★★ b97 its catalogue number and how it was named (0 / '' = not named, or an older server) */
+  norad: number; how: OrbHow;
 }
 /** ★★ 2026-11-24 THE SLICE the decoder is fed and searches (RF edges lo…hi — drawn on the waterfall), how much has arrived,
  *  how often its centre moved (a dial move on a one-pipeline radio moves it), and the scanner's floor. */
@@ -107,6 +112,7 @@ export function parseOrbcommStatus(d: unknown): OrbStatus | null {
       const dn = obj(q.down); if (dn) sat.down = { part: cnt(dn.part), of: cnt(dn.of), hz: hzList(dn.hz) };
       const up = obj(q.up); if (up) sat.up = { hz: hzList(up.hz), retries: cnt(up.retries), slots: cnt(up.slots) };
       const el = obj(q.elements); if (el) sat.elements = { sc: cnt(el.sc), ma: n(el.ma), mm: n(el.mm) };
+      const rfs = hzList(q.rfs).slice(0, 6); if (rfs.length > 1) sat.rfs = rfs;
       sats.push(sat);
     }
   const carriers: OrbCarrier[] = [];
@@ -115,7 +121,7 @@ export function parseOrbcommStatus(d: unknown): OrbStatus | null {
       const q = obj(x);
       if (!q) continue;
       carriers.push({ id: Math.floor(n(q.id)), rf: Math.max(0, n(q.rf)), snr: n(q.snr), lock: q.lock === true, ok: cnt(q.ok), bad: cnt(q.bad), fixed: cnt(q.fixed),
-                      sat: s(q.sat, 40) });
+                      sat: s(q.sat, 40), norad: cnt(q.norad), how: HOWS.includes(q.how as OrbHow) ? (q.how as OrbHow) : '' });
     }
   // ★★ the slice: a window only when its edges are real RF (lo < hi, under 10 GHz, at most 20 MHz wide)
   let slice: OrbSlice | null = null;
@@ -251,14 +257,22 @@ export function orbCountsText(c: Record<string, number> | undefined): string {
                                          ncc: 'gateway', message: 'subscriber (raw)', sync: 'sync', fill: 'fill' };
   return ORB_COUNT_KEYS.filter((k) => (c[k] ?? 0) > 0).map((k) => `${word[k]} ${c[k].toLocaleString('en-GB')}`).join(' · ');
 }
-/** A bird's lines in the box (name first). `clockOff` = its clock against ours from its last position report. */
-export function orbSatLines(b: OrbSat, clockOff?: number, heldSecs?: number): string[] {
+/** ★★ b97 an unnamed carrier's GUESS, in words — "probably FM116?" (the waterfall draws the same name amber with "?":
+ *  src/utils/orbcommView.ts orbLabelPlan is the one source of both). */
+export function orbGuessText(name: string): string {
+  return `probably ${name.replace(/^ORBCOMM\s+/i, '')}?`;
+}
+/** A bird's lines in the box (name first). `clockOff` = its clock against ours from its last position report.
+ *  ★★ b97 `guess` = the name orbLabelPlan guesses for an UNNAMED row's carrier (the first line then ends "probably FM116?" —
+ *  the viewers draw that line amber, as the waterfall draws the guess); a bird on several carriers lists every one. */
+export function orbSatLines(b: OrbSat, clockOff?: number, heldSecs?: number, guess?: string): string[] {
   const out: string[] = [];
-  out.push(`${b.name || (b.norad ? `NORAD ${b.norad}` : 'Unknown ORBCOMM bird')} · ${orbHowText(b.how)}${heldSecs != null ? ` · ${orbHeldText(heldSecs)}` : ''}`);
+  const g = !b.norad && guess ? ` · ${orbGuessText(guess)}` : '';
+  out.push(`${b.name || (b.norad ? `NORAD ${b.norad}` : 'Unknown ORBCOMM bird')} · ${orbHowText(b.how)}${g}${heldSecs != null ? ` · ${orbHeldText(heldSecs)}` : ''}`);
   const sky = b.el > -90 && (b.az || b.el) ? ` · az ${Math.round(b.az)}° el ${Math.round(b.el)}°` : '';
   out.push(`SNR ${b.snr.toFixed(1)} dB · Doppler ${kHz(b.dop)}${b.pred ? ` (predicted ${kHz(b.pred)})` : ''}${sky}`);
   out.push(`${b.ok.toLocaleString('en-GB')} good packets${b.messages ? ` · ${b.messages.toLocaleString('en-GB')} subscriber messages (raw)` : ''}`
-    + `${b.rf ? ` · ${mhz(b.rf)} MHz` : ''}${heldSecs == null && b.age >= 3 ? ` · last ${Math.round(b.age)} s ago` : ''}`);
+    + `${b.rfs && b.rfs.length > 1 ? ` · ${b.rfs.map(mhz).join(' + ')} MHz` : b.rf ? ` · ${mhz(b.rf)} MHz` : ''}${heldSecs == null && b.age >= 3 ? ` · last ${Math.round(b.age)} s ago` : ''}`);
   if (b.eph) {
     const e = b.eph;
     out.push(`Position ${Math.abs(e.lat).toFixed(2)}°${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lon > 180 ? e.lon - 360 : e.lon).toFixed(2)}°${(e.lon > 180 ? e.lon - 360 : e.lon) >= 0 ? 'E' : 'W'}`

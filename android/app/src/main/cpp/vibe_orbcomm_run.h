@@ -110,6 +110,7 @@ private:
         uint64_t ok = 0, msgs = 0;
         std::string eph, down, up, elements, ncc;   // the latest housekeeping, as JSON fragments
     };
+    struct Who { long long norad = 0; std::string name, how; double last = 0; };   // ★★ b97 one carrier's identity (onRx_)
     struct Bucket { double t0 = 0; int snr = -127; int n = 0; float az = 0, el = 0; };
 
     double now_() const {
@@ -146,6 +147,11 @@ private:
         s.chan = r.chan; s.rfHz = r.rfHz; s.snr = r.snrDb; s.last = r.t; s.ok++;
         s.dcn = id_.channelOf(r.chan); s.scId = id_.scIdOf(r.chan);
         if (a.sky) { s.az = a.azDeg; s.el = a.elDeg; s.dop = a.dopplerHz; s.pred = a.predictedHz; }
+        /* ★★ b97 (Stuart, XCover: two carriers labelled FM116, the card naming only one): WHO EACH CARRIER IS, per carrier —
+         *  its own latest answer, never "the carrier this bird's row last heard". The status's carriers[] (the waterfall's
+         *  marks) and the card's rows read this one record, so a carrier is named only when the decoder named THAT carrier. */
+        if (who_.size() > 64 && !who_.count(r.chan)) who_.erase(who_.begin());   // bounded even with no status reader
+        { Who& w = who_[r.chan]; w.norad = a.norad; w.name = a.norad ? a.name : std::string(); w.how = a.how; w.last = r.t; }
         if (a.norad) { goodBySat_[a.norad]++; seenThisPass_[a.norad] = true; }
         if (a.norad && a.sky) addDot_(a.norad, r.t, int(std::lround(r.snrDb)), float(a.azDeg), float(a.elDeg));
         // the packet's line
@@ -290,6 +296,15 @@ private:
         for (auto& kv : typeCount_) { j += std::string(first ? "" : ",") + "\"" + typeName(kv.first) + "\":" + std::to_string(kv.second); first = false; }
         j += "},\"sats\":[";
         first = true;
+        const auto chans = rx_.channels();
+        for (auto it = who_.begin(); it != who_.end();) {   // ★★ b97 a carrier gone from the receiver forgets who it was (ids are never reused)
+            bool open = false; for (auto& c : chans) if (c.id == it->first) { open = true; break; }
+            if (!open || t - it->second.last > 600) it = who_.erase(it); else ++it;
+        }
+        const auto whoNow = [&](int chan) -> const Who* {   // the carrier's identity while it is fresh (as the rows: 30 s)
+            auto it = who_.find(chan);
+            return it != who_.end() && it->second.norad && t - it->second.last < 30 ? &it->second : nullptr;
+        };
         for (auto& kv : sats_) {
             const Sat& s = kv.second;
             if (t - s.last > 30) continue;   // gone (set, or the carrier dropped)
@@ -302,18 +317,25 @@ private:
             if (!s.down.empty()) j += ",\"down\":" + s.down;
             if (!s.up.empty()) j += ",\"up\":" + s.up;
             if (!s.elements.empty()) j += ",\"elements\":" + s.elements;
+            if (s.norad) {   // ★★ b97 EVERY open carrier the decoder names as this bird (a bird has several downlinks) — the card lists them all
+                std::string rfs; int n = 0;
+                for (auto& c : chans) { const Who* w = whoNow(c.id); if (w && w->norad == s.norad) rfs += (n++ ? "," : "") + fmt("%.0f", c.rfHz); }
+                if (n > 1) j += ",\"rfs\":[" + rfs + "]";
+            }
             j += "}";
             first = false;
         }
         j += "],\"carriers\":[";
         first = true;
-        for (auto& c : rx_.channels()) {
+        for (auto& c : chans) {
             char b[200];
             std::snprintf(b, sizeof b, "%s{\"id\":%d,\"rf\":%.0f,\"snr\":%.1f,\"lock\":%s,\"ok\":%llu,\"bad\":%llu,\"fixed\":%llu", first ? "" : ",", c.id, c.rfHz, c.snrDb,
                           c.locked ? "true" : "false", (unsigned long long)c.ok, (unsigned long long)c.bad, (unsigned long long)c.repaired);
             j += b; first = false;
             // ★ the bird on this carrier, once named (the waterfall's carrier mark)
-            for (auto& kv : sats_) if (kv.second.chan == c.id && kv.second.norad && t - kv.second.last < 30) { j += ",\"sat\":\"" + jsonEsc(kv.second.name) + "\""; break; }
+            // ★★ b97 named only when the decoder named THIS carrier (who_), with how and the catalogue number — the clients'
+            //    one source of truth for confirmed vs guessed (src/utils/orbcommView.ts orbLabelPlan)
+            if (const Who* w = whoNow(c.id)) j += ",\"sat\":\"" + jsonEsc(w->name) + "\",\"norad\":" + std::to_string(w->norad) + ",\"how\":\"" + jsonEsc(w->how) + "\"";
             j += "}";
         }
         {   /* ★★ THE SLICE (2026-11-24, the XCover's HF+ showed no carrier and nothing said whether IQ arrived): what the decoder is
@@ -408,6 +430,7 @@ private:
     Receiver rx_;
     Ident id_;
     std::map<long long, Sat> sats_;
+    std::map<int, Who> who_;   // ★★ b97 carrier id → who the decoder says it is (its latest good packet)
     std::map<long long, Bucket> buckets_;
     std::map<long long, double> lastEph_;
     std::map<long long, bool> seenThisPass_;
