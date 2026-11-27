@@ -714,6 +714,38 @@ const CSS = `
  *  bottom, no rim on the edge sides, a square corner (the window's own corner clips it), the safe area inside it; the
  *  controller's green focus ring drawn INSIDE (no clipping at the edge, no layout shift) */
 .trkCards .trkCard2{background:#0b110d!important}
+.mHelp,.mChipsScale{transition:transform .2s ease}
+/* ★★★ Stuart 12:44 ("empty space where it says LIST then a back button, why doesn't that go"): the drawer has NO title row —
+ *  it opens straight onto its tabs and rows. Its CHIP is the toggle, always in the corner: the list glyph, the count and an
+ *  arrow — up (open it) while shut, down (fold it) while open. The chip sits in the drawer's own bottom strip, so no row
+ *  ever hides under it. */
+.trkCard2[data-card="list"]>.ch{display:none!important}
+.trkCards .sideB>.trkCard2[data-card="list"]{padding-bottom:calc(var(--trk-lchip-h,40px) + env(safe-area-inset-bottom,0px))!important}
+.trkView .mChipsBL{z-index:800}
+.mDock[data-dock="list"].open{visibility:visible}
+.mDock[data-dock="list"].open .hCard{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
+.mDock[data-dock="list"] .arw{width:11px;height:11px;flex:none;margin-left:2px;opacity:.85;transition:transform .2s ease}
+.mDock[data-dock="list"].open .arw{transform:rotate(180deg)}
+/* the LIST chip on ONE line at every width — glyph, count, arrow — a slim strip under the drawer's rows */
+.mChipsBL .mDock[data-dock="list"] .mchip{flex-direction:row!important;min-height:30px!important;padding-top:3px!important;padding-bottom:3px!important}
+.mChipsBL .mDock[data-dock="list"] .hCard{padding-top:0!important;padding-bottom:0!important;min-height:0!important}
+/* ★★★ Stuart 12:46 / 12:48: a small TAB grows out of the drawer's top edge near its right corner — the drawer's own
+ *  background and rim, rounded top corners, concave fillets where it meets the edge (a folder tab) — ⌃ maximise, ⌄ restore */
+.trkCards .trkCard2[data-card="list"]{overflow:visible!important}
+.trkCards .trkCard2[data-card="list"]>.cb{border-radius:inherit}
+.trkCard2[data-card="list"] .lMax{all:unset;box-sizing:border-box;position:absolute;top:-19px;right:22px;width:44px;height:19px;display:flex;align-items:flex-start;justify-content:center;padding-top:3px;
+  background:#0b110d;border:1px solid;border-bottom:0;border-color:inherit;border-radius:9px 9px 0 0;color:var(--hc,#5BE36B);cursor:pointer;z-index:2}
+.trkCard2[data-card="list"] .lMax svg{width:12px;height:12px;transition:transform .2s ease}
+.trkCard2[data-card="list"] .lMax[aria-pressed="true"] svg{transform:rotate(180deg)}
+.trkCard2[data-card="list"] .lMax::before,.trkCard2[data-card="list"] .lMax::after{content:"";position:absolute;bottom:-1px;width:9px;height:9px;pointer-events:none}
+.trkCard2[data-card="list"] .lMax::before{left:-9px;background:radial-gradient(circle at 0 0,transparent 7.5px,currentColor 8px,currentColor 8.6px,#0b110d 9.2px)}
+.trkCard2[data-card="list"] .lMax::after{right:-9px;background:radial-gradient(circle at 100% 0,transparent 7.5px,currentColor 8px,currentColor 8.6px,#0b110d 9.2px)}
+.trkCards .trkCard2[data-card="list"]{position:relative}
+.trkCard2[data-card="list"] .lMax:focus-visible{outline:2px solid #ffd34d;outline-offset:-3px}
+.trkCards .trkCard2[data-card="list"][hidden] .lMax,.trkCards .trkCard2[data-card="list"].stepAside .lMax{display:none}
+.trkView.lMax .trkCards .sideB{top:var(--trk-cb-top,0px)!important}
+.mChipsBL .mDock[data-dock="list"] .mchip .ic{display:inline-flex!important;flex-direction:row!important;align-items:center;gap:6px}
+.trkView.listOverAttrib .maplibregl-ctrl-attrib,.trkView.listOverAttrib .leaflet-control-attribution{visibility:hidden}
 /* ★ Stuart 12:34 ("no gap on mac but there is on iphone"): an old phone rule inset the cards' layer 6 px — the layer is the
  *  whole map on every width; only the drawer's CONTENT takes the safe area */
 .trkView[data-narrow] .trkCards{left:0!important;right:0!important;top:0!important;bottom:0!important}
@@ -814,6 +846,27 @@ const CSS = `
 .trkCards.lAndB .sideL{bottom:47%}
 .trkCards.lAndB .sideB{top:55%}
 .trkCards .sideB>.trkCard2[data-card="list"]{height:var(--trk-list-card-h,320px);flex:none!important;max-height:none!important}
+.trkView[data-narrow] .trkCard2[data-card="list"]>.cb>.facts{display:none}
+.trkView[data-narrow] .trkList .hd{flex-wrap:nowrap;gap:6px;padding:5px 8px}
+.trkView[data-narrow] .trkList .hd{gap:6px}
+/* ★★★ Stuart 12:47: the tabs are ONE ROW that SCROLLS, on every width that needs it — a fade and a small arrow at whichever
+ *  edge has more beyond it (only then), the arrow nudging the row by about a tab; NEAREST | LATEST pinned at the right,
+ *  outside the scroller, so it is always in reach. The fade is a mask (compositor work, no repaint of the rows). */
+.trkList .hd .tabWrap{position:relative;display:flex;min-width:0;flex:1 1 auto}
+.trkList .hd .tabWrap[hidden]{display:none}
+.trkList .hd .tabs{flex-wrap:nowrap!important;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;min-width:0;flex:1 1 auto;scroll-behavior:smooth}
+.trkList .hd .tabs::-webkit-scrollbar{display:none}
+.trkList .hd .tab{white-space:nowrap;flex:none}
+.trkList .hd .tabWrap.mR .tabs{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 30px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 30px),transparent)}
+.trkList .hd .tabWrap.mL .tabs{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 30px),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 30px),transparent)}
+.trkList .hd .tabWrap.mL.mR .tabs{-webkit-mask-image:linear-gradient(to right,transparent,#000 30px,#000 calc(100% - 30px),transparent);mask-image:linear-gradient(to right,transparent,#000 30px,#000 calc(100% - 30px),transparent)}
+.trkList .hd .tArr{all:unset;box-sizing:border-box;position:absolute;top:50%;transform:translateY(-50%);width:20px;height:22px;display:none;align-items:center;justify-content:center;
+  color:#ffd34d;font:700 15px/1 system-ui,sans-serif;cursor:pointer;z-index:1;border-radius:5px}
+.trkList .hd .tArr.l{left:-2px}.trkList .hd .tArr.r{right:-2px}
+.trkList .hd .tabWrap.mL .tArr.l,.trkList .hd .tabWrap.mR .tArr.r{display:flex}
+.trkList .hd .tArr:focus-visible{outline:2px solid #ffd34d;outline-offset:-2px}
+.trkList .hd .srt{flex:none}
+.trkView[data-narrow] .trkCard2[data-card="list"]>.ch{padding-top:4px;padding-bottom:4px}
 .trkCard2[data-card="list"]>.cb{display:flex;flex-direction:column;overflow:hidden}
 .trkCard2[data-card="list"]>.cb>.facts{flex:none}
 .trkCard2[data-card="list"] .trkList{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
@@ -1003,7 +1056,7 @@ export class TrackView {
       + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('servers', 'left', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card', false, SERVERS_SVG.replace('mIco', 'tIco'))}${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true, modeIconSvg('radio', 'tIco'))}`
       + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card', false, LAYER_GLYPH.aircraft)}</div>`
       + `<div class="mChips mChipsR">${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}<span class="zst" aria-hidden="true"></span></span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
-      + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
+      + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span><svg class="arw" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
       // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
       // ★★★ the SCALE as its own little edge chip (Stuart 11-27: "scale could be its own little chip on the side of the
       //     screen"), bottom right above the ? — the map's own scale lines, moved in (scaleDock), live with every zoom
@@ -1013,9 +1066,10 @@ export class TrackView {
       + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
       + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
         + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
-      + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
+      + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
         + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
-        + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`)
+        + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`
+        + `<button class="lMax" type="button" aria-pressed="false" aria-label="Maximise the list" title="Maximise the list (M)"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 7.5 6 4l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>`)
       + card('servers', 'SERVERS', `<div class="srvBody" role="group" aria-label="Servers and radios"></div>`)
       + card('tune', 'TUNE', `<div class="facts"></div><div class="trkSlot slot-tune"></div><div class="tunePop" role="menu" aria-label="Tune the radio"></div>`)
       + card('layers', 'LAYERS', `<div class="facts"></div><div class="sect"><span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span></div>`
@@ -1054,6 +1108,7 @@ export class TrackView {
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
     for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => {
       // ★ the LIST stepped aside for a card: its chip brings it back (the card folds), never shuts it
+      if (b.dataset.cbtn === 'list' && this.lpFired) { this.lpFired = false; return; }
       if (b.dataset.cbtn === 'list' && this.listAside) { this.closeTransients(); return; }
       this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
     };
@@ -1084,7 +1139,12 @@ export class TrackView {
     this.viewSync();
     this.cardsLayout();
     if (typeof ResizeObserver !== 'undefined') { this.cardRo = new ResizeObserver(() => this.cardsLayout()); this.cardRo.observe(r); }
-    else window.addEventListener('resize', () => this.cardsLayout());
+    { // ★ the visual viewport (iOS toolbars, the keyboard): the LIST's rows follow it, settled (debounced)
+      const vv = (window as any).visualViewport as EventTarget | undefined; let t: ReturnType<typeof setTimeout> | null = null;
+      const on = () => { if (t) clearTimeout(t); t = setTimeout(() => { if (this.open && this.cardOrder.includes('list')) this.cardsLayout(); }, 150); };
+      vv?.addEventListener('resize', on); vv?.addEventListener('scroll', on);
+    }
+    if (typeof ResizeObserver === 'undefined') window.addEventListener('resize', () => this.cardsLayout());
     this.rowsEl.addEventListener('pointerdown', (e) => {
       const row = (e.target as HTMLElement).closest('.trkRow') as HTMLElement | null;
       this.down = { key: row?.dataset.key || '', at: performance.now(), x: e.clientX, y: e.clientY };
@@ -1099,6 +1159,19 @@ export class TrackView {
     for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) this.list.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     /* ★★★ beta96 Escape (and the pad's BACK): inside a card — that card shuts, focus back on its button; else an item's
      *  own card on the map (the selection) first, as before; else the TOP card (the last opened); else the map. */
+    { // ★ the LIST: its tab, a long press of its chip, or M — maximise / restore
+      const lb = r.querySelector('[data-cbtn="list"]') as HTMLElement | null; let lp: ReturnType<typeof setTimeout> | null = null;
+      lb?.addEventListener('pointerdown', () => { if (lp) clearTimeout(lp); lp = setTimeout(() => { this.lpFired = true; if (!this.isCardOpen('list')) this.cardOpen('list', true, true); this.setListMax(!this.listMax); }, 550); });
+      for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) lb?.addEventListener(ev, () => { if (lp) { clearTimeout(lp); lp = null; } });
+      (r.querySelector('.lMax') as HTMLElement | null)?.addEventListener('click', (e) => { e.stopPropagation(); this.setListMax(!this.listMax); });
+      r.addEventListener('keydown', (e) => {
+        if ((e.key !== 'm' && e.key !== 'M') || e.metaKey || e.ctrlKey || e.altKey) return;
+        const t = e.target as HTMLElement | null; if (t && (t.closest('input, textarea, select, [contenteditable="true"]'))) return;
+        if (!this.isCardOpen('list')) return;
+        e.preventDefault(); e.stopPropagation(); this.setListMax(!this.listMax);
+      });
+      if (this.listMax) { r.classList.add('lMax'); const b = r.querySelector('.lMax') as HTMLElement | null; if (b) { b.setAttribute('aria-pressed', 'true'); b.setAttribute('aria-label', 'Restore the list'); } }
+    }
     r.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
@@ -1156,6 +1229,7 @@ export class TrackView {
     const shown = Array.from(this.cardsEl.querySelectorAll('.trkCard2')).map((c) => (c as HTMLElement).dataset.card as CardId);
     const top = inCard && this.root.contains(inCard) ? inCard.dataset.card as CardId : this.sel ? undefined : [...open].reverse().find((id) => shown.includes(id));
     if (!top) return false;
+    if (top === 'list' && this.listMax) { this.setListMax(false); this.cardClosedAt = performance.now(); return true; }
     this.cardOpen(top, false, true);
     this.cardClosedAt = performance.now();
     if (inCard) (this.root.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null)?.focus();
@@ -1267,7 +1341,7 @@ export class TrackView {
     this.cardsEl.classList.toggle('both', false);
     this.cardsEl.classList.toggle('lAndB', false);   // ★ tweak 5: a transient card simply lies OVER the list (its shadow says so)
     this.listRefit();
-    if (sig === this.layoutSig) { this.cardsAnchor(place); this.listStepAside(); return; }   // ★ a data tick: only the anchors follow the chips
+    if (sig === this.layoutSig) { this.cardsAnchor(place); this.listStepAside(); this.liftOverList(); return; }   // ★ a data tick: only the anchors follow the chips
     this.layoutSig = sig;
     /* ★★★ tweak 5 (Stuart 11-27: "the list keeps popping open every refresh of data"): a card is MOVED only when its own
      *  place changes — one already where it belongs is never re-inserted (a re-insert restarts its pop-out animation and
@@ -1296,8 +1370,8 @@ export class TrackView {
     }
     if (focused && focused !== document.activeElement && this.root.contains(focused) && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
     this.cardsAnchor(place);
-    this.listStepAside();
-    setTimeout(() => this.listStepAside(), 30);   // ★ once the new card has its size
+    this.listStepAside(); this.liftOverList();
+    setTimeout(() => { this.listStepAside(); this.liftOverList(); }, 30);   // ★ once the new card has its size
     setTimeout(() => { this.placeAcObstacle(); try { this.af?.poke?.(); } catch { /* none */ } }, 0);
   }
   /** ★★★ tweak 4: each side's cards open AT their chip — the left / right column's top is its first open chip's top, the
@@ -1324,7 +1398,25 @@ export class TrackView {
         const reachesLeft = !!ab && ab.width > 0 && ab.left < m.left + 320;   // ★ an attribution wrapped across a phone runs under the drawer
         setv('--trk-list-bottom', `${reachesLeft ? Math.round(m.bottom - ab!.top) : 0}px`); }
       const room = Math.max(120, m.height - capTop - attrib - 8);
-      setv('--trk-list-card-h', `${Math.round(Math.min(room, Math.max(240, Math.min(480, m.height * 0.48))))}px`);
+      /* ★ Stuart 12:38 ("the list could show fewer lines at a time"): WHOLE ROWS — the header and N rows, N from a share of
+       *  the map (≈ a third on a phone-sized map under 700 px, about half on a large one, ≤ 480 px), at least 3, never
+       *  past the room; the last row always whole */
+      const lcEl = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
+      const rowsEl = lcEl?.querySelector('.rows') as HTMLElement | null;
+      const rowH = (rowsEl?.querySelector('.trkRow') as HTMLElement | null)?.offsetHeight || 44;
+      const head = lcEl && rowsEl && lcEl.offsetHeight > 0 ? Math.max(40, lcEl.offsetHeight - rowsEl.clientHeight) : 96;
+      /* ★ Stuart 12:40 ("use the viewport size to determine the list size"): a continuous function of the VISUAL viewport
+       *  (iOS Safari's toolbars and keyboard counted). Its height alone cannot tell an iPhone (390×844: 3–4 rows wanted)
+       *  from a laptop window (1440×900: 8–9), so the share grows with the width too: 30 % of the height at phone width,
+       *  rising to 55 % by 1500 px. At least 3 rows, never past the room. */
+      const vv = (window as any).visualViewport as { width: number; height: number } | undefined;
+      const vw = vv?.width || window.innerWidth, vh = vv?.height || window.innerHeight;
+      const share = Math.min(0.55, Math.max(0.29, 0.29 + (vw - 400) / 4200));
+      let n = Math.max(3, Math.floor((vh * share - head) / rowH));
+      while (n > 1 && head + n * rowH > room) n--;
+      this.listNormH = Math.round(head + n * rowH);
+      this.listMaxH = Math.max(this.listNormH, Math.round(m.height - capTop - (parseFloat(this.root.style.getPropertyValue('--trk-list-bottom')) || 0)));
+      setv('--trk-list-card-h', `${this.listMax ? this.listMaxH : this.listNormH}px`);
       // ★ the scale bar steps right of the open LIST (not just its chip)
       const lc = place.B.includes('list') ? (this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null)?.getBoundingClientRect() : null;
       if (lc && lc.width) setv('--trk-list-w', `${Math.ceil(lc.right - m.left) + 8}px`);
@@ -1333,6 +1425,76 @@ export class TrackView {
   /** ★★★ Stuart 12:18 ("the list auto hides when it will clip"): while a transient card would OVERLAP the LIST drawer, the
    *  LIST steps aside (down into its chip — dimmed, it is only away for the moment; a press brings it back and folds the
    *  card). Measured, never by window size; its node, scroll, tab and its remembered-open state untouched; no re-fit. */
+  /** ★★★ Stuart 12:40 ("the help button and scale could shift up when list opened, the credits button can stay hidden"):
+   *  while the open LIST drawer's rectangle covers the ? or the scale strip (measured, not by width) they slide UP to sit
+   *  just above its top edge — transform only, the drawer's timing — and back down as it closes. The credits' (i) stays
+   *  where it is, hidden under the drawer (they were shown as the map opened). HELP grows from the ? where it now is. */
+  private liftOverList() {
+    const m = this.mapHost.getBoundingClientRect();
+    { const ch = this.root.querySelector('.mDock[data-dock="list"] .hCard') as HTMLElement | null;   // the drawer's chip strip
+      const v = `${ch && ch.offsetHeight ? ch.offsetHeight : 40}px`; if (this.root.style.getPropertyValue('--trk-lchip-h') !== v) this.root.style.setProperty('--trk-lchip-h', v); }
+    const list = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
+    const open = !!list && !list.hidden && !this.listAside && !!list.parentElement?.classList.contains('sideB') && list.offsetHeight > 0;
+    let L: { l: number; t: number; r: number; b: number } | null = null;
+    if (open) { const p = (list!.parentElement as HTMLElement).getBoundingClientRect(); L = { l: p.left + list!.offsetLeft, t: p.top + list!.offsetTop, r: p.left + list!.offsetLeft + list!.offsetWidth, b: p.top + list!.offsetTop + list!.offsetHeight }; }
+    /* ★ Stuart 12:44 ("help clips the scale"): the right-bottom items are ONE stack — (i), ?, the scale, fixed gaps from the
+     *  bottom up — and it moves as one, by the amount its lowest covered item needs; lifted separately, each landed on the
+     *  drawer's edge and the ? sat on the scale */
+    const stack = (Array.from(this.root.querySelectorAll('.mHelp, .mChipsScale')) as HTMLElement[]).map((el) => {
+      const was = Number(el.dataset.lift || 0), b = el.getBoundingClientRect();
+      return { el, was, b, base: { l: b.left, r: b.right, t: b.top + was, b: b.bottom + was } };   // where it sits unlifted
+    });
+    let lift = 0;
+    for (const { b, base } of stack) if (L && b.width && base.l < L.r - 1 && base.r > L.l + 1 && base.b > L.t + 1 && base.t < L.b - 1) lift = Math.max(lift, Math.ceil(base.b - L.t + 6));
+    for (const { el, was, b, base } of stack) {
+      if (lift !== was) { el.dataset.lift = String(lift); el.style.transform = lift ? `translateY(${-lift}px)` : ''; }
+      if (el.classList.contains('mHelp') && b.width) {
+        const setv = (k: string, v: string) => { if (this.root.style.getPropertyValue(k) !== v) this.root.style.setProperty(k, v); };
+        setv('--trk-help-r', `${Math.round(m.right - base.r)}px`); setv('--trk-help-b', `${Math.round(m.bottom - (base.t - lift))}px`);
+      }
+    }
+    // the (i): hidden while the drawer covers it, back as the LIST closes
+    const at = this.mapHost.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution') as HTMLElement | null, ab = at?.getBoundingClientRect();
+    const under = !!(L && ab && ab.width && ab.left < L.r && ab.right > L.l && ab.bottom > L.t && ab.top < L.b);
+    this.root.classList.toggle('listOverAttrib', under);
+  }
+  /* ★★★ the LIST maximised (Stuart 12:46): it fills the map under the chips' column; AUTO pauses (there is no map to fit);
+   *  remembered per viewer; Escape un-maximises before it folds. One layout at the toggle, then a transform slide. */
+  private listNormH = 0;
+  private listMaxH = 0;
+  listMax = (() => { try { return localStorage.getItem('vibesdr.mapListMax') === '1'; } catch { return false; } })();
+  setListMax(on: boolean) {
+    if (on === this.listMax) return;
+    const c = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
+    const shown = !!c && !c.hidden && c.offsetHeight > 0;
+    const t0 = shown ? c!.getBoundingClientRect().top : 0, h0 = shown ? c!.offsetHeight : 0;
+    const apply = () => {
+      this.listMax = on;
+      try { localStorage.setItem('vibesdr.mapListMax', on ? '1' : '0'); } catch { /* private window */ }
+      this.root.classList.toggle('lMax', on);
+      const b = this.root.querySelector('.lMax') as HTMLElement | null;
+      if (b) { b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-label', on ? 'Restore the list' : 'Maximise the list'); b.title = on ? 'Restore the list (M)' : 'Maximise the list (M)'; }
+      this.cardsLayout();
+      this.listMaxPause();
+    };
+    if (!shown) { apply(); return; }
+    const rows = c!.querySelector('.rows') as HTMLElement | null, st = rows?.scrollTop ?? 0;
+    if (on) {   // grow: take the new height at once, slide up from where its top was (FLIP — compositor only)
+      apply();
+      const d = t0 - c!.getBoundingClientRect().top;
+      if (rows) rows.scrollTop = st;
+      if (d > 1) { c!.style.transition = 'none'; c!.style.transform = `translateY(${d}px)`; void c!.offsetHeight; c!.style.transition = ''; c!.style.transform = ''; }
+    } else {    // shrink: slide down by the difference, then take the new height
+      const d = h0 - (this.listNormH || h0);
+      if (d <= 1) { apply(); return; }
+      c!.style.transform = `translateY(${d}px)`;
+      let done = false;
+      const fin = () => { if (done) return; done = true; c!.style.transition = 'none'; c!.style.transform = ''; apply(); if (rows) rows.scrollTop = st; void c!.offsetHeight; c!.style.transition = ''; };
+      c!.addEventListener('transitionend', fin, { once: true }); setTimeout(fin, 320);
+    }
+  }
+  private listMaxPause() { this.fitPauseForCards(); }   // ★ maximised counts as a card over the map: AUTO waits
+  private lpFired = false;
   private listAside = false;
   private listStepAside() {
     const list = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
@@ -1743,14 +1905,51 @@ export class TrackView {
    *  [] = the plain list title. A tab pressed calls `onTab`; the host draws that tab's rows. */
   setTabs(tabs: Array<{ id: string; label: string; n: number }>, current: string, onTab: (id: string) => void) {
     const host = this.root.querySelector('.hd .tabs') as HTMLElement, lt = this.root.querySelector('.hd .lt') as HTMLElement;
-    host.hidden = tabs.length < 2; lt.hidden = tabs.length >= 2; this.countEl.hidden = tabs.length >= 2;
+    (host.parentElement as HTMLElement).hidden = tabs.length < 2; lt.hidden = tabs.length >= 2; this.countEl.hidden = tabs.length >= 2;
+    this.tabScrollWire(host);
     const sig = JSON.stringify([tabs, current]);
     if (sig === this.tabSig) return;
+    const changedTab = !this.tabSig || JSON.parse(this.tabSig)[1] !== current;
     this.tabSig = sig;
     if (tabs.length === 1) lt.textContent = tabs[0].label;
     const tg: Record<string, string> = { aircraft: LAYER_GLYPH.aircraft, ships: LAYER_GLYPH.ship, navtex: LAYER_GLYPH.navtex, sondes: LAYER_GLYPH.balloon, navaids: LAYER_GLYPH.navaid };
     host.innerHTML = tabs.map((t) => `<button class="tab" type="button" role="tab" data-tab="${esc(t.id)}" aria-selected="${t.id === current}">${tg[t.id] ? `<span class="tg" aria-hidden="true">${tg[t.id]}</span>` : ''}${esc(t.label)}<span class="tn">${t.n}</span></button>`).join('');
     for (const b of Array.from(host.querySelectorAll('[data-tab]')) as HTMLButtonElement[]) b.onclick = (e) => { e.stopPropagation(); onTab(b.dataset.tab || ''); };
+    const sel = host.querySelector('[aria-selected="true"]') as HTMLElement | null;
+    if (sel && changedTab) this.tabIntoView(host, sel);
+    this.tabEdges(host);
+  }
+  /** the tab row's edges: a fade + arrow only where there is more beyond */
+  private tabEdges(host: HTMLElement) {
+    const w = host.parentElement as HTMLElement;
+    const l = host.scrollLeft > 1, r = host.scrollLeft + host.clientWidth < host.scrollWidth - 1;
+    if (w.classList.contains('mL') !== l) w.classList.toggle('mL', l);
+    if (w.classList.contains('mR') !== r) w.classList.toggle('mR', r);
+  }
+  private tabIntoView(host: HTMLElement, t: HTMLElement) {
+    const a = t.offsetLeft - host.offsetLeft, pad = 24;
+    if (a < host.scrollLeft + pad) host.scrollLeft = Math.max(0, a - pad);
+    else if (a + t.offsetWidth > host.scrollLeft + host.clientWidth - pad) host.scrollLeft = a + t.offsetWidth - host.clientWidth + pad;
+  }
+  private tabScrollWired = false;
+  private tabScrollWire(host: HTMLElement) {
+    if (this.tabScrollWired) return;
+    this.tabScrollWired = true;
+    const w = host.parentElement as HTMLElement;
+    host.addEventListener('scroll', () => this.tabEdges(host), { passive: true });
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.tabEdges(host)).observe(host);
+    const step = (dir: number) => { const t = host.querySelector('.tab') as HTMLElement | null; host.scrollBy({ left: dir * (t?.offsetWidth || 90), behavior: 'smooth' }); };
+    (w.querySelector('.tArr.l') as HTMLElement).addEventListener('click', (e) => { e.stopPropagation(); step(-1); });
+    (w.querySelector('.tArr.r') as HTMLElement).addEventListener('click', (e) => { e.stopPropagation(); step(1); });
+    // ★ keyboard / pad: ← → walk the tabs, each brought into view
+    host.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const ts = Array.from(host.querySelectorAll('.tab')) as HTMLElement[], i = ts.indexOf(document.activeElement as HTMLElement);
+      if (i < 0) return;
+      const n = ts[i + (e.key === 'ArrowRight' ? 1 : -1)];
+      if (n) { e.preventDefault(); e.stopPropagation(); n.focus({ preventScroll: true }); this.tabIntoView(host, n); }
+    });
+    host.addEventListener('focusin', (e) => { const t = (e.target as HTMLElement).closest('.tab') as HTMLElement | null; if (t) this.tabIntoView(host, t); });
   }
   get tab(): string { return (this.root.querySelector('.hd .tab[aria-selected="true"]') as HTMLElement | null)?.dataset.tab || ''; }
   private srtSig = '';
@@ -2191,12 +2390,14 @@ export class TrackView {
   }
   /** A transient card opened / every transient folded: AUTO waits while one is open (only when it was running). */
   private fitPauseForCards() {
-    const open = this.cardOrder.some((x) => !STICKY_CARDS.has(x));
+    const open = this.cardOrder.some((x) => !STICKY_CARDS.has(x)) || (this.listMax && this.isCardOpen('list'));
     try {
       const st = this.af?.state?.();
       if (open && !this.cardPausedFit && st?.on && !st.paused) { this.cardPausedFit = true; this.af.pause(); }
       else if (open && !this.cardPausedFit && this.selPaused) { this.cardPausedFit = true; }
-      else if (!open && this.cardPausedFit) { this.cardPausedFit = false; const s2 = this.af?.state?.(); if (!this.selPaused && !this.movedWhilePaused && s2?.on && s2.paused) { this.af.resume(); this.af.fitNow?.(); } }
+      // ★ Stuart 12:31 ("sluggish"): a chip card folding only RESUMES AUTO — the map did not change under it, so no forced
+      //   glide (a glide moves every marker each frame); AUTO's own hysteresis moves it if something did change
+      else if (!open && this.cardPausedFit) { this.cardPausedFit = false; const s2 = this.af?.state?.(); if (!this.selPaused && !this.movedWhilePaused && s2?.on && s2.paused) this.af.resume(); }
     } catch (e) { console.error('[tracks] fit pause', e); }
     this.zoomStateSync();
   }

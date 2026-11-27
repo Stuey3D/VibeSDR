@@ -362,6 +362,76 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
       const fl = JSON.parse(await p.ev(`JSON.stringify((() => { const h = ${V}.querySelector('.trkMapHost').getBoundingClientRect(), c = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); return { l: Math.round(c.left - h.left), b: Math.round(h.bottom - c.bottom), lb: parseFloat(${V}.style.getPropertyValue('--trk-list-bottom')) || 0 }; })())`));
       ok(fl.l === 0 && Math.abs(fl.b - fl.lb) <= 1, `${ww}×${hh}: the LIST drawer flush — left ${fl.l} px, bottom ${fl.b} px (the attribution's line ${fl.lb})`);
     }
+    // ── whole rows follow the viewport (Stuart 12:38 / 12:40): 3 at 375×667, 3–4 at 390×844, ≥ 8 at 1440×900, never a part row ──
+    const rowsAt = async (ww, hh, mob) => { await p.size(ww, hh, mob); await sleep(800); await shutTransients(p);
+      await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(700);
+      return JSON.parse(await p.ev(`JSON.stringify((() => { const r = ${V}.querySelector('.trkCard2[data-card="list"] .rows'); const h = r.querySelector('.trkRow')?.offsetHeight || 1; return { n: r.clientHeight / h, total: r.querySelectorAll('.trkRow').length }; })())`)); };
+    const r1 = await rowsAt(375, 667, true), r2 = await rowsAt(390, 844, true), r3 = await rowsAt(1440, 900, false);
+    ok(Math.abs(r1.n - 3) < 0.05, `375×667: 3 whole rows (${r1.n.toFixed(2)})`);
+    ok(Math.abs(r2.n - 4) < 0.05, `390×844: 4 whole rows (${r2.n.toFixed(2)})`);
+    ok(r3.n >= 6.95 && Math.abs(r3.n - Math.round(r3.n)) < 0.05 || r3.total < 7, `1440×900: 7 or more whole rows, the top under the chips' column (${r3.n.toFixed(2)})`);
+    // ── 390×844, LIST open: the ? and the scale lifted clear of the drawer, the (i) hidden; LIST shut, all back down ──
+    { await rowsAt(390, 844, true); await sleep(400);
+      const q = JSON.parse(await p.ev(`JSON.stringify((() => { const L = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect();
+        const ov = (e) => { if (!e) return false; const b = e.getBoundingClientRect(); return b.width > 0 && b.left < L.right && b.right > L.left && b.top < L.bottom && b.bottom > L.top; };
+        const at = ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution');
+        return { help: ov(${V}.querySelector('.mHelp')), scale: ov(${V}.querySelector('.mChipsScale')), attribHidden: !at || getComputedStyle(at).visibility === 'hidden' || !ov(at) }; })())`));
+      ok(!q.help && !q.scale && q.attribHidden, `390×844 LIST open: the ? and the scale clear of the drawer, the (i) out of sight (${JSON.stringify(q)})`);
+      await p.ev(`${BTN('list')}.click(); 1`); await sleep(600);
+      const d = JSON.parse(await p.ev(`JSON.stringify({ help: ${V}.querySelector('.mHelp').style.transform, scale: (${V}.querySelector('.mChipsScale')?.style.transform || ''), vis: getComputedStyle(${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution') || document.body).visibility })`));
+      ok(!d.help && !d.scale && d.vis !== 'hidden', `…LIST shut: both back down, the (i) back (${JSON.stringify(d)})`);
+      await p.ev(`(() => { const b = ${BTN('list')}; if (b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(400); }
+    // ── the LIST drawer: no title row; its chip in the corner is the toggle (arrow down open, up shut); no row under it ──
+    { await rowsAt(390, 844, true);
+      const t = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), d = ${V}.querySelector('.mDock[data-dock="list"]');
+        const rows = c.querySelector('.rows').getBoundingClientRect(), chip = d.querySelector('.hCard').getBoundingClientRect();
+        return { title: getComputedStyle(c.querySelector('.ch')).display, chipVis: getComputedStyle(d).visibility, arrow: getComputedStyle(d.querySelector('.arw')).transform, clear: rows.bottom <= chip.top + 1, expanded: d.querySelector('[data-cbtn]').getAttribute('aria-expanded') }; })())`));
+      ok(t.title === 'none' && t.chipVis === 'visible' && t.arrow !== 'none' && t.clear && t.expanded === 'true', `the drawer has no title row; its chip stays in the corner, arrow down, the rows clear of it (${JSON.stringify(t)})`);
+      await p.ev(`${BTN('list')}.click(); 1`); await sleep(600);
+      const u = JSON.parse(await p.ev(`JSON.stringify({ shut: ${V}.querySelector('.trkCard2[data-card="list"]').hidden || !${V}.querySelector('.trkCard2[data-card="list"]').offsetHeight, arrow: getComputedStyle(${V}.querySelector('.mDock[data-dock="list"] .arw')).transform })`));
+      ok(u.shut && u.arrow === 'none', `…its chip folds it; the arrow points up (${JSON.stringify(u)})`);
+      await p.ev(`${BTN('list')}.click(); 1`); await sleep(400); }
+    // ── the right-bottom stack — (i), ?, the scale — never overlaps, LIST open or shut, phone and desktop (Stuart 12:44) ──
+    for (const [ww, hh, mob] of [[390, 844, true], [1440, 900, false]]) for (const listOn of [true, false]) {
+      await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);
+      await p.ev(`(() => { const b = ${BTN('list')}; if ((b.getAttribute('aria-expanded') === 'true') !== ${listOn}) b.click(); return 1; })()`); await sleep(700);
+      const hits = await p.ev(`(() => { const vis = (e) => e && getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().width > 0;
+        const els = [['?', ${V}.querySelector('.mHelp')], ['scale', ${V}.querySelector('.mChipsScale')], ['(i)', ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution')]].filter(([, e]) => vis(e));
+        const out = []; for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) { const a = els[i][1].getBoundingClientRect(), b = els[j][1].getBoundingClientRect();
+          if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) out.push(els[i][0] + '×' + els[j][0]); } return out.join(','); })()`);
+      ok(!hits, `${ww}×${hh} LIST ${listOn ? 'open' : 'shut'}: the ?, the scale and the (i) apart${hits ? ' — ' + hits : ''}`);
+    }
+    // ── the tab row (Stuart 12:47): no "no pos" pill; it scrolls, a fade + arrow only at an edge with more beyond ──
+    { await rowsAt(390, 844, true);
+      const st = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const w = ${V}.querySelector('.trkList .hd .tabWrap'), t = w.querySelector('.tabs');
+        const vis = (q) => getComputedStyle(w.querySelector(q)).display !== 'none';
+        return { pill: !!${V}.querySelector('.npChip') || /no pos/.test(${V}.querySelector('.trkList .hd').textContent), over: t.scrollWidth > t.clientWidth + 1, aL: vis('.tArr.l'), aR: vis('.tArr.r'),
+          fade: getComputedStyle(t).webkitMaskImage || getComputedStyle(t).maskImage }; })())`));
+      const s0 = await st();
+      ok(!s0.pill, 'no "+N no pos" pill in the LIST header');
+      if (s0.over) {
+        ok(s0.aR && !s0.aL && /gradient/.test(s0.fade), `390×844 tabs overflow: the right fade + arrow, none on the left (${JSON.stringify(s0)})`);
+        await p.ev(`(() => { const t = ${V}.querySelector('.trkList .hd .tabs'); t.style.scrollBehavior = 'auto'; t.scrollLeft = t.scrollWidth; return 1; })()`); await sleep(300);
+        const s1 = await st();
+        ok(s1.aL && !s1.aR, `…scrolled to the end: the left fade + arrow, none on the right (${JSON.stringify(s1)})`);
+        await p.ev(`(() => { const t = ${V}.querySelector('.trkList .hd .tabs'); t.scrollLeft = 0; t.style.scrollBehavior = ''; return 1; })()`);
+      } else ok(!s0.aL && !s0.aR, 'the tabs fit: no arrows');
+    }
+    // ── the maximise tab (Stuart 12:46): on the drawer's top edge near its right corner; it fills the map under the chips; AUTO waits; again restores ──
+    { await rowsAt(390, 844, true);
+      const g = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), t = c.querySelector('.lMax'), m = ${V}.querySelector('.trkMapHost').getBoundingClientRect();
+        const cb = c.getBoundingClientRect(), tb = t.getBoundingClientRect(), cap = parseFloat(${V}.style.getPropertyValue('--trk-cb-top')) || 0, lb = parseFloat(${V}.style.getPropertyValue('--trk-list-bottom')) || 0;
+        return { tabOn: tb.width > 0 && Math.abs(tb.bottom - cb.top) <= 1 && tb.right > cb.right - 80 && tb.right <= cb.right, h: Math.round(cb.height), want: Math.round(m.height - cap - lb), pressed: t.getAttribute('aria-pressed'), zoom: ${V}.querySelector('.mDock[data-dock="map"]').dataset.zoom || '' }; })())`));
+      const g0 = await g();
+      ok(g0.tabOn && g0.pressed === 'false', `the maximise tab sits on the drawer's top edge near its right corner (${JSON.stringify(g0)})`);
+      await p.ev(`${V}.querySelector('.lMax').click(); 1`); await sleep(700);
+      const g1 = await g();
+      ok(Math.abs(g1.h - g1.want) <= 2 && g1.pressed === 'true', `…pressed: the LIST fills the map under the chips (${g1.h} of ${g1.want} px)`);
+      ok(g1.zoom !== 'on', `…AUTO waits while it is maximised (${g1.zoom})`);
+      await p.ev(`document.activeElement?.blur?.(); ${V}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 1`); await sleep(700);
+      const g2 = await g();
+      ok(Math.abs(g2.h - g0.h) <= 1 && g2.pressed === 'false', `…Escape restores it first, the LIST still open (${g2.h} px)`);
+    }
     // ── HELP grows out of its ?: its bottom-right corner on the button ──
     for (const [ww, hh, mob] of [[750, 950, false], [390, 844, true], [1440, 900, false]]) {
       await p.size(ww, hh, mob); await sleep(700); await shutTransients(p);
