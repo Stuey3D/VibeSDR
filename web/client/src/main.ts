@@ -9764,6 +9764,18 @@ function mapShBuild(): HTMLElement {
   mapShEl = g;
   return g;
 }
+/** ★★ Stuart 14:46: a press on a locked control points at WHERE TO ASK — the shared-tuner bar and the CHAT chip breathe
+ *  with a radar pulse each, ~2.5 s, then stop; a press again restarts it (never stacks). tracks.ts .askPulse (transform
+ *  and opacity only; reduced motion = one flash). */
+let mapAskT: ReturnType<typeof setTimeout> | null = null;
+function mapAskPulse() {
+  const v = document.querySelector('.trkView:not([hidden])');
+  const els = [document.getElementById('mapShLine'), v?.querySelector('.mDock[data-dock="chat"] .hCard')].filter(Boolean) as HTMLElement[];
+  for (const e of els) { e.classList.remove('askPulse'); void e.offsetWidth; e.classList.add('askPulse'); }
+  if (mapAskT) clearTimeout(mapAskT);
+  mapAskT = setTimeout(() => { mapAskT = null; for (const e of els) e.classList.remove('askPulse'); }, 2600);
+}
+(window as any).__vibeMapAskPulse = mapAskPulse;
 function mapShChatSync() {
   const src = document.getElementById('mChat') as HTMLButtonElement | null;
   const b = document.getElementById('mapChat') as HTMLButtonElement | null;
@@ -9845,6 +9857,14 @@ function mapSharedSync() {
     line.textContent = person ? st.text.replace(/ 👤$/, ' ') : st.text;
     if (person) line.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 16 16" width="0.95em" height="0.95em" fill="currentColor" aria-hidden="true" style="vertical-align:-0.12em"><circle cx="8" cy="5" r="3"/><path d="M2 15c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5z"/></svg>');
     line.title = st.why || (alone ? 'Nobody else is listening — free to tune' : 'Others share this dial — ask in the chat before you change it');
+    // ★ Stuart 14:42: one line — too wide for the room between the ✕ and RATE, it says less ("Shared VFO · Ask · 2/5")
+    line.dataset.long = line.textContent || '';
+    requestAnimationFrame(() => {
+      if (!line.isConnected || line.scrollWidth <= line.clientWidth + 1) return;
+      const t = line.dataset.long || '', n = /(\d+\/\d+)\s*$/.exec(t)?.[1] ?? '', head = t.split(':')[0].trim();
+      const word = /ask/i.test(t) ? 'Ask' : /free/i.test(t) ? 'Free' : /lock/i.test(t) ? 'Locked' : '';
+      if (head && word) line.textContent = [head, word, n].filter(Boolean).join(' · ');
+    });
     line.setAttribute('aria-label', st.text.replace(/👤/, 'listening') + ' — open the chat');
     mapShChatSync();
   }
@@ -9852,7 +9872,7 @@ function mapSharedSync() {
   if (o.v === asView) {
     const gain = document.getElementById('adsbGain'); if (gain) { if (adsbOn) gain.dataset.dial = '1'; else delete gain.dataset.dial; }
   }
-  if (!o.v.onDialLocked) o.v.onDialLocked = (why) => { nudgeAsk(); showPill(why, 4000); };
+  if (!o.v.onDialLocked) o.v.onDialLocked = (why) => { nudgeAsk(); showPill(why, 4000); mapAskPulse(); };
   mapServersSync();   // ★★★ tweak 3 the SERVERS chip — every map, always
   o.v.setDialLock(st.show || scanLockOn ? st.why : '', o.exitMoves);
 }

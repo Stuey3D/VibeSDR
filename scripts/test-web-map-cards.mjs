@@ -123,6 +123,12 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="chat"]'); return !!c && !c.hidden && !!c.querySelector('#chatPhrases') && !!c.querySelector('#chatLog'); })()`), `${tag} ${w}: CHAT opens its card — the log and the canned replies`);
     await shutTransients(p);
     ok(await p.ev(`!!document.getElementById('chatPanel')?.contains(document.getElementById('chatPhrases'))`), `${tag} ${w}: …folded, the chat's nodes are home again`);
+    // ★ a press on a locked control points at where to ask: the bar and CHAT pulse for ~2.5 s, then nothing runs (Stuart 14:46)
+    await p.ev(`window.__vibeMapAskPulse(); 1`); await sleep(200);
+    const pz = JSON.parse(await p.ev(`JSON.stringify({ bar: !!document.querySelector('#mapShLine.askPulse'), chat: !!document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"] .hCard.askPulse') || !document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"]:not([hidden])'), run: document.getAnimations().filter(a => a.playState === 'running').length })`));
+    ok(pz.bar && pz.chat && pz.run > 0, `${tag} ${w}: a locked press pulses the shared-tuner bar and CHAT (${JSON.stringify(pz)})`);
+    await sleep(4000);
+    ok(await p.ev(`document.getAnimations().filter(a => a.playState === 'running' && a.effect && a.effect.target && a.effect.target.closest && a.effect.target.closest('.trkView')).length`) === 0, `${tag} ${w}: …and 4 s later nothing in the map is animating`);
     ok(/^Shared VFO: .+ \d+\/\d+$/.test(await p.ev(`document.getElementById('mapShLine').textContent`)), `${tag} ${w}: the line reads "Shared VFO: … n/max" (${await p.ev(`document.getElementById('mapShLine').textContent`)})`);
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);

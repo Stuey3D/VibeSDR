@@ -741,6 +741,13 @@ const CSS = `
 /* a row's long title is a mouse's tooltip, never a touch's */
 @media (hover:none){.trkRow{-webkit-touch-callout:none}}
 .mHelp,.mChipsScale{transition:transform .2s ease}
+/* ★★ the ASK PULSE (main.ts mapAskPulse): a breath and a radar ring, three times, transform + opacity only */
+.trkView .askPulse{position:relative;overflow:visible!important;animation:trkAskBreathe .8s ease-in-out 3}
+.trkView .askPulse::after{content:"";position:absolute;inset:-2px;border-radius:inherit;border:2px solid #ffcc88;pointer-events:none;animation:trkAskRing .8s ease-out 3;opacity:0}
+@keyframes trkAskBreathe{0%,100%{opacity:1}50%{opacity:.72}}
+@keyframes trkAskRing{0%{transform:scale(1);opacity:.9}100%{transform:scale(1.6);opacity:0}}
+@media (prefers-reduced-motion:reduce){.trkView .askPulse{animation:trkAskFlash .6s ease-out 1}.trkView .askPulse::after{animation:none}}
+@keyframes trkAskFlash{0%{opacity:.5}100%{opacity:1}}
 /* ★★ the radio page's SERVER HEALTH chip, lent to the map's right column (main.ts mapChromeAdopt) — in the flow, not fixed */
 .trkView .mChipsR #srvHealth{position:relative!important;top:auto!important;right:auto!important;left:auto!important;bottom:auto!important;transform:none!important;pointer-events:auto;align-self:flex-end}
 .mTime .hCard{padding:6px 5px!important;min-width:30px}
@@ -792,12 +799,20 @@ body.trkMapUp > :not(.trkView) *,body.trkMapUp > :not(.trkView){animation-play-s
 .trkView.rateOpen .trkCards .sideR{right:0!important;left:auto!important;top:var(--trk-rate-bottom,40px)!important}
 .trkView.rateOpen .trkCards .sideR>.trkCard2[data-card="rate"]{border-top-width:0!important;border-right-width:0!important;border-radius:0 0 0 12px!important;width:max(var(--trk-rate-w,160px),240px);transform-origin:top right}
 .trkView .trkTop .slot-share{max-width:100%}
-.trkView .trkTop .slot-share .mapShLine{border-radius:999px!important;padding:7px 12px!important;box-shadow:0 2px 10px rgba(0,0,0,.45);background:rgba(28,22,10,.92)!important;white-space:normal;text-align:center;line-height:1.25;max-width:100%}
-.trkView .trkTop .slot-share .mapShLine.alone{background:rgba(10,26,14,.92)!important}
-.trkView .trkTop .slot-share .mapShLine.locked{background:rgba(40,14,10,.92)!important}
+/* ★★★ Stuart 14:42: the shared-tuner message MIRRORS THE CONTROL DECK — attached to the top edge, centred, the deck
+ *  upside down (square top, rounded bottom), the deck's own material (--ctl-card-bg / --bar-border, so every skin and
+ *  the transparency setting follow) and its font; one line, shortened (main.ts) before it could reach the ✕ or RATE */
+.trkView .trkTop{padding-top:0!important}
+.trkView .trkTop .slot-share .mapShLine{margin-top:0;border-radius:0 0 12px 12px!important;border:1px solid var(--bar-border,rgba(255,255,255,.18))!important;border-top:0!important;
+  padding:calc(env(safe-area-inset-top,0px) + 7px) 14px 7px!important;box-shadow:0 8px 28px rgba(0,0,0,.6)!important;background:var(--ctl-card-bg,rgba(10,10,10,.92))!important;
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace!important;font-size:12px!important;letter-spacing:.12em!important;color:#ffcc88!important;
+  white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;text-align:center;line-height:1.2;max-width:100%}
+.trkView .trkTop .slot-share .mapShLine.alone{color:#7bd88f!important}
+.trkView .trkTop .slot-share .mapShLine.locked{color:#ff9d8a!important}
+.trkView[data-narrow] .trkTop .slot-share .mapShLine{white-space:nowrap!important;font-size:11px!important;letter-spacing:.06em!important}
 .trkView .trkTop #mapChat{display:none!important}
 /* the RATE chip: a reading; a ⌄ only with several sources */
-.mDock[data-dock="rate"] .rateIc{gap:4px;font:700 11px/1 ui-monospace,Menlo,monospace;color:#dfe7ef;white-space:nowrap}
+.mDock[data-dock="rate"] .rateIc{flex-direction:row!important;align-items:center;gap:4px;font:700 11px/1 ui-monospace,Menlo,monospace;color:#dfe7ef;white-space:nowrap}
 .mDock[data-dock="rate"] .ru{color:#ffd34d}
 .mDock[data-dock="rate"] .rmore{color:#9fb0c2;font-size:10px}
 .mDock[data-dock="rate"] .rmore:empty{display:none}
