@@ -4187,7 +4187,15 @@ function mapTimeSync() {
   const text = t && !t.hidden ? (t.textContent || '').trim() : '';
   for (const v of [asView, ismMapView, ismGalView]) if (v?.open) v.setTimeLeft(text, t?.className || '');
 }
-window.addEventListener('vibe:mapopened', () => mapChromeAdopt(true));
+window.addEventListener('vibe:mapopened', () => { mapChromeAdopt(true); mapDeckVars(); });
+/** ★ the shared-tuner bar wears the control deck's material: the look (skin, transparency) is put on #mcard only
+ *  (controlColours.ts applyControlLook), so its fill and rim are copied onto the open map — on open and with each bar sync */
+function mapDeckVars() {
+  const mc = document.getElementById('mcard'); if (!mc) return;
+  const cs = getComputedStyle(mc);
+  for (const v of Array.from(document.querySelectorAll('.trkView:not([hidden])')) as HTMLElement[])
+    for (const k of ['--ctl-card-bg', '--bar-border']) { const val = cs.getPropertyValue(k).trim(); if (val) { if (v.style.getPropertyValue(k) !== val) v.style.setProperty(k, val); } else v.style.removeProperty(k); }
+}
 { const t = document.getElementById('rxTimeLeft'); if (t && typeof MutationObserver !== 'undefined') new MutationObserver(() => mapTimeSync()).observe(t, { attributes: true, childList: true, characterData: true, subtree: true }); }
 
 function renderFrame(frameTs: number) {
@@ -9874,6 +9882,7 @@ function mapSharedSync() {
   }
   if (!o.v.onDialLocked) o.v.onDialLocked = (why) => { nudgeAsk(); showPill(why, 4000); mapAskPulse(); };
   mapServersSync();   // ★★★ tweak 3 the SERVERS chip — every map, always
+  mapDeckVars();
   o.v.setDialLock(st.show || scanLockOn ? st.why : '', o.exitMoves);
 }
 (window as any).__vibeMapShared = () => {

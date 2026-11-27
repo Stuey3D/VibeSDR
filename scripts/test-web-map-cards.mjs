@@ -252,7 +252,14 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`document.querySelector('.trkView:not([hidden]) .trkTop .exit') && 1`);
     { const A = `${V}?.querySelector('.maplibregl-ctrl-attrib')`;
       if (await p.ev(`!!${A}`)) {
+        // ★ Stuart 14:52: SERVER HEALTH is the radio page's own chip, lent to the map — it must look the same in both places
+        const HS = `JSON.stringify((() => { const h = document.getElementById('srvHealth'); if (!h) return null; const c = h.querySelector('.hCard') || h; const cs = getComputedStyle(c); const r = c.getBoundingClientRect();
+          return { inMap: !!h.closest('.trkView'), w: Math.round(r.width), h: Math.round(r.height), bg: cs.backgroundColor, border: cs.borderTopColor + ' ' + cs.borderTopWidth, radius: cs.borderRadius, font: cs.fontFamily + ' ' + cs.fontSize, pad: cs.padding }; })())`;
+        const hMap = JSON.parse(await p.ev(HS));
         await p.ev(`${V}.querySelector('.trkTop .exit').click(); 1`); await sleep(1500);
+        const hPage = JSON.parse(await p.ev(HS));
+        if (hMap && hPage) { const same = ['w', 'h', 'bg', 'border', 'radius', 'font', 'pad'].every((k) => hMap[k] === hPage[k]);
+          ok(hMap.inMap && !hPage.inMap && same, `SERVER HEALTH: lent to the map, back on the page after, the same chip in both (${same ? 'identical' : JSON.stringify({ hMap, hPage })})`); }
         await p.ev(`document.getElementById('mMode')?.click()`); await sleep(500);
         await p.ev(`document.getElementById('mModeAirSea')?.click(); 1`);
         ok(await p.until(`!!${A} && ${A}.classList.contains('maplibregl-compact-show')`, 8000), 'the map credits are shown as the map opens');
