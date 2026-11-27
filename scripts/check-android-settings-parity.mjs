@@ -198,6 +198,25 @@ for (const row of TABLE.filter((r) => r.status === 'ports')) {
 // ── 3. every "not" row says why ──
 for (const row of TABLE.filter((r) => r.status === 'not')) ok(!!row.why && row.why.length > 20, `${row.ids.join('/')}: not ported, and says why`);
 
+// ── 3b. ★★★ b96-2 every PORTED control is also on the phone's REMOTE page (Stuart 11-27: "why cant i schedule satellite passes
+//    on the xcover?"). The remote Setup page hides every control that is not in vibe_android_setup.h's control table
+//    (androidPrune), so a control ported to the phone's screen but missing from that table is on the phone and gone from the
+//    page — Unattended satellite passes, "When an update adds new modes" and "Not at this site" all were. Only the few the
+//    page hides on a phone ON PURPOSE (androidPrune's own list — the phone handles them itself) are excused.
+{
+  const HDR = read('android/app/src/main/cpp/vibe_android_setup.h');
+  const tab = HDR.slice(HDR.indexOf('controlTable()'), HDR.indexOf('inline std::vector<std::string> splitIds'));
+  const remote = new Set();
+  for (const m of tab.matchAll(/\{\s*((?:"[^"]*"\s*)+),\s*D_/g))
+    for (const s of m[1].matchAll(/"([^"]*)"/g)) for (const id of s[1].split(/\s+/)) if (id) remote.add(id);
+  const pr = PAGE.slice(PAGE.indexOf('function androidPrune()'), PAGE.indexOf('function androidSrvCard()'));
+  const onPurpose = new Set([...((pr.match(/for \(const id of \[([^\]]*)\]\)[^\n]*androidOff/) || [])[1] || '').matchAll(/"([A-Za-z]\w*)"/g)].map((m) => m[1]));
+  ok(remote.size > 150 && onPurpose.size >= 3, `read the phone's control table (${remote.size} ids) and the page's on-purpose list (${[...onPurpose].join(', ')})`);
+  const gone = TABLE.filter((r) => r.status === 'ports').flatMap((r) => r.ids).filter((id) => !remote.has(id) && !onPurpose.has(id));
+  ok(gone.length === 0, 'every ported control is on the phone\'s remote Setup page (a row in vibe_android_setup.h\'s control table)'
+     + (gone.length ? ` — PRUNED from the page: ${gone.join(', ')}` : ''));
+}
+
 // ── 4. the V12 background-decoding chain, link by link (the shape a future edit could quietly break) ──
 const JNI = read('android/app/src/main/cpp/vibe_localsdr_jni.cpp');
 const SHIM = read('android/app/src/main/cpp/local_sdr_shim.cpp');

@@ -141,3 +141,20 @@ wrong). Now read as numbers; the parity check refuses the pattern.
   control.
 - Untested by hand on a device: compiled (Mac vibeserver; Android main app arm64 and Lite armeabi-v7a, Kotlin + native)
   and statically tested only.
+
+## ★★★ b96-2 (2026-11-27) — on the phone's screen is not the same as on the phone's REMOTE page
+
+Stuart: *"why cant i schedule satellite passes on the xcover?"* The XCover's remote Setup page showed Background Decoding
+but no **Unattended satellite passes**. The phone's server screen had it (BackgroundDecodingSetup), the engine runs it (the
+shim's `satPassTick`, the same housekeeping tick on every platform; orbit data from `vibe_localsdr_jni.cpp`'s daily fetch; the
+owner's location through `setLocationJson`), and a page save already carried `satPasses` inside `bgDecode`. But the remote
+page hides every control not in `vibe_android_setup.h`'s `controlTable()` (`androidPrune`), and nothing had a row for
+`hwSatPass` / `spOn` / `spMinEl` / `spMeteor` / `spOrbcomm` / `spFirst` / `spBirds` / `spXpdr` — so the whole block was pruned.
+The same check found two more: **When an update adds new modes** (`newModesPolOn/Off`) and **Not at this site** (`feedOffsite`).
+
+- **Fixed:** rows added (satellite passes D_RADIO, Lite included; the other two beside their siblings).
+- **The guard:** `check-android-settings-parity.mjs` §3b — every *ported* id must also be in the control table, unless the
+  page hides it on a phone on purpose (`androidPrune`'s own list). Before the fix it named all 8.
+- **Tests:** `test-setup-android-e2e.mjs` (block + groups + generated ticks visible on the pruned page; a save carries
+  `satPasses` {on, 20°, Meteor} in `bgDecode` and the phone's page config hands it back) — 5 FAIL before, all pass after;
+  `test-android-setup` (198 ids, each with its home in the page config).

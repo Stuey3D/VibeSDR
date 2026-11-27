@@ -283,7 +283,7 @@ inline const std::vector<Control>& controlTable() {
         // ★★ V12 beta96 the standalone AIR & SEA map's limits and the server-level aircraft feed sources (vibe_feeds.h) — every
         //    radio: nothing is tuned
         { "mapViewers mapTimeMin",                       D_ANY,   0 },
-        { "feedFind feedFmt feedDir feedAddr feedPort feedLabel feedName", D_ANY, 0 },   // ★ beta96 follow-up: + FIND (auto-detect)
+        { "feedFind feedFmt feedDir feedAddr feedPort feedLabel feedName feedOffsite", D_ANY, 0 },   // ★ beta96 follow-up: + FIND (auto-detect); ★ b96-2 + "Not at this site" (pruned without it)
         // ★ V12 beta90 PSK Reporter + WSPRnet (every radio's digital spots); the DMR ID lookup only where DV ID can run
         { "pskrOn pskrCall pskrAntenna wsprnetOn wsprnetCall", D_ANY, 0 },
         { "dmrIdLookup",                                 D_RADIO, 0 },
@@ -304,7 +304,7 @@ inline const std::vector<Control>& controlTable() {
         { "idleGrace",                                   D_ANY,   0 },
         { "spectrogram",                                 D_RADIO, P_ADV },
         { "rate rateLock maxFps",                        D_RADIO, 0 },
-        { "modeBlockList bandModeList radioUseGeneral radioUseSingle singlePick singleWindow modeSingleUse", D_ANY, 0 },   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
+        { "modeBlockList bandModeList newModesPolOn newModesPolOff radioUseGeneral radioUseSingle singlePick singleWindow modeSingleUse", D_ANY, 0 },   // ★ b96-2 + "When an update adds new modes" (newmodes@ in blockedModes; pruned without it)   // ★★★ beta96 + the single-mode radio   // the modes this aerial is offered (blockedModes)
         { "dabRateBoost",                                D_RADIO, 0 },
         { "adsb256 ism256",                              D_RTL,   0 },
         { "dabScanLabels",                               D_RADIO, P_LITE },
@@ -326,6 +326,10 @@ inline const std::vector<Control>& controlTable() {
         { "convLo convDown convHi androidConvInLo",      D_HWSETUP, 0 },
         { "icomBaud icomCiv icomScopeSpeed icomTuneLock icomPowerOn icomAutoOff icomOffDelayMin", D_ICOM, 0 },
         { "bgOn bgWait bgKeepInRange bgProfiles",        D_RADIO, 0 },
+        // ★★★ b96-2 (Stuart 11-27: "why cant i schedule satellite passes on the xcover?") UNATTENDED SATELLITE PASSES — saved
+        //    INSIDE bgDecode (satPasses), so it rides the bgOn write below; run by the shim's satPassTick on every platform. With
+        //    no row the whole block was pruned. #spBirds / #spXpdr are the containers of generated ticks with no ids. Lite too.
+        { "hwSatPass spOn spMinEl spMeteor spOrbcomm spFirst spBirds spXpdr", D_RADIO, 0 },
         { "dxOn dxWait dxBands dxRaster dxOirt dxExt dxViewAdmin", D_RADIO, 0 },
         { "afServe afPort afOpen afPush",                D_RADIO, 0 },   // ★★ V12 beta96 flight trackers (the phone's adsbFeed; the page's adsbShare)
         { "rawIqOn rawIqLan rawIqStreams rawIqLocalOnly", D_RADIO, P_NOT_LITE },

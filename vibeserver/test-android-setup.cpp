@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
             {"galleryPublic","galleryPublic"},{"gallerySaveLive","gallerySaveLive"},{"communityMap","communityMap"},{"communityModes","communityOff"},{"batteryPauseAt","batteryPauseAt"},
             // ★★ V12 beta96 the standalone AIR & SEA map's limits and the server-level aircraft feed sources
             {"mapViewers","mapViewers"},{"mapTimeMin","mapTimeMin"},{"feedFind","aircraftFeeds"},{"feedFmt","aircraftFeeds"},{"feedDir","aircraftFeeds"},{"feedAddr","aircraftFeeds"},
-            {"feedPort","aircraftFeeds"},{"feedLabel","aircraftFeeds"},{"feedName","aircraftFeeds"},
+            {"feedPort","aircraftFeeds"},{"feedLabel","aircraftFeeds"},{"feedName","aircraftFeeds"},{"feedOffsite","aircraftFeeds"},
             // ★ V12 beta90 PSK Reporter / WSPRnet / the DMR ID lookup
             {"pskrOn","pskrOn"},{"pskrCall","pskrCall"},{"pskrAntenna","pskrAntenna"},{"wsprnetOn","wsprnetOn"},{"wsprnetCall","wsprnetCall"},{"dmrIdLookup","dmrIdLookup"},
             {"place","place"},{"lat","lat"},{"lon","lon"},{"locFollow","locFollow"},{"country","country"},{"locator","locator"},
@@ -390,7 +390,7 @@ int main(int argc, char** argv) {
             {"zoomSpectrum","r:zoomSpectrum"},{"landingFreq","r:landingFreq"},{"demodMode","r:demodMode"},
             {"sessionLimit","r:sessionLimitMin"},{"sessionLimitMode","r:sessionLimitSoft"},{"idleKick","r:idleKickMin"},
             {"nbWide","r:nbWide"},{"vfoB","r:vfoB"},{"idleGrace","r:idleGrace"},{"spectrogram","r:spectrogram"},
-            {"rate","r:rate"},{"rateLock","r:rateLock"},{"maxFps","r:maxFps"},{"modeBlockList","r:blockedModes"},{"radioUseGeneral","r:singleMode"},{"radioUseSingle","r:singleMode"},{"singlePick","r:singleMode"},{"bandModeList","r:blockedModes"},
+            {"rate","r:rate"},{"rateLock","r:rateLock"},{"maxFps","r:maxFps"},{"modeBlockList","r:blockedModes"},{"radioUseGeneral","r:singleMode"},{"radioUseSingle","r:singleMode"},{"singlePick","r:singleMode"},{"bandModeList","r:blockedModes"},{"newModesPolOn","r:blockedModes"},{"newModesPolOff","r:blockedModes"},
             {"dabRateBoost","r:dabRateBoost"},{"adsb256","r:adsb256"},{"ism256","r:ism256"},{"dabScanLabels","r:dabScanLabels"},
             {"gainRestSlider","r:restGain"},{"gainRest","r:restGain"},{"gainRestLock","r:restGain"},{"rtlAgc","r:rtlAgc"},
             {"androidTunerBw","r:tunerBwAuto"},{"gainAgcLock","r:agcLock"},{"gainPick","r:gainLimits"},{"gainCurve","r:gainCurves"},
@@ -415,6 +415,9 @@ int main(int argc, char** argv) {
             {"icomBaud","r:icomBaud"},{"icomCiv","r:icomCiv"},{"icomScopeSpeed","r:icomScopeSpeed"},{"icomTuneLock","r:icomTuneLock"},
             {"icomPowerOn","r:icomPowerOn"},{"icomAutoOff","r:icomAutoOff"},{"icomOffDelayMin","r:icomOffDelayMin"},
             {"bgOn","r:bgDecode"},{"bgWait","r:bgDecode"},{"bgKeepInRange","r:bgDecode"},{"bgProfiles","r:bgDecode"},
+            // ★★★ b96-2 unattended satellite passes — inside bgDecode (satPasses)
+            {"hwSatPass","r:bgDecode"},{"spOn","r:bgDecode"},{"spMinEl","r:bgDecode"},{"spMeteor","r:bgDecode"},{"spOrbcomm","r:bgDecode"},
+            {"spFirst","r:bgDecode"},{"spBirds","r:bgDecode"},{"spXpdr","r:bgDecode"},
             {"dxOn","r:dxScan"},{"dxWait","r:dxScan"},{"dxBands","r:dxScan"},{"dxRaster","r:dxScan"},{"dxOirt","r:dxScan"},{"dxExt","r:dxScan"},{"dxViewAdmin","r:dxScan"},
             {"rawIqOn","r:rawIq"},{"rawIqLan","r:rawIqLanMaxHz"},{"rawIqStreams","r:rawIqMax"},{"rawIqLocalOnly","r:rawIq"},
             {"rspVibeAgc","r:rspVibeAgc"},{"rfNotch","r:rfNotch"},{"dabNotch","r:dabNotch"},{"rspAmNotch","r:rspAmNotch"},{"rspHdr","r:rspHdr"},

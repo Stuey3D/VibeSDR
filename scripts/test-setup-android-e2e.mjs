@@ -127,6 +127,9 @@ ok(vis('ppm') && vis('androidTunerBw') && vis('adsb256') && !vis('ppb') && !vis(
   ok(vis('spOn') && vis('spMinEl') && vis('spMeteor') && vis('spOrbcomm'), '…its switch, elevation and the Meteor / ORBCOMM groups');
   const bird = doc.querySelector('#spBirds input[type="checkbox"]');
   ok(!!bird && vis('spBirds'), `…and the other downlinks' ticks (generated in #spBirds, no ids) — tick ${!!bird}`);
+  // ★ the same class, found beside it: "When an update adds new modes" (radio tab) and "Not at this site" (server tab)
+  ok(vis('newModesPolOn') && vis('newModesPolOff'), '"When an update adds new modes" is on the phone\'s page');
+  ok(vis('feedOffsite'), '"Not at this site" (+ Add aircraft feed) is on the phone\'s page');
   const sp = doc.getElementById('spOn');
   sp.checked = true; sp.dispatchEvent(new w.Event('change', { bubbles: true }));
   const el = doc.getElementById('spMinEl');
