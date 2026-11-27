@@ -151,7 +151,7 @@ ok(/vormapAvail: !asMenuOne && \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\
 ok((app.match(/onlyRefuses\('vormap'/g) || []).length >= 2 && /askLocked\(dialStateRef\.current\)\) \{ setVmMapOpen\(false\); askGate\(\); return; \}/.test(app),
    'app: EXIT and the Mode key refuse to leave the only mode; ask before tuning');
 ok(/case 'vormap': return \{ id, node: vmShown \? vmKey\(\) : null \};/.test(ms) && /addLegend\('VOR MAP', 'vormap'\)/.test(ms), 'app: the VOR MAP key in TUNES THE RADIO ITSELF, beside NDB');
-ok(/'EXIT VOR MAP'|EXIT VOR MAP<\/button>/.test(mo) && /KIND==='vormap'/.test(mo) && /kind === 'vormap' \? 'NAVAIDS'/.test(mo), 'app: its map — EXIT VOR MAP, the shared track layer, the NAVAIDS list');
+ok(/vormap: 'EXIT VOR MAP'/.test(mo) && /KIND==='vormap'/.test(mo), 'app: its map — EXIT VOR MAP (the cards\' ✕), the shared track layer');
 ok(/audioQuietFor\(\{ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn, vormap: vmOn \}\)/.test(app), 'app: nothing to hear — the audio session let go, as NDB');
 const setup = read('android/app/src/main/cpp/vibe_setup_page.h'), sms = read('src/screens/ServerModeScreen.tsx');
 ok(/\{ id: "vormap", label: "VOR \/ ILS map \(the whole navaid band, swept\)" \}/.test(setup) && /\{ id: 'vormap', label: 'VOR \/ ILS map \(the whole navaid band, swept\)' \}/.test(sms),

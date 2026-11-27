@@ -42,11 +42,12 @@ const tog = sc.slice(sc.indexOf('const toggleAirSeaLive = useCallback'), sc.inde
 ok(/if \(adsbOnRef\.current\) \{ setAsViewer\(false\); setAdsbViewOpen\(true\); return; \}/.test(tog) && /setAvMapOpen\(true\); return; \}/.test(tog), 'lit: the map comes back (every air / sea mode)');
 ok(!/exitAdsb\(\)|exitAis\(\)|exitSondes\(\)|exitVormap\(\)|exitNdb\(\)|avUiOff\(\)/.test(tog), 'lit: never leaves the mode (EXIT in the map does)');
 
-console.log('── TrackLiveList: SHOW counts and dots ──');
-ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string \}>/.test(tl), 'a chip may carry n and colour');
-ok(/>SHOW<\/Text>/.test(tl) && /\{!!colour && <View style=\{\[s\.tDot, \{ backgroundColor: colour \}\]\} \/>\}/.test(tl) && /n != null \? <Text style=\{s\.tN\}>\{` \$\{n\}`\}<\/Text> : null/.test(tl),
-   'labelled SHOW, a colour dot, the count');
-ok(/accessibilityLabel=\{n != null \? `\$\{words\}, \$\{n\}` : words\}/.test(tl), 'a screen reader hears the count');
+console.log('── ★★★ beta97 LAYERS (MapChrome): counts and dots ──');
+const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+ok(/export interface MapLayerRow \{ id: string; label: string; words: string; n\?: number; colour\?: string; live\?: boolean; others\?: string\[\]; group\?: string \}/.test(mc), 'a row may carry n, colour and its LIVE state');
+ok(/\{!!r\.colour && <View style=\{\[styles\.dot, \{ backgroundColor: r\.colour \}\]\} \/>\}/.test(mc) && /\{r\.n != null && <Text style=\{styles\.layerN\}>\{r\.n\}<\/Text>\}/.test(mc),
+   'a colour dot, the count');
+ok(/words=\{`\$\{r\.words\}\$\{r\.n != null \? `, \$\{r\.n\}` : ''\}/.test(mc), 'a screen reader hears the count');
 ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string \}>; toggled\?/.test(mo), 'MapOverlay passes them through');
 
 console.log('── the ISM mesh map ──');

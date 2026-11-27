@@ -22,7 +22,7 @@ import { AccessibilityInfo, Animated, Easing, ScrollView, StyleSheet, Text, Text
 import Slider from '@react-native-community/slider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path, Circle } from 'react-native-svg';
-import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, usePanelNav, noteTouchInteraction } from './PanelNav';
+import { NavCtx, NavRow, NavRing, useNavButton, useNavFocus, useNavRange, usePanelNav, noteTouchInteraction } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
 import ModeIcon from './ModeIcon';
 import SectionIcon from './SectionIcon';
@@ -50,6 +50,38 @@ export interface MapLayerRow { id: string; label: string; words: string; n?: num
 export interface MapStatsSection { mode: string; rows: Array<{ key: string; label: string; value: string; name: string }> }
 export interface MapCtlState { auto: 'on' | 'off' | 'paused'; rings?: boolean; range?: boolean; rangeOffered?: boolean; labels?: boolean; aircraft: boolean }
 export interface MapGainHandlers { onAgc: (on: boolean) => void; onSet: (at: number) => void; onUnlock?: (password: string) => Promise<boolean>; onMore?: () => void }
+
+/** ★ The shared tuner's line + CHAT (dialChat.mapBarLine words — the SAME inputs as the controls bar's banner). */
+export interface MapSharedProps {
+  line: { show: boolean; text: string; dialLocked: boolean; why: string };
+  chatDisabled: boolean;
+  chatUnread: boolean;
+  onChat: () => void;
+}
+/** ★ TUNE's mode list (airSeaTune.ts rows — THIS radio's vibeserver.json). */
+export interface MapTuneProps {
+  rows: AirSeaTuneRow[];
+  chip: string;
+  onPick: (id: string) => void;
+  onRefused: (why: string) => void;
+}
+/** ★★★ What the SCREEN works out for the cards (SDRScreen — the web's asCardsSync): SERVERS, the gain row, STATS, RATE,
+ *  HEALTH / TIME, the mini waterfall, SOURCES. Everything else comes from the map's own `trk`. */
+export interface MapCardsIn {
+  servers: MapChromeProps['servers'];
+  gain: GainRow; gainH: MapGainHandlers;
+  /** TUNE's line: the live mode's frequency, gain, capture */
+  facts?: string;
+  stats: MapChromeProps['stats'];
+  rate: RateRow[];
+  health: MapChromeProps['health'];
+  time: MapChromeProps['time'];
+  wf: MapChromeProps['wf'];
+  sources?: Array<{ id: string; name: string; what: string; on: boolean }>;
+  onSource?: (id: string, on: boolean) => void;
+  /** LIST's facts: heard but not placed, sources hidden */
+  listNote?: string;
+}
 
 export interface MapChromeProps {
   visible: boolean;
@@ -98,8 +130,11 @@ export interface ListIn {
   safety?: string[];
   selected?: string | null;
   onPick: (r: TrackRow) => void;
-  /** under the rows: the data credit, an NDB card … */
+  /** under the rows: the data credit … */
   foot?: React.ReactNode;
+  /** ★★ the mesh ROUTE key (the ISM maps): only while the chosen node carries a route — no dead control */
+  route?: { name: string; on: boolean } | null;
+  onRoute?: () => void;
 }
 
 const LIST_OPEN_KEY = 'lsv_map_list_open', LIST_MAX_KEY = 'lsv_map_list_max';
@@ -453,10 +488,7 @@ function GainRowView({ row, h, locked, onLocked }: { row: GainRow; h: MapGainHan
           {row.kind === 'manual' ? (
             <>
               {!!row.label && <Text style={styles.gainLbl}>{row.label}</Text>}
-              <Slider style={{ flex: 1, height: 32 }} minimumValue={row.min} maximumValue={Math.max(row.min + row.step, row.max)} step={row.step} value={row.at}
-                      onValueChange={(v) => setDrag(Math.round(v))}
-                      onSlidingComplete={(v) => { setDrag(null); if (!ask()) h.onSet(Math.round(v)); }}
-                      minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} />
+              <GainSlide row={row} onDrag={setDrag} onSet={(v) => { if (!ask()) h.onSet(v); }} />
               <Text style={styles.gainVal}>{drag != null ? '' : val}</Text>
               {agc}
             </>
@@ -489,6 +521,20 @@ function GainRowView({ row, h, locked, onLocked }: { row: GainRow; h: MapGainHan
     const ok = await h.onUnlock(pwText).catch(() => false);
     if (ok) { setPw(false); setPwText(''); setPwMsg(''); } else setPwMsg('Not accepted');
   }
+}
+/** The gain slider: a pad reaches it too (Enter, then left / right a step — useNavRange), the ring round it. */
+function GainSlide({ row, onDrag, onSet }: { row: Extract<GainRow, { min: number }>; onDrag: (v: number | null) => void; onSet: (v: number) => void }) {
+  const { focused, adjusting, viewRef } = useNavRange((dir) => onSet(Math.max(row.min, Math.min(row.max, row.at + dir * row.step))));
+  const { ring } = useNavFocus();
+  return (
+    <View ref={viewRef as never} style={{ flex: 1 }}>
+      <Slider style={{ flex: 1, height: 32 }} minimumValue={row.min} maximumValue={Math.max(row.min + row.step, row.max)} step={row.step} value={row.at}
+              onValueChange={(v) => onDrag(Math.round(v))}
+              onSlidingComplete={(v) => { onDrag(null); onSet(Math.round(v)); }}
+              minimumTrackTintColor={C.gold} maximumTrackTintColor="#444" thumbTintColor={C.gold} accessibilityLabel={`Gain ${row.value}`} />
+      <NavRing on={focused || adjusting} color={adjusting ? '#ffb833' : ring} radius={8} />
+    </View>
+  );
 }
 function TuneList({ t, locked, onLocked, onDone }: { t: NonNullable<MapChromeProps['tune']>; locked: boolean; onLocked: () => void; onDone: () => void }) {
   if (t.rows.length < 2) return null;
@@ -690,7 +736,10 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
           {!!L.filter && <NavRow><View style={styles.listBar}><Text style={styles.status} numberOfLines={1}>{L.filter}</Text>
             <Key label={'× ALL'} words="Show every message" onPress={() => L.onFilterClear?.()} /></View></NavRow>}
           {(L.safety ?? []).map((t, i) => <Text key={i} style={styles.safety} numberOfLines={1}>{t}</Text>)}
-          <ScrollView ref={scrollRef} style={{ height: bodyH - (L.filter ? 30 : 0) - (L.safety?.length ?? 0) * 18 }} keyboardShouldPersistTaps="handled"
+          {!!L.route && <NavRow><View style={styles.listBar}>
+            <Key label={L.route.on ? 'HIDE ROUTE' : 'ROUTE'} on={L.route.on} words={`${L.route.on ? 'Hide' : 'Show'} the route ${L.route.name}'s message came by, hop by hop`} onPress={() => L.onRoute?.()} />
+            <Text style={styles.status} numberOfLines={1}>{L.route.name}</Text></View></NavRow>}
+          <ScrollView ref={scrollRef} style={{ height: bodyH - (L.filter ? 30 : 0) - (L.route ? 30 : 0) - (L.safety?.length ?? 0) * 18 }} keyboardShouldPersistTaps="handled"
                       scrollEventThrottle={64}
                       onScroll={(e) => { const y = e.nativeEvent.contentOffset.y; if (y > 6 && !heldRef.current) setHeld(L.rows); else if (y <= 2 && heldRef.current) setHeld(null); }}>
             {L.extraRows}

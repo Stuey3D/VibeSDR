@@ -388,6 +388,32 @@ export function pillWords(text: string, maxChars: number): string {
   return short.length <= maxChars || !count ? short : count;
 }
 
+/** ★★ ADS-B LIVE: its gain is the server's ramp (AUTO, training) over the radio's list — the web lends its #adsbGain into
+ *  TUNE while ADS-B is on; here it is the same one row: [AUTO] value (the ramp) · slider over the list (manual), the
+ *  owner's ceiling the slider's end. null view (no gain list, owner-fixed, older server) = no row. */
+export function adsbGainRow(view: { auto: boolean; now: string; idx: number; maxIdx: number } | null, more = false): GainRow {
+  if (!view) return { kind: 'none', more };
+  return { kind: view.auto ? 'auto' : 'manual', driver: 'adsb', name: 'AUTO', label: '', value: view.now, min: 0, max: Math.max(1, view.maxIdx), step: 1,
+           at: Math.max(0, Math.min(view.maxIdx, view.idx)), set: 'gain-index', more, unlocked: false };
+}
+
+/** The layers' families for the LAYERS chip (icon over count): aircraft, ships, NAVTEX stations, sondes, beacons — each
+ *  the sum of its shown layers' counts (the web's setLayerSummary families). */
+export const LAYER_FAMILY: Record<string, 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'> = {
+  adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', adsc: 'aircraft',
+  ships: 'ship', dsc: 'ship', navst: 'navtex', sondes: 'balloon', vor: 'beacon', ndb: 'beacon',
+};
+export function layerFamilies(rows: Array<{ id: string; n?: number; colour?: string }>, toggled: Record<string, boolean>): Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> {
+  const out: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> = [];
+  for (const r of rows) {
+    const f = LAYER_FAMILY[r.id];
+    if (!f || toggled[r.id] === false || !(r.n && r.n > 0)) continue;
+    const have = out.find((x) => x.glyph === f);
+    if (have) have.n += r.n; else out.push({ glyph: f, n: r.n, colour: r.colour || '#9fb0c2' });
+  }
+  return out;
+}
+
 /** The credits' (i) folds itself away this long after the map opens, or at the first touch (Stuart). */
 export const CREDITS_FOLD_MS = 5000;
 /** The ask-lock pulse on the pill and CHAT: this long, then it stops (2–3 s). */

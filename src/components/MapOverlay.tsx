@@ -32,7 +32,12 @@ import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle, spotsListModes } from 
 import type { LogRadio } from '../utils/logRadio';   // ★ beta92 the digi map's radio filter
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay, usePanelNav } from './PanelNav';
-import MapTopStrip, { mapTopStripShown, type MapSharedProps, type MapTuneProps } from './MapTopStrip';   // ★★★ beta96 the shared line, CHAT, TUNE
+import MapChrome, { type MapSharedProps, type MapTuneProps, type MapCardsIn, type MapCtlState, type MapLayerRow } from './MapChrome';   // ★★★ beta97 THE MAP CONTROL CARDS
+import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
+import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
+import AircraftDataCredit from './AircraftDataCredit';
+import { adsbGainRow, layerFamilies, type GainRow } from '../utils/mapChrome';
+import type { ModeIconName } from '../utils/modeIcons';
 import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
@@ -138,9 +143,10 @@ import { APRS_LEGEND, aprsIcon as aprsLegendIcon } from '../utils/aprsSymbols'; 
  *  layer; EXIT VOR MAP leaves the mode and gives the receiver back, as NDB's. */
 /* ★★★ 'airsea' (V12 beta96, docs/v12/ONE-MAP.md) = THE AIR & SEA MAP: the aviation map ('avdata') and the shipping map
  *  ('ais' / 'navtex' / 'dsc') as ONE page — aircraft on the ADS-B layer (made when the first one arrives), ships, DSC,
- *  NAVTEX and the sea areas on the track layer. The page is built once; its TITLE, its EXIT key and whose camera it is are
- *  pushed in (__trkChrome / __trkCamera) from the current mode on every change — never baked into the page, so a mode
- *  change while it is open can never leave it wearing the old mode (Mac Ha 11-26). */
+ *  NAVTEX and the sea areas on the track layer. The page is built once; whose camera it is is pushed in (__trkCamera) from
+ *  the current mode on every change, and the ✕ (beta97: the map cards' — React Native) wears the current mode's exit on
+ *  every render — never baked into the page, so a mode change while it is open can never leave it wearing the old mode
+ *  (Mac Ha 11-26). */
 export type MapKind = 'hfdl' | 'digi' | 'cw' | 'ais' | 'aprs' | 'dsc' | 'ism' | 'navtex' | 'sondes' | 'avdata' | 'vormap' | 'airsea';
 
 interface MapOverlayProps {
@@ -219,7 +225,10 @@ interface MapOverlayProps {
           sortWhat?: string;
           /** ★ beta96 a row chosen (an aircraft → MESSAGES filtered to it) */
           onPick?: (key: string) => string | void } | null;
-  /** ★★★ beta96 (Stuart 11-26) THE SHARED TUNER line + CHAT over a full-screen map that holds the radio (MapTopStrip) — null =
+  /** ★★★ beta97 THE MAP CONTROL CARDS' inputs the screen works out (SDRScreen — the web's asCardsSync): SERVERS, the gain
+   *  row, STATS, RATE, HEALTH / TIME, the mini waterfall, SOURCES. Track maps only. */
+  cards?: MapCardsIn | null;
+  /** ★★★ beta96 (Stuart 11-26) THE SHARED TUNER line + CHAT over a full-screen map that holds the radio (MapChrome's pill) — null =
    *  not shown (an unshared dial, a one-listener server, a viewer). */
   shared?: MapSharedProps | null;
   /** ★★★ beta96 the TUNE chip and its list (airSeaTune.ts rows) — null / one row = none. */
@@ -446,9 +455,6 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #title{font-size:15px;letter-spacing:2px;color:rgba(${T.x},0.80);flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   #cntwrap{display:flex;align-items:center;gap:5px;font-size:13px;letter-spacing:1px;color:rgba(${T.x},0.60);flex-shrink:0;}
   #cnt{color:rgba(${T.x},0.90);font-size:16px;}
-  /* ★★ ADS-B: the receiver dropping samples (adsbCaptureWarning) — red, before the count; a phone keeps only "capture N %". */
-  #capwarn{flex:0 1 auto;min-width:0;font-size:11px;letter-spacing:0.5px;color:#ff6b5e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  @media (max-width:520px){#capwarn .w{display:none;}}
   /* ★★ The feed warning (AdsbReport.feedWarn): red-edged, at the top of the map, wraps; × hides it until it changes. */
   #feedwarn{position:absolute;left:10px;right:10px;top:8px;z-index:900;max-width:640px;margin:0 auto;display:flex;gap:10px;align-items:flex-start;
     padding:8px 10px 8px 12px;border-radius:8px;background:rgba(8,6,2,0.96);border:1px solid #ff6b5e;font-size:12px;letter-spacing:0.3px;
@@ -711,35 +717,26 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   /* ★★ ADS-B (and V12 NDB, AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
      legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
      downwards from there. */
-  #legend{top:10px;bottom:auto;}
-  #legbody{top:0;bottom:auto;max-height:min(320px,calc(100vh - 140px));}
+  /* ★★★ beta97 the KEY (MAP card → KEY): React Native says where it opens (__cardsKey) — beside the cards, never under them */
+  #legend{top:var(--keyTop,64px);left:var(--keyLeft,64px);bottom:auto;}
+  #legbody{left:0;top:0;bottom:auto;max-height:calc(100vh - var(--keyTop,64px) - 24px);}
   /* ★★ THE ATTRIBUTION STAYS READABLE BESIDE THE LIST: its text is narrowed to the room right of the list (the list
      reports its width, __adsbListW; 0 as a pill) and wraps upwards instead of running underneath it. */
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib,.leaflet-bottom.leaflet-right .leaflet-control-attribution{
     max-width:calc(100vw - var(--adsbListW,0px) - 40px - env(safe-area-inset-left) - env(safe-area-inset-right));white-space:normal;}` : ''}
 </style>
 </head><body>
-<div id="topbar">
+${/* ★★★ beta97 THE MAP CARDS (MapChrome): the track maps have NO top bar — the ✕, the title, FIT and the count are the
+     cards' (React Native). Only the HFDL / spots / CW maps keep this bar. */ ''}
+${isTrk ? '' : `<div id="topbar">
   ${opts?.only
     ? `<button id="back" aria-label="Close the map — ${esc(opts.only)}, and the mode carries on">CLOSE MAP</button>`   /* ★★ V12 the only mode: no EXIT */
-    : kind === 'ais' ? '<button id="back" aria-label="Exit AIS and give the receiver back">EXIT AIS</button>'
-    : kind === 'aprs' ? '<button id="back" aria-label="Close the map — the APRS decoder carries on">CLOSE MAP</button>'
-    : kind === 'dsc' ? '<button id="back" aria-label="Close the map — the DSC decoder carries on">CLOSE MAP</button>'
-    : kind === 'ism' ? '<button id="back" aria-label="Close the map — ISM carries on">CLOSE MAP</button>'
-    : kind === 'sondes' ? '<button id="back" aria-label="Exit SONDES and give the receiver back">EXIT SONDES</button>'   /* ★★ V12 the mode's screen, as the web's (2026-11-17) */
-    : kind === 'vormap' ? '<button id="back" aria-label="Exit the VOR map and give the receiver back">EXIT VOR MAP</button>'   /* ★★ V12 the mode's screen, as NDB's */
-    : kind === 'avdata' ? '<button id="back" aria-label="Close the map — the aircraft datalink carries on">CLOSE MAP</button>'
-    : kind === 'airsea' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'   /* ★ beta96 the words are pushed in (__trkChrome) */
-    : kind === 'navtex' ? '<button id="back" aria-label="Close the map">CLOSE MAP</button>'
     : '<button id="back">&#8592; SDR</button>'}
   <div id="title">${TITLE}${opts?.only ? `<br><span style="font-size:10px;letter-spacing:1px;opacity:0.75">${esc(opts.only)}</span>` : ''}</div>
   ${isHfdl ? `<button id="snap" title="Toggle auto-snap to latest aircraft">&#9881;<br>SNAP</button>` : ''}
-  ${/* ★ beta92 the shared AUTO FIT's key (trkFitMake). Not on the aviation map: the ADS-B layer's own AUTO / FIT frame it. */ ''}
-  ${isTrk && kind !== 'avdata' ? `<button id="snap" class="trkfit" title="Auto fit: every ${trkWhat(kind)} and the receiver">FIT</button>` : ''}
   ${isSpots ? '<button id="snap" class="digifit" title="Auto fit: every station the filters show and the receiver">FIT</button>' : ''}
-  ${kind === 'airsea' ? '<span id="capwarn" style="display:none"><b></b><span class="w"></span></span>' : ''}
   <div id="cntwrap">${CNT_ICON}<span id="cnt">&#8230;</span></div>
-</div>
+</div>`}
 ${isSpots ? `
 <div id="filters">
   <span class="flabel">FILTER</span>
@@ -762,7 +759,7 @@ ${isSpots ? `
  ${/* ★★ beta96 stage 6: ADS-B mode's screen is the AIR & SEA map — its capture and antenna warnings live there */ ''}
   ${kind === 'airsea' ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
   <div id="legend"${kind === 'digi' ? ' class="dgoff"' : ''}>
-    <div id="legbtn" title="Legend">&#9432;</div>
+    ${isTrk ? '' : '<div id="legbtn" title="Legend">&#9432;</div>'}
     <div id="legbody">
       <div class="scroll-arrow scroll-arrow-up" id="arr-up">&#9650;</div>
       ${kind === 'airsea' ? airSeaLegend() : kind === 'aprs' ? `
@@ -921,7 +918,8 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,packRange:packRange,
       profile:((KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='airsea')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1,
       /* ★★ V12 beta90 a scale bar on every map — NM under the km on the sea and air maps (vibemapgl.js createNow) */
-      scale:(KIND==='hfdl'||KIND==='ndb'||KIND==='avdata'||KIND==='vormap'||KIND==='navtex'||KIND==='ais'||KIND==='dsc'||KIND==='airsea')?'nautical':'metric',scalePosition:'${isTrk ? 'bottom-right' : 'bottom-left'}'});
+      /* ★★★ beta97 the map cards: on the track maps the scale is React Native's (MapChrome, bottom-right) — none here */
+      scale:${isTrk ? 'false' : `(KIND==='hfdl'||KIND==='ndb')?'nautical':'metric'`},scalePosition:'bottom-left'});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -1186,9 +1184,9 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
 var cnt=document.getElementById('cnt');
 var toast=document.getElementById('toast');
 
-document.getElementById('back').addEventListener('click',function(){
+(function(){var bk=document.getElementById('back');if(bk)bk.addEventListener('click',function(){
   if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage('close');
-});
+});})();
 
 // Legend toggle + scroll arrows (skin lsvScrollArrows)
 var legEl=document.getElementById('legend'), legBody=document.getElementById('legbody');
@@ -1201,11 +1199,11 @@ function updArrows(el,upId,dnId){
 legBody.addEventListener('scroll',function(){updArrows(legBody,'arr-up','arr-dn');},{passive:true});
 legBody.addEventListener('touchstart',function(e){e.stopPropagation();},{passive:true});
 legBody.addEventListener('touchmove',function(e){e.stopPropagation();},{passive:true});
-document.getElementById('legbtn').addEventListener('click',function(e){
+(function(){var lb=document.getElementById('legbtn');if(lb)lb.addEventListener('click',function(e){
   e.stopPropagation();
   legEl.classList.toggle('open');
   if(legEl.classList.contains('open'))setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);
-});
+});})();
 
 // Marker glide must not fight Leaflet's zoom repositioning
 /* ★★★ PAST THIS MANY AIRCRAFT, STOP PRETENDING TO ANIMATE. A 2.2 s transition on 600 markers
@@ -1677,13 +1675,6 @@ if(KIND==='hfdl'){
 /* ★★★ The ADS-B page ('adsb') is retired: the live report's aircraft arrive as the AIR & SEA map's _adsb items (the
  *  track block below hands them to the same shared layer, acMake), and its two warnings live here. */
 if(KIND==='airsea'){
-  /* ★ The capture warning, as text nodes (never HTML): [short, rest], or null to hide it. */
-  window.__adsbCapture=function(w){
-    var el=document.getElementById('capwarn');if(!el)return;
-    if(!w||!w.length){el.style.display='none';return;}
-    el.firstChild.textContent=String(w[0]);el.lastChild.textContent=String(w[1]||'');el.title=String(w[0])+String(w[1]||'');
-    el.style.display='';
-  };
   /* ★★ The feed warning, as a text node (never HTML): a string, or '' to hide it. × hides it until the wording changes. */
   window.__adsbFeedWarn=function(w){
     var el=document.getElementById('feedwarn');if(!el)return;
@@ -1822,7 +1813,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     if(trkFit||KIND==='avdata'||!window.VibeAutoFit)return trkFit;
     var l=trkMake();if(!l)return null;
     try{trkFit=VibeAutoFit.attach(map,{points:function(){var p=l.points();if(KIND==='airsea'&&ndbLayer&&ndbLayer.points){var q=ndbLayer.points();if(q.length)p=p.concat(q);}return p;},receiver:function(){return l.receiver();},
-      button:document.getElementById('snap'),what:${JSON.stringify(trkWhat(kind))}});}
+      button:null,what:${JSON.stringify(trkWhat(kind))}});}
     catch(e){console.error('auto fit could not start',e);trkFit=null;}
     return trkFit;
   }
@@ -1830,6 +1821,9 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
    *  is drawn by the ADS-B layer — its silhouettes, tones, rings, AUTO / FIT, the glide to each new fix, the heading from
    *  the last two fixes — the rest (HFDL ground stations) by the track layer. The web's TrackView aircraft:true. */
   var acLayer=null,acHexKey={},acKeyHex={},acObst=null;
+  /* ★★★ beta97 the layer's AUTO · FIT · RINGS · RANGE · LABELS · ⌖ keys live in a host that is never in the page — the MAP
+   *  card's React Native keys press them (__cardsCtl) and read their state back (cardsState) */
+  var acCtl=document.createElement('div');
   /* ★★ beta96 stage 6 the ADS-B layer's toggles (AUTO · FIT · RINGS · RANGE · LABELS) on the AIR & SEA map, remembered per
    *  device as the ADS-B map's were (adsbPrefs → React Native → storage, never back into the page's source) */
   var ADSB_PREFS=${JSON.stringify(opts?.adsbPrefs ?? null)};
@@ -1837,7 +1831,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     if(acLayer||(KIND!=='avdata'&&KIND!=='airsea')||!window.VibeAdsbLayer)return acLayer;
     /* ★ beta91 the owner's logos / silhouettes on this server, as on the ADS-B map (adsbMake) — the datalink's aircraft carry
      *  the same keys now (vibe_aircraft_info.h) */
-    try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
+    try{acLayer=VibeAdsbLayer.create(GLVM?GLVM.map:map,{ctlHost:acCtl,receiver:(RX_LAT||RX_LON)?{lat:RX_LAT,lon:RX_LON}:null,theme:'dark',sparseLegend:true,drawReceiver:false,
       prefs:KIND==='airsea'&&ADSB_PREFS?ADSB_PREFS:undefined,
       onPrefs:KIND==='airsea'?function(p){trkPost({t:'adsbPrefs',prefs:p});}:undefined,
       imageBase:${JSON.stringify(opts?.local ? null : (opts?.radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/')},
@@ -1851,7 +1845,6 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     try{
       var a=JSON.parse(json);if(!Array.isArray(a))return;
       if(KIND==='ism'){trkRt={};for(var r0=0;r0<a.length;r0++)if(a[r0]&&a[r0]._rt)trkRt[String(a[r0].key)]=a[r0]._rt;}   // ★★ beta96
-      var nH=0;for(var j=0;j<a.length;j++)if(!(a[j]&&a[j]._nofit))nH++;cnt.textContent=String(nH);   // ★ beta95 what was heard, not the chart
       if(KIND==='airsea'){var hv=false,hs=false,hvs=false,hss=false;for(var j2=0;j2<a.length;j2++){var kk=String(a[j2]&&a[j2].key||'');if(kk.indexOf('vor:')===0)hv=true;else if(kk.indexOf('sd:')===0)hs=true;else if(kk.indexOf('vos:')===0)hvs=true;else if(kk.indexOf('sds:')===0)hss=true;}
         legShow('vor',hv);legShow('sondes',hs);legShow('vos',hvs);legShow('sds',hss);}   // ★ maps2 the remembered ones' rows too
       var l=trkMake();if(!l)return;
@@ -1866,15 +1859,12 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
       else if(af)af.poke();
     }catch(e){console.error('tracks: bad report',e);}
   };
-  /* ★★★ beta96 THE AIR & SEA MAP's chrome, from React Native on every mode change (liveMaps.ts liveChrome) */
-  window.__trkChrome=function(title,exit){try{var t=document.getElementById('title');if(t&&t.firstChild&&t.firstChild.nodeType===3)t.firstChild.nodeValue=String(title);else if(t)t.insertBefore(document.createTextNode(String(title)),t.firstChild);
-    var b=document.getElementById('back');if(b&&exit&&b.textContent!==String(exit)){b.textContent=String(exit);b.setAttribute('aria-label',String(exit)==='CLOSE MAP'?'Close the map':String(exit)+' and give the receiver back');}}catch(e){console.error('tracks chrome',e);}};
   /* ★★ beta96 whose camera: 'aircraft' = the ADS-B layer's AUTO / FIT (aviation live), 'track' = the shared auto fit */
   var trkCam='aircraft',acAuto=null;
-  function trkCameraApply(){try{var af=trkFitMake(),snap=document.getElementById('snap');
-    if(!acLayer){if(snap)snap.style.display='';return;}
-    if(trkCam==='track'){if(acAuto===null)acAuto=!!acLayer.prefs().autoZoom;acLayer.setPrefs({autoZoom:false});if(snap)snap.style.display='';if(af){af.resume();}}
-    else{if(acAuto!==null){acLayer.setPrefs({autoZoom:acAuto});acAuto=null;}if(snap)snap.style.display='none';if(af)af.pause();}
+  function trkCameraApply(){try{var af=trkFitMake();
+    if(!acLayer)return;
+    if(trkCam==='track'){if(acAuto===null)acAuto=!!acLayer.prefs().autoZoom;acLayer.setPrefs({autoZoom:false});if(af){af.resume();}}
+    else{if(acAuto!==null){acLayer.setPrefs({autoZoom:acAuto});acAuto=null;}if(af)af.pause();}
   }catch(e){console.error('tracks camera',e);}}
   window.__trkCamera=function(o){trkCam=o==='track'?'track':'aircraft';trkCameraApply();};
   window.__trkFit=function(){try{var af=trkFitMake();if(af){af.fitNow();return;}var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
@@ -1910,7 +1900,35 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
     if(!t){if(n)n.remove();return;}
     if(!n){n=document.createElement('div');n.id='trkNote';n.style.cssText='position:absolute;left:50%;top:56px;transform:translateX(-50%);background:rgba(10,14,20,.9);color:#dfe7ef;padding:6px 10px;border-radius:6px;z-index:950;font:12px ui-monospace,Menlo,monospace;pointer-events:none';document.body.appendChild(n);}
     n.textContent=String(t);};
-  trkFitMake();   // ★ the FIT key is the auto fit's from the start (on), even before the first report
+  trkFitMake();   // ★ the auto fit runs from the start (on), even before the first report
+  /* ★★★ beta97 THE MAP CARDS' BRIDGE (MapChrome): React Native's MAP card keys, its zoom keys, its scale and the KEY.
+   *  The aircraft camera is the ADS-B layer's keys (in their detached host); the track camera the shared auto fit. */
+  function acKey(k){return acCtl.querySelector('[data-k="'+k+'"]');}
+  function useAc(){return !!acLayer&&(KIND==='avdata'||trkCam==='aircraft');}
+  window.__cardsCtl=function(k){try{
+    if(k==='auto'){if(useAc()){var b=acKey('auto');if(b)b.click();}else{var af=trkFitMake();if(af){var st=af.state();if(st.on&&st.paused)af.resume();else af.set(!st.on);}}}
+    else if(k==='fit'){if(useAc()){var ba=acKey('auto');if(ba&&!(ba.classList.contains('on')))ba.click();}else window.__trkFit();}
+    else if(k==='centre'){var bc=acKey('centre');if(useAc()&&bc)bc.click();else{var mm=GLVM?GLVM.map:map;if(RX_LAT||RX_LON){if(mm.easeTo)mm.easeTo({center:[RX_LON,RX_LAT]});else mm.panTo([RX_LAT,RX_LON]);}}}
+    else{var bk2=acKey(k);if(bk2)bk2.click();}
+  }catch(e){console.error('cards ctl',e);}cardsTell(true);};
+  window.__cardsZoom=function(d){try{var mm=GLVM?GLVM.map:map;if(d>0)mm.zoomIn();else mm.zoomOut();}catch(e){}};
+  window.__cardsKey=function(on,top,left){try{document.documentElement.style.setProperty('--keyTop',(Number(top)||64)+'px');document.documentElement.style.setProperty('--keyLeft',(Number(left)||64)+'px');
+    legEl.classList.toggle('open',!!on);if(on)setTimeout(function(){updArrows(legBody,'arr-up','arr-dn');},20);if(acLayer&&acLayer.toggleLegend)acLayer.toggleLegend(!!on);}catch(e){}};
+  var cardsSig='';
+  function cardsTell(force){try{
+    var auto='off',ac=useAc();
+    if(ac){var b=acKey('auto');auto=b&&b.classList.contains('paused')?'paused':b&&b.classList.contains('on')?'on':'off';}
+    else{var af=trkFit;if(af){var st=af.state();auto=st.on?(st.paused?'paused':'on'):'off';}}
+    var rg=acKey('range');
+    var mm=GLVM?GLVM.map:map,c=mm.getCenter(),z=mm.getZoom(),gl=!!(mm.getCanvas);
+    var mpp=40075016.686*Math.cos((c.lat||0)*Math.PI/180)/((gl?512:256)*Math.pow(2,z));
+    var o={t:'cardsState',auto:auto,aircraft:!!acLayer&&ac,rings:!!(acKey('rings')&&acKey('rings').classList.contains('on')),
+      range:!!(rg&&rg.classList.contains('on')),rangeOffered:!!(rg&&!rg.hidden),labels:!!(acKey('labels')&&acKey('labels').classList.contains('on')),mpp:Math.round(mpp*100)/100};
+    var sig=JSON.stringify(o);if(!force&&sig===cardsSig)return;cardsSig=sig;trkPost(o);}catch(e){}}
+  setInterval(function(){if(document.visibilityState!=='hidden')cardsTell(false);},1000);
+  (function(){var mm=GLVM?GLVM.map:map;try{mm.on('moveend',function(){cardsTell(false);});
+    /* ★ a tap on the map folds the open card (the web's rule) — a tap, not a drag */
+    mm.on('click',function(){trkPost({t:'mapTap'});});}catch(e){}})();
   if(window.__pendingTrk){window.__trkPush(window.__pendingTrk);window.__pendingTrk=null;}
 }
 
@@ -2399,10 +2417,6 @@ if(KIND==='digi'||KIND==='cw'){
     connect();
   }
 }
-/* ★★★ beta96 the shared-dial lock greys EXIT (React Native refuses the press — closeGuarded); the top bar's height for the strip */
-window.__backLock=function(on,why){var b=document.getElementById('back');if(!b)return;b.style.opacity=on?'0.4':'';b.setAttribute('aria-disabled',on?'true':'false');b.title=on?String(why||''):'';};
-(function(){var f=function(){var t=document.getElementById('topbar');if(t&&window.ReactNativeWebView)window.ReactNativeWebView.postMessage(JSON.stringify({t:'mapTop',y:Math.round(t.getBoundingClientRect().bottom)}));};
-  window.addEventListener('resize',f);setTimeout(f,60);setTimeout(f,700);})();
 </script>
 </body></html>`;
 }
@@ -2426,7 +2440,7 @@ function spotToData(s: SpotRow) {
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
     disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay, only,
-    shared, tune, dialLock,
+    shared, tune, dialLock, cards,
     storeWindows, onDigiWindow, aprsPoints, aprsFocus, amateur, amScope, digiOverlay, digiRadios, digiWindow, digiTotals }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
@@ -2652,14 +2666,6 @@ export default function MapOverlay(
   /* ★★★ beta96 stage 6: ADS-B mode's map is the AIR & SEA map. Its aircraft are that map's `_adsb` items (SDRScreen
    *  airSeaTrk → pushTrk, the same double-encoded literal); only its warnings and its list's body are ADS-B's own here. */
   const adsbLive = kind === 'airsea' && !!adsbList;
-  // ★★ The capture warning in the top bar (adsbCaptureWarning) — JSON literal, never source; only on a change.
-  const capKey = adsbCapture ? adsbCapture.short + adsbCapture.rest : '';
-  const pushCap = () => {
-    if (kind !== 'airsea') return;
-    webRef.current?.injectJavaScript(
-      `window.__adsbCapture&&window.__adsbCapture(${JSON.stringify(adsbCapture ? [adsbCapture.short, adsbCapture.rest] : null)});true;`);
-  };
-  useEffect(() => { if (visible) pushCap(); }, [kind, visible, capKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // ★★ The feed warning (AdsbReport.feedWarn) — JSON literal, never source; only on a change.
   const pushFeedWarn = () => {
     if (kind !== 'airsea') return;
@@ -2705,13 +2711,11 @@ export default function MapOverlay(
    *  mode, which retunes the shared radio — refused with the reason while the server says this listener may not move it. */
   const exitLocked = !!dialLock?.why && dialLock.exitMoves;
   const closeGuarded = () => { if (exitLocked && dialLock) { dialLock.onDialLocked(dialLock.why); return; } onClose(); };
-  // ★ the page's own top bar's height (the strip sits under it) — reported by the page (mapTop)
-  const [mapTop, setMapTop] = useState(0);
-  // ★ one pad order for the strip and the live list (TrackLiveList), as the AMATEUR map's keys share theirs
-  const stripOn = mapTopStripShown({ shared, tune });
-  const trkNav = usePanelNav(visible && isTrkKind && !!trk && stripOn, { flat: true });
-  useEffect(() => { webRef.current?.injectJavaScript(`window.__backLock&&window.__backLock(${exitLocked},${JSON.stringify(dialLock?.why ?? '')});true;`); },
-            [exitLocked, dialLock?.why, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta97 THE MAP CARDS' STATE FROM THE PAGE: the camera keys (cardsState), a tap on the map (folds a card), the scale */
+  const [cardsCtl, setCardsCtl] = useState<MapCtlState>({ auto: 'on', aircraft: false });
+  const [cardsMpp, setCardsMpp] = useState(0);
+  const [mapTapSeq, setMapTapSeq] = useState(0);
+  useEffect(() => { if (!visible) { setCardsCtl({ auto: 'on', aircraft: false }); setCardsMpp(0); } }, [visible]);
   const trkRef = useRef(trk); trkRef.current = trk;
   /* ★★ V12 2026-11-01 THE NAVTEX CARDS' TEXT AND TRANSLATE: the page asks for a card's gallery file (only one of the
    *  items' own, by its safe name), React Native fetches it (the read auth) and sends it back as TEXT; then the gallery's
@@ -2754,8 +2758,6 @@ export default function MapOverlay(
   useEffect(() => { if (!visible) cardTr.current.clear(); }, [visible]);
   // ★ the line over the map (the warnings index being built)
   useEffect(() => { if (visible && (kind === 'navtex' || kind === 'airsea')) pageCall('__trkNote', trk?.note ?? ''); }, [visible, kind, trk?.note]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // ★★★ beta96 THE AIR & SEA MAP's title and exit, from the CURRENT mode (pushed whenever it changes, and on every new page)
-  useEffect(() => { if (visible && kind === 'airsea' && trk?.title) pageCall('__trkChrome', trk.title, trk.exitLabel ?? 'CLOSE MAP'); }, [visible, kind, trk?.title, trk?.exitLabel, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (visible && kind === 'airsea' && trk?.camera) pageCall('__trkCamera', trk.camera); }, [visible, kind, trk?.camera, pageUri]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pushTrk = (items?: TrackItem[]) => {
     if (!isTrkKind || !items) return;
@@ -2946,7 +2948,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); webRef.current?.injectJavaScript(`window.__backLock&&window.__backLock(${exitLocked},${JSON.stringify(dialLock?.why ?? '')});true;`); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushCap(); pushFeedWarn(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAprs(); pushAm(); pushOverlay(); pushFeedWarn(); pushNdb();
                              if (kind === 'digi') { pushWin(digiWinShown); pushTotals(); pushPanels();
                                                     webRef.current?.injectJavaScript(`window.__digiKeysH&&window.__digiKeysH(${digiKeysH});true;`); }
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);
@@ -2975,11 +2977,15 @@ export default function MapOverlay(
               if (id === 'stats' || id === 'summary' || id === 'legend') setDigiPanel(id, (m as any).on === true);
               return;
             }
-            if (m && (m as any).t === 'mapTop') {   // ★★★ beta96 the strip goes under the page's top bar
-              const y = Number((m as any).y);
-              if (Number.isFinite(y) && y >= 0 && y < 400) setMapTop(Math.round(y));
+            if (m && (m as any).t === 'cardsState') {   // ★★★ beta97 the MAP card's keys, read back (checked, never trusted)
+              const q = m as any;
+              const auto = q.auto === 'paused' ? 'paused' : q.auto === 'off' ? 'off' : 'on';
+              setCardsCtl({ auto, aircraft: q.aircraft === true, rings: q.rings === true, range: q.range === true, rangeOffered: q.rangeOffered === true, labels: q.labels !== false });
+              const mpp = Number(q.mpp);
+              if (Number.isFinite(mpp) && mpp > 0 && mpp < 1e6) setCardsMpp(mpp);
               return;
             }
+            if (m && (m as any).t === 'mapTap') { setMapTapSeq((n) => n + 1); return; }
             if (m && (m as any).t === 'digiTop') {
               const y = Number((m as any).y);
               if (Number.isFinite(y) && y >= 0 && y < 400) setDigiMapTop(Math.round(y));
@@ -3154,44 +3160,28 @@ export default function MapOverlay(
                          ink={ink} areaW={winW - amLeft} areaH={winH}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
         )}
-        {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
+        {/* ★★★ beta97 THE MAP CONTROL CARDS (MapChrome) — every track map's chrome: the ✕, SERVERS, TUNE, LAYERS, STATS,
+            MAP, CHAT, RATE, HEALTH / TIME, the pill, LIST and the bottom-right group. One pad order. */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList tabs={trk.tabs} tab={trk.tab} onTab={trk.onTab} sort={trk.sort} onSort={trk.onSort} sortWhat={trk.sortWhat} filter={trk.filter} onFilterClear={trk.onFilterClear}
-                         title={kind === 'airsea' ? 'AIRCRAFT' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : kind === 'sondes' ? 'SONDES' : kind === 'avdata' ? 'AIRCRAFT' : kind === 'vormap' ? 'NAVAIDS' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty} credit={!!trk.credit}
-                         ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
-                         toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
-                         onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
-                         safety={trk.safety} onFocus={(k) => { const to = trk.onPick?.(k); trkFocus(typeof to === 'string' && to ? to : k); }} selected={trkSel} onFootprint={trkFootprint}
-                         /* ★★ beta96 THE ROUTE KEY, for the pad (the card's ROUTE is in the page, out of its reach): only while the
-                          *  chosen node carries a route — no dead control */
-                         route={kind === 'ism' && trkSel && trk.items.some((it) => it.key === trkSel && !!(it as { _rt?: unknown })._rt)
-                           ? { name: String(trk.items.find((it) => it.key === trkSel)?._lb ?? ''), on: trkRouteKey === trkSel } : null}
-                         onRoute={() => { if (trkSel) webRef.current?.injectJavaScript(`window.__trkRoute&&window.__trkRoute(${JSON.stringify(trkSel)});true;`); }}
-                         ink={ink} areaW={winW} areaH={winH}
-                         /* ★★★ beta96 stage 6 ADS-B live: its own list heads the AIRCRAFT tab (useAdsbBody) — the GAIN key,
-                          *  NEWEST · FURTHEST · LONGEST TRACKED, emergencies and military first; its rows find the `adsb:` items */
-                         adsb={adsbLive && trk.tab === 'aircraft' ? {
-                           aircraft: adsbList ?? [], started: !!adsbStarted, raw: adsbAircraft ?? null,
-                           onFocus: (hex: string) => trkFocus(`adsb:${hex}`),
-                           selected: trkSel && trkSel.startsWith('adsb:') ? trkSel.slice(5) : null,
-                           gain: adsbGain?.view ?? null, gainSteps: adsbGain?.steps, onGainAuto: adsbGain?.onAuto, onGainSet: adsbGain?.onSet,
-                           receiver: Number.isFinite(rxLat as number) && Number.isFinite(rxLon as number) && (rxLat || rxLon)
-                             ? { lat: rxLat as number, lon: rxLon as number } : null,
-                           logoBase: local ? null : (radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/',
-                         } : null}
-                         /* ★★★ beta96 stage 8 NDB live: its list, tiles, keys, card and dialogs are the NAVAIDS tab's (useNdbBody) */
-                         ndb={ndbLive && trk.tab === 'navaids' && ndb ? {
-                           ndb, selected: ndbSel, onSelect: (id: number) => ndbChoose(id, true),
-                           prefs: ndbPrefs ?? parseNdbMapPrefs(null), onPrefs: ndbSetPrefs,
-                         } : null}
-                         nav={stripOn ? { navCtx: trkNav.navCtx, scrollProps: trkNav.scrollProps } : undefined}
-                         insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
-        )}
-        {/* ★★★ beta96 the SHARED TUNER line, CHAT and TUNE under the page's top bar (MapTopStrip) — one pad order with the list */}
-        {isTrkKind && !!pageUri && !packError && mapTop > 0 && stripOn && (
-          <MapTopStrip top={mapTop} left={safeInsets?.left ?? 0} shared={shared} tune={tune}
-                       lockWhy={dialLock?.why ?? ''} onLocked={(why) => dialLock?.onDialLocked(why)}
-                       navCtx={trk ? trkNav.navCtx : undefined} />
+          <MapCardsHost kind={kind} trk={trk} cards={cards ?? null} only={only} shared={shared ?? null} tune={tune ?? null}
+                        lockWhy={dialLock?.why ?? ''} onLocked={(why) => dialLock?.onDialLocked(why)} exitLocked={exitLocked} onExit={closeGuarded}
+                        winW={winW} winH={winH} insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} ink={ink}
+                        ctl={cardsCtl} mpp={cardsMpp} mapTapSeq={mapTapSeq} pageCall={pageCall} onFootprint={trkFootprint}
+                        selected={trkSel} onFocus={trkFocus}
+                        route={kind === 'ism' && trkSel && trk.items.some((it) => it.key === trkSel && !!(it as { _rt?: unknown })._rt)
+                          ? { name: String(trk.items.find((it) => it.key === trkSel)?._lb ?? ''), on: trkRouteKey === trkSel } : null}
+                        onRoute={() => { if (trkSel) pageCall('__trkRoute', trkSel); }}
+                        adsb={adsbLive && trk.tab === 'aircraft' ? {
+                          aircraft: adsbList ?? [], started: !!adsbStarted,
+                          onFocus: (hex: string) => trkFocus(`adsb:${hex}`),
+                          selected: trkSel && trkSel.startsWith('adsb:') ? trkSel.slice(5) : null,
+                          logoBase: local ? null : (radioUrl || baseUrl).replace(/\/+$/, '') + '/adsb/',
+                        } : null}
+                        adsbGain={adsbLive ? adsbGain ?? null : null} adsbCapture={adsbLive ? adsbCapture ?? null : null}
+                        ndb={ndbLive && trk.tab === 'navaids' && ndb ? {
+                          ndb, selected: ndbSel, onSelect: (id: number) => ndbChoose(id, true),
+                          prefs: ndbPrefs ?? parseNdbMapPrefs(null), onPrefs: ndbSetPrefs,
+                        } : null} />
         )}
         {disconnected && !ignored && (
           <View style={mo.discWrap} pointerEvents="box-none">
@@ -3217,6 +3207,96 @@ export default function MapOverlay(
         {overlay}
       </MacRoot>
     </Modal>
+  );
+}
+
+/* ★★★ beta97 THE MAP CONTROL CARDS' HOST — every track map (the AIR & SEA map in every state, the ISM maps, NAVTEX, DSC,
+ *  APRS …): the map's own facts (`trk`, the ADS-B and NDB bodies, the page's camera state) and the screen's (`cards`) into
+ *  MapChrome. Its own component so the list bodies' hooks run only while a track map is up. */
+/** The ✕'s words where the screen gives none: the modes whose map IS the mode (EXIT gives the receiver back) — the old bar's keys. */
+const TRK_EXIT: Partial<Record<MapKind, string>> = { ais: 'EXIT AIS', sondes: 'EXIT SONDES', vormap: 'EXIT VOR MAP' };
+const TRK_TITLE_WORDS: Partial<Record<MapKind, string>> = { aprs: 'Close the map — the APRS decoder carries on', dsc: 'Close the map — the DSC decoder carries on',
+  ism: 'Close the map — ISM carries on', avdata: 'Close the map — the aircraft datalink carries on' };
+function MapCardsHost(p: {
+  kind: MapKind; trk: NonNullable<MapOverlayProps['trk']>; cards: MapCardsIn | null; only?: string; shared: MapSharedProps | null; tune: MapTuneProps | null;
+  lockWhy: string; onLocked: (why: string) => void; exitLocked: boolean; onExit: () => void;
+  winW: number; winH: number; insets: { top: number; bottom: number; left: number; right: number }; ink: { x: string; k: string; kt: string };
+  ctl: MapCtlState; mpp: number; mapTapSeq: number; pageCall: (fn: string, ...args: unknown[]) => void; onFootprint: (w: number, h: number) => void;
+  selected: string | null; onFocus: (key: string) => void;
+  route: { name: string; on: boolean } | null; onRoute: () => void;
+  adsb: AdsbBodyInput | null; adsbGain: MapOverlayProps['adsbGain'] | null; adsbCapture: { short: string; rest: string } | null;
+  ndb: NdbBodyInput | null;
+}) {
+  const t = p.trk;
+  const listW = p.winW < 600 ? p.winW : Math.max(420, Math.min(640, p.winW * 0.3));
+  const ab = useAdsbBody(p.adsb, p.ink, listW);
+  const nb = useNdbBody(p.ndb, p.ink, p.insets, p.winW);
+  const [keyOn, setKeyOn] = useState(false);
+  const [note, setNote] = useState('');
+  const noteT = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (noteT.current) clearTimeout(noteT.current); }, []);
+  // ── LAYERS: the SHOW toggles with their counts and LIVE (this radio's own layers) ──
+  const layerRows: MapLayerRow[] = (t.toggles ?? []).map((x) => ({ id: x.id, label: x.label.replace(/^●\s*/, ''), words: x.words, n: x.n, colour: x.colour,
+    live: (x as { live?: boolean }).live ?? /^●/.test(x.label), others: (x as { others?: string[] }).others, group: (x as { group?: string }).group }));
+  const fam = layerFamilies(layerRows, t.toggled ?? {}).map((f) => ({ glyph: f.glyph as ModeIconName, n: f.n, colour: f.colour }));
+  // ── TUNE: the modes (2+), the one-row gain (ADS-B live: the server's ramp), the live mode's facts ──
+  const g = p.adsbGain;
+  const gain: GainRow = g ? adsbGainRow(g.view, false) : p.cards?.gain ?? { kind: 'none', more: false };
+  const gainH = g ? {
+    onAgc: (on: boolean) => { if (on) g.onAuto(); else if (g.view) g.onSet(g.steps[g.view.idx] ?? 0); },
+    onSet: (i: number) => g.onSet(g.steps[i] ?? 0),
+  } : p.cards?.gainH ?? { onAgc: () => {}, onSet: () => {} };
+  const facts = [p.adsbCapture ? `${p.adsbCapture.short}${p.adsbCapture.rest}` : '', g?.view ? [g.view.training ? 'TRAINING' : '', g.view.note].filter(Boolean).join(' · ') : '',
+                 p.cards?.facts ?? ''].filter(Boolean).join(' · ');
+  const tuneRows = p.tune && p.tune.rows.length > 1 ? p.tune : null;
+  const tuneOn = !!tuneRows || gain.kind !== 'none' || gain.more;
+  // ★★ V12 THE ONLY MODE: the ✕ closes the map and the mode carries on (CLOSE MAP), with the note in its words
+  const exitLabel = p.only ? 'CLOSE MAP' : t.exitLabel ?? TRK_EXIT[p.kind] ?? 'CLOSE MAP';
+  const exitWords = p.only ? `Close the map \u2014 ${p.only}, and the mode carries on`
+    : TRK_TITLE_WORDS[p.kind] ?? (/^EXIT /.test(exitLabel) ? `${exitLabel.replace(/^EXIT /, 'Exit ')} and give the receiver back` : 'Close the map');
+  const pick = (r: TrackRow) => {
+    if (!r.noPos) { const to = t.onPick?.(r.key); p.onFocus(typeof to === 'string' && to ? to : r.key); return; }
+    setNote('Not on the map — no position heard yet.');
+    if (noteT.current) clearTimeout(noteT.current);
+    noteT.current = setTimeout(() => setNote(''), 2500);
+  };
+  const credit = !!t.credit || ab.credit;
+  const foot = (
+    <>
+      {credit && <AircraftDataCredit ink={p.ink} />}
+    </>
+  );
+  return (
+    <>
+      <MapChrome visible winW={p.winW} winH={p.winH} insets={p.insets}
+        exit={{ label: exitLabel, words: exitWords, locked: p.exitLocked, onPress: p.onExit }}
+        servers={p.cards?.servers ?? null}
+        tune={tuneOn ? { rows: tuneRows?.rows ?? [], facts, onPick: tuneRows?.onPick ?? (() => {}), onRefused: tuneRows?.onRefused ?? (() => {}), gain, gainH } : null}
+        layers={layerRows.length ? { rows: layerRows, toggled: t.toggled ?? {}, onToggle: (id, on) => t.onToggle?.(id, on), fam, note: [p.cards?.listNote ?? ''].filter(Boolean).join('') } : null}
+        stats={p.cards?.stats ?? null}
+        map={{ ctl: p.ctl, onCtl: (k) => p.pageCall('__cardsCtl', k),
+               ranges: t.ranges, range: t.range,
+               onRange: t.onRange ? (id) => { t.onRange?.(id); setTimeout(() => p.pageCall('__trkFit'), 400); } : undefined,
+               sources: p.cards?.sources, onSource: p.cards?.onSource,
+               keyOn, onKey: (on) => { setKeyOn(on); p.pageCall('__cardsKey', on, p.insets.top + 64, p.insets.left + 64); },
+               extra: nb.head }}
+        chat={p.shared ? { disabled: p.shared.chatDisabled, unread: p.shared.chatUnread, onOpen: p.shared.onChat } : null}
+        rate={p.cards?.rate ?? []}
+        health={p.cards?.health ?? null} time={p.cards?.time ?? null}
+        shared={p.shared?.line.show ? { text: p.shared.line.text, dialLocked: p.shared.line.dialLocked, why: p.shared.line.why } : null}
+        lockWhy={p.lockWhy} onLocked={p.onLocked}
+        list={{ rows: t.rows, extraRows: [...ab.rows, ...nb.rows], extraCount: ab.count + nb.count,
+                empty: note || (p.adsb ? ab.empty : p.ndb ? nb.empty : t.empty), status: note || t.status,
+                tabs: t.tabs, tab: t.tab, onTab: t.onTab, sort: t.sort ?? null, onSort: t.onSort, filter: t.filter, onFilterClear: t.onFilterClear,
+                safety: t.safety, selected: p.selected, onPick: pick, foot, route: p.route, onRoute: p.onRoute }}
+        wf={p.cards?.wf ?? null}
+        scale={p.mpp > 0 ? { mpp: p.mpp, nm: p.kind === 'airsea' || p.kind === 'avdata' || p.kind === 'vormap' || p.kind === 'ais' || p.kind === 'navtex' || p.kind === 'dsc' } : null}
+        onZoom={(d) => p.pageCall('__cardsZoom', d)}
+        mapTapSeq={p.mapTapSeq}
+        onFootprint={(w, h) => p.onFootprint(w, h)} />
+      {nb.card}
+      {nb.dialog}
+    </>
   );
 }
 

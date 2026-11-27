@@ -1,16 +1,13 @@
 /**
- * TrackLiveList — the AIS / APRS map's live list, in the bottom-left corner (V12, docs/v12/AIS-APRS.md): the web's
- * TrackView list (web/client/src/tracks.ts) in React Native, beside AdsbLiveList and built the same way.
+ * TrackLiveList — the AMATEUR (spots) map's live list in the bottom-left corner: tabs (SPOTS · APRS · MESH · BEACONS), the
+ * rows (amateurMap.ts amListRows), the mesh ROUTE key, collapsing to a pill (remembered per device).
  *
- * ★★★ DRAWN BY REACT NATIVE OVER THE WEBVIEW (AdsbLiveList's note): a pad and the keyboard reach the app through
- *     hardwareKeys → PanelNav, never the page — rows registered here walk with the D-pad, Enter finds the ship / station
- *     on the map, Back passes on to the map's overlay (EXIT AIS / CLOSE MAP).
- * ★★ What it says and in what order is src/services/tracks.ts (aisListRows / aprsListRows — the web's aisRows / aprsRows):
- *    ships nearest first, stations newest first; a row with no position is dimmed and says so instead of finding nothing.
- * ★ The status line (heard · on the map · msg/min, the capture when short) sits under the header — the web's top-bar line,
- *   moved here because the map page's top bar has no room for it on a phone. The safety strip (AIS types 12/14) above the
- *   rows, amber. Collapses to a pill; remembered per device. The map's colours, never the faceplate's (AdsbLiveList's
- *   rule: it is part of the map). The decoder font.
+ * ★★★ beta97: the AIR & SEA and every other track map draw the MAP CONTROL CARDS (MapChrome — the LIST drawer is its own),
+ *     so this list's track-map chrome (the time filter, SHOW chips, the sort, the MESSAGES filter, the safety strip, the
+ *     ADS-B and NDB bodies, the data credit) was DELETED with them. What is left is the AMATEUR map's list, which the web
+ *     also keeps as it is (docs/v12/MAP-CONTROL-CARDS.md "Maps this covers / leaves") — a candidate for the cards later.
+ * ★ DRAWN BY REACT NATIVE OVER THE WEBVIEW: a pad and the keyboard reach it through hardwareKeys → PanelNav, never the page.
+ * ★ The map's colours, never the faceplate's. The decoder font.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -22,23 +19,18 @@ import { adsbListRowsFit, adsbListWidth, parseListOpen, LIST_HEAD_H, LIST_ROW_H,
 import type { TrackRow } from '../services/tracks';
 import { SnrChip } from './SnrChip';
 import type { SnrMode } from '../utils/snrColour';
-import AircraftDataCredit, { AIRCRAFT_CREDIT_H } from './AircraftDataCredit';
-import { useAdsbBody, type AdsbBodyInput } from './AdsbLiveList';
-import { useNdbBody, type NdbBodyInput } from './NdbLiveList';
 
-/** ★ The status line and each safety line under the header. */
+/** ★ The status line under the header. */
 const STATUS_H = 20;
-const SAFETY_LINE_H = 18;
-const OPEN_KEY = 'lsv_trk_list_open';   // ★ the web's vibesdr.trkListMin — one choice for AIS and APRS
+const OPEN_KEY = 'lsv_trk_list_open';
 
 export interface TrackLiveListProps {
-  /** "SHIPS" / "STATIONS". */
+  /** "STATIONS". */
   title: string;
   rows: TrackRow[];
   status: string;
   /** Shown while there are no rows (aisEmpty / aprsEmpty, or "taking the receiver to 162 MHz…" before the first report). */
   empty: string;
-  safety?: string[];
   /** A row was chosen — find it on the map (the layer's focus). Only rows with a position are sent. */
   onFocus: (key: string) => void;
   /** The map's selection (an icon tapped, or a row) — its row is highlighted. */
@@ -48,22 +40,6 @@ export interface TrackLiveListProps {
   areaW: number;
   areaH: number;
   insets: { top: number; bottom: number; left: number; right: number };
-  /** ★★ V12 2026-11-01 THE TIME FILTER (Stuart: "filter the map based on last hour last day last week last month all
-   *  time"): a row of keys under the status line, walked by the pad like any row. The screen filters. */
-  ranges?: Array<{ id: string; label: string; words: string }>;
-  range?: string;
-  onRange?: (id: string) => void;
-  /** What ALL (or the ranges offered) mean here — said to a screen reader on each key. */
-  rangeHint?: string;
-  /** ★★ V12 2026-11-01 THE NAVTEX MAP's layers (STATIONS · WARNINGS · WEATHER): on/off keys under the ranges. */
-  /** ★★★ beta96 SHOW (Stuart 11-26, as the web's): each chip may carry its count `n` and a colour dot — this viewer's own
-   *  filter, never sent to the server. */
-  toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string }>;
-  toggled?: Record<string, boolean>;
-  onToggle?: (id: string, on: boolean) => void;
-  /** ★★ V12 beta91 the aviation map: a row shows the Mictronics aircraft data — ODC-By 1.0 §4.3's notice, one small line at
-   *  the list's foot (the ADS-B layer's card words and links: aviationMap.ts AV_DATA_CREDIT). */
-  credit?: boolean;
   /** ★★★ beta96 THE LIVE MAPS (liveMaps.ts, docs/v12/ONE-MAP.md): the list's TABS (AIRCRAFT · MESSAGES · SHIPS · NAVTEX)
    *  with their counts — fewer than two = none; the screen draws the chosen tab's rows. */
   tabs?: Array<{ id: string; label: string; n: number }>;
@@ -73,22 +49,6 @@ export interface TrackLiveListProps {
    *  it on the map and fits the path, again hides it. The card's own ROUTE is in the map page, which a pad cannot reach. */
   route?: { name: string; on: boolean } | null;
   onRoute?: () => void;
-  /** ★★ beta96 the list's sort, NEAREST | LATEST (the AIRCRAFT tab; the mesh maps' NODES, Stuart 11-26) — null / absent = none
-   *  (another tab, or no receiver position: the mesh lists are then newest first with no key — never a dead NEAREST) */
-  sort?: string | null;
-  onSort?: (s: string) => void;
-  /** what the sort orders, for a screen reader — 'aircraft' when absent */
-  sortWhat?: string;
-  /** ★★ beta96 MESSAGES filtered to one aircraft: the words ("Messages from RYR12K") and × ALL */
-  filter?: string;
-  onFilterClear?: () => void;
-  /** ★★★ beta96 stage 6 ADS-B LIVE (the AIR & SEA map is ADS-B mode's screen): the ADS-B list's own body — its chips
-   *  (NEWEST · FURTHEST · LONGEST TRACKED), the GAIN key and card, and its rows (emergencies, military, then the nearest)
-   *  — heads the AIRCRAFT tab, the other sources' aircraft after it. The web's adsbListHtml in asRender. null = not live. */
-  adsb?: AdsbBodyInput | null;
-  /** ★★★ beta96 stage 8 NDB LIVE: the beacon list's body (NdbLiveList useNdbBody — the tiles, RINGS · UNHEARD · HEARD LOG ·
-   *  FIND NDB · STATS, the rows with their readings, the card, the dialogs) is the NAVAIDS tab's. null = not live. */
-  ndb?: NdbBodyInput | null;
   /** ★★★ beta96 maps2 THE AMATEUR MAP: one pad order shared with the keys above the map (DigiMapKeys) — the owner of the
    *  keys is the map, not each panel (two owners would leave the first one's keys unreachable: the top owner takes the pad).
    *  Absent = this list's own (every other map). */
@@ -116,48 +76,29 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const innerW = p.areaW - p.insets.left - p.insets.right;
   const innerH = p.areaH - p.insets.top - p.insets.bottom;
   const width = adsbListWidth(innerW);
-  const safety = p.safety ?? [];
   const tabs = (p.tabs?.length ?? 0) >= 2 ? p.tabs! : [];
-  const ab = useAdsbBody(p.adsb ?? null, p.ink, width);   // ★ beta96 the rows laid out from the list's width (adsbRowLayout)
-  const nb = useNdbBody(p.ndb ?? null, p.ink, p.insets, innerW);
-  const credit = !!p.credit || ab.credit;
-  const total = ab.count + nb.count + p.rows.length;
-  const extra = (open ? ab.extra + nb.extra : 0) + STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0)
-    + ((tabs.length || p.sort) && open ? RANGE_H : 0) + (p.filter && open ? RANGE_H : 0) + (p.route && open ? RANGE_H : 0)
-    + (credit && open ? AIRCRAFT_CREDIT_H : 0);
+  const total = p.rows.length;
+  const extra = STATUS_H + (tabs.length && open ? RANGE_H : 0) + (p.route && open ? RANGE_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
   const shown = Math.max(1, Math.min(fit, total || 1));
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
   useEffect(() => { p.onFootprint?.(open ? width : 0, open ? height : 0); }, [open, width, height]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const own = usePanelNav(!nb.modal && !p.nav, { flat: true });   // ★ an NDB dialog takes the pad
+  const own = usePanelNav(!p.nav, { flat: true });
   const { navCtx, scrollProps } = p.nav ?? own;
   const s = useMemo(() => makeStyles(p.ink), [p.ink]);
-  const placed = ab.placed + p.rows.filter((r) => !r.noPos).length;
+  const placed = p.rows.filter((r) => !r.noPos).length;
   const pos = { left: EDGE + p.insets.left + (p.leftExtra ?? 0), bottom: EDGE + p.insets.bottom };
   return (
-    <>
     <NavCtx.Provider value={navCtx}>
       <View style={[s.wrap, pos, open && { width }]} onTouchStart={noteTouchInteraction}>
         <NavRow>
           <HeadKey s={s} open={open} onPress={() => setOpenKept(!open)} title={p.title} count={total} placed={placed} />
         </NavRow>
-        {open && (tabs.length > 0 || !!p.sort) && (
+        {open && tabs.length > 0 && (
           <NavRow>
-            {/* ★★ beta96 the tabs, then (AIRCRAFT) the sort — walked by the pad like any row */}
             <View style={s.ranges} accessibilityRole="tablist">
               {tabs.map((t) => <RangeKey key={t.id} s={s} label={`${t.label} ${t.n}`} words={`${t.label}: ${t.n}`} on={p.tab === t.id} onPress={() => p.onTab?.(t.id)} />)}
-              {!!p.sort && <View style={{ width: 8 }} />}
-              {!!p.sort && (['nearest', 'latest'] as const).map((x) => <RangeKey key={x} s={s} label={x.toUpperCase()} words={`Sort the ${p.sortWhat || 'aircraft'} ${x === 'nearest' ? 'nearest first' : 'most recently heard first'}`}
-                                                                                   on={p.sort === x} onPress={() => p.onSort?.(x)} />)}
-            </View>
-          </NavRow>
-        )}
-        {open && !!p.filter && (
-          <NavRow>
-            <View style={s.ranges}>
-              <Text style={s.status} numberOfLines={1}>{p.filter}</Text>
-              <RangeKey s={s} label="× ALL" words="Show every message" on={false} onPress={() => p.onFilterClear?.()} />
             </View>
           </NavRow>
         )}
@@ -173,47 +114,17 @@ export default function TrackLiveList(p: TrackLiveListProps) {
             </View>
           </NavRow>
         )}
-        {open && ab.head}
-        {open && nb.head}
-        {open && !!p.ranges?.length && (
-          <NavRow>
-            <View style={s.ranges} accessibilityRole="radiogroup">
-              {p.ranges.map((x) => <RangeKey key={x.id} s={s} label={x.label} words={`${x.words}${p.rangeHint ? '. ' + p.rangeHint : ''}`}
-                                             on={p.range === x.id} onPress={() => p.onRange?.(x.id)} />)}
-            </View>
-          </NavRow>
-        )}
-        {open && !!p.toggles?.length && (
-          <NavRow>
-            {/* ★ beta96 the AIR & SEA map's chips can be many: they scroll sideways (never off the edge) */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={s.ranges} keyboardShouldPersistTaps="handled">
-              {/* ★★★ beta96 SHOW: labelled — what this map shows YOU; nothing here moves the radio */}
-              <Text style={s.showLbl} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">SHOW</Text>
-              {p.toggles.map((x) => <ToggleKey key={x.id} s={s} label={x.label} words={x.words} n={x.n} colour={x.colour}
-                                               on={p.toggled?.[x.id] !== false} onPress={() => p.onToggle?.(x.id, p.toggled?.[x.id] === false)} />)}
-            </ScrollView>
-          </NavRow>
-        )}
-        {open && safety.map((l, i) => (
-          <Text key={i} style={s.safety} numberOfLines={1}>{l}</Text>
-        ))}
         {open && (
           <ScrollView {...scrollProps} style={{ maxHeight: shown * LIST_ROW_H }} contentContainerStyle={scrollLane}
                       showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
-            {ab.rows}
-            {nb.rows}
             {p.rows.map((r) => (
               <NavRow key={r.key}><Row s={s} r={r} sel={!!p.selected && p.selected === r.key} onPress={() => pick(r)} /></NavRow>
             ))}
-            {!total && <Text style={s.empty} numberOfLines={3}>{p.adsb ? ab.empty : p.ndb ? nb.empty : p.empty}</Text>}
+            {!total && <Text style={s.empty} numberOfLines={3}>{p.empty}</Text>}
           </ScrollView>
         )}
-        {open && credit && <AircraftDataCredit ink={p.ink} />}
       </View>
-      {nb.card}
     </NavCtx.Provider>
-    {nb.dialog}
-    </>
   );
 }
 
@@ -250,14 +161,13 @@ function RangeKey({ s, label, words, on, onPress }: { s: S; label: string; words
   );
 }
 
-function ToggleKey({ s, label, words, on, onPress, n, colour }: { s: S; label: string; words: string; on: boolean; onPress: () => void; n?: number; colour?: string }) {
+function ToggleKey({ s, label, words, on, onPress }: { s: S; label: string; words: string; on: boolean; onPress: () => void }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
   return (
-    <TouchableOpacity ref={viewRef as never} style={[s.rKey, s.tKeyRow, on && s.tKeyOn]} onPress={onPress} activeOpacity={0.7}
-                      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={n != null ? `${words}, ${n}` : words}>
-      {!!colour && <View style={[s.tDot, { backgroundColor: colour }]} />}
-      <Text style={[s.rTxt, on && s.rTxtOn]}>{label}{n != null ? <Text style={s.tN}>{` ${n}`}</Text> : null}</Text>
+    <TouchableOpacity ref={viewRef as never} style={[s.rKey, on && s.tKeyOn]} onPress={onPress} activeOpacity={0.7}
+                      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={words}>
+      <Text style={[s.rTxt, on && s.rTxtOn]}>{label}</Text>
       <NavRing on={focused} color={ring} radius={5} />
     </TouchableOpacity>
   );
@@ -310,9 +220,6 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   status: { height: STATUS_H, lineHeight: STATUS_H, paddingHorizontal: 10, fontFamily: F, fontSize: 10.5,
             color: `rgba(${ink.x},0.62)`, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: `rgba(${ink.k},0.18)` },
   noteTxt:{ color: `rgba(${ink.x},0.95)` },
-  // ★ the web's .safety: amber on brown
-  safety: { height: SAFETY_LINE_H, lineHeight: SAFETY_LINE_H, paddingHorizontal: 10, fontFamily: F, fontSize: 10.5,
-            backgroundColor: '#3a2a10', color: '#ffe2a8' },
   row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: 6 },
   rowSel: { backgroundColor: 'rgba(255,229,102,0.12)', borderLeftWidth: 2, borderLeftColor: 'rgba(255,229,102,0.7)', paddingLeft: 6 },
   rowNoPos: { opacity: 0.65 },
@@ -339,10 +246,6 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
   rKey:   { height: 22, justifyContent: 'center', paddingHorizontal: 7, borderRadius: 5, borderWidth: 1, borderColor: `rgba(${ink.k},0.35)` },
   rKeyOn: { backgroundColor: '#ffd34d', borderColor: '#ffd34d' },
   tKeyOn: { backgroundColor: '#7fc8ff', borderColor: '#7fc8ff' },
-  tKeyRow: { flexDirection: 'row', alignItems: 'center' },
-  tDot:   { width: 7, height: 7, borderRadius: 4, marginRight: 5, borderWidth: 0.5, borderColor: 'rgba(0,0,0,0.5)' },
-  tN:     { opacity: 0.8 },
-  showLbl: { fontFamily: F, fontSize: 9, letterSpacing: 0.9, color: `rgba(${ink.x},0.6)`, marginRight: 2 },
   rTxt:   { fontFamily: F, fontSize: 10, letterSpacing: 0.8, color: `rgba(${ink.x},0.85)` },
   rTxtOn: { color: '#111' },
   empty:  { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.60)`, padding: 10, lineHeight: 17 },

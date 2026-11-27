@@ -1,29 +1,30 @@
 // test_map_shared_app.ts — beta96 (Stuart 11-26) the app's half: the SHARED TUNER line, CHAT, the TUNE chip and the dial
-// lock on the full-screen maps (MapTopStrip in MapOverlay, fed by SDRScreen), AIR & SEA LIVE in the Mode sheet and VIEWS'
-// AIR & SEA beside GALLERY. Source checks (the words and the rows are test_air_sea_tune.ts; the pad order test_nav_coverage).
+// lock on the full-screen maps — ★★★ beta97 drawn by the MAP CONTROL CARDS (MapChrome in MapOverlay, fed by SDRScreen; the old
+// MapTopStrip DELETED) — AIR & SEA LIVE in the Mode sheet and VIEWS' AIR & SEA beside GALLERY. Source checks (the words and
+// the rows are test_air_sea_tune.ts; the layout test_map_chrome.ts; the pad order test_nav_coverage).
 //   npx tsx scripts/test_map_shared_app.ts
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 let pass = 0, fail = 0;
 const ok = (c: unknown, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const rd = (f: string) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
-const mo = rd('src/components/MapOverlay.tsx'), st = rd('src/components/MapTopStrip.tsx'), sc = rd('src/screens/SDRScreen.tsx'), ms = rd('src/components/ModeSelector.tsx');
+const mo = rd('src/components/MapOverlay.tsx'), st = rd('src/components/MapChrome.tsx'), sc = rd('src/screens/SDRScreen.tsx'), ms = rd('src/components/ModeSelector.tsx');
 const bands = rd('src/utils/decoderBands.ts');
 
 console.log('── MapOverlay ──');
-ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo) && /onRequestClose=\{closeGuarded\}/.test(mo), 'EXIT (the page key) and Android back both go through closeGuarded');
+ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo) && /onRequestClose=\{closeGuarded\}/.test(mo), 'Android back goes through closeGuarded (and the old page key\'s message still would)');
 ok(/const exitLocked = !!dialLock\?\.why && dialLock\.exitMoves;/.test(mo) && /dialLock\.onDialLocked\(dialLock\.why\); return;/.test(mo), 'a locked EXIT that would leave the mode is refused with the reason');
-ok(/window\.__backLock=function\(on,why\)/.test(mo) && /__backLock&&window\.__backLock\(\$\{exitLocked\}/.test(mo), 'the page greys its EXIT key while locked (and on every load)');
-ok(/<MapTopStrip top=\{mapTop\}/.test(mo) && /t === 'mapTop'/.test(mo), 'the strip sits under the page\'s own top bar (mapTop)');
-ok(/nav=\{stripOn \? \{ navCtx: trkNav\.navCtx, scrollProps: trkNav\.scrollProps \} : undefined\}/.test(mo) && /navCtx=\{trk \? trkNav\.navCtx : undefined\}/.test(mo),
-   'ONE pad order for the strip and the live list (never two owners)');
+ok(/exitLocked=\{exitLocked\} onExit=\{closeGuarded\}/.test(mo) && /exit=\{\{ label: exitLabel, words: exitWords, locked: p\.exitLocked, onPress: p\.onExit \}\}/.test(mo), 'the cards\' ✕ is closeGuarded, greyed while locked');
+ok(!existsSync(new URL('../src/components/MapTopStrip.tsx', import.meta.url)) && !/MapTopStrip|__backLock|t === 'mapTop'/.test(mo), '★★★ the old strip, its bar height and the page key\'s lock are DELETED, not hidden');
+ok(/isTrk \? '' : `<div id="topbar">/.test(mo), '★★★ the track maps\' page has NO top bar of its own');
+ok(/<NavCtx\.Provider value=\{nav\.navCtx\}>/.test(st) && (st.match(/usePanelNav\(/g) || []).length === 1, 'ONE pad order for every chip, card and LIST row (never two owners)');
 
-console.log('── MapTopStrip ──');
-ok(/<ScrollView horizontal/.test(st), 'one sideways-scrolling row (a phone fits the line, CHAT and TUNE)');
-ok((st.match(/useNavButton\(onPress\)/g) || []).length >= 2 && /<NavRing/.test(st), 'every key and every TUNE row is a pad key');
-ok(/if \(locked\) p\.onLocked\(p\.lockWhy\); else setOpen\(!open\)/.test(st), 'the TUNE chip is refused with the reason while locked');
-ok(/if \(r\.why\) \{ tune\.onRefused\(r\.why\); return; \}/.test(st) && /if \(!r\.live\) tune\.onPick\(r\.id\)/.test(st), 'a row the server greys says why; a pick tunes (not the live one)');
+console.log('── MapChrome ──');
+ok((st.match(/useNavButton\(onPress\)/g) || []).length >= 2 && /<NavRing/.test(st), 'every key, chip and TUNE row is a pad key');
+ok(/onPress=\{\(\) => \(tuneLocked \? refuse\(\) : toggle\(id\)\)\}/.test(st) && /const refuse = \(\) => \{ setPulseAt\(Date\.now\(\)\); p\.onLocked\(p\.lockWhy\); \};/.test(st), 'the TUNE chip is refused with the reason while locked — and the pill + CHAT pulse');
+ok(/if \(r\.why\) \{ t\.onRefused\(r\.why\); return; \}/.test(st) && /if \(!r\.live\) t\.onPick\(r\.id\)/.test(st), 'a row the server greys says why; a pick tunes (not the live one)');
 ok(/TUNE_ICON_PATH\[r\.icon\]/.test(st) && /TUNE_GROUP_LABEL\[r\.group\]/.test(st), 'rows: icon, grouped');
-ok(!/toggle|setToggles|onToggle/.test(st), 'nothing of the map\'s own view (chips, tabs) is in the strip — never locked');
+ok(/<Card title="TUNE" at=\{at\} onClose=\{close\} faded=\{locked\}>/.test(st), 'TUNE\'s card fades under the ask lock');
+ok(/onKey|onToggle/.test(st) && !/locked[^\n]*onToggle/.test(st), 'the map\'s own view (LAYERS, KEY) is never locked');
 
 console.log('── SDRScreen ──');
 ok(/const mapLine = useMemo\(\(\) => mapSharedLine\(\{\n    shared: !!sharedDial, standalone: shownMap === 'airsea' && asViewer,/.test(sc), 'the line from the bar\'s own inputs (sharedDial, dialState, the ask lock, scan, said); not in the viewer');
