@@ -37,11 +37,11 @@ const RANGE = { ok: 1, window: 30, lat: 52.29, lon: -0.85, since: 1762128000, no
   far: { km: km[far], brg: far, at: 1762128000 + 86400 * 5 }, record: { km: 512, brg: 160, at: 1762128000 } };
 let hits = 0;
 
-const PAGE = (theme, prefs, base) => '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/v/maplibre-gl.css">'
+const PAGE = (theme, prefs, base, norx) => '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/v/maplibre-gl.css">'
   + '<style>html,body,#m{margin:0;height:100%;background:' + (theme === 'light' ? '#efece4' : '#05080a') + '}</style></head><body><div id="m"></div>'
   + '<script src="/v/maplibre-gl.js"></script><script src="/v/adsblayer.js"></script><script>'
   + 'window.onerror=function(m){window.err=String(m)};window.saved=[];window.map=new maplibregl.Map({container:"m",style:{version:8,sources:{},layers:[{id:"bg",type:"background",paint:{"background-color":"' + (theme === 'light' ? '#efece4' : '#05080a') + '"}}]},center:[-0.3,52.0],zoom:5.4});'
-  + 'map.on("load",function(){window.layer=VibeAdsbLayer.create(map,{receiver:{lat:52.29,lon:-0.85},theme:"' + theme + '",imageBase:' + JSON.stringify(base) + ','
+  + 'map.on("load",function(){window.layer=VibeAdsbLayer.create(map,{receiver:' + (norx ? 'null' : '{lat:52.29,lon:-0.85}') + ',theme:"' + theme + '",imageBase:' + JSON.stringify(base) + ','
   + 'prefs:Object.assign({autoZoom:false},' + JSON.stringify(prefs) + '),onPrefs:function(p){saved.push(p)}});'
   + 'layer.update([{hex:"4ca97b",lat:51.6,lon:1.2,gs:420,track:90,alt_baro:35000,flight:"RYR123",seen:0},{hex:"400f11",lat:53.4,lon:-2.6,gs:300,track:200,alt_baro:12000,flight:"BAW45",seen:12},'
   + '{hex:"3c6444",lat:50.4,lon:-1.9,gs:380,track:10,alt_baro:30000,flight:"DLH9",seen:40}]);window.ready=1;});'
@@ -50,7 +50,7 @@ const FILES = { '/v/maplibre-gl.css': 'directory/public/mapgl/vendor/maplibre-gl
                 '/v/adsblayer.js': 'web/mapkit/adsblayer.js' };
 const srv = http.createServer((q, r) => {
   const u = new URL(q.url, 'http://x');
-  if (u.pathname === '/page') { r.setHeader('content-type', 'text/html'); return r.end(PAGE(u.searchParams.get('theme'), JSON.parse(u.searchParams.get('prefs') || '{}'), u.searchParams.get('base'))); }
+  if (u.pathname === '/page') { r.setHeader('content-type', 'text/html'); return r.end(PAGE(u.searchParams.get('theme'), JSON.parse(u.searchParams.get('prefs') || '{}'), u.searchParams.get('base'), u.searchParams.get('norx') === '1')); }
   if (u.pathname === '/adsb/range') { hits++; r.setHeader('content-type', 'application/json'); return r.end(JSON.stringify(RANGE)); }
   const f = FILES[u.pathname];
   if (!f) { r.statusCode = 404; return r.end(); }
@@ -76,12 +76,12 @@ try {
   const ev = async (x) => { const r = await send('Runtime.evaluate', { expression: x, awaitPromise: true, returnByValue: true }); return r.result?.result?.value ?? ('ERR ' + r.result?.exceptionDetails?.exception?.description); };
   let navs = 0;
   // ★ a few maps in one headless Edge (SwiftShader): a later one can take well over 15 s to load — waited for, up to 40 s
-  const open = async (theme, prefs, base = '/adsb/') => {
+  const open = async (theme, prefs, base = '/adsb/', norx = false) => {
     const n = ++navs;   // ★ wait for THIS page: the last one's window.ready answers until the navigation lands
     // ★ beta95: headless Edge was marking the page HIDDEN after a couple of maps (MapLibre then never fires "load" —
     //   no frames): brought to the front, focus emulated, before each one
     await send('Page.bringToFront'); await send('Emulation.setFocusEmulationEnabled', { enabled: true });
-    await send('Page.navigate', { url: `${origin}/page?n=${n}&theme=${theme}&prefs=${encodeURIComponent(JSON.stringify(prefs))}&base=${encodeURIComponent(base)}` });
+    await send('Page.navigate', { url: `${origin}/page?n=${n}&theme=${theme}&prefs=${encodeURIComponent(JSON.stringify(prefs))}&base=${encodeURIComponent(base)}${norx ? '&norx=1' : ''}` });
     for (let i = 0; i < 160; i++) { await sleep(250); if ((await ev(`location.search.startsWith('?n=${n}&') && window.ready === 1`)) === true) break; }
     if ((await ev('window.ready === 1')) !== true) console.log('   (map not ready)', await ev(`JSON.stringify({ vis: document.visibilityState, focus: document.hasFocus(), style: window.map && map.isStyleLoaded(), err: String(window.err), gl: !!(window.map && map.painter) })`));
     await sleep(1200);
@@ -167,6 +167,25 @@ try {
     await ev(`${btn}.click()`); await sleep(400);
     ok((await shown()).points === heard, `${theme}: …and RANGE turns it back on`);
   }
+  // ★★ b96-rangefeed (Stuart 11-27, the Lenovo: "i cant activate the range rings either"): a host with NO receiver
+  //    position (a server set up with a locator only, the viewer opened from the front door) — the outline's centre is the
+  //    receiver, so RINGS and FIT work, and their titles say the position is approximate; with no outline either, they are
+  //    greyed WITH the reason (never dead)
+  const rbtn = (t) => `[...document.querySelectorAll('.vsadsb-ctl button')].find(b => b.textContent === '${t}')`;
+  const before2 = hits;
+  await open('dark', {}, '/old/', true);
+  const none = JSON.parse(await ev(`JSON.stringify({ rx: layer.receiverNow(), d: ${rbtn('RINGS')}.disabled, f: ${rbtn('FIT')}.disabled, t: ${rbtn('RINGS')}.title })`));
+  ok(none.rx === null && none.d && none.f && /^Not available: .*receiver position/.test(none.t), `no position anywhere: RINGS / FIT greyed, the title says why ("${none.t}")`);
+  await open('dark', {}, '/adsb/', true);
+  const rr = JSON.parse(await ev(`JSON.stringify({ rx: layer.receiverNow(), d: ${rbtn('RINGS')}.disabled, f: ${rbtn('FIT')}.disabled, t: ${rbtn('RINGS')}.title })`));
+  ok(rr.rx && rr.rx.from === 'range' && Math.abs(rr.rx.lat - 52.29) < 1e-9 && Math.abs(rr.rx.lon + 0.85) < 1e-9, `no host position: the receiver is the range outline's centre (${JSON.stringify(rr.rx)})`);
+  ok(!rr.d && !rr.f && /approximate/.test(rr.t), `…RINGS and FIT work, their title says approximate ("${rr.t}")`);
+  await ev(`${rbtn('RINGS')}.classList.contains('on') || ${rbtn('RINGS')}.click()`); await sleep(500);
+  ok((await ev(`map.getSource('vsadsb-rings') ? map.querySourceFeatures('vsadsb-rings').length > 0 || JSON.stringify(map.getStyle().sources['vsadsb-rings'].data).includes('LineString') : false`)) === true, '…and the rings are drawn around it');
+  await ev(`layer.setReceiver(52.24, -0.90, 'approximate — the centre of locator square IO92NG')`); await sleep(300);
+  const hr = JSON.parse(await ev(`JSON.stringify({ rx: layer.receiverNow(), t: ${rbtn('FIT')}.title })`));
+  ok(hr.rx.from === 'host' && hr.rx.lat === 52.24 && /IO92NG/.test(hr.t), `the host's position (its locator square's centre) wins, and the titles name the square ("${hr.t}")`);
+  ok(hits === before2 + 1, `…one range fetch for that map (${hits - before2})`);
   // and merged with the server's: a far live catch beyond the fixture on bearing ~95° widens it
   await open('dark', {});
   const pre = await shown();
@@ -175,7 +194,7 @@ try {
   await sleep(1900);
   const post = await shown();
   ok(post.live === 1 && post.points >= pre.points && post.ring.some((p) => Math.abs(p[0] - (-0.85)) > 7), `live + server: the far live catch is merged into the server's outline (${post.live} live bearing, ${post.points} points)`);
-  ok(hits === 5, `the outline is fetched once per map opened, not per report (${hits} for 5 maps on this server)`);
+  ok(hits === 6, `the outline is fetched once per map opened, not per report (${hits} for 6 maps on this server)`);
   ws.close();
 } catch (e) { fail++; console.log('   FAIL', e && e.stack || e); }
 clearTimeout(watchdog);

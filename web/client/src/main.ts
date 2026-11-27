@@ -175,6 +175,7 @@ import { PsStabiliser } from '../../../src/services/psStabiliser';
 import { countryForCallsign } from '../../../src/services/callsignCountry';
 import { abbrCountry } from '../../../src/assets/countryAbbr';
 import { gridToLatLon, haversineKm } from '../../../src/services/grid';
+import { rxFromLocation, rxApproxWords, doorRadioId, type RxFrom } from '../../../src/services/rxPosition';   // ★ b96-rangefeed the maps' receiver
 import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   // ★ HH:MM:SS UTC, the slot's start (one helper, web + app)
 import { setDigiModesMapOpener, openDigiModesMap, digiAprsPoints, digiOverlayClean, digiWindowOf, DIGI_WINDOWS, type DigiMapOpts, type DigiMapOverlay, type DigiMapLayer } from './digiMap';
 import { amMeshPoints, amBeaconPoints, amLiveOf, amMeshLoader, AMATEUR_JS, AM_LAYER_COLOUR, type AmLayer, type AmMeshPoint, type AmBeaconPoint } from '../../../src/utils/amateurMap';   // ★★★ beta96 stage 7 THE AMATEUR MAP
@@ -7262,6 +7263,7 @@ async function openAirSeaViewer(): Promise<void> {
     if (!(await v.join())) { showPill(v.status().refusal, 9000); return; }
     asViewer = v;
     asStandalone = true;
+    await viewerLocation();   // ★★ b96-rangefeed: no radio started yet — the map's receiver (RINGS, ⌖, FIT) from the radio's /location
     if (v.left() >= 0) { if (asViewerT) clearInterval(asViewerT); asViewerT = setInterval(asViewerTick, 1000); }
     $('splash').classList.add('hidden');
     const tab = asOffer?.tab ?? 'aircraft';
@@ -7270,6 +7272,29 @@ async function openAirSeaViewer(): Promise<void> {
   }
   // ★★★ on a page with a radio (VIEWS' AIR & SEA): the same map as a viewer — what this server holds, nothing tuned
   asOpen({ box: '', tab: adsbCap?.ok || avCap?.ok || viewsHave.aircraft ? 'aircraft' : 'ships', viewer: true });
+}
+/** ★★ b96-rangefeed (Stuart 11-27, the Lenovo: "i cant activate the range rings either" — RINGS, FIT and ⌖ greyed, no
+ *  RANGE): the standalone viewer opens before any radio is started, so loadServerLocation never ran and the map had no
+ *  receiver; on a FRONT DOOR page /location and /adsb/range are the door's HTML. Ask THIS radio's /location, or on a door
+ *  its primary radio's (/r/<id>/location). Never throws; at most 4 s. */
+async function viewerLocation(): Promise<void> {
+  if (serverLoc) return;
+  const url = isFrontDoor && !BASE_PATH ? (doorRadio ? dataUrl(`/r/${doorRadio}/location`) : '') : P('/location');
+  if (!url) return;
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch(readAuthUrl(url), { cache: 'no-store', signal: ctl.signal });
+    clearTimeout(t);
+    const j = r.ok ? await r.json() : null;
+    const rp = rxFromLocation(j);
+    if (rp && !serverLoc) serverLoc = { lat: rp.lat, lon: rp.lon, label: j?.label, country: j?.country, grid: j?.grid, from: rp.from };
+  } catch { /* none: the ADS-B layer falls back to its range outline's centre */ }
+}
+/** ★★ b96-rangefeed: where the AIR & SEA map's ADS-B layer asks for the range outline (and logos, trails): this radio's
+ *  path — on a FRONT DOOR page, the door's primary radio's (the door answers /adsb/ with its own HTML). */
+function asImageBase(): string | null {
+  if (isFrontDoor && !BASE_PATH && doorRadio && /^https?:$/.test(location.protocol)) return dataUrl(`${location.origin}/r/${doorRadio}/adsb/`);
+  return adsbImageBase() || null;
 }
 /** ★ The page going away: the ticket ends now (else it lapses in 30 s). keepalive so it survives the unload. */
 window.addEventListener('pagehide', () => {
@@ -7288,6 +7313,7 @@ async function showSplashRadios(): Promise<void> {
     if (!r.ok) return;
     dir = await r.json();
   } catch { return; }
+  doorRadio = dir?.frontDoor === true ? doorRadioId(dir) : '';   // ★★ b96-rangefeed the viewer's /location and /adsb/range
   const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
 
   // ★★★ ON THE FRONT DOOR THERE IS NOTHING TO START. It owns no radio, so START has nothing to
@@ -10698,7 +10724,7 @@ function asViewOpts() {
     // ★ the track layer's zooms are the shipping map's (its items are ships, NAVTEX, HFDL stations — the aircraft are the
     //   ADS-B layer's, with its own label rules)
     labelZoom: 3, focusZoom: 6, nautical: true, profile: 'airsea',
-    aircraft: true, mixed: true, imageBase: adsbImageBase() || null,
+    aircraft: true, mixed: true, imageBase: asImageBase(),   // ★★ b96-rangefeed a door's primary radio's on a door page
     liveIds: ['chatPanel'],   // ★ ADS-B mode's CHAT key is in this map's top bar: its panel stays reachable, over the map
     onTuneRefused: (why: string) => showPill(why, 5000),   // ★★★ beta96 a TUNE row this radio cannot run: the server's reason
     labelRank: (it: any) => it._rk ?? 0,
@@ -14366,7 +14392,9 @@ function filteredSpots(): Spot[] {
  * ANTENNA, so asking the listener for one can only produce a wrong answer — if the
  * server publishes no position, we show that plainly and do without distances.
  */
-let serverLoc: { lat: number; lon: number; label?: string; country?: string; grid?: string } | null = null;
+let serverLoc: { lat: number; lon: number; label?: string; country?: string; grid?: string; from?: RxFrom } | null = null;
+/** ★★ b96-rangefeed: on a FRONT DOOR page, the radio a viewer asks for /location and /adsb/range (rxPosition.ts doorRadioId) */
+let doorRadio = '';
 /**
  * The RECEIVER's country — a TIE-BREAK ONLY, never a filter and never a flag.
  *
@@ -14379,7 +14407,12 @@ let serverLoc: { lat: number; lon: number; label?: string; country?: string; gri
 let serverIso = '';
 let serverName = '';
 
-function myPos(): { lat: number; lon: number } | null { return serverLoc; }
+/** ★★ b96-rangefeed `approx`: the words a map adds where the position is the locator square's centre (rxPosition.ts) */
+function myPos(): { lat: number; lon: number; approx?: string } | null {
+  if (!serverLoc) return null;
+  const approx = rxApproxWords(serverLoc.from, serverLoc.grid);
+  return approx ? { ...serverLoc, approx } : serverLoc;
+}
 
 /** "Northampton IO92nh", or "52.24, -0.90" / "IO92nh" if only one is known. */
 function locLine(): string {
@@ -14517,9 +14550,9 @@ async function loadServerLocation(host: string) {
     const j = await r.json();
     serverName = typeof j.name === 'string' ? j.name : '';
     serverIso = typeof j.iso === 'string' ? j.iso : '';
-    if (typeof j.lat === 'number' && typeof j.lon === 'number') {
-      serverLoc = { lat: j.lat, lon: j.lon, label: j.label, country: j.country, grid: j.grid };
-    }
+    // ★★ b96-rangefeed: lat/lon, else the locator square's centre (approximate — rxPosition.ts)
+    const rp = rxFromLocation(j);
+    if (rp) serverLoc = { lat: rp.lat, lon: rp.lon, label: j.label, country: j.country, grid: j.grid, from: rp.from };
     // Menu row.
     const el = $('rxLoc');
     el.textContent = serverLoc
@@ -25527,6 +25560,7 @@ async function refreshSplashRadios(): Promise<void> {
     if (!r.ok) return;
     dir = await r.json();
   } catch { return; }
+  doorRadio = dir?.frontDoor === true ? doorRadioId(dir) : '';   // ★★ b96-rangefeed the viewer's /location and /adsb/range
   const radios: any[] = Array.isArray(dir?.radios) ? dir.radios : [];
   // ★ The directory itself changed (a radio added or removed) — the rows are wrong, not just their
   //   text. Hand it back to the full renderer.

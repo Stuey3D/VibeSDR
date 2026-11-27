@@ -1086,6 +1086,8 @@ if npx tsx scripts/test_decoder_bands.ts; then pass=$((pass+1)); else fail=$((fa
 if npx tsx scripts/test_aviation_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 2026-11-16 THE AVIATION MAP's client rules (src/services/aviationMap.ts): the table parsed, live + table joined once, the layers present
 if npx tsx scripts/test_aviation_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ b96-rangefeed where a map's receiver comes from (src/services/rxPosition.ts): lat/lon, else the locator square (approximate)
+if npx tsx scripts/test_rx_position.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 beta90 THE DIGI MODES MAP's client halves: stations.json cleaned + merged, the overlay, APRS points, avPlaneAdsb.
 if npx tsx scripts/test_digi_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if npx tsx scripts/test_digi_map_stats.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ beta92 the digi map's stats / legend / summary, shared app + web
