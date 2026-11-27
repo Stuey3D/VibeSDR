@@ -291,7 +291,7 @@ import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMini
 import type { MapCardsIn } from '../components/MapChrome';
 import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers, layerOtherCounts } from '../utils/mapChrome';
 import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
-import { wfModelChannels, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
+import { avBandFor, wfModelChannels, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
 import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
@@ -987,6 +987,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setHfdlCapable(false); setAvCap(undefined);   // ★ V12 aviation — the same
     setSdCap(undefined);                          // ★ V12 radiosondes — the same
     setVmCap(undefined);                          // ★ V12 the VOR / ILS map — the same
+    setSpecPauseOk(false);                        // ★★★ beta97 the drawer waterfall's gate — the same
     setMapRadio({ mine: '', count: 0 });          // ★★★ beta96 the maps' OTHER RADIOS switch — the same
     setSatCap(undefined);                         // ★ V12 satellites — the same
     setHwDabOnly(null);                           // ★★ V12 DAB only — this server has not said yet
@@ -1000,6 +1001,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       .then(o => {
         if (dead) return;
         setDabCapable(o?.dab === true);
+        setSpecPauseOk(o?.specPause === true);   // ★★★ beta97 the map drawer's waterfall needs it (Stuart: none on an older server)
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
         // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
         // ★★★ V12 DECODER REACH: a decoder this radio cannot tune comes back false WITH its reason — its key stays, greyed
@@ -2800,6 +2802,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ V12 THE AIRCRAFT DATALINK (ACARS / VDL2) — a whole-radio mode in AIS's pattern, ISM's box (AvdataPanel). The
    *  server leaves the other whole-radio modes itself (their _off arrives); here it is the box and its reports. */
   const [avOn, setAvOn] = useState(false);
+  /* ★★★ beta97 THE MAP DRAWER'S WATERFALL NEEDS A beta97 SERVER (Stuart, build 587): "specPause":1 in vibeserver.json — it
+   *  honours spec on / off and keeps a map mode's display at its floor. Absent → no swap button at all (no dead control). */
+  const [specPauseOk, setSpecPauseOk] = useState(false);
   const avOnRef = useRef(false);
   const [avReport, setAvReport] = useState<AvReport | null>(null);
   const [avError, setAvError] = useState<string | undefined>(undefined);
@@ -15968,9 +15973,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  the drawer's waterfall shows. VibeServer only (an older server ignores the message). */
   const specWanted = mapSpecWanted({ mapUp: trackMapUp, live: mapLive, wfOpen: mapWfShown });
   useEffect(() => {
-    if (!isVibeServer) return;
+    if (!isVibeServer || !specPauseOk) return;   // ★★★ beta97 only a server that says it honours it
     (client.current as { specOn?: (on: boolean) => void } | null)?.specOn?.(specWanted);
-  }, [specWanted, isVibeServer]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [specWanted, isVibeServer, specPauseOk]);   // eslint-disable-line react-hooks/exhaustive-deps
   // ── STATS: every source's aircraft, per mode (folded in only when a report changes, never per render) ──
   const mapStatsSections = useMemo(() => {
     if (!trackMapUp) return [];
@@ -16039,10 +16044,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       : aisOn && aisReport ? { name: 'AIS', perMin: aisReport.msgRate } : null;
     const rate = rateRows({ mine: asViewer ? null : mine, feeds: avShared?.feeds ?? [] });
     // ── the drawer's waterfall: a live map over this radio (not the viewer); the span and markers fit the mode ──
-    const wfOffered = !asViewer && isVibeServer && (shownMap === 'airsea' || ismMapUp);
+    const wfOffered = !asViewer && isVibeServer && specPauseOk && (shownMap === 'airsea' || ismMapUp);
     let wfModel: MapWfModel | null = null;
     if (wfOffered) {
-      const band = avOn && avReport ? avCap?.bands.find((b) => b.id === avReport.band) : undefined;
+      const band = avOn && avReport ? avBandFor(avCap?.bands, avReport) : undefined;   // ★★★ beta97 the decoder's channels
       wfModel = (band ? wfModelChannels(band) : null)
         /* ★ prime while the drawer is hidden: an ident read then is not "now" when it opens (mapWfModel's rule) */
         ?? (vmOn && vmReport ? wfModelVor(vmReport, mapWfSeen.current, !mapWfShown) : null)

@@ -369,7 +369,7 @@ export default function MapChrome(p: MapChromeProps) {
 
         {/* ── bottom-right: ? · scale · [− +] ── */}
         <BottomRight g={g} scale={p.scale} credits={p.map.credits} onTop={p.onBrTop} helpOpen={open('help')} onHelp={() => toggle('help')} onZoom={p.onZoom}
-                     lift={!g.short && listShown && g.list.w >= p.winW - 60 ? listH : 0} hide={listMax && !g.short} />
+                     lift={!g.short && listShown && g.list.w >= p.winW - 60 ? listH : 0} hide={listMax && !g.short && g.list.w >= p.winW - 60} />   {/* ★★★ beta97 (Stuart, build 587 on the Mac: the group was GONE with the list maximised) a maximised list beside the map leaves the map its zoom / ? / (i) — only a full-width one hides them */}
       </View>
     </NavCtx.Provider>
     </KCtx.Provider>

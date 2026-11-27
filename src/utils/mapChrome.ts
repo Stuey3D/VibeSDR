@@ -390,6 +390,17 @@ export function mwfCrop(bins: ArrayLike<number>, centreHz: number, spanHz: numbe
   const n = bins.length;
   if (!n || !(spanHz > 0) || !(hi > lo)) return out;
   const f0 = centreHz - spanHz / 2, hzPer = spanHz / n;
+  /* ★★★ beta97 (Stuart, build 587: hard-edged vertical bands of noise) a column NARROWER than a bin (a narrow span on a wide
+   *  capture): the bins are interpolated, never one bin's value smeared across a block of columns */
+  if ((hi - lo) / cols < hzPer) {
+    for (let c = 0; c < cols; c++) {
+      const x = (lo + ((hi - lo) * (c + 0.5)) / cols - f0) / hzPer - 0.5;
+      if (x < -0.5 || x > n - 0.5) continue;
+      const i = Math.max(0, Math.min(n - 1, Math.floor(x))), j = Math.min(n - 1, i + 1), t = Math.max(0, Math.min(1, x - i));
+      out[c] = bins[i] * (1 - t) + bins[j] * t;
+    }
+    return out;
+  }
   for (let c = 0; c < cols; c++) {
     const a = lo + ((hi - lo) * c) / cols, b = lo + ((hi - lo) * (c + 1)) / cols;
     let i0 = Math.floor((a - f0) / hzPer), i1 = Math.ceil((b - f0) / hzPer);

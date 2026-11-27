@@ -76,8 +76,20 @@ export function wfModelNdb(r: WfNdbReport, seen: WfSeen, prime: boolean): MapWfM
 }
 
 /** The datalink band (hwinfo avdataBands[]): null when the server lists no channels (an older server) — the dial's slice then. */
-export function wfModelChannels(band: { id: string; name: string; chans?: number[] }): MapWfModel | null {
-  const ch = (band.chans ?? []).filter((c) => c > 0).sort((p, q) => p - q);
+/** ★★★ beta97 (Stuart, build 587: the VDL2 map's waterfall said "USB 136.863 MHz · 13 kHz shown" with one marker) the live
+ *  band from the report — by its id, else its name, else the band whose channels hold the report's frequency — so the drawer
+ *  fits the DECODER's channels, never the dial's passband. */
+export function avBandFor<B extends { id: string; name: string; hz?: number; chLo?: number; chHi?: number; chans?: number[] }>(bands: readonly B[] | undefined, rep: { band: string; bandName?: string; hz?: number } | null | undefined): B | undefined {
+  if (!bands?.length || !rep) return undefined;
+  return bands.find((b) => b.id === rep.band)
+    ?? (rep.bandName ? bands.find((b) => b.name === rep.bandName) : undefined)
+    ?? (rep.hz ? bands.find((b) => (b.chans?.includes(rep.hz!)) || (b.chLo != null && b.chHi != null && rep.hz! >= b.chLo - 1 && rep.hz! <= b.chHi + 1) || b.hz === rep.hz) : undefined);
+}
+export function wfModelChannels(band: { id: string; name: string; chans?: number[]; chLo?: number; chHi?: number; channels?: number }): MapWfModel | null {
+  // ★ an older server's band has no channel list: its first / last channel and the count make the even grid it decodes
+  const grid = !band.chans?.length && band.chLo && band.chHi && (band.channels ?? 0) >= 2
+    ? Array.from({ length: band.channels! }, (_, i) => Math.round(band.chLo! + ((band.chHi! - band.chLo!) * i) / (band.channels! - 1))) : null;
+  const ch = (band.chans?.length ? band.chans : grid ?? []).filter((c) => c > 0).sort((p, q) => p - q);
   if (!ch.length) return null;
   const a = ch[0], z = ch[ch.length - 1], pad = Math.max(25e3, (z - a) * 0.08);
   // ★ the combined band holds both sets: each channel named by its own kind (VDL2 lives at 136 MHz and up)

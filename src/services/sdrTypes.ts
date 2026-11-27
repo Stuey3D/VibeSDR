@@ -448,6 +448,8 @@ export interface ServerOccupancy {
    *  draw it. Per AGENTS.md: a control that is visible and refused reads as a broken feature, not
    *  a blocked one. Undefined on a server older than the field, which hides it — the safe way. */
   dab?: boolean;
+  /** ★★★ beta97 {"type":"spec","on"} honoured (the map drawer's waterfall is offered only then) */
+  specPause?: boolean;
   /** ★ V12 ADS-B (docs/v12/ADSB.md). UNLIKE DAB IT IS NEVER HIDDEN WHEN REFUSED: `{ ok: false, why }`
    *  draws the control disabled with the server's reason (a capture below 2.4 MS/s, the owner's
    *  switch …) — a missing control reads as a missing feature. Undefined = an older server: none. */
@@ -597,6 +599,9 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       landingLinkUrl: safeUrl(j.landingLinkUrl, HTTP_SCHEMES) || undefined,
       landingLinkLabel: cleanText(j.landingLinkLabel, 80) || undefined,
       dab:       j.dab === true,
+      /* ★★★ beta97 the server honours {"type":"spec","on":0|1} and keeps a map mode's display at its 1 fps floor unless a drawer
+       *  waterfall is open (beta97+ always sends "specPause":1) — the map LIST's fly-over waterfall is offered only then */
+      specPause: j.specPause === 1 || j.specPause === true,
       adsb:      parseAdsbCapability(j),
       cw:        j.cw === true,
       skim:      j.skim !== false,

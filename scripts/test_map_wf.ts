@@ -2,7 +2,9 @@
 // mode; one labelled marker per decoder channel from the server's table; a scan's window is fresh at each step (the key
 // changes); a DECODED ident is stamped at its frequency when it is read (again on a later reading), never before the
 // view opened, never a listed one.   npx tsx scripts/test_map_wf.ts
-import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
+import { readFileSync } from 'node:fs';
+import { mwfCrop } from '../src/utils/mapChrome';
+import { avBandFor, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -61,5 +63,44 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  $
   const b = wfModelNdb({ ...r, beacons: [{ id: 2, hz: 400e3, ident: '', active: true, lastId: 0 }] }, seen, false);
   ok(b.stamps.length === 0 && b.marks[0].label === '', 'an undecoded beacon: no stamp, no name (the list is never the judge)');
 }
+// ── ★★★ beta97 build 587 (Stuart, the Lenovo in VDL2: "USB 136.863 MHz · 13 kHz shown", one marker, noise bands) ──
+{
+  // the VDL2 band as a server sends it (its channel list), and as an older one does (first / last channel and the count)
+  const vdl2 = { id: 'vdl2-eu', name: 'VDL2', region: 'EU', hz: 136.85e6, channels: 4, chans: [136.725e6, 136.775e6, 136.875e6, 136.975e6] };
+  const old = { id: 'vdl2-eu', name: 'VDL2', region: 'EU', hz: 136.85e6, channels: 12, chLo: 136.7e6, chHi: 136.975e6 };
+  const m1 = wfModelChannels(vdl2)!;
+  ok(m1.marks.length === 4 && m1.marks[0].label === 'Ch1 136.725' && m1.lo < 136.725e6 && m1.hi > 136.975e6, `VDL2: one labelled marker per channel, the span the channels (${m1.info})`);
+  const m2 = wfModelChannels(old)!;
+  ok(!!m2 && m2.marks.length === 12 && m2.marks[11].hz === 136.975e6, 'an older band (no channel list): the even grid from first / last and the count');
+  ok(avBandFor([vdl2], { band: 'vdl2', bandName: 'VDL2', hz: 136.875e6 }) === vdl2, 'the report\'s band found by name when the ids differ');
+  ok(avBandFor([old], { band: 'x', hz: 136.85e6 }) === old, '…else by the frequency its channels hold');
+  ok(avBandFor([vdl2], null) === undefined, 'no report → none (the VFO slice then)');
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  ok(/const band = avOn && avReport \? avBandFor\(avCap\?\.bands, avReport\) : undefined;/.test(sdr), 'the app looks the band up the forgiving way');
+  // the crop: a 13 kHz view on a capture whose bins are ~3 kHz wide — interpolated, never four hard blocks
+  const n = 2048, span = 6e6, bins = new Float32Array(n);
+  for (let i = 0; i < n; i++) bins[i] = -100 + (i % 7);
+  const centre = 136.85e6, hzPer = span / n;
+  const row = mwfCrop(bins, centre, span, centre - 6500, centre + 6500, 200);
+  let runs = 0; for (let i = 1; i < row.length; i++) if (row[i] !== row[i - 1]) runs++;
+  ok(runs > 150 && row.every((v) => Number.isFinite(v)), `a column finer than a bin: interpolated (${runs} changes over 200 columns, not ~4 blocks)`);
+  const one = mwfCrop(bins, centre, span, centre - 1, centre + 1, 1)[0];
+  const x = (centre - (centre - span / 2)) / hzPer - 0.5, i0 = Math.floor(x);
+  ok(one >= Math.min(bins[i0], bins[i0 + 1]) - 1e-3 && one <= Math.max(bins[i0], bins[i0 + 1]) + 1e-3, 'the value lies between its two bins');
+  const wide = mwfCrop(bins, centre, span, centre - 1e6, centre + 1e6, 100);
+  ok(wide.every((v) => v === -94 || v >= -100), 'a column wider than a bin keeps the strongest bin (unchanged)');
+}
+
+console.log('── ★★★ beta97 the swap needs a beta97 server ("specPause":1) — Stuart: none on an older one ──');
+{
+  const types = readFileSync(new URL('../src/services/sdrTypes.ts', import.meta.url), 'utf8');
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  ok(/specPause: j\.specPause === 1 \|\| j\.specPause === true,/.test(types), 'vibeserver.json\'s "specPause":1 read');
+  ok(/setSpecPauseOk\(o\?\.specPause === true\);/.test(sdr) && /setSpecPauseOk\(false\);/.test(sdr), 'per radio, cleared first (an older server: false)');
+  ok(/const wfOffered = !asViewer && isVibeServer && specPauseOk && /.test(sdr) && /wf: wfOffered \? \{ offered: true/.test(sdr),
+     'no flag → wf null → no ≋ on the LIST chip and no folder tab (ListDrawer wfOk = p.wf?.offered); with it → offered');
+  ok(/if \(!isVibeServer \|\| !specPauseOk\) return;   \/\/ ★★★ beta97 only a server that says it honours it/.test(sdr), 'spec on / off is sent only to a server that honours it');
+}
+
 console.log(`test_map_wf: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
