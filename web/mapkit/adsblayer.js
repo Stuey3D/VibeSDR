@@ -1780,6 +1780,7 @@
         // ★ Only THIS card's close clears the selection — closePopup() forgets the card before removing it.
         p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.addTo(gl);
+        setTimeout(() => cardClear(p), 60);
       } else {
         const p = LL.popup({ className: 'vsadsb-pop-' + th, maxWidth: 280, offset: [0, -10], autoPan: false, closeOnClick: false })
           .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);
@@ -1893,6 +1894,26 @@
      *  it, under the zoom keys). autoPan stays off — the card is refreshed every report and would drag the map each time —
      *  so the card's box (never its tip, which keeps pointing at the aircraft) is slid sideways to fit inside the map. */
     let llClampAt = 0;
+    /** ★★ the card clear of the host's chrome (opts.obstacles — the map cards' layout registry): the map moves under it,
+     *  by the least that clears every rectangle it would sit on, at most twice. */
+    function cardClear(p) {
+      if (!gl || !popup || popup !== p || typeof opts.obstacles !== 'function') return;
+      for (let pass = 0; pass < 2; pass++) {
+        const el = p.getElement && p.getElement(), w = el && el.querySelector('.maplibregl-popup-content');
+        if (!w) return;
+        const a = w.getBoundingClientRect(), m = gl.getContainer().getBoundingClientRect();
+        let best = null;
+        for (const o of opts.obstacles() || []) {
+          if (!(a.left < o.r && a.right > o.l && a.top < o.b && a.bottom > o.t)) continue;
+          // the four ways out, the shortest wins (in screen px: + moves the card right / down)
+          const ways = [[o.r - a.left + 6, 0], [o.l - a.right - 6, 0], [0, o.b - a.top + 6], [0, o.t - a.bottom - 6]]
+            .filter(([dx, dy]) => a.left + dx >= m.left && a.right + dx <= m.right && a.top + dy >= m.top && a.bottom + dy <= m.bottom);
+          for (const wv of ways) if (!best || Math.hypot(wv[0], wv[1]) < Math.hypot(best[0], best[1])) best = wv;
+        }
+        if (!best) return;
+        gl.panBy([-best[0], -best[1]], { duration: 0 });
+      }
+    }
     function llClamp() {
       if (gl || !popup || !lm) return;
       try {

@@ -191,11 +191,17 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(!plain, `${tag} ${w}: ${id.toUpperCase()}: no control in the browser's default grey${plain ? ` (${plain})` : ''}`);
     if (id === 'map' && o.multi) ok(await p.ev(`[...${V}.querySelectorAll('.srcBody [data-src]')].every(b => b.classList.contains('mRow'))`), `${tag} ${w}: the SOURCES rows are the cards' row (.mRow)`);
     if (id === 'tune') ok(await p.ev(`${V}.querySelectorAll('.tunePop [data-tune]').length`) >= 2, `${tag} ${w}: TUNE holds the TUNE rows`);
-    if (id === 'tune' && o.radio) {   // ★ Stuart 14:55: the radio page's own gain controls, lent (an RTL: its list and VIBE AGC's AUTO)
-      const g = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="tune"]'); const r = c.querySelector('#rowGain'), a = c.querySelector('#gainAuto'), sl = c.querySelector('#gain');
-        const f = c.querySelector('.facts').getBoundingClientRect(), h = c.querySelector('.mapGainHost')?.getBoundingClientRect(), t = c.querySelector('.tunePop')?.getBoundingClientRect();
-        return { row: !!r && !r.hidden && r.getClientRects().length > 0, auto: !!a, max: sl ? Number(sl.max) : -1, order: !!(h && t && h.top >= f.bottom - 1 && h.bottom <= t.top + 1) }; })())`));
-      ok(g.row && g.auto && g.max > 0 && g.order, `${tag} ${w}: TUNE carries the page's own gain list and AUTO, under the status line, above the modes (${JSON.stringify(g)})`);
+    if (id === 'tune' && o.radio) {   // ★ Stuart 15:01: ONE gain row — the radio's own AGC name, or the slider; never both
+      const st = () => p.ev(`JSON.stringify((() => { const r = ${V}.querySelector('.trkCard2[data-card="tune"] .mapGainHost .gRow'); if (!r) return null; const a = r.querySelector('.gAgc');
+        return { agc: a ? a.textContent : null, on: !!a && a.classList.contains('on'), slider: !!r.querySelector('.gSl'), val: r.querySelector('.gVal')?.textContent || '', rows: r.closest('.mapGainHost').querySelectorAll('.gRow').length, more: !!r.querySelector('.gMoreB') }; })())`);
+      const g0 = JSON.parse(await st());
+      ok(g0 && /AGC/i.test(g0.agc || '') && g0.rows === 1 && /dB/.test(g0.val) && g0.slider === !g0.on, `${tag} ${w}: TUNE's gain is one row — the radio's own AGC name (${g0 && g0.agc}), ${g0 && (g0.on ? 'lit, the gain it chose' : 'the slider')} (${g0 && g0.val})`);
+      await p.ev(`${V}.querySelector('.mapGainHost .gAgc').click(); 1`); await sleep(500);
+      const g1 = JSON.parse(await st());
+      ok(g1 && g1.on !== g0.on && g1.slider === !g1.on && g1.rows === 1, `${tag} ${w}: its AGC button swaps the row (${JSON.stringify(g1)})`);
+      await p.ev(`${V}.querySelector('.mapGainHost .gAgc').click(); 1`); await sleep(500);
+      const hasExtra = await p.ev(`!!${V}.querySelector('.mapGainHost .gMore') && [...${V}.querySelector('.mapGainHost .gMore').children].some(c => !c.hidden)`);
+      ok(g1.more === hasExtra, `${tag} ${w}: ⌄ only when the radio has more controls (${hasExtra})`);
     }
     if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);

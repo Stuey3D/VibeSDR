@@ -744,6 +744,24 @@ const CSS = `
 .trkCard2[data-card="tune"] .mapGainHost{display:flex;flex-direction:column;gap:4px;padding:4px 10px 8px;border-bottom:1px solid #1b2733}
 .trkCard2[data-card="tune"] .mapGainHost:empty{display:none}
 .trkCard2[data-card="tune"] .mapGainHost .mrow{margin:0}
+.mapGainHost .gRow{display:flex;align-items:center;gap:8px;min-height:34px}
+.mapGainHost .gRow[hidden]{display:none}
+.mapGainHost .gSl{flex:1 1 auto;min-width:80px;accent-color:#ffd34d}
+.mapGainHost .gVal{font:700 13px/1 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#e8eef5;font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}
+.mapGainHost .gAgc{all:unset;cursor:pointer;flex:none;font:700 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.08em;padding:6px 9px;border-radius:7px;border:1px solid #33475a;color:#9fb0c2;background:#141c24}
+.mapGainHost .gAgc.on{background:#ffd34d;border-color:#ffd34d;color:#111}
+.mapGainHost .gLock,.mapGainHost .gMoreB{all:unset;cursor:pointer;flex:none;font-size:15px;line-height:1;padding:4px 6px;border-radius:6px;color:#cfd9e3}
+.mapGainHost .gMoreB{margin-left:auto;font-size:16px;color:#ffd34d}
+.mapGainHost .gMoreB[aria-expanded="true"]{transform:rotate(180deg)}
+.mapGainHost .gAgc:focus-visible,.mapGainHost .gLock:focus-visible,.mapGainHost .gMoreB:focus-visible{outline:2px solid #ffd34d;outline-offset:1px}
+.mapGainHost .gPw{display:flex;gap:6px;align-items:center;padding:4px 0}
+.mapGainHost .gPw[hidden]{display:none}
+.mapGainHost .gPwIn{flex:1 1 auto;min-width:0;background:#0f1720;color:#e8eef5;border:1px solid #33475a;border-radius:6px;padding:6px 8px;font:13px ui-monospace,Menlo,monospace}
+.mapGainHost .gPwGo{all:unset;cursor:pointer;padding:6px 9px;border-radius:6px;background:#ffd34d;color:#111;font:700 10.5px/1 ui-monospace,Menlo,monospace}
+.mapGainHost .gPwMsg{font-size:11px;color:#ff8a7d}
+.mapGainHost .gPw.shake{animation:gShake .35s ease 1}
+@keyframes gShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+body.askLocked .mapGainHost .gRow{opacity:.45}
 /* ★★ the ASK PULSE (main.ts mapAskPulse): a breath and a radar ring, three times, transform + opacity only */
 .trkView .askPulse{position:relative;overflow:visible!important;animation:trkAskBreathe .8s ease-in-out 3}
 .trkView .askPulse::after{content:"";position:absolute;inset:-2px;border-radius:inherit;border:2px solid #ffcc88;pointer-events:none;animation:trkAskRing .8s ease-out 3;opacity:0;z-index:-1}
@@ -1905,6 +1923,20 @@ export class TrackView {
   }
   /** The right column, where the page's own chips (SERVER HEALTH) are lent while the map is up. */
   rightColumn(): HTMLElement { return this.root.querySelector('.mChipsR') as HTMLElement; }
+  /** ★★ THE LAYOUT REGISTRY (Stuart 15:04): every piece of chrome over the map — the corner pieces, the edge chips, the
+   *  lent SERVER HEALTH and badge, the bar, the zoom, the ?, the scale and any open card — as screen rectangles. The
+   *  aircraft card's clamp (adsblayer opts.obstacles) and the overlap e2e read the same list, so a new chip is avoided
+   *  without anyone remembering to add it. */
+  static CHROME_SEL = '.mDock:not([hidden]) .hCard, .trkTop .exit, #mapShLine, .maplibregl-ctrl-top-left, .leaflet-top.leaflet-left, .mHelp, .mChipsScale, #srvHealth .hCard, #rxBadge, .trkCards .trkCard2:not([hidden])';
+  chromeRects(): Array<{ l: number; t: number; r: number; b: number }> {
+    const out: Array<{ l: number; t: number; r: number; b: number }> = [];
+    for (const e of Array.from(this.root.querySelectorAll(TrackView.CHROME_SEL)) as HTMLElement[]) {
+      if (!e.getClientRects().length || getComputedStyle(e).visibility === 'hidden') continue;
+      const q = e.getBoundingClientRect(); if (q.width < 2 || q.height < 2) continue;
+      out.push({ l: q.left, t: q.top, r: q.right, b: q.bottom });
+    }
+    return out;
+  }
   chatHost(): HTMLElement { return this.root.querySelector('.trkCard2[data-card="chat"] .chatBody') as HTMLElement; }
   /** The facts the old status paragraph carried, each in the card it belongs to ('' = none). */
   setFacts(f: Partial<Record<'list' | 'tune' | 'layers', string>>) {
@@ -2718,6 +2750,7 @@ export class TrackView {
       try { prefs = JSON.parse(localStorage.getItem('vibesdr.avMapPrefs') || localStorage.getItem('vibesdr.adsbMapPrefs') || 'null'); } catch { /* private */ }
       this.acLayer = w.VibeAdsbLayer.create(map, {
         receiver: this.rx, prefs, theme: 'dark', sparseLegend: true, drawReceiver: false,   // ★ the track layer draws the house
+        obstacles: () => this.chromeRects(),   // ★ an aircraft's card keeps clear of every chip, corner piece and card
         imageBase: this.o.imageBase ?? null,
         ctlHost: this.slot('ctl'),   // ★★★ beta96 its keys in the MAP card (map cards), not floating over the map
         onPrefs: (p: unknown) => { try { localStorage.setItem('vibesdr.avMapPrefs', JSON.stringify(p)); } catch { /* private */ } },

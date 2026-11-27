@@ -4174,28 +4174,114 @@ window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderM
  *  element, so its card, its tuck and its alerts work as they do on the page), and the TIME LIMIT mirrored as a chip. */
 const healthHome: { parent: Node | null; next: Node | null } = { parent: null, next: null };
 const badgeHome: { parent: Node | null; next: Node | null } = { parent: null, next: null };
-/* ★★★ Stuart 14:55 ("gain setting is missing"): the TUNE card carries the radio page's OWN gain controls — the same
- *  nodes, lent while a map is up and put back after: #rowGain + #rowAgc (an RTL's list and VIBE AGC), #rspCtls (an RSP's
- *  LNA state / IF reduction), #ahfCtls (the HF+'s attenuator + preamp), #aspCtls / #hrfCtls / #usrpCtls. The page already
- *  shows only the ones this radio's driver has (hwinfo), locks them under the ask lock (body.askLocked, ASK_SHIELD_SEL)
- *  and runs the gain rules — so the card does exactly what the page does. ADS-B keeps its own GAIN (adsbGain). */
-const GAIN_IDS = ['rowGain', 'rowAgc', 'rspCtls', 'ahfCtls', 'aspCtls', 'hrfCtls', 'usrpCtls'];
+/* ★★★ Stuart 14:55 / 15:01 THE TUNE CARD'S GAIN — ONE ROW, never two, driving the radio page's OWN controls underneath
+ *  (the same handlers, the same rules: no waterfall freeze, the RSP's pop rules, the owner's caps and locks):
+ *    the radio's AGC on    [Vibe AGC] 29.6 dB ⌄           — its own name (the page's label), lit; a press turns it off
+ *    manual                ——O—— 29.6 dB [Vibe AGC] ⌄     — the slider IS the row; the named button turns the AGC back on
+ *    admin-locked gain     [Vibe AGC] 29.6 dB 🔒 ⌄        — read-only; 🔒 grows the page's own admin password box inline
+ *  ⌄ = MORE: the page's other controls for this driver (the RSP's whole panel, the HF+'s, the RTL's tuner bandwidth …),
+ *  lent under the row — offered only when there are any. A locked listener (the ask lock) gets the ask pulse, no change.
+ *  Per driver (AGENTS.md): an RTL's gain list + Vibe AGC; an RSP's IF gain reduction + its IF AGC; the HF+'s attenuator
+ *  + its AGC (no variable gain); anything else: no row, its block under ⌄. */
+type GainDrv = { agc: string; slider: string; val: () => string; name: string };
+function gainDriver(): GainDrv | null {
+  const d = radioCaps?.driver;
+  const nameOf = (btn: string, fallback: string) => {
+    const lab = document.getElementById(btn)?.closest('.mrow')?.querySelector('label');
+    const t = lab ? (lab.childNodes[0]?.textContent || '').trim() : '';
+    return t || fallback;
+  };
+  if (d === 'rtl' && hwGains.length) return { agc: 'gainAuto', slider: 'gain', name: nameOf('gainAuto', 'VIBE AGC'),
+    val: () => { const on = document.getElementById('gainAuto')?.classList.contains('on'); const t = on && hwGainNow >= 0 ? hwGainNow : hwGains[Number((document.getElementById('gain') as HTMLInputElement | null)?.value ?? 0)] ?? 0; return `${(t / 10).toFixed(1)} dB`; } };
+  if (d === 'sdrplay' && document.getElementById('rspIfAgc')) return { agc: 'rspIfAgc', slider: 'rspIfGr', name: nameOf('rspIfAgc', 'IF AGC'),
+    val: () => (document.getElementById('rspSysGain')?.textContent || document.getElementById('rspIfGrVal')?.textContent || '').trim() };
+  if (d === 'airspyhf' && document.getElementById('ahfAgc')) return { agc: 'ahfAgc', slider: 'ahfAtt', name: nameOf('ahfAgc', 'AGC'),
+    val: () => `ATT ${(document.getElementById('ahfAttVal')?.textContent || '').trim()}` };
+  return null;
+}
+const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw'], sdrplay: ['rspCtls'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
 const gainHome = new Map<string, { parent: Node; next: Node | null }>();
+let gainMoreOpen = false, gainPwOpen = false;
 function mapGainLend(on: boolean) {
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
   const facts = v?.querySelector('.trkCard2[data-card="tune"] > .cb > .facts') as HTMLElement | null;
   if (on && facts && !adsbOn) {
     let host = v!.querySelector('.mapGainHost') as HTMLElement | null;
-    if (!host) { host = document.createElement('div'); host.className = 'mapGainHost'; facts.after(host); }
-    for (const id of GAIN_IDS) {
-      const el = document.getElementById(id); if (!el || el.parentElement === host) continue;
-      if (!gainHome.has(id) && el.parentNode) gainHome.set(id, { parent: el.parentNode, next: el.nextSibling });
-      host.appendChild(el);
+    if (!host) {
+      host = document.createElement('div'); host.className = 'mapGainHost';
+      host.innerHTML = '<div class="gRow" role="group" aria-label="Gain"></div><div class="gPw" hidden></div><div class="gMore" hidden></div>';
+      facts.after(host);
     }
+    const more = host.querySelector('.gMore') as HTMLElement;
+    for (const id of MORE_IDS[radioCaps?.driver || ''] ?? []) {
+      const el = document.getElementById(id); if (!el || el.parentElement === more) continue;
+      if (!gainHome.has(id) && el.parentNode) gainHome.set(id, { parent: el.parentNode, next: el.nextSibling });
+      more.appendChild(el);
+    }
+    mapGainRender();
   } else {
     for (const [id, h] of gainHome) { const el = document.getElementById(id); if (el) h.parent.insertBefore(el, h.next && h.next.parentNode === h.parent ? h.next : null); }
-    gainHome.clear();
+    gainHome.clear(); gainMoreOpen = false; gainPwOpen = false;
   }
+}
+/** The row, redrawn from the page's own controls (cheap; at the render rate and after every press). */
+function mapGainRender() {
+  const host = document.querySelector('.trkView:not([hidden]) .mapGainHost') as HTMLElement | null;
+  if (!host) return;
+  const row = host.querySelector('.gRow') as HTMLElement, more = host.querySelector('.gMore') as HTMLElement, pw = host.querySelector('.gPw') as HTMLElement;
+  const g = gainDriver();
+  const hasMore = [...more.children].some((c) => !(c as HTMLElement).hidden);
+  const locked = hwGainLocked && !adminUnlocked;
+  const agcBtn = g ? document.getElementById(g.agc) as HTMLButtonElement | null : null;
+  const agcOn = !!agcBtn?.classList.contains('on');
+  const sl = g ? document.getElementById(g.slider) as HTMLInputElement | null : null;
+  const sig = JSON.stringify([!!g, g?.name, agcOn, locked, adminUnlocked, hasMore, gainMoreOpen, sl?.min, sl?.max, sl?.step]);
+  if (row.dataset.sig !== sig) {
+    row.dataset.sig = sig;
+    const agc = g && agcBtn ? `<button type="button" class="gAgc${agcOn ? ' on' : ''}" aria-pressed="${agcOn}" title="${escapeHtml(agcBtn.title || g.name)}">${escapeHtml(g.name)}</button>` : '';
+    const val = '<span class="gVal" aria-live="off"></span>';
+    const lock = locked ? `<button type="button" class="gLock" aria-label="Gain locked by the owner — enter the admin password" title="Locked by the owner — enter the admin password">\u{1F512}</button>`
+      : adminUnlocked && hwGainLocked ? '<span class="gLock open" title="Unlocked with the admin password">\u{1F513}</span>' : '';
+    const moreB = hasMore ? `<button type="button" class="gMoreB" aria-expanded="${gainMoreOpen}" aria-label="More radio controls">⌄</button>` : '';
+    const manual = g && sl && !agcOn && !locked;
+    row.innerHTML = g ? (manual ? `<input type="range" class="gSl" min="${sl!.min}" max="${sl!.max}" step="${sl!.step || 1}" aria-label="Gain">${val}${agc}` : `${agc}${val}${lock}`) + moreB : moreB;
+    row.hidden = !g && !hasMore;
+    const ask = () => { if (document.body.classList.contains('askLocked')) { nudgeAsk(); return true; } return false; };
+    row.querySelector('.gAgc')?.addEventListener('click', (e) => { e.stopPropagation(); if (locked || ask()) return; agcBtn?.click(); setTimeout(mapGainRender, 0); });
+    const s2 = row.querySelector('.gSl') as HTMLInputElement | null;
+    if (s2 && sl) {
+      s2.value = sl.value;
+      s2.addEventListener('pointerdown', (e) => { if (ask()) { e.preventDefault(); } });
+      s2.addEventListener('input', () => { if (document.body.classList.contains('askLocked')) { s2.value = sl.value; return; } sl.value = s2.value; sl.dispatchEvent(new Event('input', { bubbles: true })); sl.dispatchEvent(new Event('change', { bubbles: true })); (row.querySelector('.gVal') as HTMLElement).textContent = g!.val(); });
+    }
+    row.querySelector('.gMoreB')?.addEventListener('click', (e) => { e.stopPropagation(); gainMoreOpen = !gainMoreOpen; more.hidden = !gainMoreOpen; mapGainRender(); });
+    row.querySelector('button.gLock')?.addEventListener('click', (e) => { e.stopPropagation(); gainPwOpen = !gainPwOpen; mapGainPw(pw); });
+  }
+  const sv = row.querySelector('.gSl') as HTMLInputElement | null;
+  if (sv && sl && document.activeElement !== sv && sv.value !== sl.value) sv.value = sl.value;
+  const vEl = row.querySelector('.gVal') as HTMLElement | null;
+  if (vEl && g) { const t = g.val(); if (vEl.textContent !== t) vEl.textContent = t; }
+  more.hidden = !gainMoreOpen;
+  if (!locked && gainPwOpen) { gainPwOpen = false; mapGainPw(pw); }
+}
+/** 🔒 → the page's own admin unlock (doAdminUnlock: the same request, ticket and rate limit), inline in the card. */
+function mapGainPw(pw: HTMLElement) {
+  pw.hidden = !gainPwOpen;
+  if (!gainPwOpen) { pw.innerHTML = ''; return; }
+  pw.innerHTML = '<input type="password" class="gPwIn" autocomplete="current-password" placeholder="Admin password" aria-label="Admin password"><button type="button" class="gPwGo">UNLOCK</button><span class="gPwMsg" role="status"></span>';
+  const inp = pw.querySelector('.gPwIn') as HTMLInputElement, msg = pw.querySelector('.gPwMsg') as HTMLElement;
+  const go = async () => {
+    const val = inp.value; if (!val) return;
+    msg.textContent = '…';
+    try { await doAdminUnlock(val); } catch { /* the page says why */ }
+    setTimeout(() => {
+      if (adminUnlocked) { gainPwOpen = false; pw.hidden = true; pw.innerHTML = ''; mapGainRender(); }
+      else { msg.textContent = 'Not accepted'; pw.classList.remove('shake'); void pw.offsetWidth; pw.classList.add('shake'); inp.select(); }
+    }, 1200);
+  };
+  pw.querySelector('.gPwGo')!.addEventListener('click', (e) => { e.stopPropagation(); void go(); });
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); void go(); } e.stopPropagation(); });
+  setTimeout(() => inp.focus(), 0);
 }
 function mapChromeAdopt(on: boolean) {
   mapGainLend(on);
@@ -11465,6 +11551,7 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   const rate = asRateText();
   v.setRate(rate.text, rate.title);
   asStatsSync(v, x.rx);
+  mapGainRender();
   { // ★★★ the RATE chip (Stuart 12:52): this radio's live rate, then each feed (aircraft and live / stalled — a feed's
     //     message rate is not in the server's table, so its aircraft stand in)
     const rr: Array<{ name: string; rate: string; live: boolean; words?: string }> = [];
