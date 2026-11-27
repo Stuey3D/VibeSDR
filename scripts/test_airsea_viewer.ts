@@ -75,7 +75,7 @@ console.log('── B. the landing button\'s gate ──');
   ok(hfdl.show && hfdl.tab === 'aircraft' && hfdl.label === 'HFDL' && hfdl.line === '2 HFDL aircraft now', `HFDL from a feed is all there is: labelled HFDL ("${hfdl.line}")`);
   const feedWait = await airSeaOffer(mk({ '/vibeserver/aircraft.json': { aircraft: [], feeds: [{ label: 'ADSB', title: 'PiAware' }] } }), now);
   ok(feedWait.show && feedWait.label === 'ADS-B', 'a feed with no aircraft yet still gets the button (the owner set one up)');
-  const mixed = await airSeaOffer(mk({ '/vibeserver/aircraft.json': { aircraft: [{ key: 'A', src: ['ADS-B'] }], feeds: [{ label: 'HFDL' }] }, '/vibeserver/gallery/ais-ships.json': { total: 40, count: 1, vessels: [{}] } }), now);
+  const mixed = await airSeaOffer(mk({ '/vibeserver/aircraft.json': { aircraft: [{ key: 'A', src: ['ADS-B'], srcAge: { 'ADS-B': 1 } }], feeds: [{ label: 'HFDL' }] }, '/vibeserver/gallery/ais-ships.json': { total: 40, count: 1, vessels: [{}] } }), now);
   ok(mixed.tab === 'ships' && mixed.label === '', 'the most populated layer wins (40 ships over 1 aircraft); mixed sources: no label');
   const off = await airSeaOffer(mk({ '/vibeserver/aircraft.json': { aircraft: [], off: 1 }, '/vibeserver/gallery/ais-ships.json': { off: 1, total: 9 } }), now);
   ok(!off.show, 'the owner switched aircraft and AIS off: no button');
