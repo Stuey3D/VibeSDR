@@ -1038,9 +1038,13 @@ function ItemCard({ r, g, list, onClose, onCentre }: { r: TrackRow; g: ReturnTyp
     </NavCtx.Provider>
   );
 }
+/** ★★★ beta97 the LIST's SNR chip (Stuart, build 587: "the dB reading in the list is tiny") — the web's size: about the row's
+ *  facts, bold, a padded pill, at the chrome's scale; never smaller than the subtitle (lsecond). */
+export const LIST_SNR_PT = 11.5;
 /** A row: [flag] CALLSIGN [MIL]/[EMERG] [FL | nm | kt] … SNR chip + age */
 function ListRow({ r, sel, onPress, onEnter, preferred }: { r: TrackRow; sel: boolean; onPress: () => void; onEnter?: () => void; preferred?: boolean }) {
   const styles = useStyles();
+  const k = useK();
   // ★ a tap selects and centres it (the page opens its card); ENTER on a pad / keyboard does that AND opens the pad's item card
   const { focused, viewRef } = useNavButton(onEnter ?? onPress, false, { preferred: !!preferred });
   const { ring } = useNavFocus();
@@ -1060,7 +1064,7 @@ function ListRow({ r, sel, onPress, onEnter, preferred }: { r: TrackRow; sel: bo
         </View>
         <Text style={styles.lsecond} numberOfLines={1}>{r.second}</Text>
       </View>
-      {r.snrMode ? <SnrChip mode={r.snrMode as SnrMode} db={r.snr} small /> : null}
+      {r.snrMode ? <SnrChip mode={r.snrMode as SnrMode} db={r.snr} size={LIST_SNR_PT * k} /> : null}
       {!!r.age && <Text style={styles.age}>{r.age}</Text>}
       <NavRing on={focused} color={ring} radius={4} />
     </TouchableOpacity>

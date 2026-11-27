@@ -14,10 +14,11 @@
  * ★ The decoder font — the display font is for the main controls only.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, Animated, Easing, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Image, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { NavRow, NavRing, useNavButton, useNavFocus } from './PanelNav';
 import { DECODER_FONT } from './DecoderShell';
-import { SnrChip } from './SnrChip';   // ★ beta96 the reply SNR, colour-coded (replaced the 3-bar meter)
+import { SnrChip } from './SnrChip';
+import { chromeScale } from '../utils/mapChrome';   // ★ beta96 the reply SNR, colour-coded (replaced the 3-bar meter)
 import type { Aircraft } from '../services/SDRBackend';
 import { adsbListRows, adsbRowLayout, LIST_ROW_H, COL_ALT, COL_KT, COL_RNG, ROW_GAP,
          type AdsbListRow, type AdsbRowLayout } from '../services/adsbList';
@@ -74,10 +75,12 @@ type S = ReturnType<typeof makeStyles>;
 function Row({ s, r, lay, sel, onPress, logoBase }: { s: S; r: AdsbListRow; lay: AdsbRowLayout; sel: boolean; onPress: () => void; logoBase: string | null }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
+  const win = useWindowDimensions();
+  const snrK = chromeScale(win.width, win.height);   // ★★★ beta97 the LIST's scale (MapChrome's), so the dB chip reads
   // ★ the SNR chip and a MIL / emergency tag: beside the callsign, or (a narrow list) at the head of the second line
   const ex = (
     <>
-      <SnrChip mode="adsb" db={r.snr} />
+      <SnrChip mode="adsb" db={r.snr} size={11.5 * snrK} />
       {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
         : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
     </>

@@ -224,6 +224,19 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(/top: \(p\.shared \? g\.pill\.y \+ g\.pill\.h : p\.insets\.top\) \+ GAP \* k/.test(mc), 'tall: directly below the pill, never under it');
 }
 
+// ── ★★★ beta97 the LIST's dB chip reads (Stuart, build 587: "the dB reading in the list is tiny") ──
+{
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  const al = readFileSync(new URL('../src/components/AdsbLiveList.tsx', import.meta.url), 'utf8');
+  const pt = Number(/export const LIST_SNR_PT = ([0-9.]+);/.exec(mc)?.[1]);
+  const sub = Number(/lsecond: \{ fontFamily: F, fontSize: ([0-9.]+),/.exec(mc)?.[1]);
+  const facts = Number(/kv: \{ fontFamily: F, fontSize: ([0-9.]+),/.exec(mc)?.[1]);
+  ok(pt >= sub && pt >= facts, `LIST rows (aircraft, messages, ships, spots — every TrackRow): the chip ${pt} pt ≥ the subtitle ${sub} and the facts ${facts}`);
+  ok(/<SnrChip mode=\{r\.snrMode as SnrMode\} db=\{r\.snr\} size=\{LIST_SNR_PT \* k\} \/>/.test(mc), '…at the chrome\'s scale (k)');
+  const info = Number(/info: +\{ fontFamily: F, fontSize: ([0-9.]+),/.exec(al)?.[1]);
+  ok(/<SnrChip mode="adsb" db=\{r\.snr\} size=\{11\.5 \* snrK\} \/>/.test(al) && 11.5 >= info && /const snrK = chromeScale\(win\.width, win\.height\);/.test(al), `the ADS-B LIVE rows too (≥ their info line ${info} pt, at the same scale)`);
+}
+
 // ── the pill's words ──
 {
   const t = 'Shared VFO: Ask before changing mode or exiting 2/5';
