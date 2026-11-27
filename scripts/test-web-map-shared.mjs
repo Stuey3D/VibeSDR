@@ -157,7 +157,7 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.includes('adsb') && tune.includes('ais*'), `TUNE: ADS-B and AIS (AIS lit) — ${tune.join(' ')}`);
   // ★★★ beta96 map cards: TUNE is a card button now — the live mode is in its title and the TUNE card's first line
-  ok(await ev(`${CHIP}.textContent.trim() === 'TUNE' && !${CHIP}.hidden && /^TUNE · AIS 161\\.975/.test(${CHIP}.title || '')`), `ONE TUNE button, its title naming the live mode — "${await ev(`${CHIP}.title`)}"`);
+  ok(await ev(`${CHIP}.textContent.trim() === 'TUNE' && !${CHIP}.closest('.mDock').hidden && /^TUNE · AIS 161\\.975/.test(${CHIP}.title || '')`), `ONE TUNE chip, its title naming the live mode — "${await ev(`${CHIP}.title`)}"`);
   // the chip opens the list; Escape shuts it
   await ev(`${CHIP}.click(); true`);
   ok(await until(`!document.querySelector('.trkView:not([hidden]) .tunePop').hidden && document.activeElement?.classList.contains('tpRow')`, 2000), 'the chip opens the TUNE list, focus on a row (keyboard / pad)');
@@ -218,14 +218,14 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   const n0 = await ev(`window.__sent.length`);
   await ev(`document.querySelector('.trkView:not([hidden]) .trkTop .exit').click(); true`);
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="adsb"]')?.click(); true`);
-  // ★★★ beta96 map cards: opening the TUNE card moves nothing (never greyed); its ROWS are, with the reason
-  ok(await ev(`!${CHIP}.classList.contains('dialLocked') && [...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune]')].every(b => b.classList.contains('dialLocked') && b.getAttribute('aria-disabled') === 'true' && b.title.length > 10)`), `the TUNE rows greyed with the reason — "${await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune]')?.title`)}"`);
+  // ★★★ tweak 3 (Stuart 11-27): the TUNE chip FADES under the ask lock (the ask shield's look), and every row is greyed
+  ok(await ev(`${CHIP}.classList.contains('dialLocked') && ${CHIP}.closest('.mDock').classList.contains('askFaded') && [...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune]')].every(b => b.classList.contains('dialLocked') && b.getAttribute('aria-disabled') === 'true' && b.title.length > 10)`), `the TUNE chip faded and its rows greyed with the reason — "${await ev(`${CHIP}.title`)}"`);
   await sleep(1200);
   const sent = JSON.parse(await ev(`JSON.stringify(window.__sent.slice(${n0}))`));
   ok(!sent.some((s) => /"type":"(ais|adsb|avdata)"/.test(s)) && (JSON.parse(await ev(`JSON.stringify(${AS})`)) || {}).mode === 'ais', `EXIT and ADS-B refused while locked (no ais/adsb sent, still AIS)`);
   // the map stays the listener's own: tabs, SHOW chips, KEY, FIT never greyed
-  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .rng:not(.tgl):not(.scope) [data-rng], .trkView:not([hidden]) [data-cbtn]')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
-     'SHOW chips, tabs, FIT, the time filter and the card buttons are never greyed');
+  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .rng:not(.tgl):not(.scope) [data-rng], .trkView:not([hidden]) [data-cbtn]:not([data-cbtn="tune"])')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
+     'SHOW chips, tabs, FIT, the time filter and the other chips are never greyed');
   const tabs = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .tabs [role=tab], .trkView:not([hidden]) .tabs button')].map(b => b.textContent.trim()))`) || '[]');
   if (tabs.length > 1) {
     await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tabs button')].find(b => b.getAttribute('aria-selected') !== 'true')?.click(); true`);

@@ -77,7 +77,8 @@ async function browser(dir) {
 const V = `document.querySelector('.trkView:not([hidden])')`;
 const BTN = (id) => `${V}?.querySelector('[data-cbtn="${id}"]')`;
 const OPEN = `JSON.stringify([...(${V}?.querySelectorAll('[data-cbtn][aria-expanded="true"]') || [])].map(b => b.dataset.cbtn))`;
-const SHOWN = `JSON.stringify([...(${V}?.querySelectorAll('[data-cbtn]') || [])].filter(b => !b.hidden).map(b => b.dataset.cbtn))`;
+// ★★★ tweak 3: each chip is an edge dock (.mDock) — offered = its dock is not hidden
+const SHOWN = `JSON.stringify([...(${V}?.querySelectorAll('.mDock') || [])].filter(d => !d.hidden).map(d => d.dataset.dock))`;
 const VISIBLE_CARDS = `JSON.stringify([...(${V}?.querySelectorAll('.trkCards .trkCard2') || [])].filter(c => !c.hidden && c.getClientRects().length).map(c => c.dataset.card))`;
 async function shutAll(p) { await p.ev(`[...(${V}?.querySelectorAll('[data-cbtn][aria-expanded="true"]') || [])].forEach(b => b.click()); 1`); await sleep(300); }
 async function radioDatalink(p, url) {
@@ -113,13 +114,26 @@ async function sizeChecks(p, tag, w, h, o) {
   } else {
     ok(!(await p.ev(`${V}?.querySelector('.trkTop .rate')?.textContent || ''`)), `${tag} ${w}: the viewer shows no live rate (nothing live)`);
   }
-  ok(await p.ev(`!${V}.querySelector('.trkTop [data-cbtn]') && !!${V}.querySelector('.trkMapHost .cardBtns [data-cbtn]')`), `${tag} ${w}: the card buttons are on the map's rail, not in the bar`);
+  ok(await p.ev(`!${V}.querySelector('.trkTop [data-cbtn]') && ${V}.querySelectorAll('.trkMapHost .mDock.edgeDock [data-cbtn]').length >= 4`), `${tag} ${w}: the chips are edge docks on the map (the health pill's), not in the bar`);
+  // ★ the sides: TUNE / LAYERS on the left edge, SERVERS / MAP top right, LIST bottom right
+  const sides = await p.ev(`JSON.stringify(Object.fromEntries([...${V}.querySelectorAll('.mDock:not([hidden])')].map(d => { const b = d.getBoundingClientRect(); return [d.dataset.dock, b.left < ${w} / 2 ? 'L' : 'R']; })))`);
+  ok(/"layers":"L"/.test(sides) && /"map":"R"/.test(sides) && /"list":"R"/.test(sides) && /"servers":"R"/.test(sides) && (!/"tune"/.test(sides) || /"tune":"L"/.test(sides)), `${tag} ${w}: chips on their edges ${sides}`);
+  // ★ the LAYERS chip: a glyph and a count per family; a slim column on a phone-width window
+  const lay = JSON.parse(await p.ev(`JSON.stringify((() => { const es = [...${V}.querySelectorAll('.mDock[data-dock="layers"] .le')]; if (es.length < 1) return { n: 0 }; const a = es[0].getBoundingClientRect(), b = es[es.length - 1].getBoundingClientRect(); return { n: es.length, col: es.length > 1 && b.top > a.top + 4 && Math.abs(b.left - a.left) < 4, glyph: !!es[0].querySelector('svg') }; })())`));
+  ok(lay.n >= 1 && lay.glyph, `${tag} ${w}: the LAYERS chip shows a glyph and a count per family (${lay.n})`);
+  if (lay.n > 1) ok(narrow ? lay.col : !lay.col, `${tag} ${w}: LAYERS ${narrow ? 'stacks as a slim column' : 'stays a row'} on this window`);
+  // ★ tuck and back, as the health pill: › tucks it to a tab on its edge, the tab brings it back
+  await p.ev(`${V}.querySelector('.mDock[data-dock="map"] .hTuck').click(); 1`); await sleep(400);
+  const tucked = await p.ev(`(() => { const d = ${V}.querySelector('.mDock[data-dock="map"]'); const t = d.querySelector('.hTab').getBoundingClientRect(); return d.classList.contains('tucked') && t.right >= ${w} - 1 && t.width > 10; })()`);
+  ok(tucked, `${tag} ${w}: MAP tucks into a tab on the right edge`);
+  await p.ev(`${V}.querySelector('.mDock[data-dock="map"] .hTab').click(); 1`); await sleep(400);
+  ok(await p.ev(`!${V}.querySelector('.mDock[data-dock="map"]').classList.contains('tucked')`), `${tag} ${w}: …and its tab brings it back`);
   ok(await p.ev(`!${V}.querySelector('.trkTop .ttl').getClientRects().length`), `${tag} ${w}: no title in the bar`);
   ok(await p.ev(`(() => { const s = ${V}.querySelector('.trkTop .st'); const r = s.getBoundingClientRect(); return r.width <= 1 && r.height <= 1; })()`), `${tag} ${w}: the status paragraph is not on screen`);
   // ── the buttons ──
   const shown = JSON.parse(await p.ev(SHOWN));
   for (const id of o.want) ok(shown.includes(id), `${tag} ${w}: the ${id.toUpperCase()} button is there`);
-  for (const id of o.not) ok(!shown.includes(id), `${tag} ${w}: no ${id.toUpperCase()} button (${id === 'tune' ? 'nothing to tune' : 'one source'})`);
+  for (const id of o.not) ok(!shown.includes(id), `${tag} ${w}: no ${id.toUpperCase()} chip (nothing to tune)`);
   // ── no card: the map's share of the window ──
   await shutAll(p);
   const host = JSON.parse(await p.ev(`JSON.stringify(${V}.querySelector('.trkMapHost').getBoundingClientRect())`));
@@ -135,7 +149,9 @@ async function sizeChecks(p, tag, w, h, o) {
       ok(await p.ev(`!${V}.querySelector('.trkCard2[data-card="map"] .fitOnce').disabled && !${V}.querySelector('.trkCard2[data-card="map"] .fit').disabled`), `${tag} ${w}: MAP: AUTO and FIT are never greyed`);
       ok(/far outliers/.test(await p.ev(`${V}.querySelector('.fitOnce').title`) || ''), `${tag} ${w}: MAP: FIT says it leaves far outliers out`);
     }
-    if (id === 'sources') ok(await p.ev(`${V}.querySelectorAll('.srcRow').length`) >= 2, `${tag} ${w}: SOURCES lists each source (${await p.ev(`[...${V}.querySelectorAll('.srcRow b')].map(b => b.textContent).join(' · ')`)})`);
+    if (id === 'map' && o.multi) ok(await p.ev(`!${V}.querySelector('.srcSect').hidden && ${V}.querySelectorAll('.srcRow[data-src]').length >= 2`), `${tag} ${w}: MAP CONTROLS lists each source as a toggle (${await p.ev(`[...${V}.querySelectorAll('.srcRow b')].map(b => b.textContent).join(' · ')`)})`);
+    if (id === 'map') ok(await p.ev(`!!${V}.querySelector('.trkCard2[data-card="map"] .keySect summary')`), `${tag} ${w}: the KEY is a fold in MAP CONTROLS`);
+    if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'tune') ok(await p.ev(`${V}.querySelectorAll('.tunePop [data-tune]').length`) >= 2, `${tag} ${w}: TUNE holds the TUNE rows`);
     await p.ev(`${BTN(id)}.click(); 1`); await sleep(300);
     ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: ${id.toUpperCase()} shuts again`);
@@ -148,8 +164,9 @@ async function sizeChecks(p, tag, w, h, o) {
   if (narrow) ok(vis.length === 1 && vis[0] === shown[shown.length - 1], `${tag} ${w}: opening another shut the first — one card (${vis.join(',')})`);
   else {
     ok(vis.length >= 2, `${tag} ${w}: a wide window holds several cards (${vis.join(',')})`);
-    const cards = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCards').getBoundingClientRect(); let r = 0; for (const x of ${V}.querySelectorAll('.trkCards .trkCard2')) r = Math.max(r, x.getBoundingClientRect().right); return { right: r, left: c.left }; })())`));
-    ok(cards.right - cards.left <= w * 0.8, `${tag} ${w}: the cards never cover the map's width (${Math.round(cards.right - cards.left)} of ${w} px)`);
+    // ★ tweak 3: cards beside the chips on both edges — what they cover across the map's width (each x column once)
+    const cov = await p.ev(`(() => { const xs = new Set(); for (const x of ${V}.querySelectorAll('.trkCards .trkCard2')) { const b = x.getBoundingClientRect(); for (let i = Math.max(0, Math.floor(b.left)); i < Math.min(${w}, b.right); i++) xs.add(i); } return xs.size; })()`);
+    ok(cov <= w * 0.8, `${tag} ${w}: the cards never cover the map's width (${cov} of ${w} px)`);
   }
   void lim;
   const sw = await p.ev(`document.documentElement.scrollWidth`);
@@ -198,8 +215,8 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
   try {
     ok(await radioDatalink(p, `http://127.0.0.1:${P}/r/${rid}/`), 'the DATALINK map is up (the radio page, AIR & SEA LIVE)');
     ok(await p.until(`/msg\\/min/.test(${V}?.querySelector('.trkTop .rate')?.textContent || '')`, 30000), 'the datalink report came (the rate shows)');
-    ok(await p.until(`(${SHOWN}).includes('sources')`, 20000), 'two sources (the feed and the radio): SOURCES is offered');
-    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'DATALINK', w, h, { radio: true, want: ['list', 'tune', 'view', 'map', 'key', 'sources'], not: [] }); }
+    ok(await p.until(`!${V}?.querySelector('.srcSect')?.hidden`, 20000), 'two sources (the feed and the radio): SOURCES is offered in MAP CONTROLS');
+    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'DATALINK', w, h, { radio: true, multi: true, want: ['list', 'tune', 'layers', 'map', 'servers'], not: [] }); }
     // ── the listener's CONTROL COLOURS (the web's skins: background, button, font, transparency — controlColours.ts) never
     //    reach the map's own chrome: the bar and the cards keep their palette, solid or glass ──
     const look = `JSON.stringify([...${V}.querySelectorAll('.trkTop .cbtn, .trkTop .exit, .trkTop .rate')].slice(0, 4).map(e => { const c = getComputedStyle(e); return c.backgroundColor + '|' + c.color; }))`;
@@ -224,7 +241,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await p.ev(`document.getElementById('splashAirSea').click(); 1`);
     ok(await p.until(`!!${V}`, 10000), 'the viewer opens');
     await sleep(3000);
-    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'VIEWER', w, h, { radio: false, want: ['list', 'view', 'map', 'key'], not: ['tune'] }); }
+    for (const [w, h, m] of SIZES) { await p.size(w, h, m); await sleep(800); await sizeChecks(p, 'VIEWER', w, h, { radio: false, want: ['list', 'layers', 'map', 'servers'], not: ['tune'] }); }
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
   } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
   finally { p.close(); feed.kill(); }
@@ -246,7 +263,7 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     ok(await p.until(`/msg\\/min/.test(${V}?.querySelector('.trkTop .rate')?.textContent || '')`, 30000), 'the datalink report came');
     await sleep(4000);   // ★ aircraft.json polled (every 3 s): long enough for a second source to show if there were one
     await p.size(1440, 900, false);
-    ok(!JSON.parse(await p.ev(SHOWN)).includes('sources'), `one source: no SOURCES button (${await p.ev(SHOWN)})`);
+    ok(await p.ev(`${V}.querySelector('.srcSect').hidden`), `one source: no SOURCES section (${await p.ev(`${V}.querySelectorAll('.srcRow').length`)} rows)`);
     ok(!p.errs.length, `no page errors (${p.errs.slice(0, 2).join(' | ')})`);
   } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
   finally { p.close(); }

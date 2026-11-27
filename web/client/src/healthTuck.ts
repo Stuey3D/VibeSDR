@@ -75,16 +75,21 @@ function readBox(): void {
 }
 
 /** ★ A flick: further than 50 px, or faster than 0.5 px/ms (the app's thresholds). */
-function wireDrag(card: HTMLElement, d: HTMLElement | null = dock, sign = 1, onTuck: () => void = userTuck): void {
+function wireDrag(card: HTMLElement, d: HTMLElement | null = dock, signOf: number | (() => number) = 1, onTuck: () => void = userTuck, axis: 'x' | 'y' = 'x'): void {
+  // ★ the sign is read at each gesture: a map chip can change edge as its window is resized
+  let sign = 1;
   let id = -1, x0 = 0, y0 = 0, dragging = false, lastX = 0, lastT = 0, vx = 0, swallowClick = false;
+  // ★ axis 'y': a BOTTOM-edge dock (the map's LIST) — the same gesture, turned through 90°
+  const along = (e: PointerEvent) => (axis === 'x' ? e.clientX : e.clientY), across = (e: PointerEvent) => (axis === 'x' ? e.clientY : e.clientX);
   card.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || (d ?? dock)?.classList.contains('tucked')) return;
-    id = e.pointerId; x0 = lastX = e.clientX; y0 = e.clientY; lastT = e.timeStamp; vx = 0; dragging = false;
+    id = e.pointerId; x0 = lastX = along(e); y0 = across(e); lastT = e.timeStamp; vx = 0; dragging = false;
+    sign = typeof signOf === 'function' ? signOf() : signOf;
   });
   card.addEventListener('pointermove', (e) => {
     if (e.pointerId !== id) return;
     // ★ sign: +1 a right-edge dock (drag right to tuck), −1 a left-edge one (drag left) — the same thresholds
-    const dx = (e.clientX - x0) * sign, dy = e.clientY - y0;
+    const dx = (along(e) - x0) * sign, dy = across(e) - y0;
     if (!dragging) {
       if (!(dx > 6 && Math.abs(dx) > Math.abs(dy))) return;
       dragging = true;
@@ -92,8 +97,8 @@ function wireDrag(card: HTMLElement, d: HTMLElement | null = dock, sign = 1, onT
       card.classList.add('dragging');
     }
     const dt = Math.max(1, e.timeStamp - lastT);
-    vx = (e.clientX - lastX) * sign / dt; lastX = e.clientX; lastT = e.timeStamp;
-    card.style.transform = `translateX(${Math.max(0, dx) * sign}px)`;
+    vx = (along(e) - lastX) * sign / dt; lastX = along(e); lastT = e.timeStamp;
+    card.style.transform = `translate${axis === 'x' ? 'X' : 'Y'}(${Math.max(0, dx) * sign}px)`;
     e.preventDefault();
   });
   const end = (e: PointerEvent, cancelled: boolean) => {
@@ -102,7 +107,7 @@ function wireDrag(card: HTMLElement, d: HTMLElement | null = dock, sign = 1, onT
     if (!dragging) return;
     dragging = false;
     swallowClick = true; setTimeout(() => { swallowClick = false; }, 0);
-    const dx = (e.clientX - x0) * sign;
+    const dx = (along(e) - x0) * sign;
     // ★ Restore the transition BEFORE clearing the inline transform, in the same frame: the browser then animates
     //   from where the finger let go to wherever the class says — off the edge, or back home.
     card.classList.remove('dragging');
@@ -115,22 +120,25 @@ function wireDrag(card: HTMLElement, d: HTMLElement | null = dock, sign = 1, onT
   card.addEventListener('click', (e) => { if (swallowClick) { e.stopPropagation(); e.preventDefault(); } }, true);
 }
 
-function wireTab(tab: HTMLElement, sign = 1, onShow: () => void = userShow): void {
+function wireTab(tab: HTMLElement, signOf: number | (() => number) = 1, onShow: () => void = userShow, axis: 'x' | 'y' = 'x'): void {
+  const sg = () => (typeof signOf === 'function' ? signOf() : signOf);
   tab.addEventListener('click', () => onShow());
   // ★ The app's tab also comes out on a drag away from its edge.
   let id = -1, x0 = 0;
-  tab.addEventListener('pointerdown', (e) => { id = e.pointerId; x0 = e.clientX; });
-  tab.addEventListener('pointerup', (e) => { if (e.pointerId === id && (e.clientX - x0) * sign < -20) onShow(); id = -1; });
+  const along = (e: PointerEvent) => (axis === 'x' ? e.clientX : e.clientY);
+  tab.addEventListener('pointerdown', (e) => { id = e.pointerId; x0 = along(e); });
+  tab.addEventListener('pointerup', (e) => { if (e.pointerId === id && (along(e) - x0) * sg() < -20) onShow(); id = -1; });
 }
 
 /** ★★★ beta96 an edge dock of the map's (tracks.ts): the same drag, flick, › and tab as the health pill's — `side` the
  *  screen edge it tucks into. */
-export function wireEdgeDock(d: HTMLElement, side: 'left' | 'right', onTuck: () => void, onShow: () => void): void {
-  const sign = side === 'left' ? -1 : 1;
+export function wireEdgeDock(d: HTMLElement, side: 'left' | 'right' | 'bottom', onTuck: () => void, onShow: () => void): void {
+  // ★ the edge is read from the dock at each gesture (data-side), so a chip moved to the other edge still slides the right way
+  const sign = () => ((d.dataset.side || side) === 'left' ? -1 : 1), axis = side === 'bottom' ? 'y' : 'x';
   const card = d.querySelector<HTMLElement>(':scope > .hCard'), tab = d.querySelector<HTMLElement>(':scope > .hTab');
   d.querySelector<HTMLElement>('.hTuck')?.addEventListener('click', (e) => { e.stopPropagation(); onTuck(); });
-  if (card) wireDrag(card, d, sign, onTuck);
-  if (tab) wireTab(tab, sign, onShow);
+  if (card) wireDrag(card, d, sign, onTuck, axis);
+  if (tab) wireTab(tab, sign, onShow, axis);
 }
 
 /** ★ Build (once) the card, its › and the tab inside #srvHealth, and return the element the pill's contents go in. */

@@ -4097,6 +4097,15 @@ select.btn { padding: 6px 8px; }
              padding-left: env(safe-area-inset-left, 0px); border-right-width: 1.5px; border-left-width: 0; border-radius: 0 12px 12px 0;
              transform: translateX(calc(-100% - 2px)); }
 .edgeDock.left.tucked .hTab { transform: translateX(0); }
+/* ★ the BOTTOM edge: the same dock turned to face UP (the map's LIST, bottom-left) — the card slides down into a tab */
+.edgeDock.bottom .hCard { flex-direction: column-reverse; align-items: stretch; border-right-width: 1.5px; border-bottom-width: 0;
+             border-radius: 12px 12px 0 0; padding: 0 8px calc(4px + env(safe-area-inset-bottom, 0px)) 8px; touch-action: pan-x; }
+.edgeDock.bottom.tucked .hCard { transform: translateY(calc(100% + 4px)); }
+.edgeDock.bottom .hTuck { width: auto; height: 15px; margin: 0 -8px 2px; padding: 0; border-radius: 10px 10px 0 0; }
+.edgeDock.bottom .hTab { top: auto; bottom: 0; right: auto; left: 0; width: 56px; padding: 0 0 env(safe-area-inset-bottom, 0px) 0;
+             height: calc(30px + env(safe-area-inset-bottom, 0px)); flex-direction: row; border-right-width: 1.5px; border-bottom-width: 0;
+             border-radius: 12px 12px 0 0; transform: translateY(calc(100% + 2px)); }
+.edgeDock.bottom.tucked .hTab { transform: translateY(0); }
 /* ★ Critical and tucked: the tab breathes as the card's border does — it comes back out anyway, but a box that was
      already sliding it home should not leave a silent red tab. */
 .edgeDock.crit .hTab { animation: hBorderPulse 1.4s ease-in-out infinite; }

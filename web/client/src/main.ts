@@ -11284,6 +11284,7 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
     rows.push({ id: mapMine, on: !asSrcHidden.has(mapMine), name: asRadioNames?.get(mapMine) ?? 'This radio', what: `this radio${live ? ` · live: ${live}` : ''}`, value: avOn && avReport ? `${avReport.aircraft.length} aircraft` : adsbOn && adsbReport ? `${adsbReport.aircraft.length} aircraft` : aisOn && aisReport ? `${aisReport.vessels.length} ships` : '—' });
   }
   // ★ every feed is tagged "feed" in the table (vibe_aircraft_share.h): the feed rows show and hide together
+  if (per.has('feed') && !(avShared?.feeds ?? []).length) { const e = per.get('feed')!; rows.push({ id: 'feed', on: !asSrcHidden.has('feed'), name: 'Aircraft feeds', what: 'the server\u2019s feeds', value: `${e.ac} aircraft` }); }
   for (const f of avShared?.feeds ?? []) {
     const up = /connected|listening|live|ok/i.test(f.state);
     rows.push({ id: 'feed', on: !asSrcHidden.has('feed'), name: f.title, what: `${(f.label || 'adsb').toUpperCase()} feed · ${f.state || 'unknown'}`, value: `${f.aircraft} aircraft`, down: !up });

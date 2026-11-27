@@ -21,7 +21,7 @@ import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96
 import { flagEmoji } from '../../../src/services/adsbInfo';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
-import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
+import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
@@ -638,7 +638,10 @@ const CSS = `
 /* ★★★ TWEAK 3+ (Stuart 11-27): the chips are EDGE DOCKS (index.html .edgeDock — the SERVER HEALTH pill's own look and
  *  slide): TUNE and LAYERS down the LEFT edge, MAP CONTROLS top RIGHT, LIST bottom RIGHT (the health pill's side). */
 .mChips{position:absolute;z-index:790;display:flex;flex-direction:column;gap:8px;pointer-events:none}
-.mChipsL{left:0;top:84px}
+/* ★ tweak 4: SERVERS top-left where the app has it, then TUNE, LAYERS; the zoom ± step over to the right, under MAP */
+.mChipsL{left:0;top:8px}
+.trkMapHost .maplibregl-ctrl-top-left,.trkMapHost .leaflet-top.leaflet-left{left:auto!important;right:0;top:var(--trk-zoom-top,72px)}
+.trkView[data-oneside] .trkMapHost .maplibregl-ctrl-top-left,.trkView[data-oneside] .trkMapHost .leaflet-top.leaflet-left{top:0}
 .mChipsR{right:0;top:8px}
 .mChipsRB{right:0;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
 .mDock{position:relative}
@@ -666,7 +669,7 @@ const CSS = `
 .trkCard2 .srvPick b{font:600 13px/1.25 system-ui,sans-serif;color:#e8eef5}
 .trkCard2 .srvPick small{font-size:11px;color:#93a3b4}
 .trkCard2 .srvPick:hover,.trkCard2 .srvPick:focus-visible{background:#1a2632;outline:none}
-.trkView .trkCards{position:absolute;inset:0;left:0;right:0;top:0;bottom:0;max-width:none;display:block;z-index:760;pointer-events:none}
+.trkView .trkCards{position:absolute;inset:0;left:0;right:0;top:0;bottom:0;max-width:none;display:block;z-index:795;pointer-events:none}   /* ★ an open card above the other chips */
 .trkCards .cSide{position:absolute;display:flex;flex-direction:column;gap:8px;width:var(--trk-card-w,340px);pointer-events:none;min-height:0}
 .trkCards .cSide>.trkCard2{pointer-events:auto}
 .trkCards .cL{left:var(--trk-chip-l,70px);top:84px;bottom:calc(var(--trk-attrib-h,0px) + 8px)}
@@ -679,6 +682,70 @@ const CSS = `
 .trkView[data-narrow] .trkCards .cR,.trkView[data-narrow] .trkCards .cB{left:var(--trk-chip-l,64px);right:var(--trk-chip-r,64px);width:auto}
 .trkView[data-narrow] .trkCards .cB{right:var(--trk-chip-rb,64px);top:30%}
 .trkView[data-narrow] .trkCard2{max-height:100%}
+/* ★★★ TWEAK 4 (Stuart 11-27): a press on a chip EXPANDS it in place into its card (flush to the same edge, the dock's
+ *  rim); its header shrinks it back. The tuck › stays the separate, deliberate action — smaller, set off by a rule. */
+.mDock.open{visibility:hidden}
+/* ★★★ the ? HELP button and its card, bottom-right above the attribution */
+.mHelp{all:unset;box-sizing:border-box;position:absolute;right:10px;bottom:calc(var(--trk-attrib-h,0px) + 10px);z-index:790;width:30px;height:30px;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font:800 15px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);
+  background:rgba(8,12,8,.86);border:1.5px solid rgba(120,200,120,.45);box-shadow:0 2px 8px rgba(0,0,0,.45)}
+.mHelp:hover,.mHelp:focus-visible,.mHelp.on{border-color:var(--hc,#5BE36B);outline:none;background:#16231a}
+.trkCards .cH{right:10px;bottom:calc(var(--trk-attrib-h,0px) + 48px);top:20%;justify-content:flex-end;width:min(340px,calc(100% - 20px))}
+.trkCards .cH>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-radius:12px;transform-origin:bottom right;background:rgba(8,12,8,.94)}
+.helpBody{padding:6px 10px 10px}
+.hRowH{display:flex;gap:10px;align-items:flex-start;padding:6px 0;font-size:12.5px;line-height:1.35;color:#dfe7ef;border-bottom:1px solid #151f29}
+.hRowH b{font:700 10.5px/1 system-ui,sans-serif;letter-spacing:.12em;color:#fff}
+.hRowH .hi{flex:none;color:var(--hc,#5BE36B);display:flex}
+.hRowH .hi svg{width:18px;height:18px;display:block}
+.hNoteH{padding:6px 0 0;font-size:11.5px;color:#9fb0c2;line-height:1.35}
+/* ★★★ the LAYERS card is a LIST: one row per mode — its colour, its name, its count — a press shows / hides it */
+.trkCard2[data-card="layers"] .sect{padding:0}
+.trkCard2[data-card="layers"] .tgl{display:flex;flex-direction:column;align-items:stretch;gap:0}
+.trkCard2[data-card="layers"] .tgl .grp{flex:none;margin:0;padding:8px 10px 4px;font:700 9.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#7f93a7}
+.trkCard2[data-card="layers"] .tgl .btn.chip{display:flex;align-items:center;gap:10px;width:100%;box-sizing:border-box;border:0;border-bottom:1px solid #151f29;
+  border-radius:0;background:none;padding:10px 12px;font:600 13px/1.2 system-ui,sans-serif;color:#e8eef5;opacity:1;text-align:left}
+.trkCard2[data-card="layers"] .tgl .btn.chip:hover,.trkCard2[data-card="layers"] .tgl .btn.chip:focus-visible{background:#1a2632;outline:none}
+.trkCard2[data-card="layers"] .tgl .btn.chip .dot{width:10px;height:10px;flex:none}
+.trkCard2[data-card="layers"] .tgl .btn.chip .n{margin-left:auto;font:700 13px/1 ui-monospace,Menlo,monospace;opacity:1;color:#ffd34d}
+.trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"]{color:#7f93a7}
+.trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"] .n{color:#7f93a7}
+.trkCard2[data-card="layers"] .tgl .btn.chip::after{content:"ON";flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787;margin-left:8px}
+.trkCard2[data-card="layers"] .tgl .btn.chip[aria-pressed="false"]::after{content:"OFF";background:#2a1d1d;color:#ff8a6b}
+.trkCard2[data-card="layers"] .tgl .btn.chip.live::before{margin-right:-4px}
+/* ★ tweak 4: a tucked tab wears its chip's own glyph (the health pill's + is its own) */
+.mDock .hTab{gap:3px}
+.mDock .hTabIco{display:flex;flex-direction:column;align-items:center;gap:1px;color:var(--hc)}
+.mDock .hTabIco svg,.mDock .tIco{width:16px;height:16px;display:block}
+.mDock .tCn{font:700 8.5px/1 ui-monospace,Menlo,monospace;color:#e8eef5;letter-spacing:0}
+.mDock .tCn:empty{display:none}
+.mDock .hTab:has(.tCn:not(:empty)){height:62px}
+.trkCards .cL{left:0;top:var(--trk-cl-top,8px)}
+.trkCards .cR{right:0;top:var(--trk-cr-top,8px)}
+/* ★ tweak 4: the LIST grows UP out of its chip at the bottom-left, where the old list sheet sat */
+.mChipsBL{left:12px;bottom:var(--trk-list-bottom,0px);overflow:hidden;padding-top:12px;margin-top:-12px}
+.trkView[data-narrow] .mChipsBL{--trk-list-bottom:var(--trk-attrib-h,0px)}
+.mChipsBL .mDock .mchip{flex-direction:row;gap:8px;min-height:34px}
+.trkMapHost .maplibregl-ctrl-bottom-left,.trkMapHost .leaflet-bottom.leaflet-left{left:var(--trk-list-w,0px)}
+.trkCards .cB{left:12px;right:auto;bottom:var(--trk-cb-bottom,0px);top:30%;justify-content:flex-end;width:min(var(--trk-card-w,340px),calc(100% - 24px))}
+.trkCards.lAndB .cL{bottom:47%}
+.trkCards.lAndB .cB{top:55%}
+.trkCards .cB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-radius:12px 12px 0 0;transform-origin:bottom left}
+.trkCards .cSide>.trkCard2{border:1.5px solid var(--hc,#5BE36B);background:rgba(8,12,8,.92)}
+.trkCards .cL>.trkCard2{border-left-width:0;border-radius:0 12px 12px 0;transform-origin:top left}
+.trkCards .cR>.trkCard2{border-right-width:0;border-radius:12px 0 0 12px;transform-origin:top right}
+@keyframes trkCardIn{from{opacity:.2;transform:scale(.35)}to{opacity:1;transform:none}}
+.trkCard2>.ch{cursor:pointer;font:700 9px/1 system-ui,sans-serif;letter-spacing:.16em;color:#B9C0B4}
+.trkCard2>.ch:hover{background:rgba(255,255,255,.04)}
+.trkCard2>.ch .x{font:700 18px/1 system-ui,sans-serif;color:var(--hc,#5BE36B);border:0;padding:0 6px}
+.trkCards .cL>.trkCard2>.ch{flex-direction:row}
+.mDock .hTuck{width:15px!important;font-size:15px!important;opacity:.6}
+.mDock:not(.left) .hTuck{border-right:1px solid rgba(255,255,255,.14);margin-right:5px!important}
+.mDock.left .hTuck{border-left:1px solid rgba(255,255,255,.14);margin-left:5px!important}
+.mDock .hTuck:hover{opacity:1}
+.mDock .mchip{padding:2px 6px;min-height:40px}
+.trkView[data-narrow] .trkCards .cL{left:0;right:var(--trk-chip-r,64px);top:var(--trk-cl-top,8px)}
+.trkView[data-narrow] .trkCards .cR{left:var(--trk-chip-l,64px);right:0}
+.trkView[data-narrow] .trkCards .cB{left:6px;right:6px;width:auto}
 `;
 function addCss() {
   if (document.getElementById('trk-style')) return;
@@ -688,6 +755,8 @@ function runSource(src: string) { const el = document.createElement('script'); e
 const MIN_KEY = 'vibesdr.trkListMin';
 /** ★★★ beta96 the map control cards (docs/v12/MAP-CONTROL-CARDS.md): their rules are shared with the app (mapCards.ts). */
 const CARDS_KEY = 'vibesdr.mapCards';
+/** ★ the chips' sides follow the window (mapCards.ts cardSide / oneSide) — MAP CONTROLS moves edge as it is resized. */
+const CARD_SIDE_NOTE = 'mapCards.cardSide';
 /** ★★★ tweak 3 the LAYERS chip's glyphs — the shapes the map draws: the aircraft and ship silhouettes (airSeaTune's,
  *  as the TUNE list draws them), the NAVTEX station's disc and mast (navtexMap.ts navIcon), the balloon, the beacon. */
 export type LayerGlyph = 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid' | 'dot';
@@ -709,6 +778,11 @@ const SERVERS_SVG = '<svg class="mIco" viewBox="0 0 24 24" aria-hidden="true" fi
   + '<rect x="3.5" y="4" width="17" height="6.5" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5"/><path d="M7 7.25h.01M7 16.75h.01M11 7.25h6M11 16.75h6"/></svg>';
 const LIST_SVG = '<svg class="mIco" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">'
   + '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2" fill="currentColor"/><circle cx="4.5" cy="12" r="1.2" fill="currentColor"/><circle cx="4.5" cy="18" r="1.2" fill="currentColor"/></svg>';
+/** ★ the HELP card's glyphs — each chip's own */
+const HELP_GLYPH: Record<string, string> = {
+  servers: SERVERS_SVG.replace('mIco', 'tIco'), tune: modeIconSvg('radio', 'tIco'), layers: P16(TUNE_ICON_PATH.aircraft), map: modeIconSvg('map', 'tIco'),
+  list: LIST_SVG.replace('mIco', 'tIco'),
+};
 const FIT_KEY = 'vibesdr.mapFitTo';
 export { CARD_IDS, type CardId, trimOutliers };
 
@@ -822,11 +896,14 @@ export class TrackView {
     /* ★★★ tweak 3+ (Stuart 11-27): each chip is an EDGE DOCK exactly as the SERVER HEALTH pill's (healthTuck.ts, index.html
      *  .edgeDock) — out: the card with its caption and glyphs and a › (‹ on the left edge) that tucks it away; tucked: the
      *  + tab on the edge that brings it back; the same drag, flick, slide and colours. The chip itself opens its card. */
-    const dock = (id: string, side: 'left' | 'right', cap: string, inner: string, what: string, dial = false) =>
-      `<div class="edgeDock mDock${side === 'left' ? ' left' : ''}" data-dock="${id}" data-side="${side}" hidden>`
-      + `<div class="hCard"><button type="button" class="hTuck" aria-label="Tuck ${esc(what)} away" title="Tuck away">${side === 'left' ? '‹' : '›'}</button>`
-      + `<button type="button" class="hBody mchip" data-cbtn="${id}"${dial ? ' data-dial="1"' : ''} aria-expanded="false" aria-label="${esc(cap)} — open ${esc(what)}"><span class="cap">${esc(cap)}</span>${inner}</button></div>`
-      + `<button type="button" class="hTab" aria-label="Show ${esc(what)}" title="${esc(cap)}"><span class="hTabPlus" aria-hidden="true">+</span><span class="hTabChev" aria-hidden="true">${side === 'left' ? '›' : '‹'}</span></button></div>`;
+    // ★★★ tweak 4: a tucked chip's tab wears ITS OWN glyph (`tabIcon`) — never the health pill's + (Stuart: "the collapsed
+    //     modes need to show the icons for what they control")
+    const dock = (id: string, side: 'left' | 'right' | 'bottom', cap: string, inner: string, what: string, dial = false, tabIcon = '') =>
+      `<div class="edgeDock mDock${side === 'right' ? '' : ' ' + side}" data-dock="${id}" data-side="${side}" hidden>`
+      // ★★★ Stuart 11-27 (11:38): TWO states only — the collapsed chip (its own glyph, and the counts) and the open card.
+      //     One press opens the card from the chip; one press on the card's header shrinks it back. No tuck, no + tab:
+      //     the chip is already the small thing on the edge. (tabIcon is kept for the drivers' sake — unused.)
+      + `<div class="hCard"><button type="button" class="hBody mchip" data-cbtn="${id}"${dial ? ' data-dial="1"' : ''} aria-expanded="false" aria-label="${esc(cap)} — open ${esc(what)}"><span class="cap">${esc(cap)}</span>${inner}</button></div></div>`;
     const card = (id: string, title: string, body: string) => `<section class="trkCard2" data-card="${id}" role="region" aria-label="${esc(title)}" hidden>`
       + `<div class="ch"><span class="ct">${esc(title)}</span><button class="x" type="button" aria-label="Close ${esc(title.toLowerCase())}">×</button></div><div class="cb">${body}</div></section>`;
     /* ★★★ beta96 TWEAK 2 (Stuart 11-27, live on the preview): the bar is EXACTLY "EXIT | Shared VFO: … 2/5 | CHAT | the
@@ -836,12 +913,15 @@ export class TrackView {
       + `<span class="rate" role="status" aria-live="off"></span><span class="spacer"></span><span class="st" aria-live="polite"></span></div>`
       /* ★★★ TWEAK 3 (Stuart 11-27, live): the HEALTH CARDS' shape — chips FLANKING the map that pop out a card and shrink
        *  back: TUNE and LAYERS down the left edge, MAP CONTROLS on the right, LIST at the bottom (its card pops UP). */
-      + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true)}`
-      + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card')}</div>`
-      + `<div class="mChips mChipsR">${dock('servers', 'right', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card')}`
-      + `${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}</span>`, 'the map controls')}</div>`
-      + `<div class="mChips mChipsRB">${dock('list', 'right', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span></span>`, 'the list')}</div>`
-      + `<div class="trkCards"><div class="cSide cL"></div><div class="cSide cR"></div><div class="cSide cB"></div></div><div class="trkPark" hidden>`
+      + `<div class="trkMapHost"><div class="mChips mChipsL">${dock('servers', 'left', 'SERVERS', `<span class="ic">${SERVERS_SVG}</span>`, 'the servers card', false, SERVERS_SVG.replace('mIco', 'tIco'))}${dock('tune', 'left', 'TUNE', `<span class="ic">${modeIconSvg('radio', 'mIco')}</span>`, 'the tuning card', true, modeIconSvg('radio', 'tIco'))}`
+      + `${dock('layers', 'left', 'LAYERS', '<span class="lsum"></span>', 'the layers card', false, LAYER_GLYPH.aircraft)}</div>`
+      + `<div class="mChips mChipsR">${dock('map', 'right', 'MAP', `<span class="ic">${modeIconSvg('map', 'mIco')}</span>`, 'the map controls', false, modeIconSvg('map', 'tIco'))}</div>`
+      + `<div class="mChips mChipsBL">${dock('list', 'bottom', 'LIST', `<span class="ic">${LIST_SVG}<span class="cn"></span></span>`, 'the list', false, `${LIST_SVG.replace('mIco', 'tIco')}<span class="tCn"></span>`)}</div>`
+      // ★★★ the ? HELP button, bottom-right above the map's attribution (its (i) is the attribution's own — kept)
+      + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
+      + `<div class="trkCards"><div class="cSide cL"></div><div class="cSide cR"></div><div class="cSide cB"></div><div class="cSide cH"></div></div><div class="trkPark" hidden>`
+      + card('help', 'HELP', `<div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
+        + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
         + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`)
@@ -882,13 +962,15 @@ export class TrackView {
     this.cardsEl = r.querySelector('.trkCards') as HTMLElement;
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
     for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
-    for (const x of Array.from(r.querySelectorAll('.trkCard2 > .ch .x')) as HTMLButtonElement[]) {
-      x.onclick = () => { const id = (x.closest('.trkCard2') as HTMLElement).dataset.card as CardId; this.cardOpen(id, false, true); (r.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null)?.focus(); };
+    // ★★★ tweak 4 (Stuart 11-27): the open card IS the chip, expanded in place — a press on its header (or its ‹ / ›) shrinks
+    //     it back to the chip; the tuck to the edge stays the separate, deliberate › / drag / flick on the chip
+    for (const ch of Array.from(r.querySelectorAll('.trkCard2 > .ch')) as HTMLElement[]) {
+      ch.onclick = () => { const id = (ch.closest('.trkCard2') as HTMLElement).dataset.card as CardId; this.cardOpen(id, false, true); (r.querySelector(`[data-cbtn="${id}"]`) as HTMLElement | null)?.focus(); };
     }
     for (const d of Array.from(r.querySelectorAll('.mDock')) as HTMLElement[]) {
       const id = d.dataset.dock as CardId;
-      edgeDockSet(d, true);
-      wireEdgeDock(d, d.dataset.side === 'left' ? 'left' : 'right', () => this.dockTuck(id, true), () => this.dockTuck(id, false));
+      edgeDockSet(d, true);   // ★ always out: the chip IS the collapsed state (no tuck since 11:38)
+      void id; void wireEdgeDock;
     }
     for (const c of [...Array.from(r.querySelectorAll('.trkCard2')), ...Array.from(r.querySelectorAll('.mChips'))] as HTMLElement[])
       for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) c.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
@@ -939,7 +1021,7 @@ export class TrackView {
   private parkEl: HTMLElement;
   private cardRo: ResizeObserver | null = null;
   private cardOrder: CardId[] = [];
-  private cardAvail = new Set<CardId>(['list', 'map']);
+  private cardAvail = new Set<CardId>(['list', 'map', 'help']);
   private narrow(): boolean { const w = this.root.clientWidth || window.innerWidth; return w < CARD_NARROW_W; }
   /** How many cards this window takes at once (the window's size, never the device). */
   cardLimit(): number { return cardLimitFor(this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight); }
@@ -972,7 +1054,7 @@ export class TrackView {
   cardOpen(id: CardId, on: boolean, save = false) {
     if (on && !this.cardAvail.has(id)) return;
     // ★ the oldest gives way past the window's limit (mapCards.ts cardToggle)
-    this.cardOrder = cardToggle(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on, this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight);
+    this.cardOrder = cardToggle(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on, this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight, this.oneSideNow);
     if (save) this.cardsSave();
     this.cardsLayout();
     if (on && save) {
@@ -997,10 +1079,30 @@ export class TrackView {
     this.layoutSig = ''; this.cardsLayout();
   }
   get tuckedDocks(): CardId[] { return (Array.from(this.root.querySelectorAll('.mDock.tucked')) as HTMLElement[]).map((d) => d.dataset.dock as CardId); }
+  private oneSideNow = false;
+  /** For the drivers: every chip down the left (a tall map) or flanking (MAP CONTROLS top-right). */
+  get chipsOneSide(): boolean { return this.oneSideNow; }
   private layoutSig = '';
   /** Put the open cards beside their chips (and the rest in the park), the chips pressed, the obstacle told. */
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
+    { /* ★★★ Stuart 11-27: a TALL window puts every chip down the LEFT (SERVERS, TUNE, LAYERS, MAP CONTROLS; LIST bottom-left);
+       *  a shorter one flanks — MAP CONTROLS top-right. By the window, live as it is resized. */
+      // ★ the whole stack measured: every offered chip's own height (a tucked one counts as out — no flapping as it tucks)
+      const docks = (Array.from(this.root.querySelectorAll('.mDock')) as HTMLElement[]).filter((d) => !d.hidden);
+      const stackH = docks.reduce((t, d) => t + Math.max(40, (d.querySelector('.hCard') as HTMLElement).offsetHeight) + 8, 16);
+      const one = oneSide(this.mapHost.clientHeight || 0, stackH);
+      this.oneSideNow = one;
+      const md = this.root.querySelector('.mDock[data-dock="map"]') as HTMLElement | null;
+      const host = this.root.querySelector(one ? '.mChipsL' : '.mChipsR') as HTMLElement | null;
+      if (md && host && md.parentElement !== host) {
+        host.appendChild(md);
+        md.dataset.side = one ? 'left' : 'right';
+        md.classList.toggle('left', one);
+        this.layoutSig = '';
+      }
+      this.root.toggleAttribute('data-oneside', one);
+    }
     { // ★ the MAP card's layer keys: shown while a layer put keys in it (ADS-B, NDB)
       const sl = this.root.querySelector('.slot-ctl') as HTMLElement | null, sc = this.root.querySelector('.ctlSect') as HTMLElement | null;
       if (sl && sc) { const any = Array.from(sl.children).some((c) => !(c as HTMLElement).hidden); if (sc.hidden === any) sc.hidden = !any; }
@@ -1013,21 +1115,30 @@ export class TrackView {
     // ★ a tucked dock's card is off the edge: only its 26 px tab counts
     const dw = (sel: string) => Math.max(0, ...(Array.from(this.root.querySelectorAll(sel)) as HTMLElement[]).filter((d) => !d.hidden)
       .map((d) => (d.classList.contains('tucked') ? 26 : (d.querySelector('.hCard') as HTMLElement).getBoundingClientRect().width)));
+    void CARD_SIDE_NOTE;
     void cw;
     const setv = (k: string, v: string) => { if (this.root.style.getPropertyValue(k) !== v) this.root.style.setProperty(k, v); };
     setv('--trk-chip-l', `${Math.ceil(dw('.mChipsL .mDock')) + 8}px`);
     setv('--trk-chip-r', `${Math.ceil(dw('.mChipsR .mDock')) + 8}px`);
-    setv('--trk-chip-rb', `${Math.ceil(dw('.mChipsRB .mDock')) + 8}px`);
+    { const md = this.root.querySelector('.mChipsR') as HTMLElement | null; const b = md?.getBoundingClientRect(); setv('--trk-zoom-top', b && b.height ? `${Math.ceil(b.height) + 16}px` : '0px'); }
+    { // ★ tweak 4: the LIST dock at the bottom-left — the scale bar steps right of it
+      const ld = this.root.querySelector('.mChipsBL .mDock') as HTMLElement | null;
+      const lb = ld && !ld.hidden ? (ld.classList.contains('tucked') ? (ld.querySelector('.hTab') as HTMLElement).getBoundingClientRect() : (ld.querySelector('.hCard') as HTMLElement).getBoundingClientRect()) : null;
+      setv('--trk-list-w', `${Math.ceil(lb?.width ?? 0) + 8}px`);
+      setv('--trk-list-h', `${Math.ceil(lb?.height ?? 0) + 8}px`);
+    }
     setv('--trk-card-w', `${W >= CARD_ROOMY_W ? CARD_W : CARD_W_SNUG}px`);
-    const place = cardPlace(this.cardOrder.filter((id) => this.cardAvail.has(id)), W, H);
-    const open = [...place.L, ...place.R, ...place.B];
+    const place = cardPlace(this.cardOrder.filter((id) => this.cardAvail.has(id)), W, H, this.oneSideNow);
+    const open = [...place.L, ...place.R, ...place.B, ...place.H];
     const sig = JSON.stringify([place, this.narrow()]);
     for (const b of Array.from(this.root.querySelectorAll('[data-cbtn]')) as HTMLElement[]) {
       const on = open.includes(b.dataset.cbtn as CardId);
       b.setAttribute('aria-expanded', String(on));
       b.closest('.mDock')?.classList.toggle('open', on);
+      if (b.classList.contains('mHelp')) b.classList.toggle('on', on);
     }
-    this.cardsEl.classList.toggle('both', place.R.length > 0 && place.B.length > 0);
+    this.cardsEl.classList.toggle('both', false);
+    this.cardsEl.classList.toggle('lAndB', place.L.length > 0 && place.B.length > 0);   // ★ tweak 4: the left column and the LIST share the left edge
     if (sig === this.layoutSig) return;
     this.layoutSig = sig;
     // ★ every card to the park first (moving an element keeps it and its state — never innerHTML over them)
@@ -1036,12 +1147,28 @@ export class TrackView {
       if (!open.includes(c.dataset.card as CardId)) c.hidden = true;
       if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c);
     }
-    for (const side of ['L', 'R', 'B'] as const) {
-      const host = this.cardsEl.querySelector(side === 'B' ? '.cB' : `.c${side}`) as HTMLElement;
+    for (const side of ['L', 'R', 'B', 'H'] as const) {
+      const host = this.cardsEl.querySelector(`.c${side}`) as HTMLElement;
       for (const id of place[side]) { const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement; c.hidden = false; host.appendChild(c); }
     }
+    for (const side of ['L', 'R', 'B', 'H'] as const) for (const id of place[side]) {
+      const x = this.root.querySelector(`.trkCard2[data-card="${id}"] > .ch .x`) as HTMLElement | null;
+      if (x) x.textContent = side === 'L' ? '‹' : '›';   // ★ points at the edge the chip lives on
+    }
     if (focused && focused !== document.activeElement && this.root.contains(focused) && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
+    this.cardsAnchor(place);
     setTimeout(() => { this.placeAcObstacle(); try { this.af?.poke?.(); } catch { /* none */ } }, 0);
+  }
+  /** ★★★ tweak 4: each side's cards open AT their chip — the left / right column's top is its first open chip's top, the
+   *  bottom card's foot the LIST chip's foot — so the chip seems to grow into its card (the health pill's way). */
+  private cardsAnchor(place: Record<'L' | 'R' | 'B', CardId[]>) {
+    const m = this.mapHost.getBoundingClientRect();
+    const dockTop = (id: CardId) => (this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null)?.getBoundingClientRect() ?? null;
+    const top = (ids: CardId[]) => Math.min(...ids.map((id) => { const b = dockTop(id); return b ? b.top - m.top : 1e9; }));
+    const setv = (k: string, v: string) => { if (this.root.style.getPropertyValue(k) !== v) this.root.style.setProperty(k, v); };
+    if (place.L.length) setv('--trk-cl-top', `${Math.max(6, Math.round(top(place.L)))}px`);
+    if (place.R.length) setv('--trk-cr-top', `${Math.max(6, Math.round(top(place.R)))}px`);
+    if (place.B.length) { const b = dockTop('list'); if (b) setv('--trk-cb-bottom', `${Math.max(0, Math.round(m.bottom - b.bottom))}px`); }
   }
   /** ★★★ tweak 3 the LAYERS chip: a glyph and a count per layer present ([plane] 157 [ship] 3 [NAVTEX] 40); a slim column
    *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */
@@ -1059,6 +1186,9 @@ export class TrackView {
     el.innerHTML = entries.map((e) => `<span class="le" title="${esc(e.words)}"><span class="lg" style="color:${esc(e.colour)}">${LAYER_GLYPH[e.glyph] ?? LAYER_GLYPH.dot}</span><span class="ln">${esc(e.n)}</span></span>`).join('');
     const b = this.root.querySelector('[data-cbtn="layers"]') as HTMLElement;
     b.setAttribute('aria-label', `Layers — ${entries.map((e) => e.words).join(', ') || 'what the map shows'}`);
+    // ★ its tucked tab: the main family's glyph in its colour (the aircraft where there are aircraft)
+    const ti = this.root.querySelector('.mDock[data-dock="layers"] .hTabIco') as HTMLElement | null;
+    if (ti) { const f = entries[0]; ti.innerHTML = LAYER_GLYPH[f?.glyph ?? 'aircraft'] ?? LAYER_GLYPH.dot; ti.style.color = f?.colour ?? ''; }
     this.layoutSig = ''; this.cardsLayout();
   }
   /** The live rate, top right ("ADS-B 1,425 msg/s" · "VDL2 153 msg/min") — '' = none (a viewer, nothing live). */
@@ -1875,7 +2005,7 @@ export class TrackView {
       return r > l ? { l, r, t, b } : null;
     };
     const L = group('.mChipsL .mDock:not(.tucked) .hCard, .trkCards .cL .trkCard2');
-    const R = group('.mChipsR .mDock:not(.tucked) .hCard, .mChipsRB .mDock:not(.tucked) .hCard, .trkCards .cR .trkCard2, .trkCards .cB .trkCard2');
+    const R = group('.mChipsR .mDock:not(.tucked) .hCard, .trkCards .cR .trkCard2');
     const aL = L ? (L.r - m.left) * (L.b - m.top) : 0, aR = R ? (m.right - R.l) * (R.b - m.top) : 0;
     if (!aL && !aR) return null;
     return aL >= aR ? { corner: 'top-left', w: L!.r - m.left + 8, h: Math.min(L!.b - m.top + 8, m.height) }
@@ -1922,7 +2052,7 @@ export class TrackView {
     // ★ beta96 a map whose host does not place its facts (the ISM maps): the status line heads the LIST card
     if (!this.hostFacts) { const f = this.root.querySelector('.trkCard2[data-card="list"] .facts') as HTMLElement; if (f.textContent !== status) f.textContent = status; }
     this.countEl.textContent = String(count);
-    { const c = this.root.querySelector('.mDock[data-dock="list"] .cn') as HTMLElement | null; if (c && c.textContent !== String(count)) c.textContent = String(count); }
+    for (const c of Array.from(this.root.querySelectorAll('.mDock[data-dock="list"] .cn, .mDock[data-dock="list"] .tCn')) as HTMLElement[]) if (c.textContent !== String(count)) c.textContent = String(count);
     this.safetyEl.hidden = !safety;
     if (safety && this.safetyEl.innerHTML !== safety) this.safetyEl.innerHTML = safety;
   }

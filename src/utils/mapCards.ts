@@ -12,11 +12,11 @@
 /* ★★★ TWEAK 3 (Stuart 11-27, live): the HEALTH CARDS' shape — four chips FLANKING the map, each popping out a card and
  *  shrinking back: TUNE and LAYERS down the LEFT edge, MAP CONTROLS on the RIGHT, LIST at the BOTTOM (its card pops up).
  *  KEY and SOURCES live inside MAP CONTROLS now. */
-export const CARD_IDS = ['tune', 'layers', 'servers', 'map', 'list'] as const;
+export const CARD_IDS = ['tune', 'layers', 'servers', 'map', 'list', 'help'] as const;
 export type CardId = typeof CARD_IDS[number];
-export const CARD_LABEL: Record<CardId, string> = { tune: 'TUNE', layers: 'LAYERS', servers: 'SERVERS', map: 'MAP', list: 'LIST' };
+export const CARD_LABEL: Record<CardId, string> = { tune: 'TUNE', layers: 'LAYERS', servers: 'SERVERS', map: 'MAP', list: 'LIST', help: 'HELP' };
 /** Where each chip sits and its card opens: L = the left edge, R = the right edge, B = the bottom (the card pops up). */
-export const CARD_SIDE: Record<CardId, 'L' | 'R' | 'B'> = { tune: 'L', layers: 'L', servers: 'R', map: 'R', list: 'B' };
+export const CARD_SIDE: Record<CardId, 'L' | 'R' | 'B' | 'H'> = { tune: 'L', layers: 'L', servers: 'L', map: 'R', list: 'B', help: 'H' };
 /** A window narrower than this is a phone's: ONE card at a time; the LAYERS chip stands as a slim column. */
 export const CARD_NARROW_W = 600;
 /** A card's width on a wide window (px / pt); narrower under CARD_ROOMY_W so a left and a right card leave the map. */
@@ -26,28 +26,40 @@ export const CARD_ROOMY_W = 1100;
 /** Tall enough for the two left cards (TUNE, LAYERS) stacked. */
 export const CARD_TALL_H = 700;
 
+/** ★★★ Stuart 11-27: "on a large screen all could go down one side, shorter screens flank either side" — a window this
+ *  tall (and wider than a phone's) puts MAP CONTROLS on the left too, under LAYERS; shorter ones keep it top-right. */
+/*  Calibrated on his phones (11-27): an iPhone SE portrait (≈375×550 in Safari, a map ≈440 tall) FLANKS; a 17 Pro Max
+ *  portrait (≈440×830, a map ≈720 tall) puts everything on the LEFT; a phone in landscape (≈956×400) FLANKS. So: by the
+ *  MAP's own height against the whole stack of chips (their real heights) plus room for a card to open — never a device. */
+export const ONE_SIDE_MIN_H = 600;
+export const ONE_SIDE_ROOM = 160;
+/** Every chip down the left fits: the map is at least ONE_SIDE_MIN_H tall and holds the stack (SERVERS, TUNE, LAYERS, MAP
+ *  CONTROLS, LIST and their gaps — `stackH`, measured) with ONE_SIDE_ROOM to spare. */
+export function oneSide(mapH: number, stackH: number): boolean { return mapH >= Math.max(ONE_SIDE_MIN_H, stackH + ONE_SIDE_ROOM); }
+/** The side a chip and its card stand on: MAP CONTROLS joins the left when `one`. */
+export function cardSide(id: CardId, one = false): 'L' | 'R' | 'B' | 'H' { return id === 'map' && one ? 'L' : CARD_SIDE[id]; }
 /** How many cards a window of w × h takes at once: one on a phone; else one per side, two on the left when tall. */
 export function cardLimit(w: number, h: number): number {
   if (w < CARD_NARROW_W) return 1;
-  return h >= CARD_TALL_H ? 5 : 3;
+  return h >= CARD_TALL_H ? 6 : 4;
 }
 /** The open cards by side, the window's limit applied (the newest kept); a short window keeps one on the left. */
-export function cardPlace(open: CardId[], w: number, h: number): Record<'L' | 'R' | 'B', CardId[]> {
+export function cardPlace(open: CardId[], w: number, h: number, one = false): Record<'L' | 'R' | 'B' | 'H', CardId[]> {
   const shown = open.slice(-cardLimit(w, h));
-  const out: Record<'L' | 'R' | 'B', CardId[]> = { L: [], R: [], B: [] };
-  for (const id of shown) out[CARD_SIDE[id]].push(id);
+  const out: Record<'L' | 'R' | 'B' | 'H', CardId[]> = { L: [], R: [], B: [], H: [] };
+  for (const id of shown) out[cardSide(id, one)].push(id);
   if (h < CARD_TALL_H && out.L.length > 1) out.L = out.L.slice(-1);
   if (h < CARD_TALL_H && out.R.length > 1) out.R = out.R.slice(-1);
   return out;
 }
 /** A card opened (or shut): the new open list, the oldest giving way past the window's limit. */
-export function cardToggle(open: CardId[], id: CardId, on: boolean, w: number, h: number): CardId[] {
+export function cardToggle(open: CardId[], id: CardId, on: boolean, w: number, h: number, one = false): CardId[] {
   const out = open.filter((x) => x !== id);
   if (on) out.push(id);
   const lim = cardLimit(w, h);
   let r = out.slice(Math.max(0, out.length - lim));
   // ★ a short window holds one card on the left: the other left one gives way
-  if (h < CARD_TALL_H && w >= CARD_NARROW_W && on && CARD_SIDE[id] !== 'B') r = r.filter((x) => x === id || CARD_SIDE[x] !== CARD_SIDE[id]);
+  if (h < CARD_TALL_H && w >= CARD_NARROW_W && on && cardSide(id, one) !== 'B' && cardSide(id, one) !== 'H') r = r.filter((x) => x === id || cardSide(x, one) !== cardSide(id, one));
   return r;
 }
 /** What opens by default: nothing on a phone (the map is the point), LIST on a wide window. */
@@ -81,3 +93,17 @@ export function fitDefault(counts: Record<string, number>, main: string): string
 }
 /** The live message rate's words, top right: ADS-B per second, the rest per minute ('' = nothing live). */
 export function rateWords(n: number): string { return n >= 100 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(n < 10 ? 1 : 0); }
+
+/** ★★★ THE MAP HELP (Stuart 11-27: "a little floating ? Help button to explain the cards") — one place for the words, the
+ *  web page's ? card (tracks.ts) and the app's port alike. UK English, plain, one line each. */
+export const MAP_HELP: Array<{ id: Exclude<CardId, 'help'>; name: string; words: string }> = [
+  { id: 'servers', name: 'SERVERS', words: 'Leave this server, or switch to its other radios.' },
+  { id: 'tune', name: 'TUNE', words: 'Change mode and gain. Faded when you must ask in chat first.' },
+  { id: 'layers', name: 'LAYERS', words: 'What is on the map. Tap a row to show or hide it.' },
+  { id: 'map', name: 'MAP', words: 'Time filter, fit, rings, range, labels, sources and the key.' },
+  { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message, nearest or latest.' },
+];
+export const MAP_HELP_NOTES: string[] = [
+  'Tap a chip to open its card; tap the card\u2019s heading to close it. Escape or BACK closes it too.',
+  'On a phone-sized window one card opens at a time.',
+];
