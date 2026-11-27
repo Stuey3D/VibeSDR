@@ -11256,8 +11256,8 @@ function asRateText(): { text: string; title: string } {
   return { text: '', title: '' };
 }
 /* ★★★ beta96 THE STATS CARD (Stuart 14:20): per mode, never competing — NEWEST (the latest to appear, named, after the
- *  map opened), FURTHEST (from the receiver), LONGEST TRACKED (the distance flown while THIS mode heard it, since the map
- *  opened — the live ADS-B report's own tracked_nm where it is longer) and TRACKED LONGEST (time). Bounded: ≤ 3 000 a mode,
+ *  map opened), FURTHEST (from the receiver), FURTHEST TRACKED (the distance flown while THIS mode heard it, since the
+ *  map opened — the live ADS-B report's own tracked_nm where it is longer) and LONGEST TRACKED (time heard; Stuart 14:38). Bounded: ≤ 3 000 a mode,
  *  forgotten 10 min after they were last heard. The old list's three chips only selected (no filter) — so do these. */
 const asStats = new Map<string, Map<string, { first: number; at: number; lat: number; lon: number; nm: number; name: string }>>();
 let asStatsOpened = 0;
@@ -11297,9 +11297,9 @@ function asStatsSync(v: TrackView, rx: { lat: number; lon: number } | null) {
     if (rx) { const fur = live.map(([k, e]) => [k, e, adsbRangeBearing(rx, e.lat, e.lon).nm] as const).sort((a, b) => b[2] - a[2])[0];
       if (fur) rows.push({ key: fur[0], label: 'FURTHEST', value: `${Math.round(fur[2])} NM`, name: fur[1].name, lat: fur[1].lat, lon: fur[1].lon }); }
     const lng = live.filter(([, e]) => e.nm >= 1).sort((a, b) => b[1].nm - a[1].nm)[0];
-    pick('LONGEST TRACKED', lng, lng ? `${Math.round(lng[1].nm)} NM` : '');
+    pick('FURTHEST TRACKED', lng, lng ? `${Math.round(lng[1].nm)} NM` : '');   // ★ Stuart 14:38: distance flown while heard
     const old = live.slice().sort((a, b) => (a[1].first || asStatsOpened) - (b[1].first || asStatsOpened))[0];
-    if (old) { const mins = Math.round((now - (old[1].first || asStatsOpened)) / 60000); if (mins >= 1) pick('TRACKED LONGEST', old, `${mins} min${old[1].first ? '' : '+'}`); }
+    if (old) { const mins = Math.round((now - (old[1].first || asStatsOpened)) / 60000); if (mins >= 1) pick('LONGEST TRACKED', old, `${mins} min${old[1].first ? '' : '+'}`); }
     if (rows.length) sections.push({ mode, rows });
   }
   v.setStats(sections);

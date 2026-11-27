@@ -56,7 +56,15 @@ there is more) + ONE sort toggle (rings = nearest, clock = latest). Rows: `[flag
 the subtitle; right side the SNR chip and the age (compact on a phone); no bearing (`trkRowHtml`, `trkKvPill`,
 `acTags.ts`). LIST steps aside (measured) while a transient card would cover it.
 
-**Transient cards** (TUNE, LAYERS, SERVERS, MAP, HELP, RATE, CHAT): one at a time; fold on a map tap, another card,
+**STATS** (left edge, under LAYERS; the house 'stats' glyph): per MODE present (ADS-B, HFDL, VDL2, ACARS, ADS-C) — NEWEST,
+FURTHEST (from the receiver), FURTHEST TRACKED (distance flown while that mode heard it) and LONGEST TRACKED (time heard);
+modes never compete; a row selects that aircraft and eases the map to it (`setStats`, main.ts `asStatsSync`). AIS owed.
+
+**Under the map** (MAP-TEMPLATE.md rule 4): a same-page map parks the radio page's render loop and sends
+`{"type":"spec","on":0}` (the shim's `specPaused`), `on:1` on close; a new-tab viewer leaves the radio tab alone. The
+APP: the non-live viewer keeps the waterfall flowing and its history ingesting (as today); LIVE modes follow the web.
+
+**Transient cards** (TUNE, LAYERS, SERVERS, MAP, HELP, RATE, CHAT, STATS): one at a time; fold on a map tap, another card,
 `CARD_IDLE_MS` idle, Escape / BACK; AUTO pauses while one (or an item's card, or the maximised LIST) is open and resumes
 without a forced glide. Every card is opaque, no backdrop blur; the map never resizes under a card.
 

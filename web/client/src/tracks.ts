@@ -1479,7 +1479,7 @@ export class TrackView {
     const sig = JSON.stringify([place, this.narrow()]);
     for (const b of Array.from(this.root.querySelectorAll('[data-cbtn]')) as HTMLElement[]) {
       const on = open.includes(b.dataset.cbtn as CardId);
-      b.setAttribute('aria-expanded', String(on));
+      if (!(b.dataset.cbtn === 'rate' && this.rateStatic)) b.setAttribute('aria-expanded', String(on));   // ★ a one-source RATE is a reading
       b.closest('.mDock')?.classList.toggle('open', on);
       if (b.classList.contains('mHelp')) b.classList.toggle('on', on);
     }
@@ -1829,8 +1829,8 @@ export class TrackView {
     b.title = b.getAttribute('aria-disabled') === 'true' ? (o.why || 'Chat is closed') : n ? `Chat \u2014 ${n} new` : 'Chat';
     b.setAttribute('aria-label', `CHAT \u2014 ${n ? n + ' new message' + (n === 1 ? '' : 's') + '. ' : ''}open the chat`);
   }
-  /* ★★★ Stuart 14:20 THE STATS CARD: per MODE (ADS-B, HFDL, VDL2 …) — each its own NEWEST, FURTHEST, LONGEST TRACKED and
-   *  TRACKED LONGEST — so an HFDL aircraft followed 3 000 NM never competes with ADS-B's. A tab per mode present; a row
+  /* ★★★ Stuart 14:20 THE STATS CARD: per MODE (ADS-B, HFDL, VDL2 …) — each its own NEWEST, FURTHEST, FURTHEST TRACKED
+   *  (distance) and LONGEST TRACKED (time) — so an HFDL aircraft followed 3 000 NM never competes with ADS-B's. A tab per mode present; a row
    *  per stat; a press shows that aircraft (selected, its card open, the map moved to it). Rewritten only when it changes. */
   private statsSig = '';
   private statsMode = '';

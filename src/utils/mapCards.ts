@@ -106,7 +106,7 @@ export const MAP_HELP: Array<{ id: Exclude<CardId, 'help'>; name: string; words:
   { id: 'layers', name: 'LAYERS', words: 'What is on the map. Tap a row to show or hide it.' },
   { id: 'map', name: 'MAP', words: 'Time filter, fit, rings, range, labels, sources and the key.' },
   { id: 'list', name: 'LIST', words: 'Every aircraft, ship and message, nearest or latest.' },
-  { id: 'stats', name: 'STATS', words: 'Newest, furthest and longest tracked, per mode. Tap one to show it.' },
+  { id: 'stats', name: 'STATS', words: 'Per mode: newest, furthest, furthest tracked (distance) and longest tracked (time). Tap one to show it.' },
   { id: 'rate', name: 'RATE', words: 'Messages a minute (ADS-B a second). With several sources, tap for each one.' },
   { id: 'chat', name: 'CHAT', words: 'The shared radio\u2019s canned messages \u2014 how listeners agree who tunes next.' },
 ];

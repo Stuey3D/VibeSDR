@@ -143,7 +143,7 @@ async function sizeChecks(p, tag, w, h, o) {
   const mapLeft = geo.map && geo.map.l <= 1;
   ok(mapLeft === (mapH >= 600), `${tag} ${w}: MAP CONTROLS ${mapLeft ? 'down the left (a tall map)' : 'top-right (a short map, flanking)'} — map ${mapH} px tall`);
   const sideTabs = Object.entries(geo).filter(([id]) => !['rate', 'list', 'scale'].includes(id)).map(([, g]) => g);
-  ok(sideTabs.every((g) => g.w <= 48), `${tag} ${w}: every edge chip is a slim side tab at rest (${sideTabs.map((g) => g.w).join(',')} px) — RATE and LIST are corner pieces`);
+  ok(sideTabs.every((g) => g.w <= 48), `${tag} ${w}: every edge chip is a slim side tab at rest (${Object.entries(geo).filter(([id]) => !['rate', 'list', 'scale'].includes(id)).map(([id, g]) => id + ' ' + g.w).join(', ')} px) — RATE and LIST are corner pieces`);
   const lay = JSON.parse(await p.ev(`JSON.stringify((() => { const es = [...${V}.querySelectorAll('.mDock[data-dock="layers"] .le')]; if (!es.length) return { n: 0 }; const a = es[0].getBoundingClientRect(), b = es[es.length - 1].getBoundingClientRect(); return { n: es.length, col: es.length < 2 || b.top > a.top + 4, glyph: !!es[0].querySelector('svg') }; })())`));
   ok(lay.n >= 1 && lay.glyph && lay.col, `${tag} ${w}: the LAYERS tab stacks a glyph over a count per family (${lay.n})`);
   // ── no card: the map's share of the window ──
@@ -177,7 +177,7 @@ async function sizeChecks(p, tag, w, h, o) {
       const edges = JSON.parse(await p.ev(`JSON.stringify([...${V}.querySelectorAll('.trkCard2[data-card="${id}"] [data-tgl] .n, .trkCard2[data-card="${id}"] [data-src] .n')].filter(n => n.getClientRects().length).map(n => Math.round(n.getBoundingClientRect().right)))`));
       if (edges.length > 1) ok(Math.max(...edges) - Math.min(...edges) <= 1, `${tag} ${w}: ${id.toUpperCase()}: the ON / OFF tags line up (${[...new Set(edges)].join(',')})`);
     }
-    if (id === 'help') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="help"] .hRowH').length`) === 7, `${tag} ${w}: HELP has a line per chip (SERVERS, TUNE, LAYERS, MAP, LIST, RATE, CHAT)`);
+    if (id === 'help') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="help"] .hRowH').length`) === 8, `${tag} ${w}: HELP has a line per chip (SERVERS, TUNE, LAYERS, MAP, LIST, STATS, RATE, CHAT)`);
     await p.ev(`${V}.querySelector('.trkCard2[data-card="${id}"] > .ch').click(); 1`); await sleep(300);
     ok(!JSON.parse(await p.ev(VISIBLE_CARDS)).includes(id) && await p.ev(`${BTN(id)}.getAttribute('aria-expanded') === 'false'`), `${tag} ${w}: one press on its heading folds ${id.toUpperCase()} back to its tab`);
   }
