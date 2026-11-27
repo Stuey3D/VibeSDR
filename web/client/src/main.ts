@@ -1169,22 +1169,38 @@ function nudgeAsk() {
  *  each driver's own front end (RSP / HF+ / Airspy / HackRF rows), RTL AGC, the tuner's IF filter, the sample rate,
  *  direct sampling, the antenna, and the shared DSP (NR, notch, de-emphasis, stereo, the blankers, IMS / CEQ /
  *  auto-bandwidth, NFM voice). Squelch, the waterfall and the raw-IQ / uncompressed rows are this listener's own. */
-const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bwHome, '
+const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #bwLo, #bwHi, #bwHome, #dxTune, '
   + '#rowGain, #rspCtls, #ahfCtls, #aspCtls, #hrfCtls, #usrpCtls, #rowTunerBw, #rowRate, #agc, #dsSeg, #antSeg, #rspAntSeg, '
   + '#nr, #notch, #deemphSeg, #stereoBtn, #wspBtn, #imsBtn, #ceqBtn, #autoBwBtn, #nbBtn, #nbxBtn, #nfmVoiceBtn';
 /** ★★ THE DIMMED CONTROLS DO NOT TUNE — a touch on one is the reach that nudges. Captured before the drum, the step
  *  keys and the passband sliders see it, and only while the server says this listener is locked. The spectrum click,
  *  entry, bookmarks and the pad all reach SpectrumClient, whose own gate nudges the same way (onTuneLocked). */
+/** ★★★ THE MODE MENU AND THE DECODERS PANEL, WHILE LOCKED (Stuart, 2026-11-27: "we want to prevent decoder/demodulator
+ *  changing but still need access to the maps/gallery"). The mode pill opens its menu — it used to be shielded whole, and
+ *  the menu is the only way to the decoders panel, whose VIEWS (GALLERY, the maps, the DX LOG) are read-only. Inside the two,
+ *  every key is shielded (the demodulators, the bandwidth row, DAB / AIR & SEA LIVE / ISM / SATELLITE, every decoder key
+ *  and the option rows under them — no decoder switched on or off, retuning or not) EXCEPT what is marked data-askok: the
+ *  DECODERS… door, the VIEWS keys, the band tabs (they only change which decoders are listed), CLOSE and the links out. */
+const ASK_MENU_SEL = '#mModeMenu, #decodersPanel';
+const ASK_MENU_KEYS = 'button, select, input, label, a, [role="button"], [role="tab"]';
+function askShielded(t: Element, e: Event): boolean {
+  if (t.closest(ASK_SHIELD_SEL)) return true;
+  // ★ A touch or wheel in a panel is how it SCROLLS — never stopped there (the click it might become still is)
+  if (e.type === 'touchstart' || e.type === 'wheel') return false;
+  // ★ …and the arrows / Tab are how a pad or keyboard MOVES through it: only a press (Enter, Space) is a reach
+  if (e.type === 'keydown' && !['Enter', ' ', 'Spacebar'].includes((e as KeyboardEvent).key)) return false;
+  return !!t.closest(ASK_MENU_SEL) && !!t.closest(ASK_MENU_KEYS) && !t.closest('[data-askok]');
+}
 function wireAskShield() {
-  const sel = ASK_SHIELD_SEL;
   const stop = (e: Event) => {
     if (!askLocked(askNow) && !scanLockOn) return;   // ★ V12: an owner's scan locks the same controls (scanLockSet)
     const t = e.target as Element | null;
-    if (!t || !t.closest || !t.closest(sel)) return;
+    if (!t || !t.closest || !askShielded(t, e)) return;
     e.preventDefault(); e.stopPropagation();
-    if ((e.type === 'pointerdown' || e.type === 'keydown') && !scanLockOn) nudgeAsk();
+    // ★ click too: a pad's or a script's press is a click with no pointerdown before it (nudgeAsk is once per 2.5 s)
+    if ((e.type === 'pointerdown' || e.type === 'keydown' || e.type === 'click') && !scanLockOn) nudgeAsk();
   };
-  for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'click', 'wheel', 'input', 'keydown'])
+  for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'click', 'wheel', 'input', 'change', 'keydown'])
     document.addEventListener(ev, stop, { capture: true, passive: false });
 }
 if (typeof document !== 'undefined') wireAskShield();

@@ -883,7 +883,7 @@ body.padTuck #mVfoDial, body.padTuck #mZoomDial {
 /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md): the server has not let this listener in yet. The tuning controls
    are DIMMED — visibly locked, not missing — and a touch on one flashes the chat key and the banner (main.ts
    nudgeAsk) instead of tuning. body.askLocked is set only from the server's dial message. */
-body.askLocked #mVfoDial, body.askLocked #mVfoDown, body.askLocked #mVfoUp, body.askLocked #mMode, body.askLocked #bwLo, body.askLocked #bwHi, body.askLocked #bwHome,
+body.askLocked #mVfoDial, body.askLocked #mVfoDown, body.askLocked #mVfoUp, body.askLocked #bwLo, body.askLocked #bwHi, body.askLocked #bwHome, body.askLocked #dxTune,
 /* ★★ and the receiver settings the others hear (Stuart, 2026-10-21: "lock gain too") — main.ts ASK_SHIELD_SEL */
 body.askLocked #rowGain, body.askLocked #rspCtls, body.askLocked #ahfCtls, body.askLocked #aspCtls,
 body.askLocked #hrfCtls, body.askLocked #usrpCtls, body.askLocked #rowTunerBw, body.askLocked #rowRate, body.askLocked #agc,
@@ -891,9 +891,17 @@ body.askLocked #dsSeg, body.askLocked #antSeg, body.askLocked #rspAntSeg, body.a
 body.askLocked #deemphSeg, body.askLocked #stereoBtn, body.askLocked #wspBtn, body.askLocked #imsBtn,
 body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #bwAuto, body.askLocked #nbBtn, body.askLocked #nbxBtn,
 body.askLocked #nfmVoiceBtn { opacity: 0.35; }
+/* ★★★ THE MODE MENU AND THE DECODERS PANEL, LOCKED (Stuart, 2026-11-27: "we want to prevent decoder/demodulator changing
+   but still need access to the maps/gallery"). The mode pill OPENS (it is the way to the gallery); inside, every key that
+   changes the demodulator, the width, a whole-radio mode or a decoder is dimmed — locked, never missing — and stopped
+   (main.ts askShielded). What is marked data-askok stays lit: the DECODERS… door, the VIEWS, the band tabs, CLOSE, links. */
+body.askLocked #mModeMenu :is(button, select, input, a):not([data-askok], [data-askok] *),
+body.scanLocked #mModeMenu :is(button, select, input, a):not([data-askok], [data-askok] *),
+body.askLocked #decodersPanel :is(button, select, input):not([data-askok], [data-askok] *),
+body.scanLocked #decodersPanel :is(button, select, input):not([data-askok], [data-askok] *) { opacity: 0.35; }
 /* ★★ V12: AN OWNER'S SCAN holds the radio (main.ts scanLockSet) — the same controls, locked the same way; the shared-tuner
    slot says why ("ADMIN TRIGGERED A SCAN" / "PLEASE WAIT"). */
-body.scanLocked #mVfoDial, body.scanLocked #mVfoDown, body.scanLocked #mVfoUp, body.scanLocked #mMode, body.scanLocked #bwLo,
+body.scanLocked #mVfoDial, body.scanLocked #mVfoDown, body.scanLocked #mVfoUp, body.scanLocked #dxTune, body.scanLocked #bwLo,
 body.scanLocked #bwHi, body.scanLocked #bwHome, body.scanLocked #rowGain, body.scanLocked #rspCtls, body.scanLocked #ahfCtls,
 body.scanLocked #aspCtls, body.scanLocked #hrfCtls, body.scanLocked #usrpCtls, body.scanLocked #rowTunerBw, body.scanLocked #rowRate,
 body.scanLocked #agc, body.scanLocked #dsSeg, body.scanLocked #antSeg, body.scanLocked #rspAntSeg, body.scanLocked #nr,
@@ -5656,7 +5664,7 @@ select.btn { padding: 6px 8px; }
      (bottom-left), the way OpenWebRX does it. ★ V12: CW is this server's own (one FFT filterbank over the passband or
      a segment, decoders/cw_skimmer.h) — drawn only where vibeserver.json says "cw": true. -->
 <div id="decodersPanel">
-  <div id="menuHead">
+  <div id="menuHead" data-askok>
     <span>DECODERS</span>
     <button class="btn" id="decClose">CLOSE</button>
   </div>
@@ -5676,13 +5684,13 @@ select.btn { padding: 6px 8px; }
        its glyph. decoderBandsDom.ts MOVES the buttons below (and DIGITAL SPOTS) into #decGroups for the open tab — the
        same nodes, so every handler and the hidden-where-the-server-lacks-it rule stay as they were. A decoder far from
        its usual frequencies is DIMMED, never disabled. src/utils/decoderBands.ts is the table, shared with the app. -->
-  <div class="seg" id="decBandTabs" role="tablist" aria-label="Band"></div>
+  <div class="seg" id="decBandTabs" role="tablist" aria-label="Band" data-askok></div>
   <div id="decGroups"></div>
   <!-- ★★★ V12 (Stuart, 2026-10-29): VIEWS — the MAP of what has been spotted and the server's GALLERY (GALLERY was above the
        decoders; MAP was in DECODED SPOTS). Same uniform keys as the decoders (decoderBandsDom.ts). -->
   <div id="viewsSec">
     <h2>VIEWS</h2>
-    <div class="btnRow decKeys" id="viewsRow">
+    <div class="btnRow decKeys" id="viewsRow" data-askok>
       <!-- ★ The glyph is the house line icon (modeIcons 'map', put in by main.ts) — it was the colour 🗺 emoji. -->
       <!-- ★★★ V12 beta90 (Stuart, 2026-11-21): THREE MAP KEYS in place of the one MAP — each drawn only where this server has
            something for it (main.ts syncViewKeys; no dead keys). DIGI MODES = the digital spots (this server's station store
