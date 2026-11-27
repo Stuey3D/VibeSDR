@@ -30781,6 +30781,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   see VS_PROTO. A client draws "update the app" from these, never from `version`.
             std::string body = std::string("{\"server\":\"vibeserver\",\"hw\":") + vibe::hardwareJson()
                              + ",\"proto\":" + std::to_string(VS_PROTO)
+                             /* ★★★ beta96 (Stuart 11-27, Almere): a listener's ONLY MODE, before any socket — hwinfo's
+                              *  onlyMode as a listener is told it (the admin is told "" there, once signed in). The app reads
+                              *  it before it connects: a radio locked to a map mode goes straight to the map and never shows
+                              *  a radio screen (src/utils/mapExit.ts). scripts/test-server-map-locked.mjs. */
+                             + ",\"onlyMode\":\"" + (g_beastOn.load() ? std::string("adsb") : onlyModeNow()) + "\""
                              + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"pin\":"
                              + (pinOn ? "true" : "false") + ",\"web\":"
                              + (g_vsWebEnabled.load() ? "true" : "false")
