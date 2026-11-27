@@ -294,15 +294,23 @@ export class MapWf {
     const html: string[] = [];
     const labels: string[] = [];
     for (const k of inView.slice().sort((a, b) => a.hz - b.hz)) {
-      const x = (pct(k.hz) / 100) * cw, lw = k.label.length * 6.2 + 8;
-      let r = k.label ? rows.findIndex((end) => x - lw / 2 > end + 3) : -1;   // ★ an unlabelled channel is a faint line only
-      const shown = r >= 0;
-      if (shown) rows[r] = x + lw / 2; else r = 0;
+      const x = (pct(k.hz) / 100) * cw;
+      /* ★ Stuart 16:4x (Ch12 had no label at a 316 px panel): every labelled channel KEEPS a label — the full one where it
+       *  fits in one of the three rows, else its short form ("12", "DTY"), else the short form in the roomiest row */
+      let text = k.label, lw = text.length * 6.2 + 8;
+      let r = text ? rows.findIndex((end) => x - lw / 2 > end + 3) : -1;   // ★ an unlabelled channel is a faint line only
+      if (text && r < 0) {
+        text = shortLabel(k.label); lw = text.length * 6.2 + 8;
+        r = rows.findIndex((end) => x - lw / 2 > end + 3);
+        if (r < 0) r = rows.indexOf(Math.min(...rows));
+      }
+      const shown = !!text && r >= 0;
+      if (shown) rows[r] = Math.max(rows[r], x + lw / 2); else r = 0;
       const band = k.loHz != null && k.hiHz != null && k.hiHz > k.loHz
         ? `<span class="mwBand" style="left:${pct(k.loHz).toFixed(2)}%;width:${(pct(k.hiHz) - pct(k.loHz)).toFixed(2)}%"></span>` : '';
       html.push(`${band}<span class="mwLine${k.active ? ' on' : ''}" style="left:${pct(k.hz).toFixed(2)}%"></span>`
-        + (shown ? `<span class="mwLbl${k.active ? ' on' : ''}" style="left:${pct(k.hz).toFixed(2)}%;top:${2 + r * 13}px">${esc(k.label)}</span>` : ''));
-      if (shown) labels.push(k.label);
+        + (shown ? `<span class="mwLbl${k.active ? ' on' : ''}" style="left:${pct(k.hz).toFixed(2)}%;top:${2 + r * 13}px" title="${esc(k.label)}">${esc(text)}</span>` : ''));
+      if (shown) labels.push(text);
     }
     this.marksEl.style.setProperty('--mw-spec', `${specHOf(this.h) / this.dpr}px`);   // ★ the ticks span the trace only, never the history
     this.marksEl.innerHTML = html.join('');
@@ -319,6 +327,9 @@ export class MapWf {
     this.stats.marks = inView.length; this.stats.labels = labels;
   }
 }
+
+/** A label's short form when crowded: "Ch12 136.975" → "12", "DTY 116.40" → "DTY". */
+function shortLabel(l: string): string { const t = l.split(' ')[0] || l; return /^Ch\d+$/.test(t) ? t.slice(2) : t; }
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));

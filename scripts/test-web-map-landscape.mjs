@@ -127,6 +127,8 @@ async function radioDatalink(p, url) {
       const fam = Object.keys(R).filter((k) => k.startsWith('L:') && R[k]);
       ok(fam.length >= 3 && fam.every((k) => onScreen(R[k], w, h) && R[k].b >= h - 2 && R[k].l >= R.panel.r - 1), `${tag}: the family along the bottom edge right of the panel, all on screen (${fam.map((k) => `${k.slice(2)} ${R[k].l}-${R[k].r}/${R[k].t}-${R[k].b}`).join(', ')})`);
       ok(fam.length && fam.every((k) => R[k].top), `${tag}: …every family chip on top at its centre (${fam.filter((k) => !R[k].top).join(',') || 'all'})`);
+      { const lim = await p.ev(`(() => { const t = document.getElementById('rxTimeLeft'); return !!t && !t.hidden && /\\d/.test(t.textContent || ''); })()`);
+        ok(!!R['R:time'] === !!lim, `${tag}: the TIME tab shows exactly when a limit is in force for this listener (limit ${lim}, tab ${!!R['R:time']})`); }
       ok(R.nTime <= 1 && R.nHealth <= 1, `${tag}: one copy each of the time and health chips (${R.nTime} / ${R.nHealth})`);
       const right = ['R:rate', 'R:chat', 'R:time', 'R:health', 'R:map', 'zoom', 'scale', 'help', 'attrib'].filter((k) => R[k]);
       ok(right.every((k) => onScreen(R[k], w, h)), `${tag}: the right column on screen (${right.filter((k) => !onScreen(R[k], w, h)).map((k) => `${k} ${JSON.stringify(R[k])}`).join(' ') || right.join(',')})`);
@@ -147,6 +149,7 @@ async function radioDatalink(p, url) {
         const [a0, h0, w0] = JSON.parse(g0), [a1, h1, w1] = JSON.parse(g1);
         ok(['top', 'left', 'width', 'height'].every((k) => Math.abs(a0[k] - a1[k]) <= 1) && h0 === h1 && w0 === w1, `${tag}: 30 s of rows: the side panel did not grow (${Math.round(a0.height)} → ${Math.round(a1.height)} px; page ${h0} → ${h1})`);
       }
+      { const st = JSON.parse(await p.ev(`JSON.stringify(${WF})`)); ok(st && st.marks > 0 && st.labels.length === st.marks && st.inside, `${tag}: every channel keeps a label (${st && st.labels.length} of ${st && st.marks}: ${st && st.labels.join(' ')})`); }
       const RW = JSON.parse(await p.ev(RECTS));
       await shot(`landscape-${w}x${h}-wf.png`);
       ok(RW.panel && R.panel && RW.panel.t === R.panel.t && RW.panel.r === R.panel.r, `${tag}: the waterfall view keeps the panel's frame`);

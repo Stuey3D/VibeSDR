@@ -101,7 +101,7 @@ async function radioDatalink(p, url) {
     const hw = await (await fetch(`http://127.0.0.1:${port}/vibeserver.json`)).json().catch(() => null);
     const band = (hw?.avdataBands || []).find((b) => b.id === 'vdl2');
     const want = band?.chans?.length || 0;
-    ok(want > 1 && st.marks === want && st.labels.length >= 2 && st.labels.every((l) => /^Ch\d+ 136\.\d{3}$/.test(l)) && st.inside, `one marker per VDL2 channel (${st.marks} of ${want}), labelled: ${st.labels.slice(0, 3).join(' · ')}…`);
+    ok(want > 1 && st.marks === want && st.labels.length >= 2 && st.labels.length === st.marks && st.labels.every((l) => /^(Ch\d+ 136\.\d{3}|\d+)$/.test(l)) && st.inside, `one marker per VDL2 channel (${st.marks} of ${want}), labelled: ${st.labels.slice(0, 3).join(' · ')}…`);
     ok(band && st.lo < Math.min(...band.chans) && st.hi > Math.max(...band.chans), `the span covers every channel (${st.lo}–${st.hi})`);
     ok(/VDL2 · \d+ channels/.test(await p.ev(`${V}.querySelector('.trkList .wfInfo').textContent`)), `the bar says it in words: "${await p.ev(`${V}.querySelector('.trkList .wfInfo').textContent`)}"`);
     { // ★ Stuart 16:00 ("the waterfall history is making the window grow by itself"): 30 s of rows, the drawer unchanged
