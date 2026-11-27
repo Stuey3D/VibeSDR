@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
 
-const src = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');
+const src = fs.readFileSync(process.env.SETUP_PAGE || new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');   // ★ SETUP_PAGE: another copy (the before shot)
 const htmlDir = process.argv.includes('--html') ? process.argv[process.argv.indexOf('--html') + 1] : '';
 let fail = 0, pass = 0;
 const ok = (c, what) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (c) pass++; else fail++; };
@@ -34,7 +34,8 @@ const cardHtml = page.slice(cardStart, cardEnd) + '<div id="hwBg"></div><p id="r
 
 const fnNames = ['esc', 'singleWords', 'keepMapOf', 'keepBase', 'keepTokName', 'keepParse', 'keepIsCombo', 'keepRateWords', 'keepGate', 'keepCostWords',
                  'keepFacts', 'keepSatWords', 'keepMirror', 'keepMigrate', 'adsbLandOffer', 'keepBgNormal', 'keepIsmPlan', 'keepIsmDefault',
-                 'keepIsmSelect', 'bgWholeRender', 'bgSetWhole', 'bgKindInit'];
+                 'keepIsmSelect', 'bgWholeRender', 'bgSetWhole', 'bgKindInit',
+                 ...(/\nfunction bgPickMode\(/.test(src) ? ['bgPickMode'] : [])];   // ★ the fix's own function (absent before it)
 const body = constOf('KEEP_MODES') + constOf('KEEP_GROUP_WORDS') + constOf('KEEP_COMBO_MIN') + constOf('KEEP_MARITIME_MIN') + constOf('ADSB_MIN_RATE')
   + fnNames.map(grab).join('\n');
 
@@ -65,6 +66,7 @@ function card(H, rate, radio) {
   return { P, $, input, click, rowWhy, r: () => RADIO, document, save: (name) => {
     if (!htmlDir) return;
     fs.mkdirSync(htmlDir, { recursive: true });
+    for (const i of document.querySelectorAll('input')) i.toggleAttribute('checked', i.checked);   // ★ the state into the markup
     fs.writeFileSync(path.join(htmlDir, name), dom.serialize());
   } };
 }
@@ -80,6 +82,7 @@ console.log('── Stuart\'s recording: an RTL at 2.4 MS/s, background ADS-B, c
   ok(/2\.4 MS\/s: this radio runs one of these at a time/.test(c.$('bgRateNote').textContent), `one line above the list: ${c.$('bgRateNote').textContent}`);
   // the recorded flow: untick ADS-B (on the old page a checkbox; on the new a radio cannot be unticked — click ISM instead)
   if (c.input('adsb').type === 'checkbox') c.click(c.input('adsb'));
+  c.save(`${process.env.SHOT_TAG || 'card'}-rtl-untick-adsb.html`);
   ok(c.$('bgKindWhole').checked && !c.$('bgWholeBox').classList.contains('hide'), 'the card stays on "A whole-radio mode" (never flips to Manual)');
   ok(c.input('ism') && !c.input('ism').disabled, 'ISM can be picked');
   if (c.input('ism') && !c.input('ism').disabled) c.click(c.input('ism'));
