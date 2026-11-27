@@ -575,7 +575,7 @@ const CSS = `
 .trkCard2 .btn{background:#1e2a36;color:#e8eef5;border:1px solid #33475a;border-radius:6px;padding:6px 10px;font:600 12px/1 system-ui,sans-serif;cursor:pointer}
 .trkCard2 .btn:hover,.trkCard2 .btn:focus-visible{background:#2a3a4a;outline:none;border-color:#7fc8ff}
 .trkCard2 .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
-.trkCard2 .btn.on{background:#7fc8ff;color:#0b1014;border-color:#7fc8ff}
+.trkCard2 .btn.on{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkCard2 .btn.dialLocked{opacity:.4;filter:grayscale(.7);cursor:not-allowed}
 .trkCard2 .rng{display:inline-flex;flex-wrap:wrap;gap:0}
 .trkCard2 .rng[hidden],.trkCard2 .tgl[hidden],.trkCard2 .scope[hidden]{display:none}
@@ -601,7 +601,12 @@ const CSS = `
 .trkCard2 .slot-tune{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 10px;border-bottom:1px solid #151f29}
 .trkCard2 .slot-ctl .vsadsb-ctl{position:static!important;display:flex!important;flex-wrap:wrap;gap:5px;margin:0!important;box-shadow:none!important;background:none!important;border:0!important;padding:0!important;inset:auto!important;transform:none!important}
 .trkCard2 .slot-ctl .vsadsb-ctl button{background:#1e2a36!important;color:#e8eef5!important;border:1px solid #33475a!important;border-radius:6px!important;padding:6px 10px!important;font:600 12px/1 system-ui,sans-serif!important;margin:0!important;cursor:pointer;min-width:0!important;height:auto!important}
-.trkCard2 .slot-ctl .vsadsb-ctl button.on{background:#7fc8ff!important;color:#0b1014!important;border-color:#7fc8ff!important}
+.trkCard2 .slot-ctl .vsadsb-ctl button.on{background:#ffd34d!important;color:#111!important;border-color:#ffd34d!important}
+.trkCard2 .slot-ctl .vsadsb-ctl button{border-radius:999px!important;padding:5px 11px!important;font:700 11px/1 ui-monospace,Menlo,monospace!important;letter-spacing:.06em}
+.trkCard2 .slot-ctl .btn{border-radius:999px;padding:5px 11px;font:700 11px/1 ui-monospace,Menlo,monospace}
+.trkCard2 .slot-ctl .btn[aria-pressed="true"],.trkCard2 .slot-ctl .btn.on{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkCard2 .fitSect .btn.fit.on{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkCard2 .fitSect .btn{border-radius:999px;padding:5px 12px;font:700 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkCard2 .slot-ctl .vsadsb-ctl button:focus-visible{outline:2px solid #ffd34d!important}
 .trkCard2 .slot-ctl .vsadsb-ctl button[data-k="auto"],.trkCard2 .slot-ctl .vsadsb-ctl button[data-k="fit"]{display:none!important}
 .trkCard2 .slot-ctl:empty{display:none}
@@ -612,11 +617,25 @@ const CSS = `
 .trkCard2 .trkKey{position:static;max-height:none;overflow:visible;border:0;border-radius:0;background:none;z-index:auto}
 .trkCard2 .trkKey .kr{white-space:normal}
 .trkCard2 .kb .kr{display:flex;align-items:center;gap:8px;padding:2px 0}
-.trkCard2 .srcRow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:6px 10px;border-bottom:1px solid #151f29;font-size:12px}
-.trkCard2 .srcRow b{font-weight:600;color:#e8eef5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.trkCard2 .srcRow small{grid-column:1/-1;color:#93a3b4;font-size:11px}
-.trkCard2 .srcRow .sv{font:12px/1.2 ui-monospace,Menlo,monospace;color:#ffd34d;white-space:nowrap}
-.trkCard2 .srcRow.down .sv{color:#ff8a6b}
+/* ★★★ ONE ROW STYLE for the cards' toggle rows (Stuart 11:59): the LAYERS rows and the SOURCES rows — a dark row, a coloured
+ *  dot, the name (a muted line under it), the count on the right, an ON / OFF tag; a hidden one dimmed with OFF */
+.trkCard2 .mRow{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;cursor:pointer;
+  border-bottom:1px solid #151f29;font:600 13px/1.2 system-ui,sans-serif;color:#e8eef5;text-align:left}
+.trkCard2 .mRow:hover,.trkCard2 .mRow:focus-visible{background:#1a2632;outline:none}
+.trkCard2 .mRow:focus-visible{box-shadow:inset 3px 0 0 #ffd34d}
+.trkCard2 .mRow .dot{width:10px;height:10px;border-radius:50%;flex:none}
+.trkCard2 .mRow .nm{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto}
+.trkCard2 .mRow .nm b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trkCard2 .mRow .nm small{font:500 11px/1.25 system-ui,sans-serif;color:#93a3b4}
+.trkCard2 .mRow .n{margin-left:auto;font:700 12.5px/1 ui-monospace,Menlo,monospace;color:#ffd34d;white-space:nowrap}
+.trkCard2 .mRow::after{content:"ON";flex:none;font:800 9px/1 ui-monospace,Menlo,monospace;letter-spacing:.1em;padding:3px 5px;border-radius:4px;background:#1e3a26;color:#7ee787}
+.trkCard2 .mRow[aria-pressed="false"]{color:#7f93a7}
+.trkCard2 .mRow[aria-pressed="false"] .n{color:#7f93a7}
+.trkCard2 .mRow[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
+.trkCard2 .mRow[aria-pressed="false"]::after{content:"OFF";background:#2a1d1d;color:#ff8a6b}
+.trkCard2 .mRow.down .n{color:#ff8a6b}
+.trkCard2 .srcSect{padding:0}
+.trkCard2 .srcSect>.sh{padding:8px 10px 4px;margin:0}
 .trkCard2[data-card="list"] .trkList{position:static;width:auto;max-height:none;border:0;border-radius:0;background:none;flex:1 1 auto;min-height:0}
 .trkCard2[data-card="list"]{flex:1 1 auto}
 .trkCard2[data-card="list"] .trkList .hd{cursor:default}
@@ -750,6 +769,12 @@ const CSS = `
 .trkCards .sideB{left:12px;right:auto;bottom:var(--trk-cb-bottom,0px);top:30%;justify-content:flex-end;width:min(300px,calc(100% - 24px))}   /* ★ the LIST: as wide as its rows need, no wider */
 .trkCards.lAndB .sideL{bottom:47%}
 .trkCards.lAndB .sideB{top:55%}
+.trkCards .sideB>.trkCard2[data-card="list"]{height:var(--trk-list-card-h,320px);flex:none!important;max-height:none!important}
+.trkCard2[data-card="list"]>.cb{display:flex;flex-direction:column;overflow:hidden}
+.trkCard2[data-card="list"]>.cb>.facts{flex:none}
+.trkCard2[data-card="list"] .trkList{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+.trkCard2[data-card="list"] .trkList>.hd,.trkCard2[data-card="list"] .trkList>.filt,.trkCard2[data-card="list"] .trkList>.safety{flex:none}
+.trkCard2[data-card="list"] .trkList .rows{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .trkCards .sideB>.trkCard2{border:1.5px solid var(--hc,#5BE36B);border-bottom-width:0;border-radius:12px 12px 0 0;transform-origin:bottom left}
 .trkCards .cSide>.trkCard2{border:1.5px solid var(--hc,#5BE36B);background:rgba(8,12,8,.92)}
 .trkCards .sideL>.trkCard2{border-left-width:0;border-radius:0 12px 12px 0;transform-origin:top left}
@@ -1232,7 +1257,16 @@ export class TrackView {
     { /* ★★★ Stuart 11:48 "wrong layering": the LIST never grows over the chips on its edge — its top stops under the left
        *  column of chips (SERVERS, TUNE, LAYERS …), so every tab stays visible and pressable */
       const col = this.root.querySelector('.mChipsL') as HTMLElement | null, cb = col?.getBoundingClientRect();
-      setv('--trk-cb-top', `${cb && cb.height ? Math.round(cb.bottom - m.top + 8) : 0}px`);
+      const capTop = cb && cb.height ? Math.round(cb.bottom - m.top + 8) : 0;
+      setv('--trk-cb-top', `${capTop}px`);
+      /* ★★★ Stuart 11:59 "the list should be a fixed height and scrollable": its OWN height — about half the map, 240 to
+       *  480 px, never more than the room under the chips — so it never jumps as rows come and go; only the rows scroll */
+      const attrib = parseFloat(this.root.style.getPropertyValue('--trk-attrib-h')) || 0;
+      const room = Math.max(120, m.height - capTop - attrib - 8);
+      setv('--trk-list-card-h', `${Math.round(Math.min(room, Math.max(240, Math.min(480, m.height * 0.48))))}px`);
+      // ★ the scale bar steps right of the open LIST (not just its chip)
+      const lc = place.B.includes('list') ? (this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null)?.getBoundingClientRect() : null;
+      if (lc && lc.width) setv('--trk-list-w', `${Math.ceil(lc.right - m.left) + 8}px`);
     }
   }
   /** ★★★ tweak 3 the LAYERS chip: a glyph and a count per layer present ([plane] 157 [ship] 3 [NAVTEX] 40); a slim column
@@ -1285,8 +1319,9 @@ export class TrackView {
     if (sig === this.srcSig) return;
     this.srcSig = sig;
     const body = this.root.querySelector('.srcBody') as HTMLElement;
-    body.innerHTML = (rows ?? []).map((x) => `<button type="button" class="srcRow${x.down ? ' down' : ''}" data-src="${esc(x.id)}" aria-pressed="${x.on}" title="${esc(x.on ? 'Shown — tap to hide what only this source heard' : 'Hidden — tap to show it again')}">`
-      + `<b>${esc(x.name)}</b><span class="sv">${esc(x.value)}</span><small>${esc(x.what)}</small></button>`).join('');
+    // ★★★ Stuart 11:59 ("the sources look like windows 95"): the LAYERS rows' own look — one row style, .mRow
+    body.innerHTML = (rows ?? []).map((x) => `<button type="button" class="mRow srcRow${x.down ? ' down' : ''}" data-src="${esc(x.id)}" aria-pressed="${x.on}" title="${esc(x.on ? 'Shown — tap to hide what only this source heard' : 'Hidden — tap to show it again')}">`
+      + `<span class="dot" style="background:${x.id === 'feed' ? '#ffd34d' : '#7ee787'}"></span><span class="nm"><b>${esc(x.name)}</b><small>${esc(x.what)}</small></span><span class="n">${esc(x.value)}</span></button>`).join('');
     for (const b of Array.from(body.querySelectorAll('[data-src]')) as HTMLButtonElement[]) b.onclick = () => this.onSource?.(b.dataset.src || '', b.getAttribute('aria-pressed') !== 'true');
   }
   private onSource: ((id: string, on: boolean) => void) | null = null;

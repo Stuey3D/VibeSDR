@@ -150,6 +150,10 @@ async function sizeChecks(p, tag, w, h, o) {
       ok(await p.ev(`!!${V}.querySelector('.trkCard2[data-card="map"] .keySect summary')`), `${tag} ${w}: the KEY is a fold in MAP CONTROLS`);
       if (o.multi) ok(await p.ev(`!${V}.querySelector('.srcSect').hidden && ${V}.querySelectorAll('.srcRow[data-src]').length >= 2`), `${tag} ${w}: MAP CONTROLS lists each source as a toggle (${await p.ev(`[...${V}.querySelectorAll('.srcRow b')].map(b => b.textContent).join(' · ')`)})`);
     }
+    // ★ Stuart 11:59 ("the sources look like windows 95"): no visible control in a card wears the browser's default grey
+    const plain = await p.ev(`[...${V}.querySelectorAll('.trkCard2[data-card="${id}"] button, .trkCard2[data-card="${id}"] select, .trkCard2[data-card="${id}"] input')].filter(b => b.getClientRects().length && !b.closest('[hidden]')).filter(b => { const m = getComputedStyle(b).backgroundColor.match(/\\d+/g) || []; const [r, g, bl] = m.map(Number); return r === g && g === bl && r >= 190; }).map(b => b.className || b.textContent.trim().slice(0, 12)).join(', ')`);
+    ok(!plain, `${tag} ${w}: ${id.toUpperCase()}: no control in the browser's default grey${plain ? ` (${plain})` : ''}`);
+    if (id === 'map' && o.multi) ok(await p.ev(`[...${V}.querySelectorAll('.srcBody [data-src]')].every(b => b.classList.contains('mRow'))`), `${tag} ${w}: the SOURCES rows are the cards' row (.mRow)`);
     if (id === 'tune') ok(await p.ev(`${V}.querySelectorAll('.tunePop [data-tune]').length`) >= 2, `${tag} ${w}: TUNE holds the TUNE rows`);
     if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);
@@ -230,7 +234,12 @@ console.log('── the MAP CONTROL CARDS (beta96, docs/v12/MAP-CONTROL-CARDS.md
     await shutTransients(p);
     await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'); c.__mark = 'kept'; window.__anim = 0; c.addEventListener('animationstart', () => { window.__anim++; }); const cb = c.querySelector('.cb'); cb.scrollTop = 0; const rows = c.querySelector('.rows'); rows.scrollTop = 30; return 1; })()`);
     const st0 = await p.ev(`${V}.querySelector('.trkCard2[data-card="list"] .rows').scrollTop`);
-    await sleep(10000);   // ★ the datalink report every second, aircraft.json every 3 s: well over three ticks
+    const lh = `(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'); return Math.round(c.getBoundingClientRect().height) + ':' + c.querySelectorAll('.trkRow').length; })()`;
+    const hs = [];
+    for (let i = 0; i < 4; i++) { hs.push(await p.ev(lh)); await sleep(2500); }   // ★ the datalink report every second, aircraft.json every 3 s: well over three ticks
+    ok(new Set(hs.map((x) => x.split(':')[0])).size === 1, `LIST keeps one height through the ticks (height:rows ${hs.join(' ')})`);
+    ok(await p.ev(`/auto|scroll/.test(getComputedStyle(${V}.querySelector('.trkCard2[data-card="list"] .rows')).overflowY)`), 'only its rows scroll');
+    ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]').getBoundingClientRect(); const a = ${V}.querySelector('.maplibregl-ctrl-attrib, .leaflet-control-attribution'); return !a || c.bottom <= a.getBoundingClientRect().top + 1 || c.right <= a.getBoundingClientRect().left; })()`), 'its bottom is above the attribution line');
     ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"]').__mark === 'kept' && window.__anim === 0`), `LIST through ten seconds of data: the same node, no pop-out again (${await p.ev('window.__anim')} animations)`);
     ok(await p.ev(`${V}.querySelector('.trkCard2[data-card="list"] .rows').scrollTop`) === st0, `…and the same scroll (${st0})`);
     // ── AUTO on, LIST open: the fit keeps every fitted aircraft clear of the LIST (Stuart: "the map should shift over") ──
