@@ -617,7 +617,15 @@ const CSS = `
 .trkCard2[data-card="list"] .trkList .hd .mn{display:none}
 .trkView[data-narrow] .trkTop{flex-wrap:wrap;row-gap:6px}
 .trkView[data-narrow] .trkTop .ttl{display:none}
-.trkView[data-narrow] .trkTop .cardBtns{order:10;flex:1 0 100%;overflow-x:auto;scrollbar-width:none}
+.trkTop .brk{display:none}
+.trkTop .slot-share{min-width:0;flex:0 1 auto}
+.trkTop .slot-share .mapShLine{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+.trkTop .slot-share>span{min-width:0;max-width:100%}
+.trkView[data-narrow] .trkTop .brk{display:block;order:9;flex:1 0 100%;height:0}
+.trkView[data-narrow] .trkTop .spacer{display:none}
+.trkView[data-narrow] .trkTop .rate{order:11;margin-left:auto;font-size:10.5px}
+.trkView[data-narrow] .trkTop .cbtn{padding:5px 8px;font-size:10px;letter-spacing:.06em}
+.trkView[data-narrow] .trkTop .cardBtns{order:10;flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none}
 .trkView[data-narrow] .trkTop .cardBtns::-webkit-scrollbar{display:none}
 .trkView[data-narrow] .trkCards{left:6px;right:6px;top:6px;bottom:6px;max-width:none}
 .trkView[data-narrow] .trkCards .col{width:100%}
@@ -761,9 +769,9 @@ export class TrackView {
     r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
       + `<span class="cardBtns" role="toolbar" aria-label="Map controls">`
       + CARD_IDS.map((id) => `<button class="cbtn" type="button" data-cbtn="${id}" aria-expanded="false" hidden>${CARD_LABEL[id]}<span class="cn"></span></button>`).join('')
-      + `</span><span class="spacer"></span><span class="rate" role="status" aria-live="off"></span><span class="st" aria-live="polite"></span></div>`
+      + `</span><span class="brk" aria-hidden="true"></span><span class="spacer"></span><span class="rate" role="status" aria-live="off"></span><span class="st" aria-live="polite"></span></div>`
       + `<div class="trkMapHost"><div class="trkCards"></div><div class="trkPark" hidden>`
-      + card('list', o.listTitle, `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
+      + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabs" role="tablist" aria-label="Lists" hidden></span> <span class="n">0</span>`
         + `<span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<button class="mn" type="button" aria-label="Minimise the list" tabindex="-1">▾</button></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div></div>`)
       + card('tune', 'TUNE', `<div class="facts"></div><div class="trkSlot slot-tune"></div><div class="tunePop" role="menu" aria-label="Tune the radio"></div>`)
@@ -771,7 +779,7 @@ export class TrackView {
         + `<div class="sect scopeSect" hidden><div class="sh">SOURCES SHOWN</div><span class="rng scope" role="group" aria-label="Sources"></span><div class="note scopeNote2"></div></div>`)
       + card('map', 'MAP', `<div class="sect fitSect"><div class="sh">FIT</div><div class="row"><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">AUTO</button>`
         + `<button class="btn fitOnce" type="button">FIT</button></div><div class="sh fitToH" style="margin-top:8px" hidden>FIT TO</div><div class="fitSel" role="radiogroup" aria-label="Fit to" hidden></div><div class="note fitNote"></div></div>`
-        + `<div class="sect ctlSect" hidden><div class="sh">AIRCRAFT</div><div class="trkSlot slot-ctl"></div><div class="note farNote"></div></div>`
+        + `<div class="sect ctlSect" hidden><div class="sh">LAYER</div><div class="trkSlot slot-ctl"></div><div class="note farNote"></div></div>`
         + `<div class="sect rngSect"${o.ranges?.length ? '' : ' hidden'}><div class="sh">TIME</div>`
         + (o.ranges?.length ? `<span class="rng" role="group" aria-label="${esc(o.rangeLabel || 'Show what was heard in the last…')}" title="${esc(o.rangeHint || '')}">`
            + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
@@ -798,7 +806,6 @@ export class TrackView {
         this.refit = true;
       };
     }
-    this.setToggles(o.toggles ?? [], o.toggled ?? {});
     // ★★★ beta96 THE CARDS: each button opens / shuts its card; × shuts it; FIT (once) fits the chosen layer
     this.cardsEl = r.querySelector('.trkCards') as HTMLElement;
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
@@ -810,6 +817,7 @@ export class TrackView {
       for (const ev of ['mousedown', 'wheel', 'touchstart', 'dblclick', 'pointerdown']) c.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     (r.querySelector('.fitOnce') as HTMLButtonElement).onclick = () => this.fitOnce();
     this.cardsLoad();
+    this.setToggles(o.toggles ?? [], o.toggled ?? {});
     for (const id of CARD_IDS) this.cardsAvail(id, this.cardAvail.has(id) || (id === 'key' && !!o.legend));
     this.viewSync();
     this.cardsLayout();
@@ -899,6 +907,11 @@ export class TrackView {
   private layoutSig = '';
   /** Put the open cards in their columns (and the rest in the park), the buttons pressed, the obstacle told. */
   cardsLayout() {
+    if (!this.cardsEl) return;   // ★ still being made
+    { // ★ the MAP card's AIRCRAFT / beacon keys section: shown while a layer put keys in it (ADS-B, NDB)
+      const sl = this.root.querySelector('.slot-ctl') as HTMLElement | null, sc = this.root.querySelector('.ctlSect') as HTMLElement | null;
+      if (sl && sc) { const any = Array.from(sl.children).some((c) => !(c as HTMLElement).hidden); if (sc.hidden === any) sc.hidden = !any; }
+    }
     if (this.cardsNarrowWas !== null && this.cardsNarrowWas !== this.narrow()) { this.cardsLoad(); }
     this.root.toggleAttribute('data-narrow', this.narrow());
     const lim = this.cardLimit();
@@ -1657,7 +1670,7 @@ export class TrackView {
         onSelect: (h: string | null) => { this.layer?.select?.(null); this.markSel(h ? this.acHex.get(h) || '' : ''); },
       });
       this.placeAcObstacle();
-      (this.root.querySelector('.ctlSect') as HTMLElement).hidden = false;
+      this.cardsLayout();
       w.__vibeAcLayer = this.acLayer;   // ★ a handle for drivers (scripts/test-web-avmap.mjs), as __vibeTrkMap
     } catch (e) { console.error('[tracks] the aircraft layer could not start', e); this.acLayer = null; }
     if (this.o.mixed) this.applyCamera();

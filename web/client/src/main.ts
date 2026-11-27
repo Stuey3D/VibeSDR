@@ -11247,6 +11247,7 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
     rows.push({ name: f.title, what: `${(f.label || 'adsb').toUpperCase()} feed · ${f.state || 'unknown'}`, value: `${f.aircraft} aircraft`, down: !up });
   }
   v.setSources(rows.length > 1 ? rows : null);
+  v.cardsLayout();   // ★ a layer's keys came or went (NDB's RINGS / UNHEARD): the MAP card's section follows
 }
 /** ★ beta96 stage 8 the KEY's NDB rows (the beacon marker: dot + 3-bar meter, ndblayer.js's colours). */
 const NDB_LEGEND = '<div><b>NDB beacons</b></div><div><i style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ffb000;margin-right:6px"></i>Beacon heard, at its published position — bars: signal (1 red · 2 amber · 3 green)</div>'
