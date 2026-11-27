@@ -81,6 +81,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
          parsePacketFrame, packetFrameHead, packetHexGrouped, packetMergeLog, packetStatusExtra,
          type PacketCaps, type PacketMode, type PacketFrame } from '../../../src/services/packet';
 import { SatPanel, satSchedStored } from './satellites';
+import { SatStepKeeper, satClickDialHz, satPassbandOf, type SatPassband } from '../../../src/services/satTune';   // ★★★ beta97 tuning inside a pass
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { TrackView, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
@@ -340,7 +341,15 @@ let wheelTunes = false;
  *  move by the step. The same rule as the app's snapTap (SDRScreen onWfTapTune). */
 let tapSnap = true;
 /** Where a click at `rawHz` lands before any range rules: on the step grid, or the exact hertz with snapping off. */
-function tapHz(rawHz: number): number { return tapSnap ? snapToStep(rawHz, step) : Math.round(rawHz); }
+/* ★★★ beta97 (src/services/satTune.ts): with a satellite's Doppler lock live the DIAL is the satellite frame and the waterfall
+ *  is the received spectrum (the marker is drawn at dial + shift) — a tap takes the shift off before snapping, and a tap
+ *  inside the picked transponder's passband never snaps out of it (out = the server ends the lock). No lock: shift 0, the
+ *  ordinary snap. */
+function tapHz(rawHz: number): number {
+  let shift = 0, pb: SatPassband | null = null;
+  try { if (satPanel?.readout()) { shift = satMarkerOffset(); pb = satPassbandOf(satPanel.pickedTx()); } } catch { /* start-up: no panel yet */ }
+  return satClickDialHz(rawHz, shift, step, tapSnap, pb);
+}
 /** ★ The frequency label that follows the mouse over the waterfall (initPointerFreq). Default ON;
  *  the menu's FREQUENCY AT POINTER switch turns it off. `hidePtrFreq` is set once the label exists. */
 let ptrFreqOn = true;
@@ -11278,6 +11287,24 @@ function onVmReport(r: VorMapReport | null) {
   audio?.holdHealing(8000);   // ★ nothing to hear: the server sends no audio
   vmRender();
 }
+/* ★★★ beta97 THE SATELLITE VIEW TUNES IN 500 Hz (Stuart, RS-44: "can't manually move the VFO in a linear transponder window"
+ *  — the step was still WFM's 100 kHz, so a tap snapped past the signal and out of the passband, ending the lock). In: 500 Hz,
+ *  the listener's own step held (not saved: a reload keeps theirs). A step they choose in the view (setStep) stands for the
+ *  rest of the visit. Out: theirs back. One rule with the app (src/services/satTune.ts). */
+const satStepKeep = new SatStepKeeper();
+function satStepEnter() {
+  const v = satStepKeep.enter(step);
+  if (v == null) return;
+  step = v;
+  syncStep();
+  renderFreq();
+}
+function satStepLeave() {
+  const v = satStepKeep.leave(step);
+  if (v == null) return;
+  setStep(v);   // ★ saved: it is the listener's own step again
+  syncStep();
+}
 /* ★★ V12 SATELLITES (docs/v12/SATELLITE-ENGINE.md, satellites.ts): the panel is made on first use. */
 function satMarkerOffset(): number {
   const r = satPanel?.readout();
@@ -11311,7 +11338,8 @@ function satPanelGet(): SatPanel | null {
       },
       zoomView: (hz, span) => { if (spec) { spec.zoomSpan(hz, span); updateViewOverlays(); } },   // ★★ beta93 a new pick opens zoomed in
       pickGone: () => satFollow('', null),                           // ★★★ beta92 the server dropped the pick (tuned away)
-      left: () => { satFollow('', null); satVfoBDecoder(null); },
+      left: () => { satFollow('', null); satVfoBDecoder(null); satStepLeave(); },
+      entered: () => satStepEnter(),                                 // ★★★ beta97 the satellite view's 500 Hz step
       image: (slot) => satLendImage(slot),
       track: (norad, aos, los) => spec?.satTrack(norad, aos, los),   // ★ 1.7 the pass's path (geo → the dotted orbit)
       rxName: () => serverName,                                      // ★ 1.8 the receiver dot's label

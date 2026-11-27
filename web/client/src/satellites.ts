@@ -72,6 +72,8 @@ export interface SatPanelDeps {
   zoomView?: (hz: number, spanHz: number) => void;
   /** The mode was left: main.ts stops the followed decoder and takes its image canvas back. */
   left: () => void;
+  /** ★★★ beta97 into the mode: main.ts sets the satellite view's 500 Hz step (src/services/satTune.ts; left puts theirs back). */
+  entered?: () => void;
   /** Lend the decoder box's image canvas to `slot` (null = take it back). */
   image: (slot: HTMLElement | null) => void;
   /** ★ 1.7 {"type":"sat_list","op":"track"} — the pass's path (its `geo` draws the dotted orbit). Free: changes nothing. */
@@ -513,6 +515,7 @@ export class SatPanel {
     this.on = true;
     this.el.hidden = false;
     this.deps.list(); this.listAt = Date.now();
+    this.deps.entered?.();
     if (!this.timer) this.timer = window.setInterval(() => this.tick(), 1000);
     this.render();
   }
