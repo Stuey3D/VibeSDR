@@ -704,6 +704,25 @@ const CSS = `
 /* ★★★ TWEAK 4 (Stuart 11-27): a press on a chip EXPANDS it in place into its card (flush to the same edge, the dock's
  *  rim); its header shrinks it back. The tuck › stays the separate, deliberate action — smaller, set off by a rule. */
 .mDock.open{visibility:hidden}
+/* ★ the AIR & SEA list's own tags (acTags.ts) — the live ADS-B list's box */
+.trkRow .id b .tag{display:inline-block;margin-left:6px;padding:0 5px;border-radius:3px;font:700 8.5px/14px system-ui,sans-serif;letter-spacing:.06em;vertical-align:1px;flex:none}
+.trkRow .tag.em{background:#e04040;color:#fff}
+.trkRow .id b:has(.nmT){display:flex;align-items:center;min-width:0}
+.trkRow .id b .nmT{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.trkRow .tag.mil{background:rgba(90,170,255,.85);color:#06121f}
+/* ★★★ Stuart 12:15 / 12:18: every card OPAQUE (nothing reads through); the LIST a true drawer — flush to the left and the
+ *  bottom, no rim on the edge sides, a square corner (the window's own corner clips it), the safe area inside it; the
+ *  controller's green focus ring drawn INSIDE (no clipping at the edge, no layout shift) */
+.trkCards .trkCard2{background:#0b110d!important}
+.trkCards .sideB>.trkCard2[data-card="list"]{border-left-width:0!important;border-bottom-width:0!important;border-radius:0 12px 0 0!important;
+  padding-left:env(safe-area-inset-left,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
+.trkCards .trkCard2.gpFocus,.trkCards .trkCard2 .gpFocus{outline-offset:-3px!important}
+.trkCards .trkCard2[data-card="list"].stepAside{visibility:hidden;transform:translateY(105%);transition:transform .2s ease,visibility 0s linear .2s}
+.trkCards .trkCard2[data-card="list"]{transition:transform .2s ease}
+.mChipsBL .mDock.aside{visibility:visible!important;opacity:.55}
+/* ★ HELP grows out of its ? — its bottom-right corner ON the button */
+.trkCards .sideH{right:var(--trk-help-r,10px)!important;bottom:var(--trk-help-b,40px)!important;top:12px!important}
+.trkCards .sideH>.trkCard2{max-height:100%;transform-origin:bottom right}
 /* ★★★ tweak 5 (Stuart 11-27: "other cards can cover the list with a drop shadow to show they are the top layer"): ONE rule —
  *  the LIST's side is the bottom layer, every transient card's side above it (whatever the order they opened in), with a
  *  shadow in the map chrome's own dark. The LIST's top stops under the left chips (--trk-cb-top), so they stay pressable. */
@@ -1030,7 +1049,11 @@ export class TrackView {
     // ★★★ beta96 THE CARDS: each button opens / shuts its card; × shuts it; FIT (once) fits the chosen layer
     this.cardsEl = r.querySelector('.trkCards') as HTMLElement;
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
-    for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
+    for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => {
+      // ★ the LIST stepped aside for a card: its chip brings it back (the card folds), never shuts it
+      if (b.dataset.cbtn === 'list' && this.listAside) { this.closeTransients(); return; }
+      this.cardOpen(b.dataset.cbtn as CardId, !this.isCardOpen(b.dataset.cbtn as CardId), true);
+    };
     // ★★★ tweak 4 (Stuart 11-27): the open card IS the chip, expanded in place — a press on its header (or its ‹ / ›) shrinks
     //     it back to the chip; the tuck to the edge stays the separate, deliberate › / drag / flick on the chip
     for (const ch of Array.from(r.querySelectorAll('.trkCard2 > .ch')) as HTMLElement[]) {
@@ -1241,7 +1264,7 @@ export class TrackView {
     this.cardsEl.classList.toggle('both', false);
     this.cardsEl.classList.toggle('lAndB', false);   // ★ tweak 5: a transient card simply lies OVER the list (its shadow says so)
     this.listRefit();
-    if (sig === this.layoutSig) { this.cardsAnchor(place); return; }   // ★ a data tick: only the anchors follow the chips
+    if (sig === this.layoutSig) { this.cardsAnchor(place); this.listStepAside(); return; }   // ★ a data tick: only the anchors follow the chips
     this.layoutSig = sig;
     /* ★★★ tweak 5 (Stuart 11-27: "the list keeps popping open every refresh of data"): a card is MOVED only when its own
      *  place changes — one already where it belongs is never re-inserted (a re-insert restarts its pop-out animation and
@@ -1270,6 +1293,8 @@ export class TrackView {
     }
     if (focused && focused !== document.activeElement && this.root.contains(focused) && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
     this.cardsAnchor(place);
+    this.listStepAside();
+    setTimeout(() => this.listStepAside(), 30);   // ★ once the new card has its size
     setTimeout(() => { this.placeAcObstacle(); try { this.af?.poke?.(); } catch { /* none */ } }, 0);
   }
   /** ★★★ tweak 4: each side's cards open AT their chip — the left / right column's top is its first open chip's top, the
@@ -1280,6 +1305,8 @@ export class TrackView {
     const top = (ids: CardId[]) => Math.min(...ids.map((id) => { const b = dockTop(id); return b ? b.top - m.top : 1e9; }));
     const setv = (k: string, v: string) => { if (this.root.style.getPropertyValue(k) !== v) this.root.style.setProperty(k, v); };
     if (place.L.length) setv('--trk-cl-top', `${Math.max(6, Math.round(top(place.L)))}px`);
+    { const hb = (this.root.querySelector('.mHelp') as HTMLElement | null)?.getBoundingClientRect();
+      if (hb && hb.width) { setv('--trk-help-r', `${Math.round(m.right - hb.right)}px`); setv('--trk-help-b', `${Math.round(m.bottom - hb.top)}px`); } }
     if (place.R.length) setv('--trk-cr-top', `${Math.max(6, Math.round(top(place.R)))}px`);
     if (place.B.length) { const b = dockTop('list'); if (b) setv('--trk-cb-bottom', `${Math.max(0, Math.round(m.bottom - b.bottom))}px`); }
     { /* ★★★ Stuart 11:48 "wrong layering": the LIST never grows over the chips on its edge — its top stops under the left
@@ -1299,6 +1326,33 @@ export class TrackView {
       const lc = place.B.includes('list') ? (this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null)?.getBoundingClientRect() : null;
       if (lc && lc.width) setv('--trk-list-w', `${Math.ceil(lc.right - m.left) + 8}px`);
     }
+  }
+  /** ★★★ Stuart 12:18 ("the list auto hides when it will clip"): while a transient card would OVERLAP the LIST drawer, the
+   *  LIST steps aside (down into its chip — dimmed, it is only away for the moment; a press brings it back and folds the
+   *  card). Measured, never by window size; its node, scroll, tab and its remembered-open state untouched; no re-fit. */
+  private listAside = false;
+  private listStepAside() {
+    const list = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
+    const dock = this.root.querySelector('.mDock[data-dock="list"]') as HTMLElement | null;
+    if (!list || !dock) return;
+    const listOpen = !list.hidden && list.parentElement?.classList.contains('sideB');
+    const r = (c: HTMLElement) => { const p = (c.parentElement as HTMLElement).getBoundingClientRect(); return { l: p.left + c.offsetLeft, t: p.top + c.offsetTop, r: p.left + c.offsetLeft + c.offsetWidth, b: p.top + c.offsetTop + c.offsetHeight }; };
+    let aside = false;
+    if (listOpen) {
+      const L = r(list);
+      for (const c of Array.from(this.cardsEl.querySelectorAll('.sideL > .trkCard2, .sideR > .trkCard2, .sideH > .trkCard2')) as HTMLElement[]) {
+        if (c.hidden) continue;
+        const T = r(c);
+        if (T.l < L.r - 1 && T.r > L.l + 1 && T.t < L.b - 1 && T.b > L.t + 1) { aside = true; break; }
+      }
+    }
+    if (aside === this.listAside) return;
+    this.listAside = aside;
+    list.classList.toggle('stepAside', aside);
+    list.setAttribute('aria-hidden', String(aside));
+    list.toggleAttribute('inert', aside);
+    dock.classList.toggle('aside', aside);
+    dock.title = aside ? 'The list is tucked away while that card is open — press to bring it back' : '';
   }
   /** ★★★ tweak 3 the LAYERS chip: a glyph and a count per layer present ([plane] 157 [ship] 3 [NAVTEX] 40); a slim column
    *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */

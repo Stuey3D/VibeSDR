@@ -12,6 +12,7 @@
  *   HTML, and the callsign is cut to the characters a callsign has.
  */
 import type { AdsbAircraft, AdsbReport } from './spectrum';
+import { acTagHtml } from '../../../src/utils/acTags';
 import { dataUrl } from './origin';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the reply SNR chip
 import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
@@ -271,7 +272,8 @@ export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = 
     const tracked = trk != null && trk >= 1 ? `<small class="trk">tracked ${Math.round(trk)} NM</small>` : '';
     const em = emergency(a);
     const bars = snrChipHtml('adsb', num(a.snr));   // ★ beta96 (replaced the 3-bar meter)
-    const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
+    // ★ beta96 the tags are acTags.ts's (one source with the AIR & SEA list and the app); the emergency keeps the house badge
+    const tag = (badge ? `<span class="tag em" data-tag="emerg">${esc(badge)}</span>` : '') + (mil ? acTagHtml('mil') : '');
     return `<div class="adsbRow${keyPrefix ? ' trkRow' : ''}${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
       + (keyPrefix ? ` data-key="${esc(keyPrefix + hex)}"` : '')
       + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`

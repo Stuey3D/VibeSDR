@@ -83,7 +83,8 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
 import { SatPanel, satSchedStored } from './satellites';
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
-import { fitDefault, rateWords } from '../../../src/utils/mapCards';   // ★★★ beta96 the map control cards' shared rules
+import { fitDefault, rateWords } from '../../../src/utils/mapCards';
+import { acTagsFor, acTagHtml } from '../../../src/utils/acTags';   // ★★★ beta96 MIL / emergency tags, one source   // ★★★ beta96 the map control cards' shared rules
 import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -10246,9 +10247,9 @@ function trkFlagHtml(flag: string | undefined): string {
   return /Windows/.test(navigator.userAgent || '') ? `<span class="cc">${iso}</span> ` : `<span class="flag">${String.fromCodePoint(...cps)}</span> `;
 }
 function trkRowHtml(x: { key: string; colour: string; flag?: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean; dx?: boolean;
-                     snr?: number; snrMode?: string }): string {   // ★ beta96 snr: the message's SNR chip (stored ships, sondes …)
+                     snr?: number; snrMode?: string; mil?: boolean }): string {   // ★ beta96 snr: the message's SNR chip (stored ships, sondes …)
   return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}${x.dx ? ' dx' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
+    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${trkFlagHtml(x.flag)}<span class="nmT">${escapeHtml(x.name)}</span>${acTagsFor({ mil: x.mil }).map(acTagHtml).join('')}</b><small>${escapeHtml(x.second)}</small></span>`
     + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${snrChipHtml(x.snrMode, x.snr)}${x.dx ? '<span class="dxTag">DX</span>' : ''}${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */

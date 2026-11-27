@@ -378,7 +378,7 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
     const rb = rx && p.lat != null && p.lon != null ? rangeBearing(rx, p.lat, p.lon) : null;
     // ★ beta91 the operator and the flag for every source (the ADS-B list's own: opName, else the badge code)
     const who = [p.reg && p.reg !== avName(p) ? p.reg : '', p.icao && p.icao !== avName(p) ? p.icao : '', p.type ?? '',
-                 p.info?.opName || p.info?.op || '', p.info?.mil ? 'MIL' : ''].filter(Boolean).join(' · ');
+                 p.info?.opName || p.info?.op || ''].filter(Boolean).join(' · ');   // ★ MIL is a tag beside the name now (acTags.ts)
     const dbRoute = !(p.from && p.to) ? routeShort(p.info?.route) : '';
     return {
       key: `a:${p.key}`, colour: avColour(p), flag: flagEmoji(p.info?.country), name: avName(p),
@@ -388,6 +388,7 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
       // ★ beta95 NM on the aviation map — the list, the card and the rings agree
       range: rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM` : p.lat == null ? 'no position' : '',
       brg: rb ? compass8(rb.brg) : '', noPos: p.lat == null, age: ago(Math.min(p.age, ...Object.values(p.srcAge))), em: false,
+      mil: !!p.info?.mil,
     };
   });
 }

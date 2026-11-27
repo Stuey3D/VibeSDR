@@ -375,6 +375,8 @@ export interface TrackRow {
   range: string; brg: string; noPos: boolean; age: string; em: boolean;
   /** ★ beta95 a DX ship (aisDx.ts): the list tags it in gold */
   dx?: boolean;
+  /** ★ beta96 a military aircraft: the MIL tag beside its name (acTags.ts) */
+  mil?: boolean;
   /** ★ beta96 the message's SNR (dB, its decoder's own measure) and which scale colours it (src/utils/snrColour.ts) —
    *  the row's colour-coded chip; absent = no chip (an older server, a source that does not measure). */
   snr?: number; snrMode?: string;
