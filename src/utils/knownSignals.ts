@@ -76,7 +76,7 @@ export interface KnownSignal {
   /** ★★ beta91 a SATELLITE IN RANGE (satLabelSignals): the birds it names (one, or a label-only constellation's several
    *  merged), the highest one's elevation, and whether it is a band constellation's merged label (`b`: ORBCOMM — its tap
    *  only tunes; ORBCOMM is decoded from a SATELLITE pick, 2026-11-24). */
-  sat?: { names: string[]; tx: string; el: number; labelOnly: boolean };
+  sat?: { names: string[]; tx: string; el: number; labelOnly: boolean; guess?: boolean };
   /** ★★ beta92 a BAND SKIMMER signal (services/bandSkim.ts bandSkimLabels): its mode and the callsign read ("" = not yet). */
   skim?: { mode: 'CW' | 'RTTY'; call: string };
 }
@@ -562,6 +562,10 @@ export function isTagLabel(s: KnownSignal | null | undefined): boolean {
  *  ★ Switched with the other signal labels (Display settings' SIGNAL LABELS); the owner's "satlabels" stops the server. */
 /** Satellite labels' colour: a pale sky blue — not the bookmarks' lilac, the DX lemon, the VFO's red or DAB's pink. */
 export const SAT_LABEL_COLOUR = '#a8d8ff';
+/** ★★ b97 A GUESSED satellite name (Stuart 11-27, XCover: "ORBCOMM FM116" on a carrier the decoder had not named): amber —
+ *  not red (red reads as an error) — and the text ends "?" ("ORBCOMM FM116?"). Once the decoder names that carrier the label
+ *  is the ordinary sky blue, exactly as before. Which names are guesses: src/utils/orbcommView.ts orbLabelPlan. */
+export const SAT_GUESS_COLOUR = '#ffb833';
 /** A satellite downlink's priority: below the curated table, above every bookmark; a label-only bird's, EiBi's. */
 export const PRIO_SAT = 5;
 /** Satellite labels not refreshed for this long are dropped (ms) — the server sends every 4 s while one is up. */
@@ -569,7 +573,9 @@ export const SATLABEL_STALE_MS = 15_000;
 /** The most a message may carry (the server's kSkyLabelMax). */
 export const SATLABEL_MAX = 24;
 /** One downlink as the server sends it. */
-export interface SatLabelEntry { id: string; n: string; norad: number; tx: string; hz: number; lo?: number; hi?: number; r: number; el: number; m: string; b: boolean }
+export interface SatLabelEntry { id: string; n: string; norad: number; tx: string; hz: number; lo?: number; hi?: number; r: number; el: number; m: string; b: boolean;
+  /** ★★ b97 the name is only a GUESS (a predicted channel, not confirmed by the decoder) — never on the wire: orbLabelPlan sets it */
+  g?: boolean }
 const SAT_MODES = new Set(['nfm', 'usb', 'lsb', 'cw', 'am']);
 /** A `sat_labels` message, checked: finite, 1 MHz – 10 GHz, a band ≤ 2 MHz wide, names trimmed, at most SATLABEL_MAX. */
 export function parseSatLabels(msg: unknown): SatLabelEntry[] {
@@ -633,8 +639,9 @@ export function satLabelSignals(entries: readonly SatLabelEntry[] | null | undef
     }
     const move = e.r * dt;
     const hz = Math.round(e.hz + move);
-    const s: KnownSignal = { hz, label: satLabelText(e.n, e.tx), dec: '', dialHz: hz, mode: e.m,
+    const s: KnownSignal = { hz, label: satLabelText(e.n, e.tx) + (e.g ? '?' : ''), dec: '', dialHz: hz, mode: e.m,
                              prio: e.b ? PRIO_EIBI : PRIO_SAT, src: 'sat', sat: { names: [e.n], tx: e.tx, el: e.el, labelOnly: e.b } };
+    if (e.g) s.sat!.guess = true;   // ★★ b97 amber, ORBCOMM FM116?
     if (e.lo != null && e.hi != null) { s.lo = Math.round(e.lo + move); s.hi = Math.round(e.hi + move); }
     out.push(s);
   }
@@ -658,6 +665,7 @@ export function satLabelHint(s: KnownSignal): string {
   const m = s.sat;
   if (!m) return s.label;
   const up = `${Math.round(m.el)}° up`;
+  if (m.guess) return `${m.names[0]}? — a guess from its predicted channel; the ORBCOMM decoder has not named this carrier; ${up}`;
   if (m.labelOnly) return `${m.names.join(', ')} — commercial data messaging; decoded from a SATELLITE pick (housekeeping only — subscriber messages are never decoded); ${up}; Doppler-shifted`;
   return `${m.names[0]} — ${m.tx}, ${up}; at its Doppler-shifted frequency now`;
 }
@@ -668,7 +676,7 @@ export function withSatLabels(list: readonly KnownSignal[], sats: readonly Known
 }
 /** ★ A label's colour, line and text alike: a DX catch's lemon, a satellite's sky blue, else the labels' lilac. */
 export function knownLabelColour(s: KnownSignal | null | undefined): string {
-  return s && s.dx ? DX_LABEL_COLOUR : s && s.src === 'sat' ? SAT_LABEL_COLOUR : s && s.skim ? SKIM_LABEL_COLOUR[s.skim.mode] : KNOWN_LABEL_COLOUR;
+  return s && s.dx ? DX_LABEL_COLOUR : s && s.src === 'sat' ? (s.sat?.guess ? SAT_GUESS_COLOUR : SAT_LABEL_COLOUR) : s && s.skim ? SKIM_LABEL_COLOUR[s.skim.mode] : KNOWN_LABEL_COLOUR;
 }
 /** ★★ beta92 a band skimmer mark's colour: its mode's (digiModes.ts — teal CW, olive RTTY; kept equal by test_band_skim). */
 export const SKIM_LABEL_COLOUR: Readonly<Record<'CW' | 'RTTY', string>> = { CW: '#44AA99', RTTY: '#999933' };

@@ -60,7 +60,7 @@ import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRo
 import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, labelStems, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, SAT_LABEL_COLOUR, isSatLabel, knownLabelColour, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
-import { orbOverlayLayout, ORB_OVERLAY_COLOUR, ORB_SLICE_LABEL, type OrbOverlay } from '../../../src/utils/orbcommView';   // ★★ 2026-11-24
+import { orbOverlayLayout, ORB_OVERLAY_COLOUR, ORB_GUESS_COLOUR, ORB_SLICE_LABEL, type OrbOverlay } from '../../../src/utils/orbcommView';   // ★★ 2026-11-24
 import { tunedPick, tunedLabelX, vfoLabelLayout, utcMinutes, type Passband, type TunedRow, type TunedPick, type VfoLabelPlan, type VfoBlockedBox } from '../../../src/utils/tunedStation.ts';
 import { withDabBlocks, isDabBlockSignal, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, type DabBlockSignal } from '../../../src/utils/dabBlockView.ts';
 
@@ -1855,7 +1855,7 @@ export class Waterfall {
         const w = ctx.measureText(m.label).width + 6 * dpr, y = yT + 1.6 * r + 12 * dpr;
         const lx = Math.max(0, Math.min(W - w, m.x - w / 2));
         ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(lx, y - 10 * dpr, w, 13 * dpr);
-        ctx.fillStyle = ORB_OVERLAY_COLOUR; ctx.textAlign = 'left'; ctx.fillText(m.label, lx + 3 * dpr, y);
+        ctx.fillStyle = m.guess ? ORB_GUESS_COLOUR : ORB_OVERLAY_COLOUR; ctx.textAlign = 'left'; ctx.fillText(m.label, lx + 3 * dpr, y);   // ★★ b97 a guess: amber, "FM116?"
       }
     }
     ctx.restore();

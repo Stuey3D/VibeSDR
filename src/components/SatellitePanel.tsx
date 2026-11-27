@@ -39,7 +39,7 @@ import SkyPlotView from './SkyPlotView';   // ★★ 2026-11-24 the ORBCOMM sky 
 import { SnrChip } from './SnrChip';   // ★ beta96 the colour-coded SNR per packet
 import { ORB_CARRIER_CHOICES, ORB_CAVEAT, orbCarriersLabel, orbCountsText, orbFollowText, orbHeadText, orbNoteText, orbPktHex, orbPktLine, orbSatLines, orbShownSats,
          type OrbFollow, type OrbView } from '../services/orbcomm';
-import { ORB_NO_TUNE } from '../utils/orbcommView';
+import { ORB_NO_TUNE, ORB_GUESS_COLOUR, orbRowGuess, type OrbLabelPlan } from '../utils/orbcommView';
 // ★★★ beta94 THE TRANSPONDER FINDER — one set of words and rules with the web page (services/xpdr.ts)
 import { xpdrAgo, xpdrFaded, xpdrFollowText, xpdrFreqText, xpdrHint, xpdrListenable, xpdrListenLabel, xpdrRowsSorted, xpdrWhat, type XpdrRow, type XpdrStatus } from '../services/xpdr';
 import { parseSkyPlotJson, skyCellsAddDots, skyPlotMerge, skyPlotQuery, skySummaryFor, SKY_PLOT_WHAT, type SkyCells, type SkyDot, type SkyMode } from '../utils/skyPlot';
@@ -151,6 +151,9 @@ export interface SatellitePanelProps {
    *  under AUTO — carriers at most (0 = AUTO) — and its press (the app re-attaches with "max_carriers"); the server's sky
    *  plot read through `skyGet` (the gallery's reader) for THIS radio (`skyRadio`, '' = the server's only one). */
   orbcomm?: OrbView | null;
+  /** ★★ b97 confirmed vs guessed carrier names (utils/orbcommView.ts orbLabelPlan — the waterfall's labels read the same):
+   *  an unnamed row whose carrier sits on a predicted channel reads "probably FM116?" in amber, as the label does. */
+  orbPlan?: OrbLabelPlan | null;
   /** ★★★ beta94 THE BOX FOLLOWS THE DECODER (services/orbcomm.ts orbFollowChoice): the bird the box shows for an ORBCOMM pick
    *  — the pick, or once its pass is over the bird the decoder hears now (else the next to rise). null = the pick. */
   follow?: OrbFollow | null;
@@ -668,13 +671,16 @@ export default function SatellitePanel(p: SatellitePanelProps) {
                   {!!orbNoteText(orbStatus) && <Text style={s.detailNp}>{orbNoteText(orbStatus)}</Text>}
                   {!!orbCountsText(orbStatus?.counts) && <Text style={s.detailNp}>{`Packets: ${orbCountsText(orbStatus?.counts)}`}</Text>}
                   {/* ★★ the birds listed now, then the held ones dimmed with their age (a carrier drop no longer blanks one) */}
-                  {orbShownSats(p.orbcomm).map(({ sat: b, heldSecs }) => (
+                  {orbShownSats(p.orbcomm).map(({ sat: b, heldSecs }) => {
+                    const guess = !b.norad && heldSecs == null ? orbRowGuess(p.orbPlan, b.carrier) : '';   // ★★ b97 amber, as the label
+                    return (
                     <View key={`${b.norad}.${b.carrier}${heldSecs != null ? 'h' : ''}`} style={[s.orbBird, heldSecs != null && s.orbHeld]}>
-                      {orbSatLines(b, p.orbcomm?.clockOff[b.norad], heldSecs).map((l, i) => (
-                        <Text key={i} style={[s.mono, i === 0 && s.orbName]} selectable>{l}</Text>
+                      {orbSatLines(b, p.orbcomm?.clockOff[b.norad], heldSecs, guess).map((l, i) => (
+                        <Text key={i} style={[s.mono, i === 0 && s.orbName, i === 0 && !!guess && s.orbGuess]} selectable>{l}</Text>
                       ))}
                     </View>
-                  ))}
+                    );
+                  })}
                   {/* ★ the manual fallback under AUTO: how many carriers the decoder follows at most (AUTO = the server's 4) */}
                   {!!p.onOrbMax && (
                     <View style={s.leadRowNp}>
@@ -918,6 +924,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   caveat:  { color: T.value },
   orbBird: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.divider, paddingTop: 4, marginTop: 2 },
   orbName: { color: T.accent },
+  orbGuess: { color: ORB_GUESS_COLOUR },   // ★★ b97 a guessed name — the waterfall's amber
   orbHeld: { opacity: 0.5 },
   orbSky:  { marginVertical: 4, gap: 2 },
   orbHead: { letterSpacing: 1, marginTop: 4 },

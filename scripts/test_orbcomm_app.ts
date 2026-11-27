@@ -12,7 +12,8 @@ import { REACH_DECODERS } from '../src/services/sdrTypes';
 import { CLIENT_DECODERS } from '../src/constants/modeBox';
 import { orbFollowChoice, orbFollowText, orbHeldText, orbIsBird, orbShownSats, orbViewEmpty, ORB_HOLD_SEC } from '../src/services/orbcomm';
 import type { SatList, SatTx } from '../src/services/satellites';
-import { orbOverlayFrom, orbOverlayKey, orbOverlayLayout, ORB_NO_TUNE, ORB_SLICE_LABEL } from '../src/utils/orbcommView';
+import { orbOverlayFrom, orbOverlayKey, orbOverlayLayout, ORB_NO_TUNE, ORB_SLICE_LABEL, orbLabelPlan, orbRowGuess, ORB_MATCH_HZ, ORB_GUESS_COLOUR } from '../src/utils/orbcommView';
+import { satLabelSignals, knownLabelColour, satLabelHint, SAT_LABEL_COLOUR, SAT_GUESS_COLOUR, type SatLabelEntry } from '../src/utils/knownSignals';
 
 let fail = 0, pass = 0;
 const ok = (c: boolean, what: string) => { console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); if (c) pass++; else fail++; };
@@ -277,6 +278,102 @@ console.log('── ★★★ beta94 the box follows the decoder after the pick\
   f = orbFollowChoice(A, St({ ended: true, follow: 0 }), L([sat(A, 'ORBCOMM FM117', [pass(now + 30, now + 500)]), ...list.sats.slice(2)]), now);
   ok(f.norad === A && f.why === 'pick', 'the pick itself the next to rise: its own pass, no words');
   ok(orbIsBird(sat(1, 'ORBCOMM FM1', [], [])) && orbIsBird(sat(2, 'Some name', [], orbTx)) && !orbIsBird(list.sats[4]), 'an ORBCOMM bird: by its decoder or its name');
+}
+
+/* ★★ b97 CONFIRMED vs GUESSED (src/utils/orbcommView.ts orbLabelPlan — Stuart 11-27, the XCover's ORBCOMM screenshot: the
+ *  spectrum named TWO carriers "ORBCOMM FM116" while the card named one and listed the other "not yet named"). One source
+ *  for the waterfall's satellite labels, the slice's carrier marks and the card: a carrier is FM116 only when the decoder
+ *  named that carrier; a name only predicted is amber with "?"; once confirmed, the label is the ordinary sky blue. */
+console.log('b97 ORBCOMM labels agree with the decoder');
+{
+  // the screenshot: FM116 named by channel + Doppler on 137.6623; a second carrier on 137.8000 not yet named — where the
+  // server's sat_labels predicted FM116 (its catalogue channel + Doppler)
+  const FM116 = 41187;
+  const st = parseOrbcommStatus({
+    t: 1795609729, pick: FM116, up: 1, dots: [],
+    slice: { rate: 768000, centre: 137500000, lo: 137200000, hi: 137800000 },
+    sats: [
+      { norad: FM116, name: 'ORBCOMM FM116', how: 'doppler', carrier: 1, rf: 137662300, el: 30, ok: 40 },
+      { norad: 0, name: 'ORBCOMM (not yet named)', how: '', carrier: 2, rf: 137800000, ok: 3 },
+    ],
+    carriers: [
+      { id: 1, rf: 137662300, lock: true, sat: 'ORBCOMM FM116', norad: FM116, how: 'doppler' },
+      { id: 2, rf: 137800000, lock: true },
+    ],
+  })!;
+  ok(st.carriers[0].norad === FM116 && st.carriers[0].how === 'doppler' && st.carriers[1].norad === 0 && st.carriers[1].sat === '',
+     'the status: a named carrier carries its catalogue number and how; an unnamed one none');
+  const predicted: SatLabelEntry = { id: 'ORBCOMM-FM116', n: 'ORBCOMM FM116', norad: FM116, tx: 'ORBCOMM', hz: 137800400, r: -20, el: 30, m: 'nfm', b: false };
+  const iss: SatLabelEntry = { id: 'ISS', n: 'ISS', norad: 25544, tx: 'Voice / SSTV', hz: 145802254, r: -20, el: 37, m: 'nfm', b: false };
+  const band: SatLabelEntry = { id: 'ORBCOMM-FM114', n: 'ORBCOMM FM114', norad: 41185, tx: 'ORBCOMM', hz: 137500000, lo: 137200000, hi: 137800000, r: 0, el: 20, m: 'nfm', b: true };
+
+  // the plan (before b97 the labels drew FM116 at its predicted 137.8004 — on the unnamed carrier — beside the named one)
+  const plan = orbLabelPlan([predicted, iss, band], st);
+  const sigs = satLabelSignals(plan.entries);
+  const fm116 = sigs.filter((x) => /FM116/.test(x.label));
+  const on = (hz: number) => fm116.filter((x) => Math.abs(x.hz - hz) <= ORB_MATCH_HZ);
+  ok(on(137662300).length === 1 && on(137662300)[0].label === 'ORBCOMM FM116' && !on(137662300)[0].sat!.guess,
+     `the carrier the decoder named: "ORBCOMM FM116", confirmed (${fm116.map((x) => `${x.label}@${x.hz}`).join(' / ')})`);
+  ok(knownLabelColour(on(137662300)[0]) === SAT_LABEL_COLOUR, '…in the ordinary satellite sky blue, exactly as before');
+  ok(on(137800000).length === 0, 'the UNNAMED carrier is never labelled FM116 (FM116 is confirmed elsewhere — its prediction is dropped)');
+  ok(fm116.length === 1, 'one name on one carrier');
+  ok(sigs.some((x) => x.label === 'ISS Voice/SSTV' && !x.sat!.guess) && sigs.some((x) => x.label === 'ORBCOMM FM114' && x.sat!.labelOnly),
+     'other satellites, and ORBCOMM\'s band label, untouched');
+  const ov = orbOverlayFrom(st, [predicted, iss, band])!;
+  ok(ov.carriers.find((c) => c.rf === 137662300)!.label === 'FM116' && !ov.carriers.find((c) => c.rf === 137662300)!.guess
+     && ov.carriers.find((c) => c.rf === 137800000)!.label === '', 'the slice\'s marks: FM116 on the named carrier, nothing on the other');
+  const rows = st.sats;
+  ok(orbRowGuess(plan, rows[1].carrier) === '' && orbSatLines(rows[1], undefined, undefined, orbRowGuess(plan, rows[1].carrier))[0] === 'ORBCOMM (not yet named) · not yet named',
+     'the card\'s unnamed row stays plainly "not yet named" (no guess: FM116 is confirmed on the other carrier)');
+
+  // ── no decoder confirmation yet: the unnamed carrier sits on FM116's predicted channel → a GUESS, amber "?"
+  const st2 = parseOrbcommStatus({ t: 1795609729, pick: FM116, up: 1, dots: [], slice: { rate: 768000, centre: 137500000, lo: 137200000, hi: 137800000 },
+    sats: [{ norad: 0, name: 'ORBCOMM (not yet named)', how: '', carrier: 2, rf: 137800000, ok: 3 }],
+    carriers: [{ id: 2, rf: 137800000, lock: true }] })!;
+  const plan2 = orbLabelPlan([predicted], st2);
+  const g = satLabelSignals(plan2.entries);
+  ok(g.length === 1 && g[0].label === 'ORBCOMM FM116?' && g[0].sat!.guess === true, `an unconfirmed carrier near FM116's predicted channel: "${g[0]?.label}" (a guess)`);
+  ok(knownLabelColour(g[0]) === SAT_GUESS_COLOUR && SAT_GUESS_COLOUR === '#ffb833' && SAT_GUESS_COLOUR !== SAT_LABEL_COLOUR, '…in AMBER (not red), not the sky blue');
+  ok(/guess/.test(satLabelHint(g[0])), 'its hint says it is a guess');
+  const ov2 = orbOverlayFrom(st2, [predicted])!;
+  ok(ov2.carriers[0].label === 'FM116?' && ov2.carriers[0].guess === true, 'the slice\'s mark under it: amber "FM116?"');
+  const lay = orbOverlayLayout(ov2, (hz) => (hz - 137.2e6) / 1000, 600);
+  ok(lay.marks[0].guess === true && ORB_GUESS_COLOUR === SAT_GUESS_COLOUR, 'the layout keeps the guess for the draw (the same amber)');
+  ok(orbOverlayKey(ov2) !== orbOverlayKey({ ...ov2, carriers: ov2.carriers.map((c) => ({ ...c, guess: false })) }), 'the redraw key changes when a guess is confirmed');
+  const g2 = orbRowGuess(plan2, 2);
+  ok(g2 === 'ORBCOMM FM116' && orbSatLines(st2.sats[0], undefined, undefined, g2)[0] === 'ORBCOMM (not yet named) · not yet named · probably FM116?',
+     'the card\'s row for that carrier: "probably FM116?" — the same guess, from the same plan');
+  ok(orbSatLines(rows[0], undefined, undefined, 'ORBCOMM FM999')[0] === 'ORBCOMM FM116 · named by its channel and Doppler', 'a NAMED row never shows a guess');
+
+  // ── then the decoder confirms that carrier: the ordinary label, no "?"
+  const st3 = parseOrbcommStatus({ t: 1795609731, pick: FM116, up: 1, dots: [], slice: { rate: 768000, centre: 137500000, lo: 137200000, hi: 137800000 },
+    sats: [{ norad: FM116, name: 'ORBCOMM FM116', how: 'position', carrier: 2, rf: 137800000, ok: 9 }],
+    carriers: [{ id: 2, rf: 137800000, lock: true, sat: 'ORBCOMM FM116', norad: FM116, how: 'position' }] })!;
+  const c3 = satLabelSignals(orbLabelPlan([predicted], st3).entries);
+  ok(c3.length === 1 && c3[0].label === 'ORBCOMM FM116' && !c3[0].sat!.guess && knownLabelColour(c3[0]) === SAT_LABEL_COLOUR && c3[0].hz === 137800000,
+     `confirmed by the decoder: "${c3[0]?.label}" on the carrier, sky blue (no "?")`);
+  ok(orbOverlayFrom(st3, [predicted])!.carriers[0].label === 'FM116' && !orbOverlayFrom(st3, [predicted])!.carriers[0].guess, 'its mark too');
+
+  // ── no decoder running (not an ORBCOMM pick): an ORBCOMM channel label is a prediction — a guess
+  const nd = satLabelSignals(orbLabelPlan([predicted, iss], null).entries);
+  ok(nd.find((x) => /FM116/.test(x.label))!.label === 'ORBCOMM FM116?' && nd.find((x) => x.label === 'ISS Voice/SSTV')!.sat!.guess !== true,
+     'no ORBCOMM decoder: "ORBCOMM FM116?" (predicted), the ISS unchanged');
+
+  // ── a prediction landing on a carrier the decoder names as ANOTHER bird: dropped (one carrier, one name)
+  const st4 = parseOrbcommStatus({ t: 1795609729, pick: 0, up: -1, dots: [], slice: { rate: 768000, centre: 137500000, lo: 137200000, hi: 137800000 },
+    sats: [], carriers: [{ id: 5, rf: 137800000, lock: true, sat: 'ORBCOMM FM108', norad: 41179, how: 'position' }] })!;
+  const s4 = satLabelSignals(orbLabelPlan([predicted], st4).entries);
+  ok(!s4.some((x) => /FM116/.test(x.label)) && s4.some((x) => x.label === 'ORBCOMM FM108' && x.hz === 137800000 && !x.sat!.guess),
+     `FM116 predicted on FM108's carrier: only FM108 is named there (${s4.map((x) => x.label).join(' / ')})`);
+
+  // ── the decoder names ONE bird on TWO carriers: both labelled, and the card lists both
+  const st5 = parseOrbcommStatus({ t: 1795609729, pick: FM116, up: 1, dots: [], slice: { rate: 768000, centre: 137500000, lo: 137200000, hi: 137800000 },
+    sats: [{ norad: FM116, name: 'ORBCOMM FM116', how: 'id', carrier: 2, rf: 137800000, ok: 50, rfs: [137662300, 137800000] }],
+    carriers: [{ id: 1, rf: 137662300, lock: true, sat: 'ORBCOMM FM116', norad: FM116, how: 'position' },
+               { id: 2, rf: 137800000, lock: true, sat: 'ORBCOMM FM116', norad: FM116, how: 'id' }] })!;
+  const s5 = satLabelSignals(orbLabelPlan([predicted], st5).entries);
+  ok(s5.filter((x) => x.label === 'ORBCOMM FM116' && !x.sat!.guess).length === 2, 'the decoder says both carriers are FM116: both labelled FM116');
+  ok(/137\.6623 \+ 137\.8000 MHz/.test(orbSatLines(st5.sats[0])[2]), `…and the card says so: "${orbSatLines(st5.sats[0])[2]}"`);
 }
 
 console.log(`\ntest_orbcomm_app: ${pass} passed, ${fail} failed`);

@@ -94,8 +94,8 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { orbOverlayLayout, ORB_OVERLAY_COLOUR, ORB_SLICE_LABEL, type OrbOverlay } from '../utils/orbcommView';   // ★★ 2026-11-24
-import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, isTagLabel, VARA_TAG_HINT, isSatLabel, satLabelHint, SAT_LABEL_COLOUR, knownLabelColour, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { orbOverlayLayout, ORB_OVERLAY_COLOUR, ORB_GUESS_COLOUR, ORB_SLICE_LABEL, type OrbOverlay } from '../utils/orbcommView';   // ★★ 2026-11-24
+import { labelStems, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, DX_LABEL_COLOUR, isDxLabel, dxDialHint, isTagLabel, VARA_TAG_HINT, isSatLabel, satLabelHint, SAT_LABEL_COLOUR, SAT_GUESS_COLOUR, knownLabelColour, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { isSkimLabel, skimLabelHint } from '../services/bandSkim';   // ★★ beta92 the band skimmer's marks
 import { withDabBlocks, isDabBlockSignal, dabWideView, dabBlockHit, isDabWideList, dabLabelLayout, dabBlockBoxX, DAB_GRADE_COLOUR, dabGradeText, type DabBlockSignal } from '../utils/dabBlockView';
 import { screenNavRef } from './ScreenNav';
@@ -3522,7 +3522,7 @@ function WaterfallView({
             <View pointerEvents="none" style={[styles.orbMark, m.locked ? styles.orbMarkOn : styles.orbMarkOff, { left: m.x - 5, top: wfTop + 20 }]} />
             {!!m.label && (
               <Text pointerEvents="none" numberOfLines={1}
-                    style={[styles.orbLabel, { fontFamily, left: Math.max(0, Math.min(width - 72, m.x - 36)), top: wfTop + 32, width: 72, textAlign: 'center' }]}>{m.label}</Text>
+                    style={[styles.orbLabel, { fontFamily, left: Math.max(0, Math.min(width - 72, m.x - 36)), top: wfTop + 32, width: 72, textAlign: 'center' }, m.guess && styles.orbGuess]}>{m.label}</Text>
             )}
           </React.Fragment>
         ))}
@@ -3539,9 +3539,9 @@ function WaterfallView({
           return (
             <React.Fragment key={'kt' + i + ':' + s.hz}>
               <View pointerEvents="none" style={[styles.knownTick, { left: st.x, top: Math.min(st.y0, st.y1), height: Math.max(1, Math.abs(st.y1 - st.y0)) },
-                                                 isDxLabel(s) && styles.knownDxTick, isSatLabel(s) && styles.knownSatTick, isSkimLabel(s) && { backgroundColor: knownLabelColour(s) }]} />
+                                                 isDxLabel(s) && styles.knownDxTick, isSatLabel(s) && styles.knownSatTick, s.sat?.guess && styles.knownSatGuessTick, isSkimLabel(s) && { backgroundColor: knownLabelColour(s) }]} />
               {bx1 - bx0 >= 3 && specShow && specH > 40 && (
-                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: wfTop - 2 }, isSatLabel(s) && styles.knownSatTick]} />
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: wfTop - 2 }, isSatLabel(s) && styles.knownSatTick, s.sat?.guess && styles.knownSatGuessTick]} />
               )}
             </React.Fragment>
           );
@@ -3555,10 +3555,10 @@ function WaterfallView({
           return (
             <React.Fragment key={'kt' + i + ':' + s.hz}>
               <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) },
-                                                 isDxLabel(s) && !isDabBlockSignal(s) && styles.knownDxTick, isSatLabel(s) && styles.knownSatTick, isSkimLabel(s) && { backgroundColor: knownLabelColour(s) },
+                                                 isDxLabel(s) && !isDabBlockSignal(s) && styles.knownDxTick, isSatLabel(s) && styles.knownSatTick, s.sat?.guess && styles.knownSatGuessTick, isSkimLabel(s) && { backgroundColor: knownLabelColour(s) },
                                                  hi && { backgroundColor: stampCol, opacity: 1 }]} />
               {bx1 - bx0 >= 3 && (
-                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }, isSatLabel(s) && styles.knownSatTick]} />
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }, isSatLabel(s) && styles.knownSatTick, s.sat?.guess && styles.knownSatGuessTick]} />
               )}
             </React.Fragment>
           );
@@ -3599,7 +3599,7 @@ function WaterfallView({
                 {p.lines ? p.lines.map((t, li) => (
                   <Text key={li} numberOfLines={1} style={[styles.knownText, { fontFamily, lineHeight: 14, textAlign: 'center' }, dxLine(li) && styles.knownDxText, hi && [styles.knownHiText, { color: stampCol }]]}>{t}</Text>
                 )) : (
-                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, dxLine(0) && styles.knownDxText, isSatLabel(s) && styles.knownSatText, isSkimLabel(s) && { color: knownLabelColour(s) }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
+                  <Text numberOfLines={1} style={[styles.knownText, { fontFamily }, dxLine(0) && styles.knownDxText, isSatLabel(s) && styles.knownSatText, s.sat?.guess && styles.knownSatGuessText, isSkimLabel(s) && { color: knownLabelColour(s) }, hi && [styles.knownHiText, { color: stampCol }]]}>{s.label}</Text>
                 )}
               </View>
             </React.Fragment>
@@ -3784,6 +3784,7 @@ const styles = StyleSheet.create({
   orbBandWf: { position: 'absolute', backgroundColor: ORB_OVERLAY_COLOUR, opacity: 0.06 },
   orbEdge:   { position: 'absolute', width: 1, backgroundColor: ORB_OVERLAY_COLOUR, opacity: 0.6 },
   orbLabel:  { position: 'absolute', fontSize: 10, color: ORB_OVERLAY_COLOUR, backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 3, overflow: 'hidden' },
+  orbGuess:  { color: ORB_GUESS_COLOUR },   // ★★ b97 a carrier's guessed name ("FM116?") — the guessed labels' amber
   orbMark:   { position: 'absolute', width: 10, height: 10, borderRadius: 5, borderWidth: 1.5 },
   orbMarkOn: { backgroundColor: ORB_OVERLAY_COLOUR, borderColor: 'rgba(0,0,0,0.8)' },
   orbMarkOff:{ backgroundColor: 'rgba(0,0,0,0.55)', borderColor: ORB_OVERLAY_COLOUR },
@@ -3798,6 +3799,9 @@ const styles = StyleSheet.create({
   // ★★ beta91 a satellite in range (knownSignals.ts SAT_LABEL_COLOUR): sky blue, text and line
   knownSatText: { color: SAT_LABEL_COLOUR },
   knownSatTick: { backgroundColor: SAT_LABEL_COLOUR },
+  // ★★ b97 a GUESSED satellite name ("ORBCOMM FM116?", knownSignals.ts SAT_GUESS_COLOUR): amber; confirmed = sky blue as above
+  knownSatGuessText: { color: SAT_GUESS_COLOUR },
+  knownSatGuessTick: { backgroundColor: SAT_GUESS_COLOUR },
   // ★★ V12 the tuned station's label (utils/tunedStation.ts) — the scale stamps' dark band and halo, in the stamp colour
   tunedBox: { position: 'absolute', height: 14, paddingHorizontal: 4, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center' },
   // ★★ …and a signal label that names the tuned station: its size, the tuned colour (set inline) and the same dark halo
