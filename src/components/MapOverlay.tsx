@@ -714,9 +714,10 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   body.amL.dwide .maplibregl-ctrl-bottom-left,body.amL.dwide .leaflet-bottom.leaflet-left{bottom:calc(var(--amH,0px) + 18px);}
   ` : ''}
   ${isTrk ? `
-  /* ★★ ADS-B (and V12 NDB, AIS / APRS): THE BOTTOM-LEFT CORNER IS THE LIVE LIST'S (React Native draws it over this page — AdsbLiveList), so the
-     legend's key moves to the top-left, the one corner nothing else uses (the layer's toggles are top-right), and opens
-     downwards from there. */
+  /* ★★★ beta97 THE MAP CARDS (MapChrome, React Native over this page) own every corner: LIST bottom-left, ? · scale · [− +]
+     bottom-right, the ✕ and RATE on top. */
+  /* ★★★ beta97 the map credits' (i): just above the cards' bottom-right group (React Native says how high — __cardsBr) */
+  .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{bottom:var(--cardsBrB,0px)!important;}
   /* ★★★ beta97 the KEY (MAP card → KEY): React Native says where it opens (__cardsKey) — beside the cards, never under them */
   #legend{top:var(--keyTop,64px);left:var(--keyLeft,64px);bottom:auto;}
   #legbody{left:0;top:0;bottom:auto;max-height:calc(100vh - var(--keyTop,64px) - 24px);}
@@ -1925,6 +1926,12 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
       labels:!cs||cs.labels!==false,mpp:Math.round(mpp*100)/100};
     var sig=JSON.stringify(o);if(!force&&sig===cardsSig)return;cardsSig=sig;trkPost(o);}catch(e){}}
   window.__cardsTell=cardsTell;
+  window.__cardsBr=function(px){document.documentElement.style.setProperty('--cardsBrB',(Math.max(0,Number(px)||0))+'px');};
+  /* ★★★ beta97 THE CREDITS FOLD AWAY (Stuart): the attribution opens as the map opens, then folds to its (i) after 5 s or at the
+   *  first touch — it is still one tap away */
+  (function(){var done=false;function fold(){if(done)return;done=true;try{var a=document.querySelector('.maplibregl-ctrl-attrib');
+      if(a){a.classList.remove('maplibregl-compact-show');a.classList.add('maplibregl-compact');}}catch(e){}}
+    setTimeout(fold,5000);document.addEventListener('touchstart',fold,{once:true,passive:true});document.addEventListener('mousedown',fold,{once:true});})();
   setInterval(function(){if(document.visibilityState!=='hidden')cardsTell(false);},1000);
   (function(){var mm=GLVM?GLVM.map:map;try{mm.on('moveend',function(){cardsTell(false);});
     /* ★ a tap on the map folds the open card (the web's rule) — a tap, not a drag */
@@ -3232,6 +3239,9 @@ function MapCardsHost(p: {
   const ab = useAdsbBody(p.adsb, p.ink, listW);
   const nb = useNdbBody(p.ndb, p.ink, p.insets, p.winW);
   const [keyOn, setKeyOn] = useState(false);
+  // ★ the credits' (i) sits just above the bottom-right group (? · scale · [− +]): its height by the layout (mapChrome br)
+  const shortNow = p.winH < 480 && p.winW > p.winH;
+  useEffect(() => { p.pageCall('__cardsBr', p.insets.bottom + (shortNow ? 52 : 84)); }, [shortNow, p.insets.bottom]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [note, setNote] = useState('');
   const noteT = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (noteT.current) clearTimeout(noteT.current); }, []);
