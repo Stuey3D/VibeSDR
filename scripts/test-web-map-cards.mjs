@@ -118,6 +118,14 @@ async function sizeChecks(p, tag, w, h, o) {
     const hit = (a, b) => a && b && a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
     ok(!hit(L.pill, L.x) && !hit(L.pill, L.rate) && !hit(L.pill, L.chat) && !hit(L.zoom, L.rate) && !hit(L.zoom, L.chat) && !hit(L.zoom, L.pill),
        `${tag} ${w}: the pill, the X, RATE, CHAT and the zoom never overlap`);
+    // ★ Stuart 14:42: the bar wears the control deck's material — a skin put on #mcard reaches it; one line, never wrapped
+    { const bg0 = await p.ev(`getComputedStyle(document.getElementById('mapShLine')).backgroundColor`);
+      await p.ev(`(() => { const m = document.getElementById('mcard'); m.style.setProperty('--ctl-card-bg', 'rgb(186, 190, 196)'); m.style.setProperty('--bar-border', 'rgb(120, 124, 130)'); window.__vibeMapDeckTest = 1; return 1; })()`);
+      await p.until(`getComputedStyle(document.getElementById('mapShLine')).backgroundColor === 'rgb(186, 190, 196)'`, 8000);
+      const sk = JSON.parse(await p.ev(`JSON.stringify((() => { const e = document.getElementById('mapShLine'), cs = getComputedStyle(e); return { bg: cs.backgroundColor, rim: cs.borderLeftColor, top: Math.round(e.getBoundingClientRect().top), lines: Math.round(e.getBoundingClientRect().height / parseFloat(cs.lineHeight || '14')) }; })())`));
+      ok(sk.bg === 'rgb(186, 190, 196)' && sk.rim === 'rgb(120, 124, 130)', `${tag} ${w}: a silver deck look reaches the shared-tuner bar (${sk.bg}, rim ${sk.rim}; was ${bg0})`);
+      ok(sk.top <= 1, `${tag} ${w}: the bar is attached to the top edge (${sk.top})`);
+      await p.ev(`(() => { const m = document.getElementById('mcard'); m.style.removeProperty('--ctl-card-bg'); m.style.removeProperty('--bar-border'); return 1; })()`); }
     // CHAT: its chip opens the chat card (the canned replies); the pill opens it too
     await p.ev(`${V}.querySelector('[data-cbtn="chat"]').click(); 1`); await sleep(500);
     ok(await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="chat"]'); return !!c && !c.hidden && !!c.querySelector('#chatPhrases') && !!c.querySelector('#chatLog'); })()`), `${tag} ${w}: CHAT opens its card — the log and the canned replies`);
@@ -176,6 +184,12 @@ async function sizeChecks(p, tag, w, h, o) {
     ok(!plain, `${tag} ${w}: ${id.toUpperCase()}: no control in the browser's default grey${plain ? ` (${plain})` : ''}`);
     if (id === 'map' && o.multi) ok(await p.ev(`[...${V}.querySelectorAll('.srcBody [data-src]')].every(b => b.classList.contains('mRow'))`), `${tag} ${w}: the SOURCES rows are the cards' row (.mRow)`);
     if (id === 'tune') ok(await p.ev(`${V}.querySelectorAll('.tunePop [data-tune]').length`) >= 2, `${tag} ${w}: TUNE holds the TUNE rows`);
+    if (id === 'tune' && o.radio) {   // ★ Stuart 14:55: the radio page's own gain controls, lent (an RTL: its list and VIBE AGC's AUTO)
+      const g = JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="tune"]'); const r = c.querySelector('#rowGain'), a = c.querySelector('#gainAuto'), sl = c.querySelector('#gain');
+        const f = c.querySelector('.facts').getBoundingClientRect(), h = c.querySelector('.mapGainHost')?.getBoundingClientRect(), t = c.querySelector('.tunePop')?.getBoundingClientRect();
+        return { row: !!r && !r.hidden && r.getClientRects().length > 0, auto: !!a, max: sl ? Number(sl.max) : -1, order: !!(h && t && h.top >= f.bottom - 1 && h.bottom <= t.top + 1) }; })())`));
+      ok(g.row && g.auto && g.max > 0 && g.order, `${tag} ${w}: TUNE carries the page's own gain list and AUTO, under the status line, above the modes (${JSON.stringify(g)})`);
+    }
     if (id === 'servers') ok(await p.ev(`!!${V}.querySelector('.srvBody [data-srv="back"]')`), `${tag} ${w}: SERVERS has the way back (${await p.ev(`${V}.querySelector('.srvBody [data-srv="back"]')?.textContent`)})`);
     if (id === 'layers') ok(await p.ev(`${V}.querySelectorAll('.trkCard2[data-card="layers"] .tgl [data-tgl]').length`) >= 2, `${tag} ${w}: LAYERS lists the modes, a toggle row each`);
     if (id === 'layers' || id === 'map') {

@@ -741,6 +741,9 @@ const CSS = `
 /* a row's long title is a mouse's tooltip, never a touch's */
 @media (hover:none){.trkRow{-webkit-touch-callout:none}}
 .mHelp,.mChipsScale{transition:transform .2s ease}
+.trkCard2[data-card="tune"] .mapGainHost{display:flex;flex-direction:column;gap:4px;padding:4px 10px 8px;border-bottom:1px solid #1b2733}
+.trkCard2[data-card="tune"] .mapGainHost:empty{display:none}
+.trkCard2[data-card="tune"] .mapGainHost .mrow{margin:0}
 /* ★★ the ASK PULSE (main.ts mapAskPulse): a breath and a radar ring, three times, transform + opacity only */
 .trkView .askPulse{position:relative;overflow:visible!important;animation:trkAskBreathe .8s ease-in-out 3}
 .trkView .askPulse::after{content:"";position:absolute;inset:-2px;border-radius:inherit;border:2px solid #ffcc88;pointer-events:none;animation:trkAskRing .8s ease-out 3;opacity:0}

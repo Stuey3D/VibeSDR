@@ -1156,6 +1156,7 @@ let askNudgeTimer: ReturnType<typeof setTimeout> | null = null;
 /** ★ A reach for a locked control: flash "ASK IN CHAT BEFORE TUNING" on the banner and the CHAT key. Once per
  *  2.5 s — a drum flick or a held key is one reach, not forty. */
 function nudgeAsk() {
+  if (trackViewUp()) mapAskPulse();   // ★ on a map: the shared-tuner bar and CHAT show where to ask
   const now = Date.now();
   if (now - askNudgeAt < 2500) return;
   askNudgeAt = now;
@@ -4172,7 +4173,31 @@ window.addEventListener('vibe:mapclosed', () => { if (!trackViewUp()) specUnderM
 /* ★★ Stuart 14:38: the radio page's own SERVER HEALTH chip lent to the map's right column while a map is up (the same
  *  element, so its card, its tuck and its alerts work as they do on the page), and the TIME LIMIT mirrored as a chip. */
 const healthHome: { parent: Node | null; next: Node | null } = { parent: null, next: null };
+/* ★★★ Stuart 14:55 ("gain setting is missing"): the TUNE card carries the radio page's OWN gain controls — the same
+ *  nodes, lent while a map is up and put back after: #rowGain + #rowAgc (an RTL's list and VIBE AGC), #rspCtls (an RSP's
+ *  LNA state / IF reduction), #ahfCtls (the HF+'s attenuator + preamp), #aspCtls / #hrfCtls / #usrpCtls. The page already
+ *  shows only the ones this radio's driver has (hwinfo), locks them under the ask lock (body.askLocked, ASK_SHIELD_SEL)
+ *  and runs the gain rules — so the card does exactly what the page does. ADS-B keeps its own GAIN (adsbGain). */
+const GAIN_IDS = ['rowGain', 'rowAgc', 'rspCtls', 'ahfCtls', 'aspCtls', 'hrfCtls', 'usrpCtls'];
+const gainHome = new Map<string, { parent: Node; next: Node | null }>();
+function mapGainLend(on: boolean) {
+  const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
+  const facts = v?.querySelector('.trkCard2[data-card="tune"] > .cb > .facts') as HTMLElement | null;
+  if (on && facts && !adsbOn) {
+    let host = v!.querySelector('.mapGainHost') as HTMLElement | null;
+    if (!host) { host = document.createElement('div'); host.className = 'mapGainHost'; facts.after(host); }
+    for (const id of GAIN_IDS) {
+      const el = document.getElementById(id); if (!el || el.parentElement === host) continue;
+      if (!gainHome.has(id) && el.parentNode) gainHome.set(id, { parent: el.parentNode, next: el.nextSibling });
+      host.appendChild(el);
+    }
+  } else {
+    for (const [id, h] of gainHome) { const el = document.getElementById(id); if (el) h.parent.insertBefore(el, h.next && h.next.parentNode === h.parent ? h.next : null); }
+    gainHome.clear();
+  }
+}
 function mapChromeAdopt(on: boolean) {
+  mapGainLend(on);
   const h = document.getElementById('srvHealth');
   const v = document.querySelector('.trkView:not([hidden])') as HTMLElement | null;
   const col = v?.querySelector('.mChipsR') as HTMLElement | null;
