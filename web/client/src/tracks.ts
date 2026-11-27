@@ -21,6 +21,7 @@ import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96
 import { flagEmoji } from '../../../src/services/adsbInfo';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the colour-coded SNR per message
 import { aprsColour, aprsIcon as aprsSymIcon, aprsAltPlausible } from '../../../src/utils/aprsSymbols';
+import { CARD_IDS, CARD_LABEL, CARD_NARROW_W, cardColumns, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId } from '../../../src/utils/mapCards';
 import { aisDxSanitise, aisDxState, aisDxWords, AIS_DX_COLOUR, AIS_DX_SHORT } from '../../../src/services/aisDx';
 
 /** ★★ b96-rangefeed `approx`: words for a position that is not exact (the locator square's centre — rxPosition.ts) */
@@ -605,6 +606,8 @@ const CSS = `
 .trkCard2 .note{color:#8596a7;font-size:11px;margin-top:6px}
 .trkCard2 .note:empty{display:none}
 .trkCard2 .kb{padding:8px 10px;color:#d7dee6;font-size:12px;line-height:1.35}
+.trkCard2 .trkKey{position:static;max-height:none;overflow:visible;border:0;border-radius:0;background:none;z-index:auto}
+.trkCard2 .trkKey .kr{white-space:normal}
 .trkCard2 .kb .kr{display:flex;align-items:center;gap:8px;padding:2px 0}
 .trkCard2 .srcRow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:6px 10px;border-bottom:1px solid #151f29;font-size:12px}
 .trkCard2 .srcRow b{font-weight:600;color:#e8eef5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -637,25 +640,10 @@ function addCss() {
 }
 function runSource(src: string) { const el = document.createElement('script'); el.textContent = src; document.head.appendChild(el); }
 const MIN_KEY = 'vibesdr.trkListMin';
-/** ★★★ beta96 the map control cards (docs/v12/MAP-CONTROL-CARDS.md): their order in the bar, their buttons' words. */
-export const CARD_IDS = ['list', 'tune', 'view', 'map', 'key', 'sources'] as const;
-export type CardId = typeof CARD_IDS[number];
-const CARD_LABEL: Record<CardId, string> = { list: 'LIST', tune: 'TUNE', view: 'VIEW', map: 'MAP', key: 'KEY', sources: 'SOURCES' };
-/** A window narrower than this is a phone's: ONE card at a time, the buttons on a row of their own. */
-export const CARD_NARROW_W = 600;
-const CARD_W = 340;
+/** ★★★ beta96 the map control cards (docs/v12/MAP-CONTROL-CARDS.md): their rules are shared with the app (mapCards.ts). */
 const CARDS_KEY = 'vibesdr.mapCards';
 const FIT_KEY = 'vibesdr.mapFitTo';
-/** ★★★ beta96 FIT's outlier rule: with 8 or more points, the furthest 5 % (at least one) are left out — measured from the
- *  receiver where it is known, else from the median point. Fewer than 8: all of them (nothing is an outlier among few). */
-export function trimOutliers<T extends { lat: number; lon: number }>(pts: T[], rx: LatLon | null): T[] {
-  if (pts.length < 8) return pts;
-  const med = (a: number[]) => { const s = a.slice().sort((x, y) => x - y); return s[s.length >> 1]; };
-  const c = rx ?? { lat: med(pts.map((p) => p.lat)), lon: med(pts.map((p) => p.lon)) };
-  const d = pts.map((p) => ({ p, km: rangeBearing(c, p.lat, p.lon).km })).sort((a, b) => a.km - b.km);
-  const drop = Math.max(1, Math.ceil(pts.length * 0.05));
-  return d.slice(0, d.length - drop).map((x) => x.p);
-}
+export { CARD_IDS, type CardId, trimOutliers };
 
 export interface TrackViewOpts {
   /** ★★ AUTO FIT (Stuart 2026-11-21, ISM: "the map needs the auto fit"; 2026-11-23, every map: "an auto fit that gently
@@ -863,13 +851,7 @@ export class TrackView {
   private cardAvail = new Set<CardId>(['list', 'map']);
   private narrow(): boolean { const w = this.root.clientWidth || window.innerWidth; return w < CARD_NARROW_W; }
   /** How many cards this window takes at once (the window's size, never the device). */
-  cardLimit(): number {
-    const w = this.root.clientWidth || window.innerWidth, h = this.root.clientHeight || window.innerHeight;
-    if (w < CARD_NARROW_W) return 1;
-    const cols = Math.max(1, Math.min(3, Math.floor((w * 0.72) / (CARD_W + 8))));
-    const rows = h >= 700 ? 2 : 1;
-    return Math.min(CARD_IDS.length, cols * rows);
-  }
+  cardLimit(): number { return cardLimitFor(this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight); }
   isCardOpen(id: CardId): boolean { return this.cardOrder.includes(id); }
   get openCards(): CardId[] { return this.cardOrder.slice(); }
   private cardsKey(): string { return this.narrow() ? CARDS_KEY + '.narrow' : CARDS_KEY + '.wide'; }
@@ -877,19 +859,15 @@ export class TrackView {
   private cardsLoad() {
     let ids: CardId[] | null = null;
     try { const j = JSON.parse(localStorage.getItem(this.cardsKey()) || 'null'); if (Array.isArray(j)) ids = j.filter((x) => (CARD_IDS as readonly string[]).includes(x)); } catch { /* private window */ }
-    this.cardOrder = ids ?? (this.narrow() ? [] : ['list']);
+    this.cardOrder = ids ?? cardDefaults(this.root.clientWidth || window.innerWidth);
     this.cardsNarrowWas = this.narrow();
   }
   private cardsSave() { try { localStorage.setItem(this.cardsKey(), JSON.stringify(this.cardOrder)); } catch { /* private window */ } }
   /** Open / shut a card. `save` = a person's press (remembered); the host's own opening (TUNE's list from elsewhere) too. */
   cardOpen(id: CardId, on: boolean, save = false) {
-    const i = this.cardOrder.indexOf(id);
     if (on && !this.cardAvail.has(id)) return;
-    if (on && i < 0) this.cardOrder.push(id);
-    else if (!on && i >= 0) this.cardOrder.splice(i, 1);
-    else if (on && i >= 0) { this.cardOrder.splice(i, 1); this.cardOrder.push(id); }
-    const lim = this.cardLimit();
-    while (this.cardOrder.length > lim) this.cardOrder.shift();   // ★ the oldest gives way
+    // ★ the oldest gives way past the window's limit (mapCards.ts cardToggle)
+    this.cardOrder = cardToggle(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on, this.root.clientWidth || window.innerWidth, this.root.clientHeight || window.innerHeight);
     if (save) this.cardsSave();
     this.cardsLayout();
     if (on && save) {
@@ -914,31 +892,26 @@ export class TrackView {
     }
     if (this.cardsNarrowWas !== null && this.cardsNarrowWas !== this.narrow()) { this.cardsLoad(); }
     this.root.toggleAttribute('data-narrow', this.narrow());
-    const lim = this.cardLimit();
-    const open = this.cardOrder.filter((id) => this.cardAvail.has(id)).slice(-lim);
-    const h = this.root.clientHeight || window.innerHeight;
-    const perCol = this.narrow() ? 1 : h >= 700 ? 2 : 1;
-    const sig = JSON.stringify([open, perCol, this.narrow()]);
+    const W = this.root.clientWidth || window.innerWidth, H = this.root.clientHeight || window.innerHeight;
+    const cols = cardColumns(this.cardOrder.filter((id) => this.cardAvail.has(id)), W, H);
+    const open = cols.flat();
+    const sig = JSON.stringify([cols, this.narrow()]);
     for (const b of Array.from(this.root.querySelectorAll('[data-cbtn]')) as HTMLElement[]) b.setAttribute('aria-expanded', String(open.includes(b.dataset.cbtn as CardId)));
     if (sig === this.layoutSig) return;
     this.layoutSig = sig;
-    // ★ LIST first in its own column (it is the tall one); the others fill columns in the order they were opened
-    const ordered = [...open.filter((x) => x === 'list'), ...open.filter((x) => x !== 'list')];
-    const cols: CardId[][] = [];
-    for (const id of ordered) {
-      const last = cols[cols.length - 1];
-      if (!last || last.length >= perCol || (last[0] === 'list' && !this.narrow())) cols.push([id]); else last.push(id);
-    }
+    // ★ every card to the park first (moving an element keeps it and its state — never innerHTML over the columns)
+    const focused = document.activeElement as HTMLElement | null;
     for (const c of Array.from(this.root.querySelectorAll('.trkCard2')) as HTMLElement[]) {
-      const on = open.includes(c.dataset.card as CardId);
-      if (!on) { c.hidden = true; if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c); }
+      if (!open.includes(c.dataset.card as CardId)) c.hidden = true;
+      if (c.parentElement !== this.parkEl) this.parkEl.appendChild(c);
     }
-    this.cardsEl.innerHTML = '';
+    while (this.cardsEl.firstChild) this.cardsEl.firstChild.remove();
     for (const col of cols) {
       const d = document.createElement('div'); d.className = 'col';
       for (const id of col) { const c = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement; c.hidden = false; d.appendChild(c); }
       this.cardsEl.appendChild(d);
     }
+    if (focused && focused !== document.activeElement && this.root.contains(focused) && !focused.closest('[hidden]')) focused.focus({ preventScroll: true });
     setTimeout(() => { this.placeAcObstacle(); try { this.af?.poke?.(); } catch { /* none */ } }, 0);
   }
   /** The live rate, top right ("ADS-B 1,425 msg/s" · "VDL2 153 msg/min") — '' = none (a viewer, nothing live). */

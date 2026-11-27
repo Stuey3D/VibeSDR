@@ -111,11 +111,14 @@ try {
   await ev(`document.getElementById('ndbStatsBtn').click()`);
   ok(await until(`/BEACONS HEARD PER HOUR/.test(document.getElementById('ndbDlgBox')?.textContent || '') && /WOD/.test(document.getElementById('ndbDlgBox')?.textContent || '')`, 5000), 'the stats open with WOD');
   await ev(`document.getElementById('ndbDlgX').click()`);
-  await ev(`${V}.querySelector('.trkList .hd .mn').click()`);
-  ok(await until(`${V}.querySelector('.trkList').classList.contains('min')`, 2000), 'the list folds');
-  await ev(`${V}.querySelector('.trkList .hd .mn').click()`);
+  // ★★★ beta96 map cards: the list is the LIST card — its button shuts and opens it (it no longer folds in place)
+  await ev(`${V}.querySelector('[data-cbtn="list"]').click()`);
+  ok(await until(`${V}.querySelector('[data-cbtn="list"]').getAttribute('aria-expanded') === 'false' && !${V}.querySelector('.trkList').getClientRects().length`, 2000), 'the LIST card shuts');
+  await ev(`${V}.querySelector('[data-cbtn="list"]').click()`);
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1500);
+  await ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b.getAttribute('aria-expanded') !== 'true') b.click(); })()`);   // ★ a phone opens with no card
+  await sleep(500);
   const fit = JSON.parse(await ev(`JSON.stringify(${V}.querySelector('.trkList').getBoundingClientRect())`));
   ok(fit.left >= 4 && fit.right <= 390 - 4, `the list fits a phone (the map's own list margins): ${Math.round(fit.left)}–${Math.round(fit.right)} of 390`);
   ok(await ev(`document.documentElement.scrollWidth <= 390`), `nothing scrolls sideways (${await ev('document.documentElement.scrollWidth')})`);

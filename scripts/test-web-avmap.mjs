@@ -150,7 +150,7 @@ try {
      *  heard each aircraft (vibe_aircraft_share.h radios) — radio A's tag is seen on radio B's page, so the switch is drawn;
      *  OFF hides 400F11 (radio A's ADS-B only) and keeps 4CA97B (heard by both: A's ADS-B and B's VDL2) */
     if (!process.env.SKIP_SCOPE) {
-      const SCOPE = `${V}?.querySelector('.trkTop .scope [data-scope]')`;
+      const SCOPE = `${V}?.querySelector('.scope [data-scope]')`;
       ok(await until(`!!${SCOPE} && !${SCOPE}.closest('.scope').hidden`, 8000), 'two radios: the OTHER RADIOS ON THIS SERVER chip is drawn on radio B\'s map');
       await ev(`${SCOPE}.click(); true`);
       ok(await until(`![...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:400F11')`, 6000), 'OFF: 400F11 (radio A\'s ADS-B only) is hidden on radio B\'s map');
@@ -326,7 +326,7 @@ try {
       ok(await ev(`${V}.querySelector('.trkList .hd .srt').hidden`), '…in its own order (emergencies, military, nearest): no sort chip');
       ok(await until(`[...${V}.querySelectorAll('[data-tgl].live')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join(',') === 'ADS-B' || (!${V}.querySelector('[data-tgl]'))`, 8000),
          `the ADS-B key is LIVE (or the only layer: no chip row) (${await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim() + (b.classList.contains('live') ? '*' : '')).join(',')`)})`);
-      ok(await ev(`!!${V}.querySelector('.trkTop #adsbChat') && !!${V}.querySelector('.trkTop #adsbGain') && !!${V}.querySelector('.trkTop #adsbCapture')`), 'CHAT, GAIN and the capture warning are in the map\'s top bar');
+      ok(await ev(`!!${V}.querySelector('.trkTop #adsbChat') && !!${V}.querySelector('.slot-tune #adsbGain') && !!${V}.querySelector('.slot-tune #adsbCapture')`), 'CHAT is in the map\'s top bar; GAIN and the capture warning in its TUNE card (map cards)');
       ok(await until(`(() => { const c = ${V}.querySelector('.slot-head #adsbChips'); return !!c && !c.hidden && [...c.querySelectorAll('.adsbChip')].some(b => !b.hidden); })()`, 20000),
          `NEWEST / FURTHEST / LONGEST under the list's header (${await ev(`[...document.querySelectorAll('#adsbChips .adsbChip')].filter(b => !b.hidden).map(b => b.textContent).join(' | ')`)})`);
       ok(await ev(`!!${V}.querySelector('.slot-over #adsbFeedWarn') && !!${V}.querySelector('.slot-over #adsbGainPop')`), 'the antenna warning and the gain pop-over are over the map');

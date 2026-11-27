@@ -134,8 +134,8 @@ async function session(tag, users, before, run) {
 const MS = `window.__vibeMapShared && window.__vibeMapShared()`;
 const AS = `window.__vibeAirSea && window.__vibeAirSea()`;
 const TUNE_IDS = `[...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune]')].map(b => b.dataset.tune + (b.getAttribute('aria-checked') === 'true' ? '*' : '') + (b.classList.contains('dialLocked') ? '!' : ''))`;
-const CHIP = `(document.querySelector('.trkView:not([hidden]) .tuneChip') || {})`;
-const SHOW_IDS = `[...document.querySelectorAll('.trkView:not([hidden]) .trkTop .tgl [data-tgl]')].map(b => b.dataset.tgl)`;
+const CHIP = `(document.querySelector('.trkView:not([hidden]) [data-cbtn="tune"]') || {})`;
+const SHOW_IDS = `[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl]')].map(b => b.dataset.tgl)`;
 
 const ONLY = process.env.ONLY || '';
 console.log('── 1. a shared dial, the page alone, then company ──');
@@ -220,8 +220,8 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   const sent = JSON.parse(await ev(`JSON.stringify(window.__sent.slice(${n0}))`));
   ok(!sent.some((s) => /"type":"(ais|adsb|avdata)"/.test(s)) && (JSON.parse(await ev(`JSON.stringify(${AS})`)) || {}).mode === 'ais', `EXIT and ADS-B refused while locked (no ais/adsb sent, still AIS)`);
   // the map stays the listener's own: tabs, SHOW chips, KEY, FIT never greyed
-  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .trkTop .rng:not(.tune) [data-rng]')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
-     'SHOW chips, tabs, FIT and the time filter are never greyed');
+  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .rng:not(.tgl):not(.scope) [data-rng], .trkView:not([hidden]) [data-cbtn]')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
+     'SHOW chips, tabs, FIT, the time filter and the card buttons are never greyed');
   const tabs = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .tabs [role=tab], .trkView:not([hidden]) .tabs button')].map(b => b.textContent.trim()))`) || '[]');
   if (tabs.length > 1) {
     await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tabs button')].find(b => b.getAttribute('aria-selected') !== 'true')?.click(); true`);
@@ -251,7 +251,7 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   const cnt = (t) => (t.match(/(\d+\/\d+)/) || [])[1] || (/FREE/.test(t) ? 'alone' : '?');
   ok(unlocked && cnt(bar) === cnt(line), `the other listener leaves → the lock lifts live; the line agrees with the bar ("${line}" / bar "${bar}")`);
   if (!/FREE TO EXIT/.test(line)) console.log('   (finding: the server still counts the departed listener — the bar says the same)');
-  ok(await until(`!(${MS}).exitLocked && !document.querySelector('.trkView:not([hidden]) .tuneChip.dialLocked, .trkView:not([hidden]) .tunePop .dialLocked')`, 5000), 'EXIT and TUNE are live again (the lock lifted)');
+  ok(await until(`!(${MS}).exitLocked && !document.querySelector('.trkView:not([hidden]) [data-cbtn="tune"].dialLocked, .trkView:not([hidden]) .tunePop .dialLocked')`, 5000), 'EXIT and TUNE are live again (the lock lifted)');
   // pick → tune: ADS-B from the list
   await ev(`${CHIP}.click(); true`); await sleep(300);
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="adsb"]')?.click(); true`);

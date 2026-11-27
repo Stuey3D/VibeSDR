@@ -136,8 +136,8 @@ const AS = `window.__vibeAirSea && window.__vibeAirSea()`;
 const SC = `window.__vibeMapScope && window.__vibeMapScope()`;
 const V = `document.querySelector('.trkView:not([hidden])')`;
 const CHIPN = (id) => `(() => { const b = ${V}?.querySelector('.tgl [data-tgl="${id}"] .n'); return b ? Number(b.textContent) : -1; })()`;
-const SCOPE = `${V}?.querySelector('.trkTop .scope [data-scope]')`;
-const RNG = `[...(${V}?.querySelectorAll('.trkTop .rng:not(.tgl):not(.scope) [data-rng]') || [])].map(b => b.dataset.rng + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''))`;
+const SCOPE = `${V}?.querySelector('.scope [data-scope]')`;
+const RNG = `[...(${V}?.querySelectorAll('.rng:not(.tgl):not(.scope) [data-rng]') || [])].map(b => b.dataset.rng + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''))`;
 
 /** The stub: aircraft.json and ais-ships.json answered with tagged rows; everything else goes to the real server. */
 function stubFor(mine) {
@@ -180,19 +180,19 @@ await session('scope', 4, async (ctx) => {
   ok(await until(`${CHIPN('vdl2')} === 2`, 4000), `OFF: only this radio's own + the untagged one (VDL2 ${await ev(CHIPN('vdl2'))}; the other radio's and the feed's hidden)`);
   ok(await ev(`${CHIPN('ships')}`) === 1, `OFF: the ships follow (${await ev(CHIPN('ships'))} — ours only)`);
   ok(await ev(`localStorage.getItem('vibesdr.mapOtherRadios') === '0'`), 'remembered in this browser');
-  ok(/Only this radio/.test(await ev(`${V}?.querySelector('.trkTop .scopeNote')?.textContent || ''`)), 'the line says what is hidden');
+  ok(/Only this radio/.test(await ev(`${V}?.querySelector('.scopeNote2')?.textContent || ''`)), 'the line says what is hidden');
   await sleep(800);
   const n1 = await ev(`window.__sent.filter(s => !/"type":"(ping|state|keepalive)"/.test(s)).length`);
   ok(n1 === n0, 'the switch sends nothing to the server');
   const rng = JSON.parse(await ev(`JSON.stringify(${RNG})`) || '[]');
   ok(rng.includes('session'), `THIS SESSION beside the window: ${rng.join(' ')}`);
-  await ev(`${V}.querySelector('.trkTop [data-rng="session"]').click(); true`);
+  await ev(`${V}.querySelector('[data-rng="session"]').click(); true`);
   ok(await until(`${CHIPN('vdl2')} === 1 && (${SC}).session`, 5000), `THIS SESSION + OFF: only ours first heard since the map opened (VDL2 ${await ev(CHIPN('vdl2'))}; OLD3, first heard 4000 s ago, gone)`);
   await ev(`${SCOPE}.click(); true`);
   ok(await until(`${CHIPN('vdl2')} === 3`, 4000), `THIS SESSION + ON: ours, the other radio's and the feed's new ones (${await ev(CHIPN('vdl2'))})`);
-  ok(/this session/.test(await ev(`${V}?.querySelector('.trkTop .scopeNote')?.textContent || ''`)), 'the line says THIS SESSION');
+  ok(/this session/.test(await ev(`${V}?.querySelector('.scopeNote2')?.textContent || ''`)), 'the line says THIS SESSION');
   await shot('session');
-  await ev(`${V}.querySelector('.trkTop [data-rng]:not([data-rng="session"])').click(); true`);
+  await ev(`${V}.querySelector('[data-rng]:not([data-rng="session"])').click(); true`);
   ok(await until(`${CHIPN('vdl2')} === 4 && !(${SC}).session`, 4000), 'another window key leaves the session: everything back');
   // AIR & SEA LIVE pressed while lit: the map stays, the mode carries on
   await ev(`document.getElementById('mMode')?.click()`); await sleep(500);

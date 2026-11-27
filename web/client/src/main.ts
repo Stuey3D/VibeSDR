@@ -83,6 +83,7 @@ import { parsePacketCaps, packetChoices, packetDefault, packetFecShown, packetPa
 import { SatPanel, satSchedStored } from './satellites';
 import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src/services/satSingle';   // ★★★ beta96 single mode: satellites   // ★★★ V12 SATELLITE mode — the window (timetable, pick box, half-globe, AUTO DOPPLER)
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
+import { fitDefault, rateWords } from '../../../src/utils/mapCards';   // ★★★ beta96 the map control cards' shared rules
 import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -11163,7 +11164,7 @@ function asRender() {
 const FIT_LABEL: Record<string, string> = { adsb: 'ADS-B', datalink: 'DATALINK', ships: 'SHIPS', dsc: 'DSC', navst: 'NAVTEX STATIONS', warnings: 'WARNINGS',
   weather: 'WEATHER', vor: 'VOR', sondes: 'SONDES', other: 'OTHER' };
 const FIT_ORDER = ['adsb', 'datalink', 'ships', 'dsc', 'navst', 'warnings', 'weather', 'vor', 'sondes', 'other'];
-function fmtRate(n: number): string { return n >= 100 ? Math.round(n).toLocaleString('en-GB') : n.toFixed(n < 10 ? 1 : 0); }
+const fmtRate = rateWords;   // ★ mapCards.ts — the app's map says it the same way
 /** The live mode's messages per minute (per second for ADS-B), top right — '' = nothing live. */
 function asRateText(): { text: string; title: string } {
   if (adsbOn && adsbReport && typeof adsbReport.msgRate === 'number' && isFinite(adsbReport.msgRate))
@@ -11222,7 +11223,7 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   const groups = FIT_ORDER.filter((g) => (n.get(g) ?? 0) > 0 && g !== 'other').map((g) => ({ id: g, label: FIT_LABEL[g], n: n.get(g) ?? 0 }));
   const main = x.mode === 'datalink' || x.mode === 'hfdl' ? 'datalink' : x.mode === 'ais' ? 'ships' : x.mode === 'sondes' ? 'sondes' : x.mode === 'vormap' ? 'vor'
     : x.mode === 'navtex' ? 'navst' : x.mode === 'dsc' ? 'dsc' : '';
-  const def = (n.get('adsb') ?? 0) > 0 ? 'adsb' : main && (n.get(main) ?? 0) > 0 ? main : groups.slice().sort((a, b) => b.n - a.n)[0]?.id ?? '';
+  const def = fitDefault(Object.fromEntries(groups.map((g) => [g.id, g.n])), main);
   v.setFitGroups(groups, def);
   // ── SOURCES: each radio and each feed, only where there is more than one ──
   asRadioNamesLoad();

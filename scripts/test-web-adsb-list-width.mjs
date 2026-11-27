@@ -131,7 +131,7 @@ try {
   // ── the panel forced to each width on the 1280 px window (Stuart's case: a narrow PANEL, a wide window) ──
   await ev(`(() => { const s = document.createElement('style'); s.id = 'wtest'; document.head.appendChild(s); return 1; })()`);
   for (const w of [232, 300, 400, 600]) {
-    await ev(`document.getElementById('wtest').textContent = '.trkView .trkList { width: ${w}px !important; max-width: none !important; max-height: 80% !important; }'; 1`);
+    await ev(`document.getElementById('wtest').textContent = '.trkView .trkCards { --trk-card-w: ${w + 2}px; max-width: none !important; } .trkView .trkList { width: ${w}px !important; max-width: none !important; max-height: 80% !important; }'; 1`);   // ★ beta96 the list is in the LIST card (its column, + its 1 px borders)
     await sleep(700);
     const m = JSON.parse(await ev(MEASURE));
     ok(Math.abs(m.panel - w) < 1, `${w} px: the panel is ${m.panel} px`);
@@ -145,6 +145,9 @@ try {
   for (const [w, h] of [[390, 844], [320, 640]]) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
     await sleep(1200);
+    // ★★★ beta96 map cards: a phone-width window opens with no card — the LIST card is opened, as a person would
+    await ev(`(() => { const b = document.querySelector('.trkView:not([hidden]) [data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`);
+    await sleep(500);
     const m = JSON.parse(await ev(MEASURE));
     check(`phone ${w}`, m);
     console.log(`      phone ${w} (panel ${m.panel.toFixed(0)}): ${m.rows.map((r) => `${r.call} ${r.b.w.toFixed(0)}/${r.full.toFixed(0)} px`).join(' · ')}`);
