@@ -69,6 +69,8 @@
 #include "vibe_tones_run.h"    // ★ V12 tone decoders: DTMF and 5-tone selective calling — docs/v12/TONES.md
 #include "vibe_lrpt_run.h"     // ★ V12 METEOR-M LRPT pictures on an IQ slice of the dial — docs/v12/LRPT.md
 #include "vibe_orbcomm_run.h"  // ★ V12 ORBCOMM housekeeping + raw subscriber frames on an IQ slice — docs/v12/ORBCOMM.md
+#include "decoders/sat_skim.h" // ★★★ beta97 the satellite digital-mode skimmer (FT8 + FT4 over a whole transponder)
+#include "vibe_sat_skim_iq.h"   // ★★★ beta97 …and its "keep the corrected IQ" option
 #include "vibe_xpdr_run.h"     // ★★★ beta94 the transponder signal finder (CW + voice over a whole linear transponder) — docs/v12/TRANSPONDER-FINDER.md
 #include "vibe_sat_engine.h"    // ★ V12 the satellite engine's decoder hook (LRPT's Doppler feed-forward)
 #include "vibe_nav_run.h"      // ★ V12 VOR bearing + ILS deviation on the channel IQ — docs/v12/VOR-ILS.md
@@ -352,6 +354,12 @@ public:
          *  published frequency) — the feed-forward for vibelrpt::Run (docs/v12/LRPT.md §Interface). Empty = none: the
          *  receiver acquires and tracks the Doppler itself, or the engine moves the dial. */
         std::function<double()> satDopplerHz;
+        /** ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER's owner setting (Setup → Unattended satellite passes): "auto" (the
+         *  benchmark decides live or catch-up — the default), "live" (the owner's: live, on by default) or "catchup". Empty
+         *  hook = "auto". */
+        std::function<std::string()> satSkimMode;
+        /** ★★★ beta97 the owner's "keep the corrected IQ of each skimmed pass" (off by default) — read when a skimmer starts. */
+        std::function<bool()> satSkimKeepIq;
         /** ★★ beta91 LRPT: is this listener's satellite above the horizon (1), not (0), or is there no pick (−1)? Tests;
          *  empty = the satellite engine's decoderView. With an override the rate comes from the attach only. */
         std::function<int()> satInRange;
@@ -393,8 +401,12 @@ public:
     };
     enum class Start { Ok, Joined, Refused, Unknown };
 
-    DecoderHost(Env env, std::string session) : env_(std::move(env)), session_(std::move(session)) {}
-    ~DecoderHost() { shutdown(); }
+    DecoderHost(Env env, std::string session) : env_(std::move(env)), session_(std::move(session)) { skimSink_->host = this; }
+    ~DecoderHost() {
+        shutdown();
+        std::lock_guard<std::mutex> lk(skimSink_->m);   // ★★★ beta97 a skimmer still working its queue off spots into nothing now
+        skimSink_->host = nullptr;
+    }
     DecoderHost(const DecoderHost&) = delete;
     DecoderHost& operator=(const DecoderHost&) = delete;
 
@@ -405,6 +417,20 @@ public:
         std::lock_guard<std::mutex> dl(decMtx_);
         if (xpdr_) xpdr_->follow(id);
     }
+    /** ★★★ beta97 {"type":"xpdr_skim","on":true|false} — the SATELLITE box's SKIM switch: the transponder finder's digital-mode
+     *  skimmer on or off (decoders/sat_skim.h). Off stops cutting new slots; what is queued is still decoded. Nothing
+     *  running = ignored. @return whether a skimmer was there to switch. */
+    bool xpdrSkim(bool on) {
+        std::lock_guard<std::mutex> dl(decMtx_);
+        if (!skim_) return false;
+        skim_->setOn(on);
+        if (!on && iqKeep_) { iqKeep_->close(); iqKeep_.reset(); }   // ★ the kept IQ is the skimmed audio: it ends with the skim
+        return true;
+    }
+    /** ★★★ beta97 the skimmer now (tests, the admin line); null = none. */
+    std::shared_ptr<satskim::Skimmer> satSkimmer() { std::lock_guard<std::mutex> dl(decMtx_); return skim_; }
+    /** Seconds of IQ waiting for the decode thread (tests pace a fast feed by it). */
+    double iqQueuedSec() { return queuedIqSec(); }
 
     // ── the sockets ────────────────────────────────────────────────────────────────────────────
     /** Attach a decoder socket. @return true when it joined as a MIRROR (another socket already
@@ -1183,6 +1209,7 @@ private:
         lrpt_.reset();
         orbcomm_.reset();
         xpdr_.reset();
+        retireSkim_();   // ★★★ beta97 the skimmer works its queue off on its own (Skimmer::retire)
         iqFixed_.store(0.0, std::memory_order_relaxed);
         fctlm_.reset();
         fctlmIq_.store(false);
@@ -1888,11 +1915,98 @@ private:
         };
         o.follow.set = [keyOf](double hz) { const std::string k = keyOf(); if (!k.empty()) vibe::sat::engine().setFollow(k, hz); };
         o.follow.clear = [keyOf] { const std::string k = keyOf(); if (!k.empty()) vibe::sat::engine().clearFollow(k); };
+        buildSkimLocked_(msg, o);   // ★★★ beta97 the digital-mode skimmer on the finder's turned stream
         xpdr_.reset(new vibexpdr::Run(std::move(o)));
         cwWidth_.store(std::max(20000.0, std::min(400000.0, w)), std::memory_order_relaxed);
         if (!cwIq_.exchange(true)) skimmersRunning().fetch_add(1);
         log("decoder attached: TRANSPONDER FINDER, a " + std::to_string((int)std::lround(w / 1000)) + " kHz slice centred " + std::to_string((long long)std::llround(cen)) + " Hz"
             + (xpdr_->tlm() ? " + FUNcube telemetry" : ""));
+    }
+    /** ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER (decoders/sat_skim.h, docs/v12/SAT-SKIM.md) on the finder's ONE mixer:
+     *  every window of the passband ("plo"…"phi" — the transponder alone, not its beacon or telemetry; the span if absent),
+     *  FT8 + FT4, as each slot ends. On at the start when "skim":1 (an unattended pass — the server's own start), off when
+     *  "skim":0, else as the owner's setting and the benchmark say (Env::satSkimMode: "live" on, "catchup" off until the
+     *  listener's SKIM switch, "auto" = on where the benchmark's FT8 budget covers every window light). Its spots go out
+     *  through emitSpot with the tag of the slot they were cut in, through skimSink_ — a skimmer still working its queue
+     *  off after the finder (or this host) has gone never touches a dead host. */
+    void buildSkimLocked_(const std::string& msg, vibexpdr::Run::Opts& o) {
+        retireSkim_();
+        satskim::Skimmer::Config c;
+        c.centreHz = o.centreHz; c.loHz = o.spanLoHz; c.hiHz = o.spanHiHz;
+        double v = 0;
+        if (num(msg, "plo", v) && v > 1e6 && v >= o.spanLoHz - 5000) c.loHz = v;
+        if (num(msg, "phi", v) && v > c.loHz && v <= o.spanHiHz + 5000) c.hiHz = v;
+        if (!(c.centreHz > 1e6) || !(c.hiHz > c.loHz)) return;
+        c.lsb = !o.usb;
+        std::string pol = env_.satSkimMode ? env_.satSkimMode() : std::string("auto");
+        if (pol != "live" && pol != "catchup") pol = "auto";
+        const double units = env_.bandBudgetUnits ? env_.bandBudgetUnits() : NAN;
+        const int wins = (int)satskim::windowDials(c.loHz, c.hiHz).size();
+        const satskim::Skimmer::Mode bench = satskim::Skimmer::defaultMode(units, wins);
+        c.mode = pol == "live" ? satskim::Skimmer::Mode::Live : pol == "catchup" ? satskim::Skimmer::Mode::CatchUp : bench;
+        double sk = -1;
+        const bool said = num(msg, "skim", sk);
+        const bool startOn = said ? sk >= 0.5 : (pol == "live" || (pol == "auto" && bench == satskim::Skimmer::Mode::Live));
+        c.background = vibe::gallery::unattendedStartWho() != nullptr;   // ★ the server's own start (an unattended pass)
+        c.log = [this](const std::string& l) { log(l); };
+        c.loaded = env_.loaded;
+        const std::string sess = session_;
+        c.tag = [this, sess] {
+            satskim::Tag t;
+            t.via = satVia(); t.norad = satNorad(); t.passAos = satPassAos();
+            if (t.via.empty()) {   // ★ the lock's own figures (satVia is set by the tracker a tick after the lock starts)
+                const vibe::sat::DecoderView dv = vibe::sat::decoderView(sess);
+                if (!dv.state.empty()) { t.via = (dv.satId.empty() ? dv.satName : dv.satId).substr(0, 40); t.norad = dv.norad; t.passAos = dv.aos; }
+            }
+            if (t.via.empty()) t.via = "satellite";   // ★ never a terrestrial spot: it is a transponder downlink whatever happens
+            return t;
+        };
+        std::shared_ptr<SkimSink> sink = skimSink_;
+        c.emit = [sink](const digi::Spot& sp, double rfHz, const satskim::Tag& t) {
+            std::lock_guard<std::mutex> lk(sink->m);
+            if (sink->host) sink->host->emitSpot(sp, rfHz, &t);
+        };
+        skim_ = std::make_shared<satskim::Skimmer>(c);
+        if (!startOn) skim_->setOn(false);
+        log(std::string("SAT SKIM: ") + (startOn ? "on" : "ready, off until SKIM is switched on") + " \xe2\x80\x94 " + satskim::Skimmer::modeName(c.mode)
+            + (pol == "auto" ? " (the benchmark's choice)" : " (the owner's setting)") + (c.background ? ", an unattended pass" : ""));
+        skimWait_ = true;
+        // ★★★ beta97 keep the corrected IQ (the owner's option, off by default) — bounded, into the gallery
+        if (env_.satSkimKeepIq && env_.satSkimKeepIq() && startOn) {
+            vibesatskim::IqKeep::Opts ko;
+            ko.meta.kind = "satiq";
+            vibe::gallery::stampStartOrigin(ko.meta);
+            ko.meta.freqHz = c.centreHz; ko.meta.mode = "iq"; ko.meta.decoder = "satskim";
+            ko.meta.utc = (int64_t)std::time(nullptr);
+            const satskim::Tag t = c.tag();
+            char tb[200];
+            std::snprintf(tb, sizeof tb, "%s pass \xc2\xb7 corrected IQ \xc2\xb7 %.4f MHz centre", t.via.c_str(), c.centreHz / 1e6);
+            ko.meta.title = vibe::gallery::printable(tb, 120);
+            ko.meta.dlName = vibe::gallery::downloadSafe(t.via + " corrected IQ " + std::to_string((long long)ko.meta.utc) + ".wav");
+            const uint64_t lim = vibe::gallery::shared().limitBytes();
+            ko.maxBytes = std::min<uint64_t>(64ull << 20, lim / 4);
+            ko.log = [this](const std::string& l) { log(l); };
+            if (ko.maxBytes >= (1ull << 20)) iqKeep_.reset(new vibesatskim::IqKeep(std::move(ko)));
+            else log("SAT SKIM: corrected IQ not kept \xe2\x80\x94 the gallery's size leaves no room for it");
+        }
+        o.turned = [this](const std::complex<float>* x, int n, double rate, double utc, bool locked) {   // ★ the decode thread, decMtx_ held
+            if (!skim_) return;
+            if (locked) {
+                skim_->feed(x, n, rate, utc);
+                if (iqKeep_ && skim_->on()) iqKeep_->feed(x, n, rate);
+                skimWait_ = false;
+            } else {
+                if (!skimWait_) skim_->gap();   // ★ the lock went: the slots being cut are not Doppler-corrected any more
+                skimWait_ = true;
+            }
+        };
+        o.statusExtra = [this] { return skim_ ? "\"skim\":" + skim_->statusJson(skimWait_) : std::string(); };
+    }
+    void retireSkim_() {
+        if (iqKeep_) { iqKeep_->close(); iqKeep_.reset(); }
+        if (skim_) satskim::Skimmer::retire(std::move(skim_));
+        skim_.reset();
+        skimWait_ = true;
     }
     /** ★★ V12 2026-11-24 ORBCOMM (vibe_orbcomm_run.h, docs/v12/ORBCOMM.md): an IQ slice of the dial ("width": one listed
      *  channel ± Doppler = 40 kHz, a listed band up to 640 kHz — vibe_sat_engine.h decoderOf), every ORBCOMM carrier in it
@@ -2295,8 +2409,14 @@ private:
 
     /** ★ One spot out: to the gallery's summary and, as {"type":"digital_spot"}, to every decoder socket. `mode` is the
      *  engine's name (V12: any registered mode, not FT8-or-FT4). */
-    void emitSpot(const digi::Spot& sp, double rfHz) {
-        { std::lock_guard<std::mutex> dl(diagMtx_); diagSpots_[sp.mode]++; }   // ★ Band's minute line (bandDiagLocked_)
+    /** ★★★ beta97 `tag`: what the spot was heard THROUGH, given by the caller (the satellite skimmer: the bird, its NORAD
+     *  number and the pass its slot was cut in — a queued slot is decoded after the pass, when this host's own satVia is
+     *  long cleared); null = this host's satVia now. */
+    void emitSpot(const digi::Spot& sp, double rfHz, const vibe::satskim::Tag* tag = nullptr) {
+        { std::lock_guard<std::mutex> dl(diagMtx_); diagSpots_[sp.mode]++; }
+        const std::string via = tag ? tag->via : satVia();   // ★★★ beta97 heard through a satellite: tagged, held back from PSK Reporter
+        const long long viaNorad = tag ? tag->norad : satNorad();
+        const double viaPass = tag ? tag->passAos : satPassAos();   // ★ Band's minute line (bandDiagLocked_)
         /* ★★ STAMPED WITH ITS SLOT'S START (2026-10-26, M7EIW via Stuart): the time WSJT-X shows, so the clients' HH:MM:SS
          *  names the transmission block it was heard in (UberSDR stamps its spots the same way). An engine that does not
          *  know its slot (NaN): the moment it was decoded, as before. */
@@ -2326,7 +2446,7 @@ private:
          *  free text never reach here (the engines spot only calls). */
         {
             const vibe::callentity::Verdict v = vibe::callentity::judge(c, g);
-            if (v == vibe::callentity::kNoEntity) { toStations_(m, c, g, sp.snr, rfHz, (int64_t)(ts / 1000)); return; }
+            if (v == vibe::callentity::kNoEntity) { toStations_(m, c, g, sp.snr, rfHz, (int64_t)(ts / 1000), via.empty() ? 0 : 1); return; }
             if (v == vibe::callentity::kImplausible) g.clear();
         }
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t = spotTap_; } if (t) t->spot(m, c, g, sp.snr, rfHz); }
@@ -2334,7 +2454,6 @@ private:
          *  listener's run or background decoding — goes to the process's reporter, which drops it at once unless the owner
          *  switched reporting on with a callsign. The station heard only: nothing about who was listening. Cheap (a map
          *  insert under a lock); the network is the reporter's own thread, every five minutes. */
-        const std::string via = satVia();   // ★★★ beta97 heard through a satellite: tagged, held back from PSK Reporter
         if (via.empty()) {
             vibe::spotreport::Spot rs;
             rs.mode = m; rs.call = c; rs.grid = g; rs.snr = sp.snr; rs.rfHz = rfHz; rs.slotUtc = (double)ts / 1000.0;
@@ -2342,7 +2461,7 @@ private:
             rs.dbm = sp.dbm >= -30 && sp.dbm <= 70 ? sp.dbm : -1000;
             vibe::spotreport::Reporter::shared().note(rs);
         }
-        toStations_(m, c, g, sp.snr, rfHz, (int64_t)(ts / 1000));
+        toStations_(m, c, g, sp.snr, rfHz, (int64_t)(ts / 1000), via.empty() ? 0 : 1);
         /* ★ V12 (2026-10-27): JTTY and PSK say what the station was doing ("CQ", "QSO", "DE", "TEST"), and every spot
          *  carries the call's country (our own prefix table — vibe_callsign_country.h), printable ASCII only. */
         const std::string how = safe(sp.how, 8);
@@ -2361,8 +2480,10 @@ private:
         //     cleaned as the message is (printable ASCII, quotes escaped)
         std::string viaJ;
         if (!via.empty()) {
-            char nb[32]; std::snprintf(nb, sizeof nb, ",\"norad\":%lld", satNorad());
+            char nb[64]; std::snprintf(nb, sizeof nb, ",\"norad\":%lld", viaNorad);
             viaJ = ",\"via\":\"" + spotMsgJson(via) + "\"" + nb;
+            // ★★★ beta97 "pass": the pass's AOS (unix s) — which pass of the bird it was heard on (the skimmer's list, the map)
+            if (viaPass > 0) { std::snprintf(nb, sizeof nb, ",\"pass\":%.0f", viaPass); viaJ += nb; }
         }
         char buf[720];
         const int n = std::snprintf(buf, sizeof(buf),
@@ -2382,10 +2503,13 @@ public:
      *   · goes into the station store as ORIGIN kSatellite, never as a terrestrial reception on the downlink's band;
      *   · is HELD BACK from PSK Reporter — a station heard through a satellite is not one heard on 2 m from this receiver's
      *     grid, and whether (and how) such spots are reported is Stuart's decision, not made here. */
-    void setSatVia(const std::string& name, long long norad) {
+    /** ★★★ beta97 `passAos`: the pass's AOS (unix s; 0 = not known) — carried as the spot's "pass". */
+    void setSatVia(const std::string& name, long long norad, double passAos = 0) {
         std::lock_guard<std::mutex> lk(satViaMtx_);
         satVia_ = name.size() > 40 ? name.substr(0, 40) : name; satNorad_ = name.empty() ? 0 : norad;
+        satPass_ = name.empty() || !(passAos > 0) ? 0.0 : passAos;
     }
+    double satPassAos() const { std::lock_guard<std::mutex> lk(satViaMtx_); return satPass_; }
     std::string satVia() const { std::lock_guard<std::mutex> lk(satViaMtx_); return satVia_; }
     long long satNorad() const { std::lock_guard<std::mutex> lk(satViaMtx_); return satNorad_; }
     /** ★★ V12 beta94: a spot's decoded message as the BODY of a JSON string — OFF THE AIR, so anyone may have sent anything:
@@ -2410,11 +2534,11 @@ public:
 private:
     /** ★ V12 beta90: one spot into the station store (Env::stations — null = nowhere). The store validates the call and
      *  the grid itself and costs a map insert; its PSK Reporter listeners run here, on the decode thread, queued by them. */
-    void toStations_(const std::string& mode, const std::string& call, const std::string& grid, int snr, double rfHz, int64_t utc) {
+    void toStations_(const std::string& mode, const std::string& call, const std::string& grid, int snr, double rfHz, int64_t utc, int viaSat = -1) {   // ★★★ beta97 viaSat: 1 / 0 the caller says, −1 = this host's satVia now
         if (!env_.stations) return;
         vibestations::Reception r;
         r.call = call; r.grid = grid; r.mode = mode; r.band = bandFor(rfHz); r.snr = snr; r.rfHz = rfHz; r.utc = utc;
-        r.origin = satVia().empty() ? env_.stationOrigin : (uint8_t)vibestations::kSatellite;   // ★★★ beta97 via a satellite
+        r.origin = !(viaSat < 0 ? !satVia().empty() : viaSat != 0) ? env_.stationOrigin : (uint8_t)vibestations::kSatellite;   // ★★★ beta97 via a satellite
         env_.stations->spot(r);
     }
     /** ★ Band's mode chips as JSON (spotsMtx_ held). */
@@ -2612,7 +2736,7 @@ private:
                     if (b.gapN == 0 && b.slice == 0 && rttySkim_) rttySkim_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                     if (b.gapN == 0 && b.slice == 0 && lrpt_) lrpt_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, lrptCaptureUtc_(b.utc));   // ★★★ b96-satgrace the CAPTURE time (its clock check)
                     if (b.gapN == 0 && b.slice == 0 && orbcomm_) orbcomm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
-                    if (b.gapN == 0 && b.slice == 0 && xpdr_) xpdr_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && xpdr_) xpdr_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc);   // ★★★ beta97 + the capture time (the skimmer's slots)
                     if (b.gapN == 0 && b.slice == 0 && fctlm_ && fctlmIq_) fctlm_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.aim, fctlmIqOffHz_);   // ★★★ beta94
                 }
                 {
@@ -2908,9 +3032,15 @@ private:
     std::atomic<double> iqAim_{0.0};          // ★★ beta92 the satellite lock's corrected frequency (setIqAim) — 0 = none
     DecoderTapPtr cwTap_;                    // ★ the gallery's CW (or PSK) summary (Env::cwSpotTap / pskSpotTap), under tapMtx_
     mutable std::mutex satViaMtx_;            // ★★★ beta97 setSatVia
-    std::string satVia_; long long satNorad_ = 0;
+    std::string satVia_; long long satNorad_ = 0; double satPass_ = 0;
     std::unique_ptr<PskRun> psk_;             // ★ PSK31/63: a listener's decoder or a skimmer (buildPskLocked_) — shares cwIq_/cwWidth_
     std::unique_ptr<RttySkimRun> rttySkim_;   // ★ the RTTY skimmer (buildRttySkimLocked_) — shares cwIq_/cwWidth_, owns its workers
+    // ★★★ beta97 the satellite digital-mode skimmer (buildSkimLocked_) — decMtx_; the sink outlives this host
+    struct SkimSink { std::mutex m; DecoderHost* host = nullptr; };
+    std::shared_ptr<SkimSink> skimSink_ = std::make_shared<SkimSink>();
+    std::shared_ptr<satskim::Skimmer> skim_;
+    std::unique_ptr<vibesatskim::IqKeep> iqKeep_;
+    bool skimWait_ = true;                      // ★ no Doppler-corrected block yet (the status says "waiting for the lock")
     std::unique_ptr<vibexpdr::Run> xpdr_;      // ★★★ beta94 the transponder finder (buildXpdrLocked_) — shares cwIq_/cwWidth_/iqFixed_
     std::unique_ptr<vibeorb::Run> orbcomm_;    // ★ V12 ORBCOMM (buildOrbcommLocked_) — shares cwIq_/cwWidth_
     /** ★★★ b96-satgrace the LRPT clock check's "our time" for a block: its CAPTURE time on the clock the run reads — the

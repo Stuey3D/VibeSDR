@@ -404,6 +404,21 @@ public:
         evictLocked(dir, limit, openNames());
         return true;
     }
+    /** ★★★ beta97 A FEW BYTES OF AN ITEM REWRITTEN IN PLACE at `offset` (a WAV header's sizes, once its data is complete —
+     *  the satellite skimmer's kept IQ). Never on the handheld's card (every write there is a temp file + rename; the
+     *  kept IQ is not offered there). False when the item is gone. */
+    bool patch(const std::string& name, uint64_t offset, const std::string& bytes) {
+        if (!safeName(name) || cardLayout().on || bytes.empty()) return false;
+        std::string dir;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; }
+        if (dir.empty()) return false;
+        Lock fl(dir);
+        const int fd = ::open(itemPath(dir, name).c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) return false;
+        const bool okw = ::pwrite(fd, bytes.data(), bytes.size(), (off_t)offset) == (ssize_t)bytes.size();
+        ::close(fd);
+        return okw;
+    }
     /** ★★ V12 beta 4: an item REWRITTEN IN PLACE (the FT8 summary's last-10-minutes card: one card, not one per
      *  rewrite). The file is replaced whole (tmp + rename, so a reader never sees half of it) and its new index line is
      *  APPENDED (",\"re\":1" — it takes the item's place in the list). False when it is gone (evicted, the folder

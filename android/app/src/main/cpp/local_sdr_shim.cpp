@@ -12342,7 +12342,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         // ★★ beta92 the room's skimmer (a CW beacon pick) centred on the corrected frequency (setIqAim)
                         if (auto h = decoders_.shared(); h && !useIcom()) h->setIqAim(audioFreq.load() + (moving ? t.shiftHz : 0.0));
                         // ★★★ beta97 the room's spots are heard THROUGH the bird while the lock is live (DecoderHost::setSatVia)
-                        if (auto h = decoders_.shared()) h->setSatVia(moving ? satViaName(t) : std::string(), t.norad);
+                        if (auto h = decoders_.shared()) h->setSatVia(moving ? satViaName(t) : std::string(), t.norad, t.aos);   // ★★★ beta97 + the pass (its AOS)
                         // ★ the readout twice a second, at once on a state change (TRACK ↔ COAST, ARMED → TRACK)
                         const std::string st = vibe::sat::lockName(t.state);
                         if (st != satSharedSent_ || mono - satSharedSentAt_ >= 0.5) {
@@ -12363,7 +12363,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     { std::lock_guard<std::mutex> lk(c->mtx); c->satShiftHz = moving ? t.shiftHz : 0.0; aimHz = c->vfoHz + c->satShiftHz; }
                     satApplyClient(c.get());
                     // ★★ beta92 this listener's skimmer (a CW beacon pick) centred on where the channel IS (setIqAim)
-                    if (auto h = decoders_.find(c->session)) { h->setIqAim(aimHz); h->setSatVia(moving ? satViaName(t) : std::string(), t.norad); }   // ★★★ beta97 spots via the bird
+                    if (auto h = decoders_.find(c->session)) { h->setIqAim(aimHz); h->setSatVia(moving ? satViaName(t) : std::string(), t.norad, t.aos); }   // ★★★ beta97 spots via the bird (+ the pass)
                     const std::string st = vibe::sat::lockName(t.state);
                     bool send = false;
                     { std::lock_guard<std::mutex> lk(c->mtx);
@@ -35482,6 +35482,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12 Band governor: the owner's word per mode, and the benchmark's budget (both read when Band starts / per period).
         e.bandOverride = [](const std::string& m) { return vsBandOverride(m); };
         e.bandBudgetUnits = [] { return vsBandBudgetUnits(); };
+        // ★★★ beta97 the satellite digital-mode skimmer: the owner's speed (auto / live / catch-up) and "keep the corrected IQ"
+        //     — both on Setup → Unattended satellite passes, saved inside bgDecode's satPasses (vibe_bgdecode_config.h)
+        e.satSkimMode = [] { std::lock_guard<std::mutex> lk(g_bgMtx); return g_bgCfg.sat.skimMode; };
+        e.satSkimKeepIq = [] { std::lock_guard<std::mutex> lk(g_bgMtx); return g_bgCfg.sat.skimIq; };
         /* ★★ V12 (2026-10-31) A DIGITAL-SPOTS MODE THE OWNER SWITCHED OFF ("spots-q65"…, the setup page's per-mode boxes
          *  under Digital spots) is not run at all: Single leaves its engine out, Band reads it as Off (vsBandOverride). */
         e.spotModeOff = [](const std::string& m) {
@@ -35881,7 +35885,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string id = jsonStr(payload, "id");
                 if (id.size() > 12) id.clear();
                 if (host) host->xpdrFollow(id);
-            } else if (type == "subscribe_digital_spots") {
+            } else if (type == "xpdr_skim") {
+                /* ★★★ beta97 THE SATELLITE BOX's SKIM switch (decoders/sat_skim.h, docs/v12/SAT-SKIM.md): the finder's FT8 / FT4
+                 *  skimmer on this socket's VFO A host on or off. The owner may always switch it on (the benchmark sets only
+                 *  the default); off stops new slots, what is queued is still decoded. Anything else running ignores it. */
+                const bool on = payload.find("\"on\":true") != std::string::npos || payload.find("\"on\":1") != std::string::npos;
+                if (host) host->xpdrSkim(on);
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
                  *  the button, but an old client or a hand-rolled tool must meet the same wall.
                  * ★★ V12: "scope":"band" = Band mode (the band's IQ slice, every mode on its dial); absent = Single, the
@@ -39822,6 +39831,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     std::string satPassWhy_, satPassLast_, satPassNow_;
     double satPassRetryAt_ = 0;
+    bool satPassSkim_ = false;                       // ★★★ beta97 "skim transponder digital modes" (satPassTick's copy)
     bool satPassBoth_ = false;                       // ★ beta94 the pass and ORBCOMM run together on one capture now
     double satPassCentre_ = 0, satPassCentreLogAt_ = 0;   // ★ beta94 where the capture is held for them (0 = not held)
     static bool& satPassInternal() { static thread_local bool v = false; return v; }   // ★ our own tune is not an arrival
@@ -40185,7 +40195,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         Cand best; double nextAos = 0;
         auto consider = [&](long long norad, int ti, const vibe::sat::SatDef& sd, const vibe::sat::Transmitter& t) {
             // ★★★ beta96 a SATELLITES radio also runs LINEAR TRANSPONDER passes (the hybrid: a VFO per listener for the pass)
-            if (!(vibe::sat::passKeepable(t) || (singleNow && vibe::sat::passHybrid(t))) || t.orbcomm()) return;   // ★ ORBCOMM is the monitoring, not a pass
+            // ★★★ beta97 …and with "skim transponder digital modes" on, a ticked linear transponder on ANY radio (its FT8 / FT4 kept)
+            if (!(vibe::sat::passKeepableWith(t, cfg.sat.skim) || (singleNow && vibe::sat::passHybrid(t))) || t.orbcomm()) return;   // ★ ORBCOMM is the monitoring, not a pass
             if (!vsSatReachWhy(t.hz, t.passband() ? t.hiHz : t.hz).empty()) return;
             vibe::sat::Pass np;
             if (satEngine().nextPass(norad, clk.unix, cfg.sat.minEl, np) && np.aos > clk.unix && (nextAos == 0 || np.aos < nextAos)) nextAos = np.aos;
@@ -40299,6 +40310,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (!satWork_.on && !satWorkBeginLocked(o.runPass ? in.passName + " pass" : std::string("ORBCOMM monitoring"))) return;
         satPassBoth_ = o.both;
+        satPassSkim_ = cfg.sat.skim;   // ★★★ beta97
         if (o.runPass && !satPass_.on && best.tx >= 0) satPassStartLocked(best.norad, best.tx, best.sd, best.t, best.ps, clk);
         if (o.runOrbcomm && !satPass_.on) {
             // ORBCOMM alone: the dial on the band's middle (NFM — what a listener hears there), once
@@ -40332,7 +40344,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             satEnsureTracker();
         }
         std::string params;
-        r.decoder = vibe::sat::decoderOf(t, params);
+        /* ★★★ beta97 a skimmed transponder pass: the finder with its FT8 / FT4 skimmer forced on ("skim":1 — decoders/sat_skim.h).
+         *  Not on a SATELLITES radio's hybrid pass: that radio becomes a locked range whose shared pipeline is not fed. */
+        bool skimPass;
+        skimPass = satPassSkim_;   // ★ the copy satPassTick took (never g_bgMtx under satPassMtx_)
+        if (singleSatNow() && vibe::sat::passHybrid(t)) skimPass = false;
+        r.decoder = vibe::sat::passDecoderOf(t, skimPass, params);
         if (!r.decoder.empty()) {
             /* ★ beta94 our own attach is not an arrival: satAttach wakes the capture (resumeCaptureIdle), which would read as a
              *  listener and give the session up before the pass had begun (beta90's check looked at satPass_, not yet set) */
@@ -40568,7 +40585,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 for (const auto& b : cfg.sat.birds) {
                     const int ti = satEngine().txIndex(b.norad, b.label);
                     vibe::sat::SatDef sd; vibe::sat::Transmitter t;
-                    if (ti >= 0 && satEngine().txAt(b.norad, ti, sd, t) && !t.orbcomm() && (vibe::sat::passKeepable(t) || vibe::sat::passHybrid(t))) add(b.norad, ti, sd, t);
+                    if (ti >= 0 && satEngine().txAt(b.norad, ti, sd, t) && !t.orbcomm() && (vibe::sat::passKeepableWith(t, cfg.sat.skim) || (singleSatNow() && vibe::sat::passHybrid(t)))) add(b.norad, ti, sd, t);   // ★★★ beta97 the same rule the scheduler takes passes by
                 }
                 if (cfg.sat.meteor)
                     for (const auto& sd : satEngine().defs())

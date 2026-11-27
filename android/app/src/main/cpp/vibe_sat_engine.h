@@ -511,6 +511,9 @@ inline std::string decoderOf(const Transmitter& t, std::string& params) {
         params = b;
         // ★★★ beta94 the bird's FUNcube telemetry in the span: the finder decodes it too (vibe_xpdr_run.h — sat_tlm, fctlm_status)
         if (t.tlmHz > 0) params += ",\"tlm\":" + std::to_string((long long)std::llround(t.tlmHz));
+        /* ★★★ beta97 the transponder's own passband (no beacon, no telemetry): what the digital-mode skimmer cuts its windows
+         *  over (decoders/sat_skim.h — DecoderHost buildSkimLocked_). Clients pass the params through unread. */
+        if (t.passband()) params += ",\"plo\":" + std::to_string((long long)std::llround(t.hz)) + ",\"phi\":" + std::to_string((long long)std::llround(t.hiHz));
         return "xpdr";
     }
     if (beaconSkimmed(t)) { params ="\"width\":" + std::to_string((int)kBeaconSkimHz); return "cwskim"; }
@@ -535,6 +538,18 @@ inline bool passKeepable(const Transmitter& t) {
     std::string p;
     const std::string d = decoderOf(t, p);
     return d == "lrpt" || d == "sstv" || d == "aprs" || d == "fctlm" || d == "orbcomm";
+}
+/** ★★★ beta97 UNATTENDED PASSES WITH THE DIGITAL-MODE SKIMMER (the owner's "skim transponder digital modes", SatPasses::skim):
+ *  a linear transponder has something to keep after all — its FT8 / FT4 spots (decoders/sat_skim.h) — so with the switch on
+ *  its pass is taken unattended like a Meteor pass, and the finder it attaches has the skimmer forced on ("skim":1). */
+inline bool passHybrid(const Transmitter& t);
+inline bool passSkimmable(const Transmitter& t) { return passHybrid(t); }
+inline bool passKeepableWith(const Transmitter& t, bool skim) { return passKeepable(t) || (skim && passSkimmable(t)); }
+/** The decoder an unattended pass of `t` attaches and its params — decoderOf, + "skim":1 on a skimmed transponder. */
+inline std::string passDecoderOf(const Transmitter& t, bool skim, std::string& params) {
+    const std::string d = decoderOf(t, params);
+    if (d == "xpdr" && skim && passSkimmable(t)) params += ",\"skim\":1";
+    return d;
 }
 /** ★★★ beta96 SINGLE MODE: SATELLITES — THE LINEAR-TRANSPONDER HYBRID (docs/v12/SAT-SINGLE.md). A downlink a SATELLITES
  *  radio may run a pass of although it has nothing to keep: a linear transponder's passband (SSB / CW contacts all over

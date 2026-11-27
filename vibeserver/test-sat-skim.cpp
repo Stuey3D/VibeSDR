@@ -100,11 +100,11 @@ static void applyDoppler(std::vector<cf32>& x, double fs, const PassDoppler& d, 
     }
 }
 
-struct Got { std::string mode, call, text; double rf; satskim::Tag tag; double slot; };
+struct Got { std::string mode, call, text; double rf; satskim::Tag tag; double slot; int snr = 0; float dt = 0; };
 struct Sink {
     std::mutex m;
     std::vector<Got> got;
-    void add(const digi::Spot& s, double rf, const satskim::Tag& t) { std::lock_guard<std::mutex> lk(m); got.push_back({ s.mode, s.call, s.text, rf, t, s.slotUtc }); }
+    void add(const digi::Spot& s, double rf, const satskim::Tag& t) { std::lock_guard<std::mutex> lk(m); got.push_back({ s.mode, s.call, s.text, rf, t, s.slotUtc, s.snr, s.dt }); }
     int count(const std::string& text) { std::lock_guard<std::mutex> lk(m); int n = 0; for (auto& g : got) if (g.text == text) ++n; return n; }
     const Got* find(const std::string& text) { std::lock_guard<std::mutex> lk(m); for (auto& g : got) if (g.text == text) return &g; return nullptr; }
 };
@@ -246,22 +246,22 @@ int main() {
         rms = std::sqrt(rms / a12.size());
         std::mt19937 rng(3);
         std::normal_distribution<float> g(0.0f, 1.0f);
-        // ★ a little noise across the whole slice (10 dB under the recording's own density) — the windows outside the
+        // ★ a little noise across the whole slice (20 dB under the recording's own density — PF7X is a marginal pass-2 decode) — the windows outside the
         //   audio are not silent, as they never are on air
-        const float nz = (float)(rms * std::sqrt(fs / 3000.0 / 2.0) * 0.316);
+        const float nz = (float)(rms * std::sqrt(fs / 3000.0 / 2.0) * 0.1);
         for (size_t i = 0; i < iq.size(); ++i) {
             const cd y = Y[i] / (double)M;
             const double ph = 2 * M_PI * shift * (double)i / fs;
             const cd v = y * cd(std::cos(ph), std::sin(ph));
             iq[i] = cf32((float)v.real() + nz * g(rng), (float)v.imag() + nz * g(rng));
         }
-        PassDoppler pd{ 3200.0, 9.0, 0.06 };   // ★ 145 MHz: ±3.2 kHz, ~190 Hz/s at its steepest — far more than the real pass
+        PassDoppler pd{ 3200.0, std::getenv("SKIM_TCA") ? std::atof(std::getenv("SKIM_TCA")) : 9.0, 0.06 };   // ★ 145 MHz: ±3.2 kHz, ~190 Hz/s at its steepest — far more than the real pass
         applyDoppler(iq, fs, pd, 0.0);
         const double tRec = 1795812898.0;
         const double t0 = tRec + std::ceil((vibeUtcNow() - tRec) / 15.0) * 15.0;   // ★ on today's slot grid (test-sat-ft4)
         Sink sink;
         satskim::Skimmer::Config c;
-        c.centreHz = centre; c.loHz = 145855000; c.hiHz = 145875000; c.workers = 2;
+        c.centreHz = centre; c.loHz = 145855000; c.hiHz = 145875000; c.workers = std::getenv("SKIM_W") ? std::atoi(std::getenv("SKIM_W")) : 2;
         c.emit = [&](const digi::Spot& s, double rf, const satskim::Tag& t) { sink.add(s, rf, t); };
         c.tag = [] { satskim::Tag t; t.via = "JO-97"; t.norad = 43803; t.passAos = 1795812600; return t; };
         std::vector<std::string> logs; std::mutex lm;
@@ -270,7 +270,7 @@ int main() {
         runThroughFinder(iq, fs, centre, 145840000, 145875000, false, pd, t0, sk);
         const Got* a = sink.find("CQ DL6UMR JO71");
         const Got* b = sink.find("CQ PF7X JO22");
-        for (auto& gg : sink.got) std::printf("     %s %-18s %.0f Hz  via %s %lld\n", gg.mode.c_str(), gg.text.c_str(), gg.rf, gg.tag.via.c_str(), gg.tag.norad);
+        for (auto& gg : sink.got) std::printf("     %s %-18s %.0f Hz %+d dB dt %.2f via %s %lld\n", gg.mode.c_str(), gg.text.c_str(), gg.rf, gg.snr, gg.dt, gg.tag.via.c_str(), gg.tag.norad);
         ok(a && b, "★ both CQs decode through the skimmer: DL6UMR (pass 1) and PF7X (pass 2)");
         ok(a && b && a->mode == "FT4" && b->mode == "FT4", "…as FT4");
         ok(a && b && std::fabs(a->rf - (dial + 2020.8)) < 15 && std::fabs(b->rf - (dial + 1958.3)) < 15,

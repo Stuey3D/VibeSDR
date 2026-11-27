@@ -76,6 +76,16 @@ struct SatPasses {
     bool meteor = false;                  ///< ★ beta94 every Meteor LRPT pass
     bool orbcomm = false;                 ///< ★ beta94 ORBCOMM sky-plot monitoring
     bool orbcommFirst = false;            ///< ★ beta94 the priority where both cannot run together
+    /** ★★★ beta97 THE SATELLITE DIGITAL-MODE SKIMMER (decoders/sat_skim.h, docs/v12/SAT-SKIM.md):
+     *   · skim — a ticked LINEAR TRANSPONDER's pass is taken unattended too, and its FT8 / FT4 skimmed over the whole
+     *     passband (spots tagged via the bird and the pass, held back from PSK Reporter) — not only on a SATELLITES radio;
+     *   · skimMode — the skimmer's speed for listeners and passes alike: "auto" (the benchmark decides live or catch-up),
+     *     "live", "catchup";
+     *   · skimIq — keep the Doppler-corrected IQ of each skimmed pass in the gallery (bounded). Off by default.
+     *  Absent in the JSON = off / "auto" (an older setting reads back byte for byte). */
+    bool skim = false;
+    std::string skimMode = "auto";
+    bool skimIq = false;
     bool anyPicked() const { return meteor || orbcomm || !birds.empty(); }
     bool any() const { return on && anyPicked(); }
 };
@@ -284,6 +294,9 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
         if (const auto* v = sp->get("meteor")) out.sat.meteor = v->kind == antswitch::Json::Bool && v->b;
         if (const auto* v = sp->get("orbcomm")) out.sat.orbcomm = v->kind == antswitch::Json::Bool && v->b;
         out.sat.orbcommFirst = sp->str("first", "meteor") == "orbcomm";
+        if (const auto* v = sp->get("skim")) out.sat.skim = v->kind == antswitch::Json::Bool && v->b;   // ★★★ beta97
+        { const std::string m = sp->str("skimMode", "auto"); out.sat.skimMode = (m == "live" || m == "catchup") ? m : "auto"; }
+        if (const auto* v = sp->get("skimIq")) out.sat.skimIq = v->kind == antswitch::Json::Bool && v->b;
     }
     if (out.waitSec < 0) out.waitSec = 0;
     if (out.waitSec > 24 * 3600) out.waitSec = 24 * 3600;
@@ -367,6 +380,10 @@ inline std::string toJson(const Config& c) {
         if (c.sat.meteor) o += ",\"meteor\":true";
         if (c.sat.orbcomm) o += ",\"orbcomm\":true";
         if (c.sat.orbcommFirst) o += ",\"first\":\"orbcomm\"";
+        // ★★★ beta97 the skimmer: absent unless set
+        if (c.sat.skim) o += ",\"skim\":true";
+        if (c.sat.skimMode == "live" || c.sat.skimMode == "catchup") o += ",\"skimMode\":\"" + c.sat.skimMode + "\"";
+        if (c.sat.skimIq) o += ",\"skimIq\":true";
         o += "}";
     }
     return o + "}";
