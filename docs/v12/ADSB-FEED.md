@@ -312,11 +312,13 @@ Stuart's Lenovo, all at once:
 with no radio: no WebSocket, no tuner, only this server's HTTP reads, live, with the SHOW chips and the normal time windows
 (the maritime filter where ships / NAVTEX are drawn; aircraft keep the table's hour). No TUNE, no "this session", no other radios.
 
-**The gate** (`airSeaOffer`, one read of each when the landing draws, never polled): aircraft (`aircraft.json?since=3600`), ships
+**The gate** (`airSeaOffer`, one read of each when the landing draws, never polled): aircraft (`aircraft.json?since=3600`,
+then ★ 11-27 filtered by `aviationMap.ts avShown` — the map's own now-rule, so the button counts what the map draws when it
+opens: "72 aircraft now", never the hour's 243 — Stuart, "lies on the landing screen"), ships
 (`gallery/ais-ships.json?since=21600&limit=1`), remembered sondes / VOR stations (`gallery.json?kind=sondes|vormap`, a card
 within its keep: 24 h / 7 days), or any aircraft feed. Nothing anywhere: no button. **The landing**: the most populated of
 AIRCRAFT / SHIPS / SONDES / NAVAIDS; when every aircraft comes from feeds of one label, that label names them ("2 HFDL
-aircraft") and the list opens sorted LATEST.
+aircraft now") and the list opens sorted LATEST.
 
 **What it polls**: the aircraft as deltas every 3 s with its ticket (`aircraft.json?d=<cursor>&vt=<ticket>`); ships, DSC and
 NAVTEX every 30 s (2 s while the warnings index builds); sondes / VOR every 2 minutes. At the time limit's end every poll stops.
