@@ -289,7 +289,7 @@ import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMiniWaterfall';   // ★★★ beta97 the map drawer's waterfall
 import type { MapCardsIn } from '../components/MapChrome';
-import { gainRowFor, rateRows, mapSpecWanted } from '../utils/mapChrome';
+import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers } from '../utils/mapChrome';
 import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
 import { wfModelChannels, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
@@ -1265,6 +1265,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     }
     setRadioBase(radioBaseUrl(baseUrl, id));
   }, [baseUrl]);
+  /* ★★★ beta97 THE MAP'S SERVERS CARD SWITCHED RADIO: the screen being left stashed the pick (onSwitchRadio) — choose it as
+   *  soon as the door has answered, without the list in between. Once only (the visit is this screen's). */
+  useEffect(() => {
+    const id = visit?.pick;
+    if (!id || !door || radioBase) return;
+    if (visit) visit.pick = undefined;
+    if (door.radios.some((x) => x.id === id)) void chooseRadio(id);
+  }, [door]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** Waiting for the owner to pick — the connect must not start.
    *  ★ A door of ONE still waits when it has something to say: the aerial and the owner's message
    *    are the reason the screen exists in that case, and connecting past them would show them to
@@ -3256,8 +3264,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   const asOthersOffered = useMemo(() => otherRadiosOffered({ mine: mapRadio.mine, radioCount: mapRadio.count, viewer: asViewer,
     seen: radiosSeen([avShared?.aircraft, shipStore?.vessels, navReport?.stations, dscGal, sdStored, vmStored]) }), [mapRadio, asViewer, avShared, shipStore, navReport, dscGal, sdStored, vmStored]);
   const asSessOk = sessionOffered({ viewer: asViewer, onRadio: true });   // ★ every map the app opens is on a server's radio (the viewer excepted)
-  const asSc = useMemo<MapScope>(() => ({ mine: mapRadio.mine, others: !asOthersOffered || mapOthers, t0: asSessOk && asSess && asSessSt ? asSessSt.t0 : 0 }),
-    [mapRadio.mine, asOthersOffered, mapOthers, asSessOk, asSess, asSessSt]);
+  /* ★★★ beta97 the MAP card's SOURCES: the radios / feeds this viewer hid (this device's view, never sent) — through the scope */
+  const [asSrcHidden, setAsSrcHidden] = useState<string[]>([]);
+  useEffect(() => { AsyncStorage.getItem('lsv_map_sources_hidden').then((v) => {
+    try { const j = JSON.parse(v || '[]'); if (Array.isArray(j)) setAsSrcHidden(j.filter((x) => typeof x === 'string').slice(0, 64)); } catch { /* none */ } }).catch(() => {}); }, []);
+  const asSrcSet = useCallback((id: string, on: boolean) => {
+    setAsSrcHidden((cur) => { const next = on ? cur.filter((x) => x !== id) : [...cur.filter((x) => x !== id), id];
+      AsyncStorage.setItem('lsv_map_sources_hidden', JSON.stringify(next)).catch(() => {}); return next; });
+  }, []);
+  const asSc = useMemo<MapScope>(() => ({ mine: mapRadio.mine, others: !asOthersOffered || mapOthers, t0: asSessOk && asSess && asSessSt ? asSessSt.t0 : 0,
+                                          hidden: asViewer ? [] : asSrcHidden }),
+    [mapRadio.mine, asOthersOffered, mapOthers, asSessOk, asSess, asSessSt, asSrcHidden, asViewer]);
+  /** ★★★ beta97 the server's radios by name (the door's list) — SOURCES, LIVE elsewhere, SERVERS */
+  const mapRadioNames = useMemo<Record<string, string>>(() => Object.fromEntries((door?.radios ?? []).map((x) => [x.id, x.label])), [door]);
+  /* ★★★ beta97 which layers are live ELSEWHERE on this server (layerOthers — the same table SOURCES and RATE read; the RAW table on
+   *  purpose: it is about the other sources, whatever this viewer's scope shows) */
+  const asOthersElsewhere = useMemo(() => layerOthers((avShared?.aircraft ?? []) as Array<{ age: number; src: string[]; radios?: string[] }>,
+    { mine: mapRadio.mine, onRadio: !asViewer, names: mapRadioNames, feedTitle: avShared?.feeds?.[0]?.title }), [avShared, mapRadio.mine, asViewer, mapRadioNames]);
   const asSrcS = useMemo(() => airSeaScope({ shared: avShared, sharedSkew: avSkewRef.current, ships: shipStore, nav: navReport, warn: navWarnRep, met: navMetRep,
     dscG: dscGal, navSkew: navSkewRef.current, adsb: adsbReport, ais: aisReport, av: avReport, sd: sdReport, vm: vmReport, sdStored, vmStored }, asSc, Math.floor(Date.now() / 1000), asFirst.current),
     [asSc, avShared, shipStore, navReport, navWarnRep, navMetRep, dscGal, adsbReport, aisReport, avReport, sdReport, vmReport, sdStored, vmStored]);
@@ -13043,7 +13066,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       // ★★★ beta96 SHOW (Stuart 11-26, the web's): each chip's count and colour dot — this viewer's own, never sent; then the
       //     OTHER RADIOS ON THIS SERVER chip (2+ sources only, never the viewer)
       toggles: [...liveChips(present, live).map((c) => ({ id: c.id, label: c.live ? `\u25CF ${c.label}` : c.label, words: c.words,
-                  n: c.id === 'airports' || c.id === 'areas' ? undefined : showN[c.id] ?? undefined, colour: LIVE_CHIP_COLOUR[c.id] })),
+                  n: c.id === 'airports' || c.id === 'areas' ? undefined : showN[c.id] ?? undefined, colour: LIVE_CHIP_COLOUR[c.id],
+                  /* ★★★ beta97 LAYERS' outlined LIVE: another of this server's radios or its feeds heard it in the last minute */
+                  live: c.live, others: asOthersElsewhere[c.id] })),
                 ...(asOthersOffered ? [{ id: OTHER_RADIOS_CHIP, label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS }] : [])],
       toggled: asOthersOffered ? { ...toggled, [OTHER_RADIOS_CHIP]: mapOthers } : toggled,
 
@@ -13080,7 +13105,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       trail: (key: string) => (key.startsWith('a:') || key.startsWith('vor:') || key.startsWith('vos:') || key.startsWith('sds:') ? Promise.resolve([] as [number, number][]) : key.startsWith('sd:') ? sdTrk.trail(key.slice(3))
         : (ship.trail as (k: string) => Promise<[number, number][]>)(key)),
     };
-  }, [airSeaUp, airSeaMode, adsbLiveHere, vmTrk, sdTrk, sdStoredS, vmStoredS, sdOn, vmOn, ndbReportS, ndbChip, adsbReportS, adsbStatusLine, aisViewOpen, aisShipTrk, navTrk, avTrk, avLayers, shipLayers, avOn, avReportS, avSharedS, asPicked, asOpened, asSort, asMsgKey, trkRx?.lat, trkRx?.lon, onlyModeHere, navMetRepS, navReportS, asOthersOffered, mapOthers, mapOthersSet, asSc, asSess, asSessOk, dscCalls, aisOn]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [asOthersElsewhere, airSeaUp, airSeaMode, adsbLiveHere, vmTrk, sdTrk, sdStoredS, vmStoredS, sdOn, vmOn, ndbReportS, ndbChip, adsbReportS, adsbStatusLine, aisViewOpen, aisShipTrk, navTrk, avTrk, avLayers, shipLayers, avOn, avReportS, avSharedS, asPicked, asOpened, asSort, asMsgKey, trkRx?.lat, trkRx?.lon, onlyModeHere, navMetRepS, navReportS, asOthersOffered, mapOthers, mapOthersSet, asSc, asSess, asSessOk, dscCalls, aisOn]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★ CLOSE MAP puts every opener's map away; EXIT AIS leaves the mode (the map goes with it). */
   const closeAirSea = useCallback(() => {
     if (adsbViewOpen && adsbOnRef.current && airSeaTrk?.exitLabel === 'EXIT ADS-B') { exitAdsb(); return; }   // ★ stage 6
@@ -14974,6 +14999,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   doorBackRef.current = { hasDoor: !!door };
   // ★★ V12 two servers: leaving the server in FRONT ends it; the one in the background plays on, centred, and the
   //   server list offers a new second server (dualServer.leaveForeground). No pairing: nothing happens.
+  /** ★★★ beta97 the map's SERVERS card: straight over to another radio behind this door — the Back-to-the-list remount
+   *  (doorReturn.ts) with the radio to choose carried in the visit. */
+  const onSwitchRadio = useCallback((id: string) => {
+    setMenuOpen(false);
+    if (dualIdRef.current) leaveForeground(dualIdRef.current);
+    if (!doorBackRef.current.hasDoor) { navigation.goBack(); return; }
+    doorVisit.stash({ base: baseUrl, radioId: chosenFromListRef.current ?? id, pins: radioPins.current, adminAuthQ: adminAuthQRef.current, pick: id });
+    navigation.replace('SDR', doorReturnParams(route.params, newLocalSession));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const onBackToPicker = useCallback(() => {
     setMenuOpen(false);
     if (dualIdRef.current) leaveForeground(dualIdRef.current);
@@ -15942,6 +15977,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     statsSeen(mapStats.current, obs, now);
     return statsSections(mapStats.current, trkRx, now, mapStatsOpened.current);
   }, [trackMapUp, avShared, adsbReport, adsbLiveHere, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ SERVERS: each other radio's listeners against its limit — asked of each radio (fetchOccupancy), at most every 10 s and
+   *  only while the card is open (a floored poll: memory cloudflare_workers_limit_incident) */
+  const [radioLive, setRadioLive] = useState<Record<string, { listeners: number; max: number }>>({});
+  const radioLiveAt = useRef(0);
+  const loadRadioLive = useCallback(() => {
+    if (!door || Date.now() - radioLiveAt.current < 10_000) return;
+    radioLiveAt.current = Date.now();
+    for (const x of door.radios.filter((q) => q.id !== chosenRadio?.id).slice(0, 8)) {
+      fetchOccupancy(radioBaseUrl(baseUrl, x.id)).then((o) => {
+        if (!o) return;
+        setRadioLive((cur) => ({ ...cur, [x.id]: { listeners: Math.max(0, o.listeners ?? 0), max: Math.max(0, o.maxUsers ?? 0) } }));
+      }).catch(() => {});
+    }
+  }, [door, chosenRadio, baseUrl]);
   const mapCards: MapCardsIn | null = (() => {
     if (!trackMapUp) return null;
     const drv = String(radioCaps?.driver ?? (isLocal ? 'rtl' : ''));
@@ -15990,9 +16039,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         ?? wfModelVfo({ frequency: status.frequency, mode: String(status.mode), bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh });
     }
     return {
-      servers: { rows: [{ id: 'back', label: door && door.radios.length > 1 ? 'Leave — back to this server’s radios' : 'Leave server — back to the server list',
-                          sub: instanceName ?? baseUrl.replace(/^https?:\/\//, '') }],
-                 onPick: (id: string) => { if (id === 'back') onBackToPicker(); } },
+      servers: { rows: serversRows({ radios: door?.radios ?? [], mine: chosenRadio?.id ?? null, viaDoor: !!door && doorBackRef.current.hasDoor, live: radioLive,
+                                     host: instanceName ?? baseUrl.replace(/^https?:\/\//, ''), unlocked: unlockedRadios }),
+                 onPick: (id: string) => { if (id.startsWith('r:')) onSwitchRadio(id.slice(2)); else onBackToPicker(); },
+                 onOpen: loadRadioLive },
       gain, gainH,
       facts: avOn && avReport ? `${avReport.bandName || 'DATALINK'} ${(avReport.hz / 1e6).toFixed(3)} MHz` : '',
       stats: mapStatsSections.length ? { sections: mapStatsSections, onPick: () => { /* the map finds it (MapCardsHost → its focus) */ } } : null,
@@ -16001,6 +16051,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       time: sessionEndsAt != null && !adminOk ? { colour: TIME_TAB[timeStage], frame: ['rgba(255,160,0,0.55)', 'rgba(255,225,77,0.7)', 'rgba(255,90,90,0.75)'][timeStage],
                                                  content: <SessionClock endsAt={sessionEndsAt} limitSoft={limitSoft || borrowed} stage={timeStage} /> } : null,
       wf: wfOffered ? { offered: true, model: wfModel, colormap, store: mapWfStore, sinkRef: mapWfSink, onShown: setMapWfShown } : null,
+      // ★★★ SOURCES: each radio and feed with what it holds (the unfiltered table, so a hidden one still says what it has)
+      sources: asViewer ? undefined : sourceRows({ aircraft: avShared?.aircraft ?? [], vessels: shipStore?.vessels ?? [], feeds: avShared?.feeds ?? [],
+        mine: mapRadio.mine, onRadio: true, names: mapRadioNames, hidden: new Set(asSrcHidden), liveText: rateChip(rate).text,
+        mineHolds: adsbLiveHere && adsbReport ? `${adsbReport.aircraft.length} aircraft` : avOn && avReport ? `${avReport.aircraft.length} aircraft` : aisOn && aisReport ? `${aisReport.vessels.length} ships` : '' }) ?? undefined,
+      onSource: asSrcSet,
     };
   })();
 

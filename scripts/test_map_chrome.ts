@@ -4,7 +4,8 @@
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, CHIP_ORDER, TAB_H, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels } from '../src/utils/mapWfModel';
 
 let pass = 0, fail = 0;
@@ -169,6 +170,39 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const t = chromeGeom({ w: 375, h: 560, insets: { top: 20, bottom: 0, left: 0, right: 0 }, chips: ALL });
   const ot = padOrder(t, { cardOpen: false, listRows: 0, br: false });
   ok(ot[0] === 'chip:exit' && ot.indexOf('chip:stats') < ot.indexOf('chip:rate'), `tall: the left family, then the right column (${ot.join(' ')})`);
+}
+
+// ── SERVERS: LEAVE always, then every other radio with its listeners ──
+{
+  const radios = [{ id: 'a', label: 'RTL HF', users: 4 }, { id: 'b', label: 'RSP VHF', users: 2, driver: 'sdrplay' }, { id: 'c', label: 'Club radio', pinLocked: true }];
+  const r = serversRows({ radios, mine: 'a', viaDoor: true, host: 'pi.local', live: { b: { listeners: 1, max: 2 } } });
+  ok(r[0].id === 'back' && /this server’s radios/.test(r[0].label) && r[0].sub === 'pi.local', 'LEAVE first: back to this server’s radios');
+  ok(r.length === 3 && !r.some((x) => x.id.endsWith(':a')), 'every OTHER radio, never this one');
+  ok(r[1].id === 'r:b' && r[1].label === 'Switch to RSP VHF' && /1\/2 listeners/.test(r[1].sub) && /sdrplay/.test(r[1].sub), `a switch row with its listeners (${r[1].sub})`);
+  ok(r[2].id === 'pin:c' && /PIN/.test(r[2].sub), 'a radio behind a PIN goes to the radio list (its PIN is typed there)');
+  ok(serversRows({ radios, mine: 'a', viaDoor: true, host: 'h', unlocked: { c: true } })[2].id === 'r:c', 'a PIN radio unlocked this visit switches straight away');
+  ok(/\?\/4 listeners/.test(serversRows({ radios: [{ id: 'x', label: 'X' }, { id: 'a', label: 'A', users: 4 }], mine: 'x', viaDoor: true, host: 'h' })[1].sub), 'not polled yet: the limit alone (?/4)');
+  const lone = serversRows({ radios: [], mine: null, viaDoor: false, host: 'h' });
+  ok(lone.length === 1 && /server list/.test(lone[0].label), 'no door / one radio: LEAVE alone (back to the server list)');
+}
+// ── SOURCES + LIVE elsewhere ──
+{
+  const ac = [{ radios: ['a'], src: ['ADS-B'], age: 5 }, { radios: ['b'], src: ['VDL2'], age: 10 }, { radios: ['feed'], src: ['ADS-B'], age: 3 }, { radios: ['b'], src: ['ACARS'], age: 300 }];
+  const rows = sourceRows({ aircraft: ac, vessels: [{ radios: ['b'] }], feeds: [{ title: 'PiAware', label: 'beast', state: 'connected', aircraft: 40 }],
+                            mine: 'a', onRadio: true, names: { a: 'RTL HF', b: 'RSP VHF' }, hidden: new Set(['b']), liveText: 'ADS-B 12/s' })!;
+  ok(rows.length === 3, `a row per radio and per feed (${rows.map((x) => x.name).join(' · ')})`);
+  ok(rows[0].name === 'RTL HF' && /this radio · live: ADS-B 12\/s · 1 aircraft/.test(rows[0].what), 'this radio: live, what it holds');
+  ok(rows[1].name === 'RSP VHF' && !rows[1].on && /2 aircraft · 1 ships/.test(rows[1].what), 'a hidden radio is off, with its counts');
+  ok(rows[2].id === 'feed' && /BEAST feed · connected · 40 aircraft/.test(rows[2].what) && !rows[2].down, 'a feed row, live');
+  ok(sourceRows({ aircraft: [{ radios: ['a'] }], vessels: [], feeds: [], mine: 'a', onRadio: true, names: {}, hidden: new Set() }) === null, 'one source: no SOURCES at all');
+  const oth = layerOthers(ac, { mine: 'a', onRadio: true, names: { b: 'RSP' }, feedTitle: 'PiAware' });
+  ok(JSON.stringify(oth.vdl2) === '["RSP"]' && JSON.stringify(oth.adsb) === '["PiAware"]', `outlined LIVE: another radio / the feed, by name (${JSON.stringify(oth)})`);
+  ok(!oth.acars, 'heard more than a minute ago: not live elsewhere');
+  ok(!layerOthers(ac, { mine: 'a', onRadio: true, names: {} }).adsb?.includes('SDR'), 'this radio’s own decodes are never “elsewhere”');
+  // the scope hides what ONLY hidden sources heard
+  const sc = { mine: 'a', others: true, t0: 0, hidden: ['b'] };
+  ok(!scopeRadioOk(['b'], sc) && scopeRadioOk(['a', 'b'], sc) && scopeRadioOk([], sc), 'scope: heard only by a hidden source → out; also heard by a shown one → in; unknown → in');
+  ok(scopeList([{ r: ['b'] }, { r: ['a'] }], sc, (x) => x.r, () => null).length === 1, 'scopeList applies the hidden sources');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

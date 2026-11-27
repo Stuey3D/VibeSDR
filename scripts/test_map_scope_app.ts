@@ -48,7 +48,7 @@ ok(/export interface MapLayerRow \{ id: string; label: string; words: string; n\
 ok(/\{!!r\.colour && <View style=\{\[styles\.dot, \{ backgroundColor: r\.colour \}\]\} \/>\}/.test(mc) && /\{r\.n != null && <Text style=\{styles\.layerN\}>\{r\.n\}<\/Text>\}/.test(mc),
    'a colour dot, the count');
 ok(/words=\{`\$\{r\.words\}\$\{r\.n != null \? `, \$\{r\.n\}` : ''\}/.test(mc), 'a screen reader hears the count');
-ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string \}>; toggled\?/.test(mo), 'MapOverlay passes them through');
+ok(/toggles\?: Array<\{ id: string; label: string; words: string; n\?: number; colour\?: string; live\?: boolean; others\?: string\[\]; group\?: string \}>;/.test(mo), 'MapOverlay passes them through (with LIVE / elsewhere)');
 
 console.log('── the ISM mesh map ──');
 const ism = sc.slice(sc.indexOf('const ismTrk = useMemo'), sc.indexOf('const ismMapUp ='));

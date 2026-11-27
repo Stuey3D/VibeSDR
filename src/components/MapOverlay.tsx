@@ -206,7 +206,8 @@ interface MapOverlayProps {
           ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string;
           /** ★★ V12 2026-11-01 the NAVTEX map: its layer keys, a card's gallery text (fetched when it opens), and TRANSCRIBE's
            *  TRANSLATE TO for the gallery's own TRANSLATE in the card ('' = the phone's language). */
-          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string }>; toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;   // ★★★ beta96 SHOW counts + dots
+          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string }>;   // ★★★ beta97 live / others = LAYERS' LIVE badges (mapChrome liveBadges)
+          toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;   // ★★★ beta96 SHOW counts + dots
           /** ★ beta95 the map's padded view [s, w, n, e], rounded to 2° (the sea areas in view are sent — seaCompose's view) */
           onView?: (box: [number, number, number, number]) => void;
           cardText?: (file: string) => Promise<{ ok: boolean; text: string }>; translateTo?: string;
@@ -3247,7 +3248,7 @@ function MapCardsHost(p: {
   useEffect(() => () => { if (noteT.current) clearTimeout(noteT.current); }, []);
   // ── LAYERS: the SHOW toggles with their counts and LIVE (this radio's own layers) ──
   const layerRows: MapLayerRow[] = (t.toggles ?? []).map((x) => ({ id: x.id, label: x.label.replace(/^●\s*/, ''), words: x.words, n: x.n, colour: x.colour,
-    live: (x as { live?: boolean }).live ?? /^●/.test(x.label), others: (x as { others?: string[] }).others, group: (x as { group?: string }).group }));
+    live: x.live ?? /^●/.test(x.label), others: x.others, group: x.group }));
   const fam = layerFamilies(layerRows, t.toggled ?? {}).map((f) => ({ glyph: f.glyph as ModeIconName, n: f.n, colour: f.colour }));
   // ── TUNE: the modes (2+), the one-row gain (ADS-B live: the server's ramp), the live mode's facts ──
   const g = p.adsbGain;

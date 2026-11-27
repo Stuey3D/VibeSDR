@@ -397,6 +397,74 @@ export function adsbGainRow(view: { auto: boolean; now: string; idx: number; max
            at: Math.max(0, Math.min(view.maxIdx, view.idx)), set: 'gain-index', more, unlocked: false };
 }
 
+/** ★★★ THE SERVERS CARD (the web's mapServersSync — Stuart: "must ALWAYS be reachable on every map screen"): LEAVE first
+ *  (back to this server's radios when there is a choice, else the server list), then a row per OTHER radio on this
+ *  server with its listeners against its limit (live while the card is open, else the limit alone). A radio behind a PIN
+ *  this visit has not unlocked goes to the radio list (where its PIN is typed), never a dead switch.
+ *  ids: 'back' · 'r:<id>' (switch) · 'pin:<id>' (to the radio list). */
+export interface RadioLite { id: string; label: string; driver?: string; users?: number; pinLocked?: boolean }
+export function serversRows(o: { radios: RadioLite[]; mine: string | null; viaDoor: boolean; host: string;
+                                 live?: Record<string, { listeners: number; max: number }>; unlocked?: Record<string, boolean> }): Array<{ id: string; label: string; sub: string }> {
+  const others = o.viaDoor ? o.radios.filter((r) => r.id !== o.mine) : [];
+  const rows = [{ id: 'back', label: others.length ? 'Leave — back to this server’s radios' : 'Leave server — back to the server list', sub: o.host }];
+  for (const r of others) {
+    const lv = o.live?.[r.id], max = lv?.max || r.users || 0;
+    const count = lv ? `${lv.listeners}/${max || '?'} listeners` : max ? `?/${max} listeners` : '';
+    const pin = r.pinLocked === true && !o.unlocked?.[r.id];
+    rows.push({ id: `${pin ? 'pin' : 'r'}:${r.id}`, label: `Switch to ${r.label}`,
+                sub: [pin ? 'PIN needed — opens the radio list' : '', count, r.driver ?? ''].filter(Boolean).join(' · ') || 'another radio on this server' });
+  }
+  return rows;
+}
+
+/** ★★★ SOURCES (the MAP card — the web's asCardsSync): each radio of this server and each feed, with what it holds, as
+ *  this viewer's own show / hide (never sent). Offered only with more than one row (MAP-TEMPLATE rule 7). Every feed is
+ *  tagged "feed" in the table, so the feed rows show and hide together. */
+export interface SourceRow { id: string; name: string; what: string; on: boolean; down?: boolean }
+export function sourceRows(o: { aircraft: ReadonlyArray<{ radios?: string[] }>; vessels: ReadonlyArray<{ radios?: string[] }>;
+                                feeds: ReadonlyArray<{ title: string; label?: string; state?: string; aircraft?: number }>;
+                                mine: string; onRadio: boolean; names: Record<string, string>; hidden: ReadonlySet<string>;
+                                liveText?: string; mineHolds?: string }): SourceRow[] | null {
+  const per = new Map<string, { ac: number; ships: number }>();
+  const bump = (ids: string[] | undefined, k: 'ac' | 'ships') => { for (const id of ids ?? []) { const e = per.get(id) ?? { ac: 0, ships: 0 }; e[k]++; per.set(id, e); } };
+  for (const a of o.aircraft) bump(a.radios, 'ac');
+  for (const v of o.vessels) bump(v.radios, 'ships');
+  const rows: SourceRow[] = [];
+  const holds = (e: { ac: number; ships: number }) => [e.ac ? `${e.ac} aircraft` : '', e.ships ? `${e.ships} ships` : ''].filter(Boolean).join(' · ') || '—';
+  for (const [id, e] of per) {
+    if (id === 'feed') continue;
+    const mine = o.onRadio && id === o.mine;
+    rows.push({ id, on: !o.hidden.has(id), name: o.names[id] ?? (mine ? 'This radio' : `Radio ${id}`),
+                what: `${mine ? 'this radio' : 'a radio on this server'}${mine && o.liveText ? ` · live: ${o.liveText}` : ''} · ${holds(e)}` });
+  }
+  if (o.onRadio && o.mine && !per.has(o.mine) && o.mineHolds) {
+    rows.push({ id: o.mine, on: !o.hidden.has(o.mine), name: o.names[o.mine] ?? 'This radio', what: `this radio${o.liveText ? ` · live: ${o.liveText}` : ''} · ${o.mineHolds}` });
+  }
+  if (per.has('feed') && !o.feeds.length) rows.push({ id: 'feed', on: !o.hidden.has('feed'), name: 'Aircraft feeds', what: `the server’s feeds · ${per.get('feed')!.ac} aircraft` });
+  for (const f of o.feeds) {
+    const up = /connected|listening|live|ok/i.test(f.state ?? '');
+    rows.push({ id: 'feed', on: !o.hidden.has('feed'), name: f.title, what: `${(f.label || 'adsb').toUpperCase()} feed · ${f.state || 'unknown'} · ${f.aircraft ?? 0} aircraft`, down: !up });
+  }
+  return rows.length > 1 ? rows : null;
+}
+
+/** ★★ LIVE ELSEWHERE (Stuart 15:31, the web's `others`): which layers another of this server's radios — or its feeds —
+ *  heard an aircraft on in the last minute (the same table SOURCES and RATE read; no fetch). layer id → source names. */
+const SRC_LAYER: Record<string, string> = { 'ADS-B': 'adsb', VDL2: 'vdl2', ACARS: 'acars', HFDL: 'hfdl', 'ADS-C': 'adsc' };
+export function layerOthers(aircraft: ReadonlyArray<{ age: number; src: string[]; radios?: string[] }>, o: { mine: string; onRadio: boolean;
+                            names: Record<string, string>; feedTitle?: string }): Record<string, string[]> {
+  const out = new Map<string, Set<string>>();
+  for (const p of aircraft) {
+    if (!(p.age < 60)) continue;
+    for (const r of p.radios ?? []) {
+      if (o.onRadio && r === o.mine) continue;
+      const name = r === 'feed' ? o.feedTitle || 'FEED' : o.names[r] ?? 'SDR';
+      for (const s of p.src) { const id = SRC_LAYER[s]; if (!id) continue; (out.get(id) ?? out.set(id, new Set()).get(id)!).add(name); }
+    }
+  }
+  return Object.fromEntries([...out].map(([k, v]) => [k, [...v]]));
+}
+
 /** The layers' families for the LAYERS chip (icon over count): aircraft, ships, NAVTEX stations, sondes, beacons — each
  *  the sum of its shown layers' counts (the web's setLayerSummary families). */
 export const LAYER_FAMILY: Record<string, 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'> = {

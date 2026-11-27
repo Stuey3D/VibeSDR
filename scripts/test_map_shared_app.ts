@@ -35,6 +35,16 @@ ok(/dialLock=\{mapLockWhy \? \{ why: mapLockWhy, exitMoves: mapExitMoves, onDial
 ok(/airSeaTuneRows\(\{/.test(sc) && /only: onlyModeHere \|\| ''/.test(sc), 'TUNE rows from THIS radio\'s caps (and the only mode)');
 ok(/const airSeaTune = useCallback\(\(id: string\) => \{\n    markInteract\(\);\n    if \(askGate\(\)\) return;/.test(sc), 'a TUNE pick asks first (ask before tuning)');
 
+console.log('── ★★★ beta97 SERVERS, SOURCES, LIVE elsewhere ──');
+ok(/doorVisit\.stash\(\{ base: baseUrl, radioId: chosenFromListRef\.current \?\? id, pins: radioPins\.current, adminAuthQ: adminAuthQRef\.current, pick: id \}\);\s*navigation\.replace\('SDR', doorReturnParams/.test(sc),
+   'SERVERS → another radio: the door\'s remount, the radio carried in the visit (never in route params)');
+ok(/const id = visit\?\.pick;\s*if \(!id \|\| !door \|\| radioBase\) return;\s*if \(visit\) visit\.pick = undefined;\s*if \(door\.radios\.some\(\(x\) => x\.id === id\)\) void chooseRadio\(id\);/.test(sc),
+   'the new screen chooses it once the door answers, once only');
+ok(/onPick: \(id: string\) => \{ if \(id\.startsWith\('r:'\)\) onSwitchRadio\(id\.slice\(2\)\); else onBackToPicker\(\); \}/.test(sc) && /onOpen: loadRadioLive/.test(sc) && /Date\.now\(\) - radioLiveAt\.current < 10_000/.test(sc),
+   'LEAVE / a PIN radio go back to the list; listeners asked only while the card is open, floored at 10 s');
+ok(/hidden: asViewer \? \[\] : asSrcHidden/.test(sc) && /sources: asViewer \? undefined : sourceRows\(/.test(sc) && /onSource: asSrcSet/.test(sc), 'SOURCES: rows from the table, hidden through the scope (never on the viewer)');
+ok(/live: c\.live, others: asOthersElsewhere\[c\.id\]/.test(sc), 'LAYERS\' outlined LIVE from layerOthers (the same table)');
+
 console.log('── the Mode sheet ──');
 ok(/WHOLE_RADIO_IDS: readonly string\[\] = \['airsea',/.test(bands) && /case 'airsea': return \{ id, node: airSeaShown \? airSeaKey\(\) : null \};/.test(ms), 'AIR & SEA LIVE first in TUNES THE RADIO ITSELF');
 for (const k of ['adsbAvail', 'aisAvail', 'marAvail', 'avdataAvail', 'sondesAvail', 'vormapAvail', 'ndbAvail'])

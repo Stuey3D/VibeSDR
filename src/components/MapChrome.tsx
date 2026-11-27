@@ -89,7 +89,9 @@ export interface MapChromeProps {
   winW: number; winH: number; insets: Insets;
   exit: { label: string; words: string; locked: boolean; onPress: () => void };
   /** SERVERS: LEAVE SERVER always works; then this server's other radios. */
-  servers: { rows: Array<{ id: string; label: string; sub?: string }>; onPick: (id: string) => void } | null;
+  servers: { rows: Array<{ id: string; label: string; sub?: string }>; onPick: (id: string) => void;
+             /** the card opened (and every 10 s while it stays open): the other radios' listeners are asked for (floored by the host) */
+             onOpen?: () => void } | null;
   tune: { rows: AirSeaTuneRow[]; facts?: string; onPick: (id: string) => void; onRefused: (why: string) => void;
           gain: GainRow; gainH: MapGainHandlers } | null;
   layers: { rows: MapLayerRow[]; toggled: Record<string, boolean>; onToggle: (id: string, on: boolean) => void;
@@ -179,6 +181,13 @@ export default function MapChrome(p: MapChromeProps) {
   useEffect(() => { setCard(null); }, [p.mapTapSeq]);
   useEffect(() => { if (!p.visible) { setCard(null); } }, [p.visible]);
   const toggle = (id: Transient) => { noteTouchInteraction(); setCard((c) => (c === id ? null : id)); };
+  // ★ SERVERS open: each other radio's listeners, live while the card is open (every 10 s)
+  useEffect(() => {
+    if (card !== 'servers' || !p.servers?.onOpen) return;
+    p.servers.onOpen();
+    const t = setInterval(() => p.servers?.onOpen?.(), 10_000);
+    return () => clearInterval(t);
+  }, [card]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { p.onCovered?.(!!card || listMax); }, [card, listMax]);   // eslint-disable-line react-hooks/exhaustive-deps
   const phone = p.winW < 600;
   // ★ a phone shows one card: LIST steps aside while a transient card is open there

@@ -33,7 +33,7 @@ const hexOf = (v: unknown) => (typeof v === 'string' ? v.replace(/^~/, '').toUpp
 
 /** ★★ The sources through the scope (the same object back when nothing filters). `now` = this viewer's clock (unix s). */
 export function airSeaScope<T extends AirSeaSources>(raw: T, sc: MapScope, now: number, fs: FirstSeen): T {
-  const radio = !(sc.others || !sc.mine), sess = !!sc.t0;
+  const radio = !(sc.others || !sc.mine) || !!sc.hidden?.length, sess = !!sc.t0;   // ★★★ beta97 SOURCES hide by radio too
   const rOk = (r?: string[]) => scopeRadioOk(r, sc);
   const tOk = (f: number | null | undefined) => scopeSessionOk(f, sc);
   // ── ★ OBSERVE ALWAYS (session picked or not): an entry the server gives no first-heard time for is stamped when this viewer
