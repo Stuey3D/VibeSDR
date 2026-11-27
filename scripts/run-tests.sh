@@ -629,7 +629,7 @@ for t in "$SRC"/test-*.cpp; do
     test-openrsp-names) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — built and run by scripts/test-openrsp-names.sh below\033[0m\n' "$name"; continue ;;
     #   test-adsb-restart, test-keep-restart (beta96) — the real shim in-process; CMake targets, run by scripts/test-adsb-restart.sh
     #   and scripts/test-keep-restart.sh further down (they read vibeserver/build), so here they only "did not build".
-    test-adsb-restart|test-keep-restart) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target, run by scripts/%s.sh below\033[0m\n' "$name" "$name"; continue ;;
+    test-adsb-restart|test-keep-restart|test-sattrack-restart) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target, run by scripts/%s.sh below\033[0m\n' "$name" "$name"; continue ;;
     test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
   printf '\n\033[1m── %s ──\033[0m\n' "$name"
@@ -2872,6 +2872,9 @@ VIBESERVER_BIN="${VIBESERVER_BIN:-}" bash scripts/test-adsb-restart-linux.sh; rc
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: kept-running modes survive a restart (test-keep-restart, KEEP-RUNNING.md) ──\033[0m\n'
 BUILD="$(dirname "${VIBESERVER_BIN:-vibeserver/build/x}")" bash scripts/test-keep-restart.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta96: the satellite tracker stops with the server across in-process restarts (test-sattrack-restart) ──\033[0m\n'
+BUILD="$(dirname "${VIBESERVER_BIN:-vibeserver/build/x}")" bash scripts/test-sattrack-restart.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: keep running a whole-radio mode (test-server-keep-run) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-keep-run.mjs; rc=$?

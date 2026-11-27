@@ -1081,6 +1081,10 @@ target_link_libraries(test-adsb-restart PRIVATE vibeserver_core)
 # ★★★ b96-keeprun kept VDL2 / kept ISM 868 across IN-PROCESS restarts — needs fake-rtl-tcp: scripts/test-keep-restart.sh
 add_executable(test-keep-restart "${CMAKE_CURRENT_SOURCE_DIR}/test-keep-restart.cpp")
 target_link_libraries(test-keep-restart PRIVATE vibeserver_core)
+# ★★★ beta96 the satellite tracker stops with the server across IN-PROCESS restarts (the XCover/Sony vibe-sat-track crashes) —
+#     needs fake-rtl-tcp: scripts/test-sattrack-restart.sh (SAN=address / SAN=thread builds its own sanitised tree)
+add_executable(test-sattrack-restart "${CMAKE_CURRENT_SOURCE_DIR}/test-sattrack-restart.cpp")
+target_link_libraries(test-sattrack-restart PRIVATE vibeserver_core)
 # ★ V12 USRP: the B2xx policy + hwinfo shape, and — only where UHD is linked — "no USRP here" answered cleanly by the
 #   real source (scripts/run-tests.sh builds the same file header-only, against the stub).
 if(VIBE_USRP_BUILT)
