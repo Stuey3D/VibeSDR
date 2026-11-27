@@ -1675,8 +1675,9 @@ export class TrackView {
       const h = at.getBoundingClientRect().height;
       const wide = this.mapHost.clientWidth > 520;
       // ★ on a wide map the attribution is to the right of the list; only where they share the width does it push up
-      // ★ beta96 the cards stop above the attribution where they share the width (a phone)
-      this.cardsEl.style.bottom = !wide && h > 0 ? `calc(${Math.round(h) + 6}px + env(safe-area-inset-bottom))` : '';
+      // ★ beta96 the cards always stop above the attribution line (a tall KEY card ran under it on a wide window, Stuart 11-27)
+      void wide;
+      this.cardsEl.style.bottom = h > 0 ? `calc(${Math.round(h) + 8}px + env(safe-area-inset-bottom))` : '';
     };
     this.attribObs = new ResizeObserver(sync);
     this.attribObs.observe(at); this.attribObs.observe(this.mapHost);
