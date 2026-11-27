@@ -343,7 +343,7 @@ eq('meshDist', [meshDist(16.09), meshDist(16.09, true), meshDist(5), meshDist(5,
   ok('web gallery map: the key + its order', mt.includes("ismGalView?.setSort(meshSortOffered(meshSort, rx), (v) => meshSortSet(v, draw), 'nodes');") && mt.includes('ismGalRows(nodes, rx, mi, meshSort)'));
   ok('web: remembered in localStorage (lsGet / lsSet — try/catch)', mt.includes('let meshSort: MeshSort = meshSortParse(lsGet(MESH_SORT_KEY));') && mt.includes('lsSet(MESH_SORT_KEY, meshSort)'));
   ok('web: the chip names its rows for a screen reader', tk.includes("setSort(sort: string | null, onSort: (s: string) => void, what = 'aircraft')") && tk.includes('host.setAttribute(\'aria-label\', `Sort the ${what}`);'));
-  ok('web AIR & SEA keeps its chip (aircraft)', /v\.setSort\(tab === 'aircraft' && !adsbOn \? asSort : null, /.test(mt));
+  ok('web AIR & SEA keeps its chip (aircraft — ADS-B live too since the one LIST, purge 11-27)', /v\.setSort\(tab === 'aircraft' \? asSort : null, /.test(mt));
 }
 
 console.log(`test_mesh_route: ${pass} passed, ${fail} failed`);

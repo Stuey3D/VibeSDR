@@ -45,7 +45,7 @@ import { rangeBearing as adsbRangeBearing, adsbStatus, adsbCaptureWarning, clean
 import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode,
-         ismPlotted, ismRouteKnown, ismRouteOf, ismMilesPref, ISM_UNITS_EVENT, type IsmDevice } from './ism';
+         ismPlotted, ismRouteKnown, ismRouteOf, ismMarkSuspects, ismMilesPref, ISM_UNITS_EVENT, type IsmDevice } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
@@ -10753,6 +10753,7 @@ async function ismGalMapOpen(it0: GalleryItem) {
     const all = ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
     known = ismRouteKnown(all, rx);   // ★★ beta96 every day's repeaters may place a route
     const nodes = ismInRange(all, range).filter((d) => ismPlotted(d, rx));
+    ismMarkSuspects(nodes, known, rx);   // ★★ a suspect claimed position: "?", never the furthest or framed
     shown = nodes;
     const mi = ismMilesPref();
     ismGalView?.setSort(meshSortOffered(meshSort, rx), (v) => meshSortSet(v, draw), 'nodes');   // ★★ beta96 NEAREST | LATEST
@@ -10813,6 +10814,7 @@ function ismMapRender() {
   ismMapView.setScope(othersOk ? { label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS, on: mapOthers } : null, (on) => mapOthersSet(on, ismMapRender));
   ismMapView.setScopeNote(asScopeWords(isc, othersOk));
   const items = r ? r.devices.filter((d) => ismPlotted(d, myPos())) : [];   // ★★ beta96 an implausible fix is never drawn
+  ismMarkSuspects(items, ismKnown, myPos());   // ★★ a suspect claimed position: "?", never the furthest or framed
   ismMapDevs = items;
   const mi = ismMilesPref();
   ismMapView.setSort(meshSortOffered(meshSort, myPos()), (v) => meshSortSet(v, ismMapRender), 'nodes');   // ★★ beta96 NEAREST | LATEST
