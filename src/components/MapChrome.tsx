@@ -486,7 +486,7 @@ function Pill({ g, text, locked, pulseAt, reduce, onPress, disabled }: { g: Retu
   const styles = useStyles();
   const k = useK();
   const words = pillWords(text, Math.floor((g.pill.w - 24 * k) / (7.2 * k))   /* 11 pt mono ≈ 0.6 em + 0.5 spacing = 7.1 pt a character (6.4 let it ellipsise through the count) */);
-  const w = Math.min(g.pill.w, Math.max(80 * k, (words.length * 6.4 + 26) * k));
+  const w = Math.min(g.pill.w, Math.max(80 * k, (words.length * 7.2 + 26) * k));
   return (
     <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: g.pill.x + (g.pill.w - w) / 2, width: w, height: PILL_H * k }}>
       <NavRow>
