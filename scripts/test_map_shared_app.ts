@@ -15,7 +15,7 @@ ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo) && /onRequestClose=\
 ok(/const exitLocked = !!dialLock\?\.why && dialLock\.exitMoves;/.test(mo) && /dialLock\.onDialLocked\(dialLock\.why\); return;/.test(mo), 'a locked EXIT that would leave the mode is refused with the reason');
 ok(/exitLocked=\{exitLocked\} onExit=\{closeGuarded\}/.test(mo) && /exit=\{\{ label: exitLabel, words: exitWords, locked: p\.exitLocked, onPress: p\.onExit \}\}/.test(mo), 'the cards\' ✕ is closeGuarded, greyed while locked');
 ok(!existsSync(new URL('../src/components/MapTopStrip.tsx', import.meta.url)) && !/MapTopStrip|__backLock|t === 'mapTop'/.test(mo), '★★★ the old strip, its bar height and the page key\'s lock are DELETED, not hidden');
-ok(/isTrk \? '' : `<div id="topbar">/.test(mo), '★★★ the track maps\' page has NO top bar of its own');
+ok(/isTrk \|\| CARDS \? '' : `<div id="topbar">/.test(mo), '★★★ the track maps\' (and the AMATEUR map\'s) page has NO top bar of its own');
 ok(/<NavCtx\.Provider value=\{nav\.navCtx\}>/.test(st) && (st.match(/usePanelNav\(/g) || []).length === 1, 'ONE pad order for every chip, card and LIST row (never two owners)');
 
 console.log('── MapChrome ──');

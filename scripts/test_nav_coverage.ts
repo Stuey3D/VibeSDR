@@ -149,17 +149,13 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
 //    TrackLiveList's (RangeKey / Row — useNavButton + NavRing, counted above).
 {
   const mo = readFileSync(path.join(root, 'src/components/MapOverlay.tsx'), 'utf8');
-  const tl = readFileSync(path.join(root, 'src/components/TrackLiveList.tsx'), 'utf8');
   const dk = readFileSync(path.join(root, 'src/components/DigiMapKeys.tsx'), 'utf8');
-  ok(/const amNav = usePanelNav\(visible && amOn, \{ flat: true \}\)/.test(mo), 'AMATEUR: the map owns one pad order while its list is up');
-  ok(/<TrackLiveList title="STATIONS"[^]*?tabs=\{amList\.tabs\}[^]*?nav=\{\{ navCtx: amNav\.navCtx/.test(mo), 'AMATEUR: the tabs and rows join it (TrackLiveList, nav)');
-  ok(/navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo), 'AMATEUR: the window keys join the same order');
-  ok(/usePanelNav\(!p\.nav,/.test(tl) && /const \{ navCtx, scrollProps \} = p\.nav \?\? own;/.test(tl), 'TrackLiveList: a shared order replaces its own (never two owners)');
-  ok(/usePanelNav\(!p\.navCtx,/.test(dk) && /const navCtx = p\.navCtx \?\? own\.navCtx;/.test(dk), 'DigiMapKeys: a shared order replaces its own');
-  ok(/accessibilityRole="tablist"[^]*?\{tabs\.map\(\(t\) => <RangeKey /.test(tl) && /function RangeKey[^]*?useNavButton\(onPress\)/.test(tl), 'TrackLiveList: every tab is a pad key');
-  // ★★ beta96 the MESH ROUTE key (the card's ROUTE lives in the map page, out of the pad's reach): a ToggleKey in its own NavRow
-  ok(/\{open && !!p\.route && \(\s*<NavRow>\s*<View style=\{s\.ranges\}>\s*<ToggleKey /.test(tl) && /function ToggleKey[^]*?useNavButton\(onPress\)/.test(tl),
-     'TrackLiveList: the mesh ROUTE key is a pad key (ISM and AMATEUR maps)');
+  // ★★★ beta97 the AMATEUR map is on the MAP CARDS: ONE pad order (MapChrome's) over its chips, cards and LIST — the old list
+  //     (TrackLiveList, DELETED) and the window keys' shared order are gone
+  ok(/\{amCards && !!amList && !!pageUri && !packError && \(\s*<MapChrome /.test(mo) && !/amNav|amKeysNav/.test(mo), 'AMATEUR: the MAP CARDS own its one pad order (no second owner)');
+  ok(/tabs: amList\.tabs, tab: amList\.tab, onTab: \(id\) => setAmPick\(id as AmLayer\)/.test(mo), 'AMATEUR: the tabs and rows are the LIST drawer\'s (pad keys)');
+  ok(/usePanelNav\(true, \{ flat: true \}\)/.test(dk) && /function Key[^]*?useNavButton\(onPress\)/.test(dk), 'DigiMapKeys (the maps off the cards): its panel keys are pad keys');
+  ok(/route: amSel && amateur\?\.mesh\.some/.test(mo) && /function ListDrawer/.test(readFileSync(path.join(root, 'src/components/MapChrome.tsx'), 'utf8')), 'the mesh ROUTE key is a pad key in the LIST drawer (ISM and AMATEUR maps)');
   // ★★ beta96 (Stuart 11-26) the NODES list's NEAREST | LATEST key: RangeKeys in the tabs' NavRow, handed through by MapOverlay,
   //    given by the ISM live map and the gallery's map
   const sd = readFileSync(path.join(root, 'src/screens/SDRScreen.tsx'), 'utf8');

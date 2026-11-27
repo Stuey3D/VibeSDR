@@ -129,7 +129,7 @@ console.log('── beta92 the FIT key: the filtered stations only, and the rece
   // ★★★ beta96 stage 7 THE AMATEUR MAP: APRS through the HEARD IN window, then MESH and BEACONS (amateurMap.ts AMATEUR_JS)
   ok(/VibeAutoFit\.attach\(map,\{\s*points:function\(\)\{return digiShownPoints\(spots,function\(s\)\{return !!markers\[key\(s\)\];\},aprsPts\.filter\(function\(a\)\{return amKeep\(a\.age,amWin\(\)\);\}\),aprsOn\)[^]*?receiver:function\(\)\{return \(RX_LAT\|\|RX_LON\)\?\{lat:RX_LAT,lon:RX_LON\}:null;\}/.test(app),
      'the app: the AUTO FIT over the spots with a marker, APRS while on, AND the receiver');
-  ok(/button:document\.getElementById\('snap'\),what:'station shown',maxZoom:\$\{DIGI_FIT_MAX_ZOOM\}/.test(app), 'the app: the FIT key is its key, capped at DIGI_FIT_MAX_ZOOM');
+  ok(/button:CARDS\?null:document\.getElementById\('snap'\),what:'station shown',maxZoom:\$\{DIGI_FIT_MAX_ZOOM\}/.test(app), 'the app: the FIT key is its key (the maps off the cards; MAP CONTROLS\' AUTO / FIT on the AMATEUR map), capped at DIGI_FIT_MAX_ZOOM');
   ok(/<button type="button" id="fitBtn"[^>]*>FIT<\/button>/.test(web) && /points: \(\) => digiShownPoints\(show\.spots \? spots : \[\], \(\) => true, aprsIn\(\), show\.aprs\)[^]*?receiver: \(\) => me, button: document\.getElementById\('fitBtn'\)/.test(web),
      'the web page: FIT in its top bar is the AUTO FIT, over the layers shown AND the receiver');
   ok(!/digiFitApply|digiFitView|map\.fitBounds\(all/.test(app + web.slice(web.indexOf('function spotsMapHtml'))), 'no one-shot fit left on either digi map');

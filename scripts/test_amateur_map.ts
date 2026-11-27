@@ -195,12 +195,12 @@ const meshDone = (async () => {
   const mo = readFileSync('src/components/MapOverlay.tsx', 'utf8');
   ok(/AMATEUR_JS/.test(mo), 'app: the page carries the same rules');
   // ★★★ beta96 maps2 the app's tabs: TrackLiveList (React Native — the pad walks it) over the 'digi' page, its rows amListRows
-  ok(/<TrackLiveList title="STATIONS" rows=\{amList\.rows\}/.test(mo) && /amListRows\(tab, d, win, now/.test(mo), 'app: the AMATEUR list is TrackLiveList fed by amListRows');
-  ok(/tabs=\{amList\.tabs\} tab=\{amList\.tab\} onTab=/.test(mo) && /amTabNow\(tabs, amPick, amateur\.live/.test(mo), 'app: the tabs and the tab rule');
+  // ★★★ beta97 the AMATEUR list is the MAP CARDS' LIST drawer (MapChrome), fed by amListRows
+  ok(/list=\{\{ rows: amSortRows\(amList\.rows as unknown as TrackRow\[\], amSort\)/.test(mo) && /amListRows\(tab, d, win, now/.test(mo), 'app: the AMATEUR list is the cards\' LIST fed by amListRows (latest ⇄ nearest)');
+  ok(/tabs: amList\.tabs, tab: amList\.tab, onTab:/.test(mo) && /amTabNow\(tabs, amPick, amateur\.live/.test(mo), 'app: the tabs and the tab rule');
   ok(/const d = \{ spots: amData\.spots, aprs: amData\.aprs,/.test(mo) && /amCountsOf\(d, win, now\)/.test(mo) && /const now = Date\.now\(\), win = amSc\.t0 \? 'all' : digiWinShown;/.test(mo), 'app: the rows follow the HEARD IN window (the window keys)');
-  ok(/window\.__amFocus=function\(k\)/.test(mo) && /onFocus=\{amFocus\}/.test(mo), 'app: a row centres its station (__amFocus)');
-  ok(/nav=\{\{ navCtx: amNav\.navCtx, scrollProps: amNav\.scrollProps \}\}/.test(mo) && /navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo),
-     'app: the window keys and the list share ONE pad order (two owners would strand the keys)');
+  ok(/window\.__amFocus=function\(k\)/.test(mo) && /onPick: \(row\) => amFocus\(row\.key\)/.test(mo), 'app: a row centres its station (__amFocus)');
+  ok(!/amNav|amKeysNav/.test(mo), 'app: ONE pad order — the cards\' (the window keys and the old list\'s shared order deleted)');
   ok(/window\.__amListWH=function/.test(mo) && /body\.amL:not\(\.dwide\) #dsum/.test(mo), 'app: the summary strip and the scale stand clear of the list');
   ok(/amMeshPoints\(ismReport\?\.devices \?\? \[\], amMeshStored \?\? ismStored,/.test(main) && /savePref\('digiMapWindow', digiWindowOf\(ev\.data\.window\)\);\n  amMeshRefresh\(\);/.test(main),
      'web: MESH remembers every band (amMeshLoader), and follows the window');
