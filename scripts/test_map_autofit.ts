@@ -294,7 +294,7 @@ console.log('── every map uses it ──');
      'web: every track view (AIS, APRS, DSC, ISM + gallery, NAVTEX, sondes, datalink) — the FIT key is the auto fit\'s, with the receiver');
   ok(!/this\.autoFit\b|fitKeys/.test(tracksWeb), 'web: the old per-view fit-on-new-item logic is gone (one implementation)');
   ok(/this\.fitBtn\.hidden = !!this\.acLayer;/.test(tracksWeb), 'web: the aviation map keeps the ADS-B layer\'s AUTO / FIT');
-  ok(/points: digiFitPoints, receiver: \(\) => me, maxZoom: \$\{DIGI_FIT_MAX_ZOOM\}/.test(main) && /w\.VibeAutoFit\.attach\(hm\.fitMap \?\? hm\.map, \{\s*points: hm\.points, receiver: hm\.receiver \?\? \(\(\) => null\), button: t\.fitBtn/.test(readFileSync('web/client/src/mapChromeApi.ts', 'utf8')),
+  ok(/points: digiFitPoints, receiver: \(\) => me, maxZoom: \$\{DIGI_FIT_MAX_ZOOM\}/.test(main) && /* ★ b97-integrate: the host map boots inside TrackView now (mapChrome.ts bootHost — the MERGE NOTE) */ /this\.af = w\.VibeAutoFit\.attach\(hm\.fitMap \?\? hm\.map, \{\s*points: hm\.points, receiver: hm\.receiver \?\? \(\(\) => null\), button: this\.fitBtn/.test(readFileSync('web/client/src/mapChrome.ts', 'utf8')),
      'web: the digi modes / spots window (and the satellite pass map, which is it) — b97 the card system\'s AUTO on its own map (hostMap)');
   ok(/\$\{MAP_AUTOFIT_JS\}\nfunction autoFit\(\)/.test(dsc) && /receiver: \(\) => me,\s*button: document\.getElementById\('fitBtn'\)/.test(dsc), 'web: the DSC positions window');
   ok(/autoFit: false, drawReceiver: false/.test(ndbWeb) && /host\.morePoints = \(\) =>/.test(ndbWeb), 'web: NDB on the AIR & SEA map — the map\'s FIT frames the beacons (morePoints), no second auto fit');
