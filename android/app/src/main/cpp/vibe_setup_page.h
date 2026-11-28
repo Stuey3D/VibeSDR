@@ -240,6 +240,16 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 .card.sec.secMust > .secHead .secTitle,.card.sec.secMust > .secHead .secChev{color:var(--bad)}
 .card.sec.secMust > .secHead .secSum{color:#ff9b9b;white-space:normal}
 #secAllRow{display:flex;gap:8px;justify-content:flex-end;margin:0 0 10px}
+/* ★★★ beta98 the lapsed-login box: pinned at the top while the page scrolls, so a save refused far down is never silent */
+#adminLapse{position:sticky;top:8px;z-index:30;border:1px solid var(--amber);border-radius:10px;background:var(--panel);
+  padding:12px 14px;margin:0 0 14px;box-shadow:0 6px 18px rgba(0,0,0,.5)}
+#adminLapse.hide{display:none}
+#adminLapse b{color:var(--amber);display:block}
+#adminLapse .alSub{display:block;color:var(--dim);font-size:13px;margin-top:2px}
+#adminLapse .alRow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+#adminLapse .alRow input{flex:1;min-width:160px}
+#adminLapse .alErr{color:#ff8a7d;font-size:13px;margin-top:6px}
+#adminLapse .alErr:empty{display:none}
 #secAllRow button{padding:6px 12px;font-size:12.5px;letter-spacing:.06em}
 /* ★ The finish panel points at the step still missing: a short glow, then back to normal. */
 @keyframes needsYou { 0%,100% { box-shadow: 0 0 0 0 rgba(245,185,66,0); } 30%,70% { box-shadow: 0 0 0 4px rgba(245,185,66,.75); } }
@@ -334,6 +344,17 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
 
   <!-- ── 2. SETUP ────────────────────────────────────────────────────────── -->
   <div id="setup" class="hide">
+    <!-- ★★★ beta98 THE ADMIN LOGIN HAS LAPSED (Stuart 11-28, the Pi 500: a save at 14:39 worked, and from 14:40 every call
+         was refused while the page said nothing — "later changes didn't save"). Shown the moment the server refuses this
+         page's login or it lapses through idleness; everything typed stays where it is, and a save that was refused is
+         sent again once the password is in. The maps' inline unlock: one line, the field, the button. -->
+    <div id="adminLapse" class="hide" role="alert">
+      <b>Your admin login has lapsed: enter the password to save.</b>
+      <span class="alSub">Nothing you have changed is lost &mdash; it is still on this page, and it is saved as soon as you are back in.</span>
+      <div class="alRow"><input type="password" id="adminLapsePass" autocomplete="current-password" placeholder="Admin password">
+        <button type="button" id="adminLapseBtn">Unlock</button></div>
+      <div class="alErr" id="adminLapseErr"></div>
+    </div>
     <p class="sub">Set this receiver up. You can change any of it later from Admin.</p>
 
     <!-- ★★★ beta96 the end of a first-time REMOTE SETUP: Finish hands the TV back to its status screen. Remote access to
@@ -3785,13 +3806,142 @@ const toHex=b=>Array.from(b, x=>x.toString(16).padStart(2,"0")).join("");
 //     which every process on this machine accepts (vibe_admin_ticket.h).
 // ★★ Taken from the URL and then REMOVED from it with replaceState: an admin credential has no
 //    business sitting in the address bar, the history, or a copied link.
-const TICKET = (() => {
+let TICKET = (() => {
   const t = new URLSearchParams(location.search).get("vs_admin_ticket") || "";
   if (t) history.replaceState(null, "", location.pathname);
   return t;
 })();
 
+/* ══ ★★★ beta98 THE ADMIN LOGIN IS AN IDLE TIMEOUT, NOT A FIXED LIFETIME (Stuart 11-28) ═══════════════════════════════════
+ *  WHY IT LAPSED: a page opened from the landing page's SETUP button signs in with the TICKET it was handed and used that
+ *  same ticket for every call for ever — and a ticket is a ten-minute lease (vibe_admin_ticket.h kTicketTtlSec). Stuart's
+ *  save at 14:39:21 was the last call inside the lease; from 14:40:23 every call was refused (401) and the page said
+ *  nothing, so "later changes didn't save". The server has always renewed a lease from a VALID ticket
+ *  (/vibeserver/admin-ticket — same origin, so the chain still ends 12 h after the password, kTicketMaxLifeSec); this page
+ *  simply never asked.
+ *  NOW: the page holds a ticket (a password sign-in is exchanged for one at once, and the password is not kept), and
+ *  renews it on the OWNER'S activity — any edit, click, key, scroll or save, at most once a minute (ADMIN_RENEW_MS) — and
+ *  before every save that finds it older than that. Background polls never renew it: they carry the ticket they find, so
+ *  a tab left open lapses ten minutes after the owner stopped (ADMIN_IDLE_MS = the lease). A lapse (by idleness, or a
+ *  401 from any admin call) stops sending at once — no 401 loop: callers WAIT for the unlock (a few; the rest are told)
+ *  — and shows #adminLapse; the password there buys a fresh ticket, the waiting calls go on, and a save that was
+ *  refused is sent again. A stale ticket is never a "guess" on the server (vsAdminProof `guessable`), so none of this
+ *  moves the owner towards the lockout; only a wrongly typed password does. */
+const ADMIN_RENEW_MS = 60000;           // renew at most once a minute while the owner is active
+const ADMIN_IDLE_MS = 10 * 60000;       // = the server's lease (kTicketTtlSec): idle this long and the login lapses
+const ADMIN_WAITERS_MAX = 6;            // calls held for the unlock; past this they fail at once (never a queue that floods back)
+const ADMIN = { live: false, lapsed: false, exp: 0, at: 0, act: Date.now(), renewing: null, waiters: [] };
+function adminClock() { return Date.now(); }   // ★ one clock, so the test can run half an hour in a second
+/** The lease this ticket has, as the server said it (`ttl`), on OUR clock — never parsed from the ticket (clocks differ). */
+function adminLease(ticket, ttlSec) { TICKET = ticket; ADMIN.at = adminClock(); ADMIN.exp = ADMIN.at + Math.max(0, ttlSec) * 1000; }
+/** Renew the ticket from itself (the owner was active). One at a time; a refusal = the login has lapsed. */
+function adminRenew() {
+  if (!TICKET || ADMIN.lapsed) return Promise.resolve();
+  if (ADMIN.renewing) return ADMIN.renewing;
+  const sent = TICKET;
+  ADMIN.renewing = (async () => {
+    try {
+      const r = await adminFetch0("/vibeserver/admin-ticket?vs_admin_ticket=" + encodeURIComponent(sent), {cache: "no-store"});
+      if (r.status === 401) { if (TICKET === sent) adminLapse(); return; }
+      if (!r.ok) return;                      // ★ the server busy or restarting: the lease we hold stands
+      const j = await r.json();
+      if (j && j.ticket && TICKET === sent) adminLease(j.ticket, +j.ttl || 0);
+    } catch (e) { /* not reached: try again on the next activity */ }
+    finally { ADMIN.renewing = null; }
+  })();
+  return ADMIN.renewing;
+}
+/** The owner did something (a real event, never a script's or a poll's). */
+function adminActivity() {
+  const now = adminClock();
+  ADMIN.act = now;
+  if (ADMIN.live && TICKET && !ADMIN.lapsed && now - ADMIN.at >= ADMIN_RENEW_MS && now < ADMIN.exp) adminRenew();
+}
+for (const ev of ["pointerdown", "keydown", "input", "change", "wheel", "scroll", "touchstart"])
+  document.addEventListener(ev, (e) => { if (e.isTrusted !== false) adminActivity(); }, {capture: true, passive: true});
+/** The login has lapsed: stop sending, say so, keep everything on the page. */
+function adminLapse() {
+  if (!ADMIN.live || ADMIN.lapsed) return;
+  ADMIN.lapsed = true; TICKET = ""; PASS = ""; ADMIN.exp = 0;
+  const box = $("adminLapse");
+  if (box) { box.classList.remove("hide"); $("adminLapseErr").textContent = ""; try { $("adminLapsePass").focus({preventScroll: true}); } catch (e) {} }
+}
+/** A call that needs the login while it is lapsed: held until the owner unlocks (a few), or refused at once. ★ A SAVE
+ *  (`always`) is always held — polls filling the places must never be what drops the owner's edits. */
+function adminWaitUnlock(always) {
+  if (!always && ADMIN.waiters.length >= ADMIN_WAITERS_MAX) return Promise.reject(new Error("the admin login has lapsed — enter the password at the top of the page"));
+  return new Promise((res) => ADMIN.waiters.push(res));
+}
+/** The password typed into #adminLapse: a fresh ticket (a fresh 12-hour chain), then everything held goes on. */
+async function adminUnlock() {
+  const pw = $("adminLapsePass").value, err = $("adminLapseErr");
+  if (!pw) { err.textContent = "Enter the admin password."; return; }
+  err.textContent = "";
+  try {
+    const n = await (await adminFetch0("/vibeserver/auth", {cache: "no-store"})).json();
+    const tok = toHex(hmacSha256(bytesOf(pw), bytesOf(n.nonce)));
+    const r = await adminFetch0(`/vibeserver/admin-ticket?vs_admin_nonce=${encodeURIComponent(n.nonce)}&vs_admin_auth=${tok}`, {cache: "no-store"});
+    if (r.status === 401) { err.textContent = "That password was not accepted."; return; }
+    if (r.status === 429 || r.status === 403) { err.textContent = "Too many tries — wait a minute, then try again."; return; }
+    if (!r.ok) { err.textContent = "The server did not answer (" + r.status + "). Try again in a moment."; return; }
+    const j = await r.json();
+    adminLease(j.ticket, +j.ttl || 0);
+    PASS = "";
+  } catch (e) { err.textContent = "Could not reach the server."; return; }
+  $("adminLapsePass").value = "";
+  ADMIN.lapsed = false; ADMIN.act = adminClock();
+  $("adminLapse").classList.add("hide");
+  const w = ADMIN.waiters.splice(0);
+  w.forEach((res) => res());
+}
+/** Signed in: trade a password for a ticket (the password is not kept), or renew the landing page's ticket at once. */
+async function adminSignedIn() {
+  ADMIN.live = true; ADMIN.act = adminClock();
+  try {
+    if (TICKET) { ADMIN.at = 0; ADMIN.exp = adminClock() + ADMIN_IDLE_MS; await adminRenew(); return; }
+    if (!PASS) return;
+    const n = await (await adminFetch0("/vibeserver/auth", {cache: "no-store"})).json();
+    const tok = toHex(hmacSha256(bytesOf(PASS), bytesOf(n.nonce)));
+    const r = await adminFetch0(`/vibeserver/admin-ticket?vs_admin_nonce=${encodeURIComponent(n.nonce)}&vs_admin_auth=${tok}`, {cache: "no-store"});
+    if (!r.ok) return;                         // ★ no ticket on offer: the password handshake goes on, under the idle rule
+    const j = await r.json();
+    if (j && j.ticket) { adminLease(j.ticket, +j.ttl || 0); PASS = ""; }
+  } catch (e) { /* the password handshake goes on */ }
+}
+/** ★ Every admin call is watched: a 401 to a call that carried this page's login = it has lapsed (show it, stop sending). */
+const adminHasWin = typeof window !== "undefined" && typeof window.fetch === "function";   // ★ unit tests lift the page without one
+const adminFetch0 = adminHasWin ? window.fetch.bind(window) : (u, o) => fetch(u, o);
+if (adminHasWin) window.fetch = async function (u, o) {
+  const r = await adminFetch0(u, o);
+  if (r.status === 401 && ADMIN.live && !ADMIN.lapsed && /[?&]vs_admin_(ticket|auth)=/.test(String(u))) adminLapse();
+  return r;
+};
+/** A save: sent, and if the login had lapsed, sent AGAIN once the owner has unlocked — what they changed is never dropped. */
+async function adminSave(path, opts) {
+  await adminCheck();
+  if (ADMIN.lapsed) await adminWaitUnlock(true);
+  let r = await fetch(path + "?" + await authQuery(), opts);
+  if (r.status === 401 && ADMIN.live) {           // ★ refused: the box is up (the fetch watch) — wait for it, then once more
+    if (ADMIN.lapsed) await adminWaitUnlock(true);
+    r = await fetch(path + "?" + await authQuery(), opts);
+  }
+  return r;
+}
+/** Before any admin call: has the login lapsed (the lease ran out, or the password handshake sat idle)? Else, if the owner
+ *  is active and the lease is over a minute old, renew it first — so a save is never refused for staleness mid-session. */
+async function adminCheck() {
+  if (!ADMIN.live || ADMIN.lapsed) return;
+  const now = adminClock();
+  if (TICKET && now >= ADMIN.exp) adminLapse();                                  // the lease ran out: idle too long
+  else if (!TICKET && PASS && now - ADMIN.act >= ADMIN_IDLE_MS) adminLapse();    // the password handshake: the same idle rule
+  else if (TICKET && (ADMIN.renewing || (now - ADMIN.at >= ADMIN_RENEW_MS && now - ADMIN.act < ADMIN_RENEW_MS))) await adminRenew();
+}
+
 async function authQuery() {
+  if (ADMIN.live) {
+    await adminCheck();
+    if (ADMIN.lapsed) await adminWaitUnlock();
+  }
   if (TICKET) return `vs_admin_ticket=${encodeURIComponent(TICKET)}`;
   const r = await fetch("/vibeserver/auth", {cache:"no-store"});
   const nonce = (await r.json()).nonce;
@@ -5062,7 +5212,7 @@ function plainLandingWords() {
 }
 async function authQueryFor(prefix) {
   if (!prefix) return authQuery();
-  if (TICKET) return `vs_admin_ticket=${encodeURIComponent(TICKET)}`;
+  if (TICKET || ADMIN.lapsed) return authQuery();   // ★ beta98 a ticket is good on every radio; and the idle rule is one rule
   const r = await fetch(prefix + "/vibeserver/auth", {cache:"no-store"});
   const nonce = (await r.json()).nonce;
   const tok = toHex(hmacSha256(bytesOf(PASS), bytesOf(nonce)));
@@ -10872,6 +11022,7 @@ async function signIn(fromTicket) {
     if (r.status === 401) { $("signinErr").textContent = "That password was not accepted."; return; }
     if (!r.ok) { $("signinErr").textContent = "Server error (" + r.status + ")."; return; }
     cfg = await r.json();
+    await adminSignedIn();   // ★★★ beta98 a ticket from here on, renewed while the owner is active
     ANDROID = !!(cfg && cfg.android);
     if (!ANDROID) pollDirStatus();
     // ★ Same page, two jobs. Say which one you are doing — "Save and start" on a receiver that
@@ -12470,6 +12621,8 @@ $("benchRun").addEventListener("click", () => benchRun(false));
 $("benchWideRun").addEventListener("click", () => benchWideRun(false));
 $("benchWideRadio").addEventListener("change", benchWideRates);
 $("signinBtn").onclick = () => signIn(false);
+$("adminLapseBtn").onclick = () => adminUnlock();
+$("adminLapsePass").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); adminUnlock(); } });
 
 // ★ Arrived from the landing page already signed in — go straight in rather than asking again.
 if (TICKET) signIn(true);
@@ -12513,8 +12666,8 @@ $("saveRadioBtn").onclick = async () => {
   $("saveRadioBtn").disabled = true;
   $("barMsg").textContent = "Saving " + (list[curRadio].label || "radio") + "…";
   try {
-    const r = await fetch("/vibeserver/config?" + await authQuery(),
-                          {method:"POST", body: JSON.stringify(collect())});
+    // ★★★ beta98 a lapsed login waits for the password and sends the SAME edits again (adminSave)
+    const r = await adminSave("/vibeserver/config", {method:"POST", body: JSON.stringify(collect())});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       /* ★★★ AN UNREACHABLE SERVER IS NOT A REJECTED SAVE — and here it did REAL DAMAGE, not just
@@ -12724,8 +12877,8 @@ $("saveBtn").onclick = async () => {
     if (curRadio >= 0 && radioList()[curRadio]) radioList()[curRadio].configured = true;
     body.radios = cfg.radios;
     body.restart = true;
-    const r = await fetch("/vibeserver/config?" + await authQuery(),
-                          {method:"POST", body: JSON.stringify(body)});
+    // ★★★ beta98 a lapsed login waits for the password and sends the SAME edits again (adminSave)
+    const r = await adminSave("/vibeserver/config", {method:"POST", body: JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
       /* ★★★ "SAVE FAILED" IS THE WRONG WORD FOR AN UNREACHABLE SERVER, and it has sent us
