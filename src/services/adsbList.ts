@@ -176,6 +176,19 @@ export const COL_ALT = 58, COL_KT = 40, COL_RNG = 60;
 /** ★ What the callsign needs: a flag (~15 pt) and 7 characters of the 12 pt decoder font (~53 pt); the chip beside it. */
 export const CALL_MIN = 68, CHIP_ROOM = 41;
 export interface AdsbRowLayout { kt: boolean; chipUnder: boolean; stacked: boolean }
+/** ★★★ beta97 hotfix (Stuart, the Mac app's ADS-B LIVE list: "a bit broken" — a huge dB block beside a 12-pt callsign, a
+ *  7-px second line touching the next row, the columns misaligned) THE ROW'S SIZES AT THE CHROME'S SCALE `k` (MapChrome's
+ *  chromeScale), the web list's proportions: the callsign 12.5, the second line 10.5 (and the dB pill at that size — never
+ *  taller than the callsign's line), the altitude / speed / range cells 11.5; the row as tall as its two lines need. */
+export interface AdsbRowSizes { k: number; call: number; sub: number; cell: number; snr: number; tag: number; flag: number; op: number;
+  callLine: number; subLine: number; snrLine: number; rowH: number }
+export function adsbRowSizes(k: number): AdsbRowSizes {
+  const kk = Number.isFinite(k) && k > 0 ? k : 1;
+  const call = 12.5 * kk, sub = 10.5 * kk, cell = 11.5 * kk, snr = sub, tag = 9 * kk, flag = 12 * kk, op = 9 * kk;
+  const callLine = Math.ceil(call * 1.3), subLine = Math.ceil(sub * 1.3), snrLine = Math.round(snr * 1.3);
+  return { k: kk, call, sub, cell, snr, tag, flag, op, callLine, subLine, snrLine,
+           rowH: Math.ceil(Math.max(LIST_ROW_H * kk, callLine + 1 * kk + subLine + 6 * kk)) };
+}
 /** The callsign column's width (pt) for a row `listW` wide laid out as `l`. */
 export function adsbCallRoom(listW: number, l: AdsbRowLayout): number {
   const cols = l.stacked ? [Math.max(COL_ALT, COL_RNG)] : [COL_ALT, ...(l.kt ? [COL_KT] : []), COL_RNG];

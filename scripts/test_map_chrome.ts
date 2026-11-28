@@ -4,6 +4,7 @@
 // the app's spectrum rule under a map, the mini waterfall's crop and budget, the pill's short words.
 //   npx tsx scripts/test_map_chrome.ts
 import { readFileSync } from 'node:fs';
+import { adsbRowSizes } from '../src/services/adsbList';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
          pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, FTAB_H, LIST_CHIP_H, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
@@ -233,8 +234,8 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   const facts = Number(/kv: \{ fontFamily: F, fontSize: ([0-9.]+),/.exec(mc)?.[1]);
   ok(pt >= sub && pt >= facts, `LIST rows (aircraft, messages, ships, spots — every TrackRow): the chip ${pt} pt ≥ the subtitle ${sub} and the facts ${facts}`);
   ok(/<SnrChip mode=\{r\.snrMode as SnrMode\} db=\{r\.snr\} size=\{LIST_SNR_PT \* k\} \/>/.test(mc), '…at the chrome\'s scale (k)');
-  const info = Number(/info: +\{ fontFamily: F, fontSize: ([0-9.]+),/.exec(al)?.[1]);
-  ok(/<SnrChip mode="adsb" db=\{r\.snr\} size=\{11\.5 \* snrK\} \/>/.test(al) && 11.5 >= info && /const snrK = chromeScale\(win\.width, win\.height\);/.test(al), `the ADS-B LIVE rows too (≥ their info line ${info} pt, at the same scale)`);
+  // ★★★ the ADS-B LIVE rows: their own size table (adsbRowSizes) — the pill at the SUBTITLE's size, never the title's (Stuart, Mac)
+  ok(/<SnrChip mode="adsb" db=\{r\.snr\} size=\{z\.snr\} \/>/.test(al) && adsbRowSizes(1).snr === adsbRowSizes(1).sub, 'the ADS-B LIVE rows: the pill at their second line\'s size, at the same scale (adsbRowSizes)');
 }
 
 // ── ★★★ beta97 the TUNE gain row (Stuart, build 587: "gain controls bring up the main menu instead") ──
@@ -304,6 +305,25 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   }
   const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
   ok((mc.match(/top: -FTAB_H \* k/g) ?? []).length === 2 && /ftab: \{ position: 'absolute', width: 34, height: FTAB_H,/.test(mc), 'the tabs drawn at the height the layout allows for (FTAB_H)');
+}
+
+// ── ★★★ beta97 hotfix the ADS-B LIVE rows (Stuart, Mac: "adsb list is a bit broken") — the web's proportions, at the chrome's scale ──
+{
+  for (const [name, k] of [['iPhone', chromeScale(402, 874)], ['iPad', chromeScale(820, 1180)], ['Mac window', chromeScale(1440, 900)]] as Array<[string, number]>) {
+    const z = adsbRowSizes(k);
+    ok(z.snrLine <= z.callLine && z.snr <= z.call, `${name} (×${k.toFixed(2)}): the dB pill (${z.snr.toFixed(1)} pt, line ${z.snrLine}) never taller than the callsign's line (${z.call.toFixed(1)} pt, ${z.callLine})`);
+    ok(z.sub >= 10 * k - 1e-9, `${name}: the second line ${z.sub.toFixed(1)} pt ≥ 10 pt × the scale`);
+    const pad = (z.rowH - z.callLine - z.subLine - 1 * z.k) / 2;
+    ok(pad >= 0 && pad + z.callLine + 1 * z.k + z.subLine <= z.rowH + 1e-9 && (z.rowH - 2 * z.subLine) / 2 >= 0,
+       `${name}: both lines fit inside the ${z.rowH}-pt row (top ${pad.toFixed(1)}) — nothing reaches the next row`);
+    ok(z.cell >= z.sub && z.cell <= z.call, `${name}: the altitude / speed / range cells (${z.cell.toFixed(1)} pt) readable, on the callsign's line`);
+  }
+  const al = readFileSync(new URL('../src/components/AdsbLiveList.tsx', import.meta.url), 'utf8');
+  const sc = readFileSync(new URL('../src/components/SnrChip.tsx', import.meta.url), 'utf8');
+  ok(/<SnrChip mode="adsb" db=\{r\.snr\} size=\{z\.snr\} \/>/.test(al) && /lineHeight: Math\.round\(size \* 1\.3\)/.test(sc), 'the row draws the pill at z.snr (its line = round(size × 1.3) = snrLine)');
+  ok(/row: +\{ height: z\.rowH,/.test(al) && /call: +\{ fontFamily: F, fontSize: z\.call, lineHeight: z\.callLine,/.test(al) && /info: +\{ fontFamily: F, fontSize: z\.sub, lineHeight: z\.subLine,/.test(al)
+     && /cell: +\{ fontFamily: F, fontSize: z\.cell, lineHeight: z\.callLine,/.test(al), 'every size in the row from adsbRowSizes (none fixed)');
+  ok(/const lay = useMemo\(\(\) => adsbRowLayout\(listW \/ z\.k\), \[listW, z\.k\]\);/.test(al), 'the column layout judged in base points (the list\'s width ÷ the scale), then drawn × the scale');
 }
 
 // ── the pill's words ──

@@ -20,7 +20,7 @@ import { DECODER_FONT } from './DecoderShell';
 import { SnrChip } from './SnrChip';
 import { chromeScale } from '../utils/mapChrome';   // ★ beta96 the reply SNR, colour-coded (replaced the 3-bar meter)
 import type { Aircraft } from '../services/SDRBackend';
-import { adsbListRows, adsbRowLayout, LIST_ROW_H, COL_ALT, COL_KT, COL_RNG, ROW_GAP,
+import { adsbListRows, adsbRowLayout, adsbRowSizes, COL_ALT, COL_KT, COL_RNG, ROW_GAP, type AdsbRowSizes,
          type AdsbListRow, type AdsbRowLayout } from '../services/adsbList';
 
 /** ★★★ beta96 (stage 6, docs/v12/ONE-MAP.md): ADS-B mode's map IS the AIR & SEA map — this list no longer has a corner
@@ -55,8 +55,11 @@ export interface AdsbBody {
  *  callsign is never what gives (Stuart 11-26: "the signal hides the aircraft details"). */
 export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string; kt: string }, listW = 300): AdsbBody {
   const rows = useMemo(() => (p ? adsbListRows(p.aircraft) : []), [p?.aircraft]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const s = useMemo(() => makeStyles(ink), [ink]);
-  const lay = useMemo(() => adsbRowLayout(listW), [listW]);
+  // ★★★ beta97 hotfix the whole row at the chrome's scale (MapChrome's k): the layout judged in base points, drawn × k
+  const win = useWindowDimensions();
+  const z = useMemo(() => adsbRowSizes(chromeScale(win.width, win.height)), [win.width, win.height]);
+  const s = useMemo(() => makeStyles(ink, z), [ink, z]);
+  const lay = useMemo(() => adsbRowLayout(listW / z.k), [listW, z.k]);
   if (!p) return { count: 0, placed: 0, credit: false, rows: [], empty: '' };
   /* ★★ V12 beta91 ODC-By 1.0 §4.3: while a row shows the server's aircraft data (its second line, the operator badge) the
    *  Mictronics notice sits at the list's foot (AircraftDataCredit — the card's words) */
@@ -64,7 +67,7 @@ export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string
   return {
     count: rows.length, placed: rows.filter((r) => r.placed).length, credit,
     rows: rows.map((r) => (
-      <NavRow key={`adsb:${r.hex}`}><Row s={s} r={r} lay={lay} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
+      <NavRow key={`adsb:${r.hex}`}><Row s={s} z={z} r={r} lay={lay} sel={!!p.selected && p.selected === r.hex} logoBase={p.logoBase ?? null} onPress={() => p.onFocus(r.hex)} /></NavRow>
     )),
     empty: p.started ? 'Listening on 1090 MHz — no aircraft yet.' : 'Taking the receiver to 1090 MHz…',
   };
@@ -72,15 +75,13 @@ export function useAdsbBody(p: AdsbBodyInput | null, ink: { x: string; k: string
 
 type S = ReturnType<typeof makeStyles>;
 
-function Row({ s, r, lay, sel, onPress, logoBase }: { s: S; r: AdsbListRow; lay: AdsbRowLayout; sel: boolean; onPress: () => void; logoBase: string | null }) {
+function Row({ s, z, r, lay, sel, onPress, logoBase }: { s: S; z: AdsbRowSizes; r: AdsbListRow; lay: AdsbRowLayout; sel: boolean; onPress: () => void; logoBase: string | null }) {
   const { focused, viewRef } = useNavButton(onPress);
   const { ring } = useNavFocus();
-  const win = useWindowDimensions();
-  const snrK = chromeScale(win.width, win.height);   // ★★★ beta97 the LIST's scale (MapChrome's), so the dB chip reads
   // ★ the SNR chip and a MIL / emergency tag: beside the callsign, or (a narrow list) at the head of the second line
   const ex = (
     <>
-      <SnrChip mode="adsb" db={r.snr} size={11.5 * snrK} />
+      <SnrChip mode="adsb" db={r.snr} size={z.snr} />   {/* ★★★ the subtitle's size: never taller than the callsign's line */}
       {r.badge ? <Text style={[s.tag, s.tagEm]} numberOfLines={1}>{r.badge}</Text>
         : r.military ? <Text style={[s.tag, s.tagMil]}>MIL</Text> : null}
     </>
@@ -146,35 +147,37 @@ function EmBreath() {
 const F = DECODER_FONT;
 /* ★ The page's own chrome values (MapOverlay #topbar / #legbtn): the amber-black at 0.92, a controls-colour border at
  *  0.30, text in the text colour — so the list reads as one more piece of the map's furniture. */
-const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.create({
+const makeStyles = (ink: { x: string; k: string; kt: string }, z: AdsbRowSizes) => StyleSheet.create({
   // ★★★ beta96 the columns come from adsbRowLayout (the list's width): at 240 pt the old fixed set left the callsign 62 pt,
   //     and the SNR chip beside it took two thirds of that.
-  row:    { height: LIST_ROW_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, gap: ROW_GAP },
+  row:    { height: z.rowH, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 * z.k, gap: ROW_GAP * z.k },
   // ★ the web list's .adsbRow.sel: a faint amber wash and a bar on the left
-  rowSel: { backgroundColor: 'rgba(255,229,102,0.12)', borderLeftWidth: 2, borderLeftColor: 'rgba(255,229,102,0.7)', paddingLeft: 6 },
+  rowSel: { backgroundColor: 'rgba(255,229,102,0.12)', borderLeftWidth: 2, borderLeftColor: 'rgba(255,229,102,0.7)', paddingLeft: 6 * z.k },
   rowUnplaced: { opacity: 0.5 },
-  callCol:{ flex: 1, minWidth: 0, justifyContent: 'center' },
-  callBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center' },
-  flag:   { fontSize: 11, marginRight: 4 },
-  infoBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center', marginTop: 1 },
-  info:   { fontFamily: F, fontSize: 9.5, color: `rgba(${ink.x},0.62)`, flexShrink: 1, minWidth: 0, letterSpacing: 0.3 },
-  opBadge:{ fontFamily: F, fontSize: 8, fontWeight: '700', letterSpacing: 0.6, color: `rgba(${ink.x},0.80)`, borderWidth: StyleSheet.hairlineWidth,
-            borderColor: `rgba(${ink.x},0.55)`, borderRadius: 2, paddingHorizontal: 3, marginRight: 4, overflow: 'hidden' },
-  logo:   { width: 40, height: 10, marginRight: 4 },
-  call:   { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.95)`, flexShrink: 1, minWidth: 0 },
+  // ★★★ the callsign's line at the same height on every row (with or without a second line), the cells level with it
+  callCol:{ flex: 1, minWidth: 0, alignSelf: 'stretch', justifyContent: 'flex-start', paddingTop: (z.rowH - z.callLine - z.subLine - 1 * z.k) / 2 },
+  callBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center', height: z.callLine, gap: 5 * z.k },
+  flag:   { fontSize: z.flag, lineHeight: z.callLine },
+  infoBox:{ minWidth: 0, flexDirection: 'row', alignItems: 'center', marginTop: 1 * z.k, height: z.subLine },
+  info:   { fontFamily: F, fontSize: z.sub, lineHeight: z.subLine, color: `rgba(${ink.x},0.62)`, flexShrink: 1, minWidth: 0, letterSpacing: 0.3 },
+  opBadge:{ fontFamily: F, fontSize: z.op, fontWeight: '700', letterSpacing: 0.6, color: `rgba(${ink.x},0.80)`, borderWidth: StyleSheet.hairlineWidth,
+            borderColor: `rgba(${ink.x},0.55)`, borderRadius: 2, paddingHorizontal: 3 * z.k, marginRight: 4 * z.k, overflow: 'hidden' },
+  logo:   { width: 40 * z.k, height: 10 * z.k, marginRight: 4 * z.k },
+  call:   { fontFamily: F, fontSize: z.call, lineHeight: z.callLine, color: `rgba(${ink.x},0.95)`, flexShrink: 1, minWidth: 0 },
   emerg:  { color: '#ff6a50' },
   mil:    { color: 'rgb(140,195,255)' },
-  tag:    { marginLeft: 5, paddingHorizontal: 4, borderRadius: 3, fontFamily: F, fontSize: 8.5, fontWeight: '700', letterSpacing: 0.8,
-            overflow: 'hidden' },
+  tag:    { paddingHorizontal: 4 * z.k, borderRadius: 3, fontFamily: F, fontSize: z.tag, fontWeight: '700', letterSpacing: 0.8,
+            overflow: 'hidden', flexShrink: 0 },
   tagEm:  { backgroundColor: '#e04040', color: '#fff' },
   tagMil: { backgroundColor: 'rgba(90,170,255,0.85)', color: '#06121f' },
-  cell:   { fontFamily: F, fontSize: 11, color: `rgba(${ink.x},0.70)`, textAlign: 'right' },
-  alt:    { width: COL_ALT },
-  kt:     { width: COL_KT },
-  rng:    { width: COL_RNG },
-  // ★ a narrow list: altitude over range in one column at the end
-  stack:  { width: Math.max(COL_ALT, COL_RNG), justifyContent: 'center' },
-  stackTxt: { lineHeight: 13 },
+  // ★★★ the cells on the CALLSIGN's line (the row's top line), not floated to its middle
+  cell:   { fontFamily: F, fontSize: z.cell, lineHeight: z.callLine, color: `rgba(${ink.x},0.70)`, textAlign: 'right', alignSelf: 'flex-start', marginTop: (z.rowH - z.callLine - z.subLine - 1 * z.k) / 2 },
+  alt:    { width: COL_ALT * z.k },
+  kt:     { width: COL_KT * z.k },
+  rng:    { width: COL_RNG * z.k },
+  // ★ a narrow list: altitude over range in one column at the end (each on its own line, the two lines' heights)
+  stack:  { width: Math.max(COL_ALT, COL_RNG) * z.k, alignSelf: 'stretch', justifyContent: 'flex-start', paddingTop: (z.rowH - 2 * z.subLine) / 2 },
+  stackTxt: { lineHeight: z.subLine, marginTop: 0, alignSelf: 'auto' },
   // ★ the chip (and a tag) at the head of the second line when the list is too narrow for it beside the callsign
-  lead:   { flexDirection: 'row', alignItems: 'center', marginLeft: -5, marginRight: 5, flexShrink: 0 },   // -5: the chip's / tag's own left margin
+  lead:   { flexDirection: 'row', alignItems: 'center', gap: 5 * z.k, marginRight: 5 * z.k, flexShrink: 0 },
 });
