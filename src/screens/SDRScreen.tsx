@@ -128,6 +128,9 @@ import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
 /** The block names the DAB keys show (hopKeys.ts dabHopStrip) — built once. */
 const DAB_BLOCK_NAMES: readonly string[] = DAB_BLOCKS.map((b) => b.name);
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
+import { parseDeviceClass } from '../constants/transparency';
+import { readNativeDeviceClass } from '../services/deviceClass';
+import { parseAvMsgs, avMsgsQuery, avMsgMerge, avMsgCeiling, avMsgWindowS, avMsgInWindow, avMsgToLive, avMsgLabel, AV_MSGS_POLL_MS, AV_MSGS_PAGE, type AvMsg } from '../services/avMsgs';   // ★★★ beta97 hotfix
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/backendFactory';
 import {
@@ -12992,6 +12995,45 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { if (!airSeaUp) { setAsMsgKey(''); setAsPicked(null); } }, [airSeaUp]);
   const asMsgs = useRef<LiveMsg[]>([]);
   const asMsgSeen = useRef(new Map<string, number>());
+  /* ★★★ beta97 hotfix THE MESSAGES LIST FROM THE SERVER'S LOG (services/avMsgs.ts — Stuart approved all four): EVERY decoded
+   *  message, a BACKFILL within the map's window on open then only what is new (de-duplicated by the server's number), the
+   *  window following the map's time filter, a ceiling by this device's memory, and words saying what it shows. An older
+   *  server (no log): `avLogOk` false — the live feed above, as before, labelled "since opened". */
+  const [avLog, setAvLog] = useState<AvMsg[]>([]);
+  const [avLogOk, setAvLogOk] = useState<boolean | null>(null);
+  const avLogCur = useRef(0), avLogWin = useRef(0), avLogWant = useRef(3600), avLogCapped = useRef(false);
+  const avLogCeil = useMemo(() => avMsgCeiling(parseDeviceClass(readNativeDeviceClass()).totalMemoryBytes), []);
+  // ★ asked only where the map can hold datalink messages: this radio reaches the airband, or the shared table has datalink aircraft
+  const avLogWanted = airSeaUp && isVibeServer && (!!avCap || !!avSharedS?.aircraft?.some((a) => a.src.some((x) => x !== 'ADS-B')));
+  useEffect(() => {
+    if (!avLogWanted) { setAvLog([]); avLogCur.current = 0; avLogWin.current = 0; avLogCapped.current = false; return; }
+    let dead = false, busy = false;
+    const b = connectBase.replace(/\/+$/, '');
+    const auth = radioAuthSuffix || route.params.authSuffix || '';
+    const tick = async () => {
+      if (dead || busy) return;
+      busy = true;
+      try {
+        const want = avLogWant.current;
+        // a backfill on open, and again when the window grows (1 H → 24 H); else only what is new
+        const back = !avLogCur.current || want > avLogWin.current + 1;
+        const r = await fetch(withReadAuth(`${b}${avMsgsQuery({ windowS: want, since: back ? 0 : avLogCur.current, max: back ? Math.min(avLogCeil, 1500) : AV_MSGS_PAGE })}`, auth),
+                              { cache: 'no-store' } as RequestInit);
+        if (dead) return;
+        if (!r.ok) { if (r.status === 404) setAvLogOk(false); return; }   // ★ an older server: the live feed, labelled
+        const page = parseAvMsgs(await r.json());
+        if (!page) { setAvLogOk(false); return; }
+        setAvLogOk(true);
+        if (back) { avLogWin.current = want; avLogCapped.current = page.trunc; }
+        avLogCur.current = Math.max(avLogCur.current, page.seq);
+        // ★ a follow-up that filled its page: more came than one call holds — the next tick asks again from the new cursor
+        setAvLog((have) => avMsgMerge(have, page.msgs, avLogCeil));
+      } catch { /* a dropped call: the next tick tries again */ } finally { busy = false; }
+    };
+    void tick();
+    const iv = setInterval(() => { void tick(); }, AV_MSGS_POLL_MS);
+    return () => { dead = true; clearInterval(iv); };
+  }, [avLogWanted, connectBase, radioAuthSuffix, avLogCeil]);   // eslint-disable-line react-hooks/exhaustive-deps
   /* ★★★ beta96 maps2 STORED SONDES AND VOR STATIONS (services/storedLayers.ts — the gallery's day cards, vibe_posgal.h): while
    *  SONDES / the VOR map is NOT running, the AIR & SEA map draws what this server remembers of them, faded by age (sondes
    *  24 h, VOR stations 7 days). Read when the map is up and every 2 minutes (the cards change at most every 5); one request
@@ -13088,7 +13130,15 @@ export default function SDRScreen({ route, navigation }: Props) {
       src: p.src.join(' + ') || p.posSrc || '', n: p.n, age: p.age, label: p.label, labelName: p.labelName,
       text: bodies.get(p.icao || '') ?? bodies.get(p.reg || '') ?? bodies.get(p.flight || ''),
       ...(snrs.get(p.icao || '') ?? snrs.get(p.reg || '') ?? snrs.get(p.flight || '') ?? {}) })), Date.now());
-    const msgs = msgFilter(asMsgs.current, asMsgKey).slice(0, LIVE_ROW_CAP);
+    // ★★★ beta97 hotfix the list's window from the map's time filter (THIS SESSION, else the maritime window where drawn, else ALL)
+    const nowS = Date.now() / 1000;
+    const msgRange = asSc.t0 ? 'session' : navWin ? String(ship.range ?? 'all') : 'all';
+    const msgWin = avMsgWindowS(msgRange, nowS, asSc.t0);
+    avLogWant.current = msgWin;
+    const logMsgs = avLogOk ? avMsgInWindow(avLog, msgWin, nowS).map(avMsgToLive) : null;
+    const msgsAll = msgFilter(logMsgs ?? asMsgs.current, asMsgKey);
+    const msgs = msgsAll.slice(0, LIVE_ROW_CAP);
+    const msgWords = avMsgLabel({ windowS: msgWin, shown: msgsAll.length, capped: !!avLogOk && (avLogCapped.current || avLog.length >= avLogCeil), log: !!avLogOk, session: !!asSc.t0 });
     const hm = (t: number) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
     const msgRows: TrackRow[] = msgs.map((m) => ({ key: `m:${m.id}`, colour: AV_SRC.find((x) => x.name === m.src.split(' + ')[0])?.colour ?? '#9fb0c2', flag: '', name: m.who,
       second: [m.label, m.labelName, m.src, m.text ?? ''].filter(Boolean).join(' · '), sp: '', trend: 0 as const, range: '', brg: '', noPos: false, age: hm(m.t), em: false,
@@ -13171,7 +13221,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setAsSess(false);
         if (navWin) ship.onRange?.(id);
       },
-      tabs: tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs.current, asMsgKey).length : tabHave[t] ?? 0 })),
+      tabs: tabs.map((t) => ({ id: t, label: t === 'messages' ? `${TAB_LABEL[t]} \u00b7 ${msgWords}` : TAB_LABEL[t], n: t === 'messages' ? msgsAll.length : tabHave[t] ?? 0 })),
       tab, onTab: (t: string) => setAsPicked(t as LiveTab),
       sort: tab === 'aircraft' && !adsbLiveHere ? asSort : null,   // ★ ADS-B live: its list keeps its own order (the web's rule)
       onSort: (v: string) => { const n: AircraftSort = v === 'latest' ? 'latest' : 'nearest'; setAsSort(n); AsyncStorage.setItem('lsv_airsea_sort', n).catch(() => {}); },
