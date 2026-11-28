@@ -189,10 +189,12 @@ try {
     const scale = await ev(`document.querySelector('.trkView:not([hidden]) .mScale .vsLbl')?.dataset.t || ''`);
     ok(/nm$/.test(scale || ''), `the vertical scale, in NM on the aviation map (${scale})`);
     // ★★ beta90 a datalink aircraft (no track, no speed): two fixes → it faces the bearing between them and GLIDES there
-    const glide = JSON.parse(await ev(`(() => { const L = window.__vibeAcLayer; const a = { hex: '~abc123', flight: 'TST1', lat: 51.0, lon: -1.0, alt_baro: 35000, sparse: true, seen_pos: 30 };
-      L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0 })]);
+    //    ★ beta97-2 (ce231d7a1 derivedFace): the two fixes are from ONE source (posSrc, as every server sends) and the second
+    //    is newer (seen_pos 30 → 0); the bearing only TURNS the icon (face) — track stays null, nothing dead-reckons on it
+    const glide = JSON.parse(await ev(`(() => { const L = window.__vibeAcLayer; const a = { hex: '~abc123', flight: 'TST1', lat: 51.0, lon: -1.0, alt_baro: 35000, sparse: true, seen_pos: 30, posSrc: 'VDL2' };
+      L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0, seen_pos: 0 })]);
       const s = L.shown().find(x => x.hex === '~abc123'); return JSON.stringify(s || null); })()`) || 'null');
-    ok(glide && Math.abs(glide.track - 90) < 2 && glide.gliding && glide.sparse, `beta90: a sparse aircraft faces east (${glide && glide.track?.toFixed(1)}°) and glides to its new fix (${glide && glide.gliding})`);
+    ok(glide && glide.track == null && Math.abs(glide.face - 90) < 2 && glide.gliding && glide.sparse, `beta90: a sparse aircraft faces east (${glide && glide.face?.toFixed(1)}°, track ${glide && glide.track}) and glides to its new fix (${glide && glide.gliding})`);
     // ★★ beta96 THE CLICK ORDER (receiver → points → lines → areas; Stuart's community-map bug): an aircraft over a sea area's
     //    marker — a press there opens the AIRCRAFT's card, never the area's
     {
