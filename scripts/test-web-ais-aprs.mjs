@@ -168,7 +168,8 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
     ok(/Weather: .*1012/.test(await mev(`aprsCard(aprs.find(a => /MB7UH/.test(a.call)))`) || ''), 'its card says it');
     ok(await mev(`(() => { const l = document.querySelector('.trkCard2 .tgl'); const k = [...l.querySelectorAll('[data-tgl]')]; return !l.hidden && /^APRS(LIVE)?[0-9]+$/.test(k[0].textContent) && k[0].querySelector('.dot') && l.querySelector('.lbl')?.textContent === 'SHOW' && k[0].classList.contains('live') && k.every(b => b.getAttribute('aria-pressed') === 'true'); })()`),
        `the layer keys (SHOW: a colour dot, the name, its count — beta96), the live one first: ${await mev(`[...document.querySelectorAll('.trkCard2 .tgl [data-tgl]')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed') + (b.classList.contains('live') ? '(live)' : '') + (b.querySelector('.dot') ? '(dot)' : '')).join(',')`)}`);
-    ok(/APRS\s*\d/.test(await mev(`document.querySelector('.trkCard2[data-card="list"] .hd .tabs').textContent`) || '') && /G4ABC|MB7UH/.test(await mev(`document.querySelector('.trkCard2[data-card="list"] .rows').textContent`) || ''),
+    // ★ b97-integrate: the LIST draws tabs only when 2+ layers have something (main.ts listSync); with APRS alone its rows ARE APRS
+    ok(await mev(`(() => { const t = document.querySelector('.trkCard2[data-card="list"] .hd .tabs'); const w = t && t.closest('.tabWrap'); return !w || w.hidden || /APRS\\s*\\d/.test(t.textContent); })()`) && /G4ABC|MB7UH/.test(await mev(`document.querySelector('.trkCard2[data-card="list"] .rows').textContent`) || ''),
        `the LIST's APRS tab: ${await mev(`document.querySelector('.trkCard2[data-card="list"] .rows').textContent.slice(0, 120)`)}`);
     /* ★★★ STUART'S RULE: ANY station in the HEARD IN window — a background-decoded and a listener-decoded spot (the store's
      *  src 1 and 2) both shown inside the window and gone outside it; APRS follows the SAME window */
@@ -196,8 +197,9 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
     let meshNames = '';
     for (let i = 0; i < 40; i++) { meshNames = await mev(`mesh.map(m => m.name).sort().join(',')`) || ''; if (/Hill 433/.test(meshNames) && /Tower 868/.test(meshNames)) break; await sleep(250); }
     ok(meshNames === 'Hill 433,Tower 868', `MESH: both bands' remembered nodes (433 and 868, ISM never ran): ${meshNames}`);
-    ok(await mev(`mesh.every(m => !m.live)`) && /MESH 2/.test(await mev(`document.getElementById('amTabs').textContent`) || ''), `…remembered, not live, and the MESH tab counts them: ${await mev(`document.getElementById('amTabs').textContent`)}`);
-    const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+    ok(await mev(`mesh.every(m => !m.live)`) && /MESH\s*2/.test(await mev(`document.querySelector('.trkCard2[data-card="list"] .hd .tabs').textContent`) || ''), `…remembered, not live, and the MESH tab counts them: ${await mev(`document.querySelector('.trkCard2[data-card="list"] .hd .tabs').textContent`)}`);   // ★ b97-integrate: the cards' LIST tabs (#amTabs is gone)
+    // ★ b97-integrate: the scale is the MAP CARDS' chip (.mScaleBody) now — no MapLibre / Leaflet scale control
+    const sc = await mev(`[...document.querySelectorAll('.mScaleBody, .maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
     ok(/km/.test(sc || ''), `a scale bar (${sc})`);
     const r = await msend('Page.captureScreenshot', { format: 'png' });
     if (r.result) { const f = path.join(os.tmpdir(), 'vibesdr-aisaprs-aprs-map.png'); fs.writeFileSync(f, Buffer.from(r.result.data, 'base64')); console.log('   screenshot', f); }
