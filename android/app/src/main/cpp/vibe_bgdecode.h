@@ -1661,7 +1661,37 @@ public:
         double   machineBusyPct = -1;    ///< the whole machine 0..100 (-1 unknown — Android)
         int      cores = 0;
         double   listenerHz = NAN;       ///< the listener's dial — chips and skimmers furthest from it go first (NaN = centre)
+        double   utc = NAN;              ///< ★ b97: the load ladder's clock (UTC s, what the spotters stamp) — NaN = now; a test passes its own
     };
+    /** ★★★ b97-cpu-budget (2026-11-28, the Pi 500): THE FRONT END'S DROPS ARE "BEHIND" TOO. The load ladder heard only its
+     *  decoders (a skipped slot, a backlog, the governor's shed) — but when the CHANNELISER falls behind the radio the
+     *  decoders downstream are starved, not late: they read "light", the ladder saw calm and put depth back to FULL while
+     *  the RSP1B lost 30-43 s of IQ a minute (every band losing ~70 % of every slot — bands lost by accident, the very thing
+     *  Stuart's order exists to prevent). Now: over a rolling ~30 s, more than kFrontBehindSecPerMin of IQ dropped a minute
+     *  counts as behind (a depth step per LoadLadder::kStepSec; at the minimum the spotters' pause rule takes CW, then RTTY),
+     *  and while it lasts depth cannot come back (calm() needs kCalmSec without a behind). Shedding depth here frees CPU
+     *  across the box — the decoders' share goes back to the front ends (vibe-bgdsp ranks above them, vibe_thread.h).
+     *  Called every health tick (~2 s) whether or not a listener is on. Pure on its inputs: a test drives it with its own
+     *  clock through easeTick. */
+    static constexpr double kFrontBehindSecPerMin = 1.5;   ///< BG-EASE's allowance (2.5 % of the capture): slots start going
+    void frontEndWatch(int64_t nowMs, double utc) {
+        if (p_.sampleRate <= 0) return;
+        const uint64_t d = dropped_.load(std::memory_order_relaxed);
+        frontHist_.push_back({ nowMs, d });
+        while (frontHist_.size() > 2 && nowMs - frontHist_[1].first >= 30000) frontHist_.pop_front();
+        while (frontHist_.size() > 64) frontHist_.pop_front();
+        const auto& a = frontHist_.front();
+        const double w = (double)(nowMs - a.first) / 1000.0;
+        if (w < 10.0) return;                                            // ★ judge over at least 10 s
+        const double perMin = (double)(d >= a.second ? d - a.second : 0) / p_.sampleRate * 60.0 / w;
+        frontDropPerMin_.store(perMin, std::memory_order_relaxed);
+        if (perMin <= kFrontBehindSecPerMin) return;
+        char why[120];
+        std::snprintf(why, sizeof why, "the channels fell behind the radio: %.1f s of IQ a minute dropped", perMin);
+        ladder_->behind(utc, why);   // ★ the ladder's own clock is UTC — the spotters' capture stamps
+    }
+    /** ★ b97: the front end's IQ drop rate, s a minute over the last ~30 s (admin, tests). */
+    double frontDropPerMin() const { return frontDropPerMin_.load(std::memory_order_relaxed); }
     /** ★★ ONE TICK OF THE GOVERNOR: at most one step taken or given back, said in the log in plain words. Never touches a
      *  listener's own decoders (it only ever reaches this runner's VFOs). Takes the slot lock and the channel lock, as
      *  retarget() does — the worker is between blocks when it runs. */
@@ -1704,6 +1734,7 @@ public:
                     cands.push_back(k);
                     break;
                 }
+        frontEndWatch(in.nowMs, std::isfinite(in.utc) ? in.utc : vibeUtcNow());   // ★★★ b97: IQ the channeliser could not take is "behind" for the load ladder, listener or not
         bool canShed = false, canSafety = false;
         for (auto& k : cands) { if (k.tier == ease::kTierSafety) canSafety = true; else canShed = true; }
         ease::Signals sg;
@@ -2291,7 +2322,7 @@ private:
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
     void loop() {
-        vibeBackgroundThread("vibe-bgdsp");   // ★★★ beta92: the back seat — below listener decoders (vibe_thread.h)
+        vibeBackgroundFrontThread("vibe-bgdsp");   // ★★★ beta92 the back seat; b97 one notch above its own decoders (vibe_thread.h)
         auto lastYieldCheck = std::chrono::steady_clock::now();
         for (;;) {
             std::vector<cf32> buf; bool gap = false; double bufUtc = 0; size_t gapN = 0;
@@ -2464,6 +2495,8 @@ private:
     std::chrono::steady_clock::time_point lastResume_{};
     std::mutex slotMtx_;
     std::unique_ptr<BgSlots> bgSlots_;   // ★ beta94: p_.slots points here while p_.cpu is set
+    std::deque<std::pair<int64_t, uint64_t>> frontHist_;   // ★ b97: (ms, dropped_) — frontEndWatch, under slotMtx_
+    std::atomic<double> frontDropPerMin_{0.0};
     std::shared_ptr<digi::LoadLadder> ladder_ = std::make_shared<digi::LoadLadder>();   // ★ beta94: every Band VFO's
     std::mutex chanMtx_;   // ★ the worker's channel cut vs retarget()
     std::shared_ptr<std::atomic<bool>> listenerOnFlag_ = std::make_shared<std::atomic<bool>>(false);   // ★ the worker's slotTick and a test's slotTickForTest

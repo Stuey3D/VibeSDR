@@ -487,7 +487,60 @@ static void fullCpu() {
     }
 }
 
+// ── ★★★ b97-cpu-budget: the FRONT END's drops are "behind" for the load ladder (the Pi 500's RSP1B, 2026-11-28) ─────────
+/* The RSP1B's channeliser dropped 30-43 s of IQ a minute while its decoders read "light"; the ladder heard nothing and put
+ * depth back to FULL. Now drops over 1.5 s/min (rolling 30 s) step depth down, one per LoadLadder::kStepSec, and keep it
+ * down while they last; a quiet front end lets depth come back by the ordinary calm path. */
+static void frontEnd() {
+    std::printf("── b97: background front-end drops step DEPTH down (listener or not); depth stays down while they last ──\n");
+    const std::string dir = tmpDir("front");
+    FileSlots sl(dir, [] { return 8; });
+    bg::BgRegistry reg; reg.open(dir, "R");
+    bg::BgRunner r;
+    bg::BgRunner::Params p; p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sl; p.registry = &reg;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{489500, "usb", "navtex"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    auto lad = r.ladderForTest();
+    std::vector<vibedsp::cf32> blk(8000, vibedsp::cf32{0.01f, 0.0f});
+    int64_t t = 0; double utc = 1.8e9;
+    auto tick = [&] { t += 2000; utc += 2.0; bg::BgRunner::EaseInputs in; in.nowMs = t; in.utc = utc; in.machineBusyPct = 100; in.cores = 4; r.easeTick(in); };
+    for (int i = 0; i < 10; i++) tick();
+    ok(lad->depth() == digi::LoadLadder::kFull && r.frontDropPerMin() < 0.01, "a front end that keeps up: depth stays FULL");
+    // the front end falls behind: ~0.5 s of IQ dropped per 2 s tick (15 s a minute; the Pi 500 dropped 30-43)
+    auto dropHalfSecond = [&] {
+        auto held = r.holdQueueForTest();
+        for (int i = 0; i < 24; i++) r.feedIq(blk.data(), (int)blk.size());   // 0.77 s offered, 0.25 s held: ~0.5 s dropped
+    };
+    int steps = 0;
+    for (int i = 0; i < 40; i++) {               // 80 s
+        dropHalfSecond();
+        const int before = lad->depth();
+        tick();
+        if (lad->depth() > before) ++steps;
+    }
+    ok(r.frontDropPerMin() > 1.5, "the rate is measured: " + std::to_string(r.frontDropPerMin()) + " s a minute");
+    ok(lad->depth() >= 4 && steps >= 4, "★★★ 80 s of front-end drops: depth stepped down " + std::to_string(steps) + " times (now "
+       + digi::LoadLadder::name(lad->depth()) + "), one per FT8 slot — depth BEFORE any band");
+    ok(logged("the channels fell behind the radio") && logged("decode depth reduced"), "...said in plain words");
+    ok(r.decodersRunning() == 1, "★ no VFO paused for it: every band keeps decoding");
+    for (int i = 0; i < 20; i++) tick();
+    ok(r.frontDropPerMin() < 0.01, "the front end keeps up again (the window forgets the drops)");
+    const int low = lad->depth();
+    for (int i = 0; i < 20; i++) { tick(); lad->calm(utc, &r, 0); }
+    ok(lad->depth() < low, "★ ...and depth comes back up once it is calm (" + std::string(digi::LoadLadder::name(lad->depth())) + ")");
+    dropHalfSecond(); tick();
+    const int d2 = lad->depth();
+    for (int i = 0; i < 20; i++) { dropHalfSecond(); tick(); lad->calm(utc, &r, 0); }
+    ok(lad->depth() >= d2, "★ drops continuing: depth never comes back up while the front end is behind");
+    r.stop();
+}
+
 int main() {
+    frontEnd();
     fullCpu();
     eased();
     backSeat();
