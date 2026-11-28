@@ -1142,6 +1142,12 @@ export class TrackView {
       e.stopPropagation();
       (d.querySelector('.hTuck') as HTMLElement | null)?.click();
     }, true);
+    // ★★ a press of the map's own zoom keys is the person moving the map: AUTO steps aside (the auto fit's own test is a
+    //    pointer or key event in the last second — a controller's or keyboard's press, a click with no pointer, had none,
+    //    and AUTO pulled the map straight back: the sea map's Humber arrow, the pad's + / −)
+    r.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement | null)?.closest?.('.maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out, .leaflet-control-zoom-in, .leaflet-control-zoom-out')) { try { this.af?.pause?.(); } catch { /* none */ } }
+    }, true);
     this.parkEl = r.querySelector('.trkPark') as HTMLElement;
     for (const b of Array.from(r.querySelectorAll('[data-cbtn]')) as HTMLButtonElement[]) b.onclick = () => {
       // ★ the LIST stepped aside for a card: its chip brings it back (the card folds), never shuts it
@@ -1383,6 +1389,7 @@ export class TrackView {
       // ★ its own controls (the maximise and swap tabs, the bar's keys) are stops of their own in the walk (gamepad.ts
       //   data-navout — Stuart 11-27); ENTER on the LIST itself goes into the rows
       L.dataset.navout = '.lMax, .lSwap, .trkList .hd button, .trkList .hd [role="button"], .trkList .hd select';
+      L.dataset.navrect = '.rows .trkRow';   // ★ the walk measures it by its first row
       // ★ no data-navlist: BACK from a row leaves the list in one press (Stuart's flow — not its header bar first)
     }
   }
