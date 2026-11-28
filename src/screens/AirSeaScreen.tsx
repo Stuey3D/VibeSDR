@@ -35,7 +35,7 @@ import { storedLoader, type GalPos, type StoredKind } from '../services/storedLa
 import type { LiveTab, AircraftSort } from '../services/liveMaps';
 import type { MapCardsIn } from '../components/MapChrome';
 import { rateRows } from '../utils/mapChrome';
-import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
+import { statsSeen, statsSections, statsObsOfShared, type StatsStore } from '../utils/mapStats';
 
 export type AirSeaParams = {
   /** the SERVER's address (the front door, or the one-radio server itself) */
@@ -204,8 +204,7 @@ export default function AirSeaScreen({ navigation, route }: { navigation: any; r
   const statsOpened = useRef(Date.now());
   const sections = useMemo(() => {
     const now = Date.now();
-    const obs: Array<{ mode: string; key: string; lat: number; lon: number; name: string }> = [];
-    for (const pl of shared?.aircraft ?? []) if (pl.lat != null && pl.lon != null) for (const m of pl.src) obs.push({ mode: m, key: `a:${pl.key}`, lat: pl.lat, lon: pl.lon, name: pl.flight || pl.reg || pl.icao || '' });
+    const obs = statsObsOfShared(shared?.aircraft);   // ★★ 11-28 a position counts for the source that gave it (posSrc) only
     statsSeen(stats.current, obs, now);
     return statsSections(stats.current, rx, now, statsOpened.current);
   }, [shared, rx]);

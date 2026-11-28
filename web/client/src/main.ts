@@ -65,7 +65,9 @@ import {  AV_EMPTY,  avCompose, avLegendHtml,  sharedSanitise,
 import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProfile, liveTabs, liveTabPick, avLayersFrom, avLayerOf, shipLayerOf,
          aircraftOrder, msgFeedUpdate, msgFilter, avSnrByKey, MAP_TITLE, TAB_LABEL, SHIP_ID, LIVE_ROW_CAP,
          LIVE_CHIP_COLOUR, type LiveLayerId, type LiveMode, type LiveTab, type AircraftSort, type LiveMsg } from '../../../src/services/liveMaps';
-import { avMerge, avNowRule, avHave, avName, type AvLayerId } from '../../../src/services/aviationMap';
+import { avMerge, avNowRule, avHave, avHavePos, avName, type AvLayerId } from '../../../src/services/aviationMap';
+import { layerPosWords } from '../../../src/utils/mapChrome';   // ★★★ beta97 hotfix ON THE MAP / HEARD
+import { parseAvMsgs, avMsgsQuery, avMsgMerge, avMsgCeiling, avMsgWindowS, avMsgInWindow, avMsgToLive, avMsgLabel, AV_MSGS_POLL_MS, AV_MSGS_PAGE, type AvMsg } from '../../../src/services/avMsgs';   // ★★★ beta97 hotfix
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
 import { sondeCard, sondeIcon, sondeItems,  sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
@@ -294,7 +296,7 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
 // ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
 import { MapWf, type MapWfFrame } from './mapWf';
-import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, type MapWfModel } from '../../../src/utils/mapWfModel';   // ★★★ V12 the map drawer's live waterfall
+import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, wfModelIsm, avBandFor, type MapWfModel } from '../../../src/utils/mapWfModel';   // ★★★ V12 the map drawer's live waterfall
 import { rankCard } from '../../../src/utils/spotRanks';   // ★ V12 beta90 the gallery's ranking card
 import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
 
@@ -4394,7 +4396,9 @@ function mapWfEnd() { mapWfOn = false; if (wf) wf.onProcessed = null; mapWfInst?
 let mapWfOn = false;
 (window as any).__vibeMapWf = () => (mapWfInst && mapWfOn ? { ...mapWfInst.stats, histRows: mapWfInst.history.rows, histCap: mapWfInst.history.cap, spec: !specOffSent } : null);
 (window as any).__vibeMapWfStrip = (y: number) => (mapWfInst ? mapWfInst.strip(y) : null);
+let mapWfBinHz = 0;   // ★ the radio's spectrum bin width (Hz), from the frames — the floor under any span (16 bins)
 function mapWfFeed(fr: MapWfFrame) {
+  if (fr.row.length) mapWfBinHz = fr.bwHz / fr.row.length;
   const m = mapWfModel(false);
   if (!m || !mapWfInst || !mapWfOn || !wf) return;
   mapWfInst.push(fr, wf.mapLook(), m);   // ★ the page's look read fresh each frame: a palette change shows on the next row
@@ -4406,8 +4410,13 @@ function mapWfFeed(fr: MapWfFrame) {
 function mapWfModel(prime: boolean): MapWfModel | null {
   if (vmOn && vmReport) return wfModelVor(vmReport, mapWfSeen, prime);
   if (ndbOn && ndbReport) return wfModelNdb(ndbReport, mapWfSeen, prime);
-  if (avOn && avReport) { const band = avBands.find((b) => b.id === avReport!.band); const m = band ? wfModelChannels(band) : null; if (m) return m; }
-  return spec ? wfModelVfo(spec.vfoA()) : null;
+  // ★★ beta97 hotfix: the live band by id, else name, else the frequency its channels hold (avBandFor — the app's rule)
+  if (avOn && avReport) { const band = avBandFor(avBands, avReport as any); const m = band ? wfModelChannels(band) : null; if (m) return m; }
+  // ★★★ beta97 hotfix: ISM / LoRa — the decoder's channels (or the capture), never the dial's 13 kHz
+  if (ismOn && ismReport) { const m = wfModelIsm(ismReport as any); if (m) return m; }
+  // ★ ADS-B: its one channel and the 2 MHz either side the capture holds (never a 13 kHz slice of 1090)
+  if (adsbOn) return { lo: 1089e6, hi: 1091e6, key: 'adsb', stamps: [], marks: [{ hz: 1090e6, label: 'ADS-B 1090.000', active: true, loHz: 1089e6, hiHz: 1091e6 }], info: 'ADS-B · 1090 MHz · 2 MHz shown' };
+  return spec ? wfModelVfo(spec.vfoA(), mapWfBinHz * 16) : null;   // ★★ never narrower than 16 of the radio's bins
 }
 function mapTimeSync() {
   const t = document.getElementById('rxTimeLeft');
@@ -11272,7 +11281,52 @@ async function asStoredPoll() {
 function asStoredStart() {
   void asStoredPoll();
   if (!asStoredT) asStoredT = setInterval(() => { void asStoredPoll(); }, 120_000);
+  avLogStart();
 }
+/* ★★★ beta97 hotfix THE MESSAGES LIST FROM THE SERVER'S LOG (src/services/avMsgs.ts, shared with the app — Stuart approved):
+ *  EVERY decoded ACARS / VDL2 / HFDL / ADS-C message, a BACKFILL within the map's window on open (and when the window grows),
+ *  then every 5 s only what came after the last number, de-duplicated; a ceiling by this device's memory
+ *  (navigator.deviceMemory); the tab says what it shows. Asked only while the AIR & SEA map is open, this page visible and
+ *  the map can hold datalink messages; this server's own HTTP (galUrl), never the Worker; one call at a time, never faster
+ *  than AV_MSGS_POLL_MS. An older server (404 / not a log page): the live feed as before, labelled "since opened". */
+let avLog: AvMsg[] = [];
+let avLogOk: boolean | null = null;
+let avLogCur = 0, avLogWin = 0, avLogWant = 3600, avLogCapped = false, avLogBusy = false, avLogAt = 0;
+let avLogT: ReturnType<typeof setInterval> | null = null;
+const avLogCeil = avMsgCeiling((() => { const g = Number((navigator as any).deviceMemory); return Number.isFinite(g) && g > 0 ? g * 2 ** 30 : null; })());
+/** The map can hold datalink messages: the datalink runs here, this radio can run it, or the shared table has datalink aircraft. */
+function avLogWanted(): boolean {
+  return !!asView?.open && (avOn || !!avCap?.ok || !!avShared?.aircraft?.some((a) => a.src.some((x) => x !== 'ADS-B')));
+}
+function avLogReset() { avLog = []; avLogCur = 0; avLogWin = 0; avLogCapped = false; }
+async function avLogTick() {
+  if (!asView?.open) { if (avLogT) clearInterval(avLogT); avLogT = null; avLogReset(); return; }
+  if (!avLogWanted() || document.visibilityState !== 'visible' || avLogBusy || avLogOk === false) return;
+  const t = performance.now();
+  if (t - avLogAt < AV_MSGS_POLL_MS - 250) return;   // ★ the floor: never faster, whatever calls it
+  avLogAt = t; avLogBusy = true;
+  try {
+    const want = avLogWant;
+    const back = !avLogCur || want > avLogWin + 1;   // a backfill on open, and again when the window grows (1 H → 24 H)
+    const r = await fetch(galUrl(avMsgsQuery({ windowS: want, since: back ? 0 : avLogCur, max: back ? Math.min(avLogCeil, 1500) : AV_MSGS_PAGE })), { cache: 'no-store' });
+    if (!r.ok) { if (r.status === 404 || r.status === 501 || r.status === 503) { avLogOk = false;   // ★ no log here (an older server; a door page, whose radios keep the logs)
+      if (asView?.open) asRender(); } return; }
+    const page = parseAvMsgs(await r.json());
+    if (!page) { avLogOk = false; if (asView?.open) asRender(); return; }
+    avLogOk = true;
+    if (back) { avLogWin = want; avLogCapped = page.trunc; }
+    avLogCur = Math.max(avLogCur, page.seq);
+    const before = avLog;
+    avLog = avMsgMerge(avLog, page.msgs, avLogCeil);
+    if ((avLog !== before || back) && asView?.open) asRender();
+  } catch { /* a dropped call: the next tick tries again */ } finally { avLogBusy = false; }
+}
+function avLogStart() {
+  void avLogTick();
+  if (!avLogT) avLogT = setInterval(() => { void avLogTick(); }, AV_MSGS_POLL_MS);
+}
+/** For drivers: the log list's state. */
+(window as any).__vibeAvLog = () => ({ ok: avLogOk, n: avLog.length, cur: avLogCur, win: avLogWant, ceil: avLogCeil, polling: !!avLogT });
 /** EXIT <MODE> leaves the mode (the map goes with it); CLOSE MAP puts the map away and the mode carries on. */
 function asExit() {
   const c = liveChrome('airsea', asMode());
@@ -11482,6 +11536,11 @@ function asRender() {
   // ── what each layer has ──
   const planesAll = avNowRule(avMerge(avOn ? avR : null, avSh), avSh).planes;
   const avh = avHave(planesAll, avSh?.stations ?? []);
+  /* ★★★ beta97 hotfix ON THE MAP / HEARD (Stuart: ✈ 28 with nothing drawn — none had sent a position): how many of each
+   *  aircraft layer the map can DRAW (avHavePos, the app's rule); ADS-B live from its own report */
+  const avhP = avHavePos(planesAll);
+  const adsbPosN = adsbOn && adsbR ? (adsbR.aircraft as any[]).filter((a) => a.lat != null && a.lon != null).length : undefined;
+  const havePos: Partial<Record<LiveLayerId, number>> = { adsb: adsbOn && adsbR ? adsbPosN : avhP.adsb, acars: avhP.acars, vdl2: avhP.vdl2, hfdl: avhP.hfdl, adsc: avhP.adsc };
   const nowS = navLast.w?.now ?? navLast.m?.now ?? navLast.st?.now ?? Math.floor(Date.now() / 1000);
   const sh = shipHave(nowS, shipSrc);
   const have: Partial<Record<LiveLayerId, number>> = {
@@ -11520,7 +11579,7 @@ function asRender() {
       }
     }
   }
-  v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id],
+  v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, nPos: havePos[c.id], colour: AS_CHIP_COLOUR[c.id],
                                                     others: others.has(c.id) ? [...others.get(c.id)!] : undefined,
                                                     nMine: c.live && others.has(c.id) ? (c.id === 'adsb' && adsbOn && adsbR ? Math.max(nMine.get('adsb') ?? 0, (adsbR.aircraft as any[]).length) : nMine.get(c.id) ?? 0) : undefined })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
@@ -11579,15 +11638,26 @@ function asRender() {
   const tabHave: Partial<Record<LiveTab, number>> = { aircraft: aircraftN, messages: asMsgs.length, ships: shipsN || (aisOn ? 1 : 0), navtex: navN,
     navaids: vmOn ? Math.max(1, sc.t0 ? vmR?.beacons.length ?? 0 : vmR?.heard ?? 0) : ndbOn ? Math.max(1, ndbView?.count() ?? 0) + (on('vor') ? vmSt.length : 0) : on('vor') ? vmSt.length : 0,
     sondes: sdOn ? Math.max(1, sdR?.sondes.length ?? 0) : on('sondes') ? sdSt.length : 0 };
+  // ★★★ beta97 hotfix the MESSAGES list from the server's log, in the map's time window (THIS SESSION, else the maritime
+  //   window where drawn, else ALL); the live feed on an older server
+  const msgNowS = Date.now() / 1000;
+  asNavWin = shipPresent.some((id) => id !== 'areas');
+  const msgRange = asSess && sessOk && sc.t0 ? 'session' : asNavWin ? navRange : 'all';
+  const msgWin = avMsgWindowS(msgRange, msgNowS, sc.t0);
+  if (msgWin !== avLogWant) { avLogWant = msgWin; if (msgWin > avLogWin + 1) avLogAt = 0; }   // a wider window: backfill at the next tick
+  const logMsgs: LiveMsg[] | null = avLogOk ? avMsgInWindow(avLog, msgWin, msgNowS).map(avMsgToLive) : null;
+  const msgsAll = msgFilter(logMsgs ?? asMsgs, asMsgKey);
+  const msgWords = avMsgLabel({ windowS: msgWin, shown: msgsAll.length, capped: !!avLogOk && (avLogCapped || avLog.length >= avLogCeil), log: !!avLogOk, session: msgRange === 'session' });
+  if (logMsgs) tabHave.messages = logMsgs.length;
   const tabs = liveTabs('airsea', tabHave, live, asOpenedTab);
   const tab = liveTabPick(tabs, asPicked, live, asOpenedTab) ?? 'aircraft';
-  v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
+  v.setTabs(tabs.map((t) => ({ id: t, label: t === 'messages' ? `${TAB_LABEL[t]} \u00b7 ${msgWords}` : TAB_LABEL[t], n: t === 'messages' ? msgsAll.length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
   // ★★ ADS-B live: one list like every other (Stuart 16:53) — nearest / latest
   if (adsbOn) { adsbChromeMount(v, tab); adsbRender(); }
   // ★★ beta96 stage 8 NDB live: its controls in MAP CONTROLS, its layer on the map; beta97 its beacons in the ONE LIST
   if (ndbOn && ndbView) { ndbView.mount(v); ndbView.setShown(on('ndb')); }
   v.setSort(tab === 'aircraft' ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
-  const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
+  const msgWho = asMsgKey ? (logMsgs ?? asMsgs).find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
   // ── the ranges: the DATALINK's bands while it is on, else the time filter where a maritime layer is drawn ──
   // ★★★ beta96 THIS SESSION beside the window (a map with no window of its own: ALL | THIS SESSION) — on a radio only
@@ -11614,7 +11684,7 @@ function asRender() {
       return trkRowHtml({ ...r, key: `adsb:${h}`, ...(liveSnr.has(h) ? { snr: liveSnr.get(h), snrMode: 'adsb' } : {}) }); }).join('');
     if (!rows) rows = `<div class="trkEmpty">${escapeHtml(avShared?.off ? 'The owner of this server has switched the aircraft decoders off.' : avOn && !avReport ? 'Taking the receiver to the aircraft datalink…' : AV_EMPTY)}</div>`;
   } else if (tab === 'messages') {
-    const list = msgFilter(asMsgs, asMsgKey).slice(0, LIVE_ROW_CAP);
+    const list = msgsAll.slice(0, LIVE_ROW_CAP);
     rows = list.map((m) => `<div class="trkRow trkMsg" role="button" tabindex="0" data-key="m:${escapeHtml(m.id)}" data-focus="${escapeHtml(m.key)}">`
       + `<span class="id"><b><i class="sw" style="background:${avSrcColour(m.src)}"></i>${escapeHtml(m.who)}</b><small><span class="lbl">${escapeHtml(m.label)}</span>${m.labelName ? ' · ' + escapeHtml(m.labelName) : ''} · ${escapeHtml(m.src)}</small>`
       + (m.text ? `<small class="avText">${escapeHtml(m.text)}</small>` : '') + `</span><span class="sp">${snrChipHtml(m.snrMode, m.snr)}</span><span class="rg"></span><span class="ag">${escapeHtml(utcHm(m.t))}</span></div>`).join('')
@@ -11682,9 +11752,11 @@ function asStatsSync(v: TrackView, rx: { lat: number; lon: number } | null) {
     e.lat = lat; e.lon = lon; e.at = now; if (name) e.name = name;
     if (trackedNm != null && trackedNm > e.nm) e.nm = trackedNm;
   };
+  // ★★ 11-28 a shared aircraft's position is a sighting for the source that GAVE it (posSrc) — never for every source that
+  //   has heard it: an aircraft heard on ADS-B that later moved to HFDL kept ADS-B's FURTHEST at its HFDL fix (statsObsOfShared)
   for (const p of avShared?.aircraft ?? []) {
-    if (p.lat == null || p.lon == null) continue;
-    for (const s of p.src) seen(s, `a:${p.key}`, p.lat, p.lon, avName(p));
+    if (p.lat == null || p.lon == null || !p.posSrc) continue;
+    seen(p.posSrc, `a:${p.key}`, p.lat, p.lon, avName(p));
   }
   if (adsbOn && adsbReport) for (const a of adsbReport.aircraft as any[]) {
     const lat = Number(a.lat), lon = Number(a.lon), hex = String(a.hex || '').toLowerCase();
@@ -11801,11 +11873,14 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
   // ── LIST: what is heard but not placed ──
   const acNoPos = x.otherPlanes.filter((p: any) => p.lat == null || p.lon == null).length + (adsbOn && x.adsbR ? x.adsbR.aircraft.filter((a) => a.lat == null || a.lon == null).length : 0);
   const shipNoPos = aisOn && x.aisR ? x.aisR.vessels.filter((s) => s.lat == null || s.lon == null).length : 0;
-  const notPlaced = [acNoPos ? `${acNoPos} aircraft` : '', shipNoPos ? `${shipNoPos} ship${shipNoPos === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+  // ★★★ beta97 hotfix the aircraft in words where some cannot be drawn: "25 aircraft · 0 with position" (the app's line)
+  const acAll = x.otherPlanes.length + (adsbOn && x.adsbR ? x.adsbR.aircraft.length : 0);
+  const acWords = acNoPos ? layerPosWords(acAll, acAll - acNoPos, 'aircraft', 'aircraft') : '';
+  const notPlaced = shipNoPos ? `${shipNoPos} ship${shipNoPos === 1 ? '' : 's'}` : '';
   const clock = asStandalone && asViewer ? asViewer.status().clock : '';
   v.setFacts({
     tune,
-    list: [clock, notPlaced ? `${notPlaced} heard but not on the map yet (no position)` : '',
+    list: [clock, acWords, notPlaced ? `${notPlaced} heard but not on the map yet (no position)` : '',
            asSrcHidden.size ? `Hidden in MAP \u2192 SOURCES: ${[...asSrcHidden].map((id) => (id === 'feed' ? 'the aircraft feeds' : asRadioNames?.get(id) ?? id)).join(', ')}` : ''].filter(Boolean).join(' · '),
     layers: x.shc.warnWords,
   });
@@ -11860,9 +11935,11 @@ function asCardsSync(v: TrackView, x: { items: any[]; rx: { lat: number; lon: nu
     asRender();
   });
   // ── the LAYERS chip: a glyph and a count per family present ──
-  const fam: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid'; n: number; colour: string; words: string }> = [];
+  const fam: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid'; n: number; pos?: number; colour: string; words: string }> = [];
   const acN = x.otherPlanes.length + (adsbOn && x.adsbR ? x.adsbR.aircraft.length : 0);
-  if (acN && AV_LAYER_IDS.some((id) => x.present.includes(id) && x.on(id))) fam.push({ glyph: 'aircraft', n: acN, colour: AS_CHIP_COLOUR.adsb ?? '#ffd34d', words: `${acN} aircraft` });
+  // ★★★ beta97 hotfix ON THE MAP / HEARD: "0/25" where fewer can be drawn than were heard
+  const acPos = x.otherPlanes.filter((p: any) => p.lat != null && p.lon != null).length + (adsbOn && x.adsbR ? x.adsbR.aircraft.filter((a) => a.lat != null && a.lon != null).length : 0);
+  if (acN && AV_LAYER_IDS.some((id) => x.present.includes(id) && x.on(id))) fam.push({ glyph: 'aircraft', n: acN, pos: acPos, colour: AS_CHIP_COLOUR.adsb ?? '#ffd34d', words: layerPosWords(acN, acPos, 'aircraft', 'aircraft') });
   if (x.present.includes('ships') && x.on('ships') && x.sh.ships) fam.push({ glyph: 'ship', n: x.sh.ships, colour: AS_CHIP_COLOUR.ships ?? '#4fa3ff', words: `${x.sh.ships} ships` });
   if (x.present.includes('navst') && x.on('navst') && x.sh.stations) fam.push({ glyph: 'navtex', n: x.sh.stations, colour: AS_CHIP_COLOUR.navst ?? '#ffad42', words: `${x.sh.stations} NAVTEX stations` });
   if (x.present.includes('sondes') && x.on('sondes')) { const n = sdOn ? sdReport?.sondes.length ?? 0 : sdStored.length; if (n) fam.push({ glyph: 'balloon', n, colour: AS_CHIP_COLOUR.sondes ?? '#c58cff', words: `${n} sondes` }); }

@@ -85,6 +85,31 @@ static constexpr int64_t kAdsbNowSec = 60;
  *  its process ended). Five flushes: a busy Pi's decoder-priority Sharer thread may run late, never that late. */
 static constexpr int64_t kAdsbLiveSec = 10;
 
+/** ★★ 11-28 A HEADING FROM TWO FIXES (Stuart: "with HFDL, UberSDR shows the planes pointing the correct direction when they
+ *  have provided a couple of messages, can we do the same" · "community map and servers need it too, same for VDL2 and
+ *  ACARS"). A datalink position (ACARS, VDL2, HFDL, ADS-C) comes with no track; two of them say which way it is going:
+ *  the INITIAL great-circle bearing from the previous fix to the newest, when both came from the SAME source, are at
+ *  least kDeriveMinKm apart (closer, the jitter of a report would spin the glyph) and the previous one is no more than
+ *  kDeriveMaxGapMs older (HFDL reports are sparse, but an hour-old fix says nothing about now). A REPORTED track always
+ *  wins (Update::hasTrk). It turns the icon only — it is published as "trk" with "trkSrc":"derived" and never flown on.
+ *  The clients apply the same rule to their own fixes for an older server (src/utils/derivedHeading.ts). */
+static constexpr double kDeriveMinKm = 2.0;
+static constexpr int64_t kDeriveMaxGapMs = 30 * 60 * 1000;
+/** The derived heading (0…360, degrees true) from fix 1 to fix 2, or NAN when the rule above says none. */
+inline double derivedTrack(int src1, double lat1, double lon1, int64_t ms1, int src2, double lat2, double lon2, int64_t ms2) {
+    if (src1 != src2 || src1 <= kAdsb || src1 >= kNSrc) return NAN;
+    if (!(ms2 > ms1) || ms2 - ms1 > kDeriveMaxGapMs) return NAN;
+    if (!(std::isfinite(lat1) && std::isfinite(lon1) && std::isfinite(lat2) && std::isfinite(lon2))) return NAN;
+    const double d2r = 3.14159265358979323846 / 180.0, p1 = lat1 * d2r, p2 = lat2 * d2r, dl = (lon2 - lon1) * d2r;
+    const double h = std::sin((p2 - p1) / 2) * std::sin((p2 - p1) / 2) + std::cos(p1) * std::cos(p2) * std::sin(dl / 2) * std::sin(dl / 2);
+    const double km = 2 * 6371.0088 * std::asin(std::min(1.0, std::sqrt(h)));
+    if (km < kDeriveMinKm) return NAN;
+    const double y = std::sin(dl) * std::cos(p2), x = std::cos(p1) * std::sin(p2) - std::sin(p1) * std::cos(p2) * std::cos(dl);
+    double b = std::atan2(y, x) / d2r;
+    if (b < 0) b += 360;
+    return b >= 360 ? b - 360 : b;
+}
+
 /** What one writer knows about one aircraft (only the fields it knows are set). Times are wall-clock milliseconds. */
 struct Update {
     uint32_t icao = 0;
@@ -124,6 +149,12 @@ struct Rec {
      *  In what was padding: an older build's record reads 0. With Rec::flags 32 (the position came from an off-site feed)
      *  it decides offsiteOnly — the range outline's rule. */
     int64_t siteMs;
+    /** ★★ 11-28 THE DERIVED HEADING (Stuart: "with HFDL, UberSDR shows the planes pointing the correct direction when they
+     *  have provided a couple of messages"): with Rec::flags kTrkDerived, the bearing from this aircraft's previous fix to
+     *  its newest, both from the SAME source (derivedTrack), and when that newest fix was made (wall ms). In what was
+     *  padding: an older build's record reads 0 and no flag — no derived heading, as before. */
+    float dTrk;
+    int64_t dMs;
 };
 #pragma pack(pop)
 static_assert(sizeof(Rec) <= kRecSize, "an aircraft record is 256 bytes");
@@ -173,7 +204,19 @@ struct Row {
     std::string reg, flight, type, from, to, label, app, posTime, via;
     uint32_t radios = 0;   ///< ★ beta96 the radios that heard it (Rec::radios); 0 = unknown
     int64_t siteMs = 0;    ///< ★★ b96-2 when a source at this site last heard it (Rec::siteMs); 0 = none / an older writer
+    float dTrk = 0; int64_t dMs = 0;   ///< ★★ 11-28 the derived heading (flags kTrkDerived) and its newest fix's time
 };
+/** ★★ 11-28 Rec::flags 64: dTrk holds a heading derived from two fixes of one source (derivedTrack). */
+static constexpr uint8_t kTrkDerived = 64;
+/** The heading to publish: a reported one, else a derived one — {has, degrees, derived}. */
+struct Heading { bool has = false; double deg = 0; bool derived = false; };
+inline Heading headingOf(const Row& w) {
+    Heading h;
+    if (!(w.flags & 1)) return h;
+    if (w.flags & 4) { h.has = true; h.deg = w.trk; return h; }
+    if (w.flags & kTrkDerived) { h.has = true; h.deg = w.dTrk; h.derived = true; }
+    return h;
+}
 inline Row fromRec(const Rec& r) {
     Row w;
     w.used = r.used == 1; w.icao = r.icao & 0xFFFFFF; w.srcMask = r.srcMask & 0x1F; w.flags = r.flags;
@@ -182,12 +225,14 @@ inline Row fromRec(const Rec& r) {
     for (int s = 0; s < kNSrc; ++s) w.srcMs[s] = r.srcMs[s];
     w.lat = (r.flags & 1) ? r.lat / 1e7 : NAN; w.lon = (r.flags & 1) ? r.lon / 1e7 : NAN;
     w.altFt = r.altFt; w.trk = r.trk; w.gs = r.gs; w.count = r.count; w.radios = r.radios; w.siteMs = r.siteMs;
+    w.dTrk = r.dTrk; w.dMs = r.dMs;
     w.reg = getStr(r.reg, sizeof r.reg); w.flight = getStr(r.flight, sizeof r.flight); w.type = getStr(r.type, sizeof r.type);
     w.from = getStr(r.from, sizeof r.from); w.to = getStr(r.to, sizeof r.to); w.label = getStr(r.label, sizeof r.label);
     w.app = getStr(r.app, sizeof r.app); w.posTime = getStr(r.posTime, sizeof r.posTime); w.via = getStr(r.via, sizeof r.via);
     // ★ a hostile or torn record never reaches the JSON as anything but printable text and finite numbers
     if (!(std::isfinite(w.lat) && std::isfinite(w.lon) && std::fabs(w.lat) <= 90 && std::fabs(w.lon) <= 180)) { w.flags &= ~1; w.lat = w.lon = NAN; }
     if (!std::isfinite(w.trk)) w.flags &= ~4;
+    if (!std::isfinite(w.dTrk) || w.dTrk < 0 || w.dTrk >= 360) w.flags &= ~kTrkDerived;
     if (!std::isfinite(w.gs)) w.flags &= ~8;
     return w;
 }
@@ -198,6 +243,7 @@ inline Rec toRec(const Row& w) {
     for (int s = 0; s < kNSrc; ++s) r.srcMs[s] = w.srcMs[s];
     if (w.flags & 1) { r.lat = (int32_t)std::lround(w.lat * 1e7); r.lon = (int32_t)std::lround(w.lon * 1e7); }
     r.altFt = w.altFt; r.trk = w.trk; r.gs = w.gs; r.count = w.count; r.radios = w.radios; r.siteMs = w.siteMs;
+    r.dTrk = w.dTrk; r.dMs = w.dMs;
     putStr(r.reg, sizeof r.reg, w.reg); putStr(r.flight, sizeof r.flight, w.flight); putStr(r.type, sizeof r.type, w.type);
     putStr(r.from, sizeof r.from, w.from); putStr(r.to, sizeof r.to, w.to); putStr(r.label, sizeof r.label, w.label);
     putStr(r.app, sizeof r.app, w.app); putStr(r.posTime, sizeof r.posTime, w.posTime); putStr(r.via, sizeof r.via, w.via);
@@ -234,9 +280,16 @@ inline void apply(Row& w, const Update& u) {
     w.count += u.count;
     if (u.hasPos && std::isfinite(u.lat) && std::isfinite(u.lon) && std::fabs(u.lat) <= 90 && std::fabs(u.lon) <= 180
         && (!(w.flags & 1) || u.posMs >= w.posMs)) {
+        // ★★ 11-28 the heading from the previous fix to this one (same source, ≥ 2 km, ≤ 30 min — derivedTrack); a hop too
+        //   short keeps the heading it had (one source's jitter never spins it); a reported track, or another source's fix
+        //   too far from it in time, ends it
+        const double dt = (w.flags & 1) && !u.hasTrk ? derivedTrack(w.posSrc, w.lat, w.lon, w.posMs, u.posSrc, u.lat, u.lon, u.posMs) : NAN;
+        bool derived = false;
+        if (std::isfinite(dt)) { w.dTrk = (float)dt; w.dMs = u.posMs; derived = true; }
+        else if (!u.hasTrk && (w.flags & kTrkDerived) && u.posSrc == w.posSrc && u.posMs - w.dMs <= kDeriveMaxGapMs) derived = true;
         w.lat = u.lat; w.lon = u.lon; w.posMs = u.posMs; w.posSrc = u.posSrc;
-        w.flags = uint8_t((w.flags & ~(1 | 2 | 4 | 8 | 16 | kPosOffsite)) | 1 | (u.hasAlt ? 2 : 0) | (u.hasTrk ? 4 : 0) | (u.hasGs ? 8 : 0) | (u.ground ? 16 : 0)
-                          | (u.offsite ? kPosOffsite : 0));   // ★★ b96-2 whose position this is
+        w.flags = uint8_t((w.flags & ~(1 | 2 | 4 | 8 | 16 | kPosOffsite | kTrkDerived)) | 1 | (u.hasAlt ? 2 : 0) | (u.hasTrk ? 4 : 0) | (u.hasGs ? 8 : 0) | (u.ground ? 16 : 0)
+                          | (u.offsite ? kPosOffsite : 0) | (derived ? kTrkDerived : 0));   // ★★ b96-2 whose position this is
         w.altFt = u.hasAlt ? u.altFt : 0; w.trk = u.hasTrk ? u.trk : 0; w.gs = u.hasGs ? u.gs : 0;
         w.posTime = clean(u.posTime, 11);
     } else if (u.hasAlt && newer && !(w.flags & 1)) { w.flags |= 2; w.altFt = u.altFt; }
@@ -257,7 +310,7 @@ inline void absorb(Row& a, const Row& b) {
     a.count += b.count;
     if ((b.flags & 1) && (!(a.flags & 1) || b.posMs > a.posMs)) {
         a.lat = b.lat; a.lon = b.lon; a.posMs = b.posMs; a.posSrc = b.posSrc; a.altFt = b.altFt; a.trk = b.trk; a.gs = b.gs; a.posTime = b.posTime;
-        a.flags = b.flags;
+        a.flags = b.flags; a.dTrk = b.dTrk; a.dMs = b.dMs;   // ★★ 11-28 the derived heading goes with the position
     }
 }
 
@@ -525,7 +578,8 @@ inline std::string toJson(const std::vector<Row>& rows, const std::vector<GsHear
             o += b;
             if (w.posSrc >= 0) str("posSrc", srcName(w.posSrc));
             if (w.flags & 2) { std::snprintf(b, sizeof b, ",\"alt\":%d", w.altFt); o += b; }
-            if (w.flags & 4) { std::snprintf(b, sizeof b, ",\"trk\":%.0f", (double)w.trk); o += b; }
+            { const Heading hd = headingOf(w);   // ★★ 11-28 a reported track, else one derived from two fixes (marked so)
+              if (hd.has) { std::snprintf(b, sizeof b, ",\"trk\":%.0f%s", hd.deg, hd.derived ? ",\"trkSrc\":\"derived\"" : ""); o += b; } }
             if (w.flags & 8) { std::snprintf(b, sizeof b, ",\"gs\":%.0f", (double)w.gs); o += b; }
             if (w.flags & 16) o += ",\"ground\":1";
             str("posTime", w.posTime);

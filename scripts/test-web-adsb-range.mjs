@@ -63,7 +63,7 @@ const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-adsbrange-'));
 const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg}`, '--no-first-run', '--no-default-browser-check',
   '--enable-unsafe-swiftshader', `--user-data-dir=${path.join(ud, 'edge')}`, '--window-size=1100,800', 'about:blank'], { stdio: 'ignore' });
 const done = (code) => { try { edge.kill(); } catch {} srv.close(); setTimeout(() => { try { fs.rmSync(ud, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch {} process.exit(code); }, 500); };
-const watchdog = setTimeout(() => { console.log('   FAIL timed out'); done(1); }, 300000);
+const watchdog = setTimeout(() => { console.log('   FAIL timed out'); done(1); }, 420000);   // ★ 11-28 +2 min: the facing checks (a fresh map, the 3.5 s datalink glide)
 
 try {
   let page = null;
@@ -143,6 +143,33 @@ try {
   ok((await liveN()) === n0 + 2, 'live: …its first fix without the mark is a FIRST fix (no pair across the two)');
   await ev(row('aa0003', 200.5, 180.4, 0, false)); await sleep(1800);
   ok((await liveN()) === n0 + 3, `live: …the next grows it (${await liveN()} bearings)`);
+  // (before the themes' maps: each opens a fresh layer, so these aircraft disturb nothing after)
+  // ★★ 11-28 FACING ITS WAY FROM TWO FIXES (Stuart: "with HFDL, UberSDR shows the planes pointing the correct direction")
+  {
+    const E = 0.5 / Math.cos(55.25 * Math.PI / 180);
+    const dl = (hex, lat, lon, seenPos, extra = '') => `layer.update([{hex:"${hex}",lat:${lat},lon:${lon},gs:470,alt_baro:35000,seen:0,seen_pos:${seenPos},sparse:true,posSrc:"HFDL"${extra}}])`;
+    const one = async (hex) => JSON.parse(await ev(`JSON.stringify(layer.shown().find((a) => a.hex === '${hex}') || null)`));
+    await ev(dl('bb0001', 55.0, -20.0, 600)); await sleep(400);
+    let a = await one('bb0001');
+    ok(a && a.face == null && a.track == null, `one HFDL fix: the default orientation (${JSON.stringify(a && { face: a.face, track: a.track })})`);
+    await ev(dl('bb0001', 55.5, -20.0 + E, 0)); await sleep(4500);   // ★ past the datalink glide (SPARSE_GLIDE_MS 3.5 s)
+    a = await one('bb0001');
+    ok(a && Math.abs(a.face - 45) < 1.5 && a.track == null, `★★ two HFDL fixes NE of each other: it faces ≈ 45° (${a && a.face && a.face.toFixed(1)}), with no track to fly on`);
+    const p0 = a && [a.lat, a.lon]; await sleep(3000); a = await one('bb0001');
+    ok(a && Math.abs(a.lat - 55.5) < 1e-4 && Math.abs(a.lon - (-20 + E)) < 1e-4 && Math.abs(p0[0] - a.lat) < 1e-6, `★★ …and it is NOT dead-reckoned on that heading (gs 470: still at its fix ${JSON.stringify(p0)} → ${JSON.stringify(a && [a.lat, a.lon])})`);
+    await ev(dl('bb0001', 55.509, -20.0 + E, 0)); await sleep(500);
+    a = await one('bb0001');
+    ok(a && Math.abs(a.face - 45) < 1.5, `a fix 1 km on: the heading unchanged (${a && a.face && a.face.toFixed(1)})`);
+    await ev(dl('bb0002', 50.0, 0.0, 1900)); await sleep(300); await ev(dl('bb0002', 51.0, 1.0, 0)); await sleep(500);
+    a = await one('bb0002');
+    ok(a && a.face == null, 'the previous fix over 30 min older: no derived heading');
+    await ev(dl('bb0003', 50.0, 0.0, 60)); await sleep(300); await ev(`layer.update([{hex:"bb0003",lat:50.5,lon:0.5,gs:470,track:270,alt_baro:35000,seen:0,seen_pos:0,sparse:true,posSrc:"ADS-C"}])`); await sleep(600);
+    a = await one('bb0003');
+    ok(a && a.track === 270 && a.face == null && Math.abs(a.hdg - 270) < 5, `a reported track wins (${a && a.track} / ${a && a.hdg && a.hdg.toFixed(0)})`);
+    await ev(dl('bb0004', 50.0, 0.0, 0, ',track:135,trkSrc:"derived"')); await sleep(600);
+    a = await one('bb0004');
+    ok(a && a.track == null && a.face === 135, `the server's derived heading ("trkSrc":"derived") turns the icon, never a track (${a && a.face} / ${a && a.track})`);
+  }
   for (const theme of ['dark', 'light']) {
     await open(theme, {});
     let s = await shown();

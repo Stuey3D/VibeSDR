@@ -47,6 +47,13 @@ how many cards can be open follows the window; a phone shows one at a time.
 - **History:** a ring of palette indices, 1024 columns × the screen's longer side (≤ 1600 rows), re-rendered on any
   resize (small ↔ maximised, rotation, the side panel), kept across list ↔ waterfall (a grey gap line), freed when the
   map closes; only a retune clears it. Light: DPR 1, ≤ 10 rows/s.
+- **beta97 hotfix (11-28, Stuart):** the span FITS THE MODE, never the dial's 13 kHz — ISM / LoRa / MeshCore: the decoder's
+  channels from the ISM report's `lora.chs` [{hz, bw, net}] (server change), one marker each (`MeshCore 869.618`), the
+  capture when there is no list; datalink by `avBandFor` (id → name → frequency), an even grid with no channel list; ADS-B
+  1089–1091 MHz; the VFO fallback never narrower than 16 bins; a column narrower than a bin INTERPOLATES. **NO spectrum
+  trace** in the mini view — the waterfall only (`stats.trace` false); the unfilled history stays BLACK; the span is
+  CLAMPED to the capture so no part of it reads as a gap. An item's card (`.vtl-card`) sits in the chip-free rectangle
+  (`--trk-vtl-t/-r/-l/-b`, from the chips as DRAWN), its × sticky; the LIST's cap (`--trk-cb-top`) counts its 19 px tabs.
 - **Spectrum on only while it shows** (`spec` on:1 / on:0). **Server** (`recomputeEngineRate`, `vsMapMode`): in a map
   mode the display FFT runs at the 1 fps housekeeping floor with nobody's waterfall open, ≤ 10 fps with one open; the FFT
   size is untouched (a change restarts the engine and dips everyone's audio).

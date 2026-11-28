@@ -1,7 +1,7 @@
 // test_map_stats.ts — ★★★ beta97 THE STATS CARD in the app (src/utils/mapStats.ts — the web's asStatsSync rule): per mode,
 // NEWEST / FURTHEST / FURTHEST TRACKED / LONGEST TRACKED; modes never compete; bounded and forgotten.
 //   npx tsx scripts/test_map_stats.ts
-import { statsSeen, statsSections, nmBetween, STATS_CAP, type StatsStore } from '../src/utils/mapStats';
+import { statsSeen, statsSections, statsObsOfShared, nmBetween, STATS_CAP, type StatsStore } from '../src/utils/mapStats';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -39,5 +39,17 @@ statsSeen(big, Array.from({ length: STATS_CAP + 50 }, (_, i) => ({ mode: 'ADS-B'
 ok(big.get('ADS-B')!.size === STATS_CAP, `≤ ${STATS_CAP} a mode`);
 ok(Math.abs(nmBetween({ lat: 0, lon: 0 }, { lat: 1, lon: 0 }) - 60) < 0.2, 'a degree of latitude ≈ 60 NM');
 ok(statsSections(new Map(), null, t0, t0).length === 0, 'nothing heard: no sections (the STATS chip is not offered)');
+// ★★ 11-28 each mode its OWN fixes: heard on ADS-B (near), then moved to HFDL far away — ADS-B's FURTHEST never takes the HFDL fix
+{
+  const fx: StatsStore = new Map();
+  statsSeen(fx, statsObsOfShared([{ key: '4CA123', lat: 52.5, lon: 0, posSrc: 'ADS-B', flight: 'EIN1', src: ['ADS-B'] } as any]), t0);
+  statsSeen(fx, statsObsOfShared([{ key: '4CA123', lat: 40, lon: -40, posSrc: 'HFDL', flight: 'EIN1', src: ['ADS-B', 'HFDL'] } as any]), t0 + 60000);
+  const sx = statsSections(fx, rx, t0 + 60000, t0);
+  const adsb = sx.find((x) => x.mode === 'ADS-B')?.rows.find((r) => r.label === 'FURTHEST');
+  const hfdl = sx.find((x) => x.mode === 'HFDL')?.rows.find((r) => r.label === 'FURTHEST');
+  ok(adsb?.value === '30 NM' && adsb.lat === 52.5, `★★ ADS-B FURTHEST keeps the ADS-B fix (${adsb?.value}), never the HFDL one`);
+  ok(!!hfdl && Number.parseInt(hfdl.value, 10) > 1000, `★★ the HFDL fix is HFDL's FURTHEST (${hfdl?.value})`);
+  ok(statsObsOfShared([{ key: 'X', lat: 50, lon: 0, src: ['ADS-B', 'HFDL'] } as any]).length === 0, 'a row with no posSrc is nobody\u2019s fix');
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

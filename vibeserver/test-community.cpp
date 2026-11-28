@@ -107,12 +107,20 @@ int main() {
                 if (r.icao == 0x400004) { ex.wtc = "|"; ex.species = "\""; ex.eng = "2J|x"; }
             };
             const std::string c = "[" + aircraftCompact(w3, nowMs, stub) + "]";
-            CHECK(c.find("\"B744\",\"H|L|4J|\"]") != std::string::npos, "the 747: the data's type and \"H|L|4J|\": %.200s", c.c_str());
-            CHECK(c.find("\"EC35\",\"L|H|2T|m\"]") != std::string::npos, "the helicopter: the ROW's type wins, military marked");
+            CHECK(c.find("\"B744\",\"H|L|4J|\",") != std::string::npos, "the 747: the data's type and \"H|L|4J|\": %.200s", c.c_str());
+            CHECK(c.find("\"EC35\",\"L|H|2T|m\",") != std::string::npos, "the helicopter: the ROW's type wins, military marked");
             { const size_t at = c.find("[\"400003\","), end = c.find(']', at);
-              CHECK(at != std::string::npos && c.compare(end - 5, 5, "\"\",\"\"") == 0, "nothing known: an empty type and an empty what: %.80s", c.c_str() + at); }
-            CHECK(c.find("\"||2J|\"]") != std::string::npos, "a part never carries the separator or a quote");
-            CHECK(aircraftCompact(w3, nowMs).find(",\"\"]") != std::string::npos, "no extra (an older caller): the field is there, empty");
+              CHECK(at != std::string::npos && c.substr(at, end - at).find(",\"\",\"\",") != std::string::npos, "nothing known: an empty type and an empty what: %.80s", c.c_str() + at); }
+            CHECK(c.find("\"||2J|\",") != std::string::npos, "a part never carries the separator or a quote");
+            CHECK(aircraftCompact(w3, nowMs).find(",\"\",") != std::string::npos, "no extra (an older caller): the field is there, empty");
+            // ★★ 11-28 fields 12 / 13: the position's source (a bit of the mask) and whether the track is derived
+            { std::vector<vibeavshare::Row> w4(2, plane(0x400010, nowMs - 1000, true));
+              w4[0].posSrc = vibeavshare::kAdsb;
+              w4[1].icao = 0x400011; w4[1].posSrc = vibeavshare::kHfdl; w4[1].flags = uint8_t((w4[1].flags & ~4) | vibeavshare::kTrkDerived); w4[1].dTrk = 45;
+              const std::string c4 = "[" + aircraftCompact(w4, nowMs) + "]";
+              CHECK(c4.find(",\"\",1,0]") != std::string::npos, "an ADS-B row: field 12 = 1 (ADS-B), field 13 = 0 (reported or none): %.160s", c4.c_str());
+              CHECK(c4.find("[\"400011\",") != std::string::npos && c4.find(",45,") != std::string::npos && c4.find(",\"\",8,1]") != std::string::npos,
+                    "an HFDL row with a derived heading: track 45, field 12 = 8 (HFDL), field 13 = 1: %.200s", c4.c_str()); }
         }
         std::vector<vibeavshare::Row> lots;
         for (uint32_t i = 0; i < 1000; i++) lots.push_back(plane(0x500000 + i, nowMs - i * 100, true));

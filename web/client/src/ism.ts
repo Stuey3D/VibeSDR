@@ -47,7 +47,9 @@ export interface IsmMsg { ago: number; from: string; text: string; net?: string;
   snr?: number; sf?: number }
 export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number;
   /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
-  found: number; foundKnown: number }
+  found: number; foundKnown: number;
+  /** ★★ beta97 hotfix: each running channel (centre, width, network) — absent on an older server */
+  chs?: Array<{ hz: number; bw: number; net: string }> }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number; region?: string }   // ★ region: beta72, the BANDS list
 /** ★ beta94 an UNIDENTIFIED burst, described by the server (vibe_ism_unknown.h): modulation, coding, rate (bit/s for PWM /
@@ -123,7 +125,9 @@ export function ismSanitise(msg: any): IsmReport | null {
     meters: num(msg.meters), damaged: num(msg.damaged), collector: num(msg.collector), wmGap: num(msg.wmGap),
     lora: lo ? { chans: num(lo.chans) ?? 0, plan: num(lo.plan) ?? 0, dets: num(lo.dets) ?? 0, frames: num(lo.frames) ?? 0, badCrc: num(lo.badCrc) ?? 0,
                  texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0,
-                 found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0 } : undefined,
+                 found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0,
+                 // ★★ beta97 hotfix: the running channels (the map's waterfall fits them) — bounded, numbers checked
+                 chs: Array.isArray(lo.chs) ? lo.chs.slice(0, 64).filter((c: any) => c && Number.isFinite(Number(c.hz))).map((c: any) => ({ hz: Number(c.hz), bw: Number.isFinite(Number(c.bw)) ? Number(c.bw) : 125e3, net: typeof c.net === 'string' ? c.net.slice(0, 16) : '' })) : undefined } : undefined,
     msgs: lo ? msgsOf(msg.msgs) : undefined,
     peak: num(msg.peak), clipPct: num(msg.clipPct),
     unk: Array.isArray(msg.unk) ? ismUnkSanitise(msg.unk, num, str) : undefined,

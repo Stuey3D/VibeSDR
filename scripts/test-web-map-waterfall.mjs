@@ -177,6 +177,14 @@ async function radioDatalink(p, url) {
       const B = JSON.parse(box), hit = (a, b) => a && b && a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
       ok(B.sw && B.mx && !hit(B.sw, B.mx) && !hit(B.sw, B.help) && !hit(B.sw, B.scale) && !hit(B.mx, B.help) && !hit(B.mx, B.scale) && B.sw.l >= 0 && B.mx.r <= w, `${w}×${h}: the swap tab and ⌃ clear of each other and the ? / scale stack (${box})`);
     }
+    { /* ★★★ beta97 hotfix (Stuart 11-28): NO spectrum trace in the mini view — the waterfall only, its history from the box's
+       *  top, whatever the main view's SHOW / HIDE */
+      await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); if (${V}.querySelector('.trkList').dataset.pane !== 'wf') ${V}.querySelector('.lSwap').click(); return 1; })()`);
+      await p.until(`!!${WF} && ${WF}.rows > 3`, 8000);
+      const t = await p.ev(`${WF}?.trace`);
+      const top = JSON.parse(await p.ev(`JSON.stringify(window.__vibeMapWfStrip(1))`)) || [];
+      ok(t === false && top.filter((v) => v > 24).length > 16, `no trace in the mini view: the waterfall from its top (trace ${t}, ${top.filter((v) => v > 24).length}/64 drawn)`);
+    }
     { // rotation keeps it: a phone turned on its side (the side panel)
       await p.size(390, 844, true); await sleep(1500);
       await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); if (${V}.querySelector('.trkList').dataset.pane !== 'wf') ${V}.querySelector('.lSwap').click(); return 1; })()`); await sleep(1500);

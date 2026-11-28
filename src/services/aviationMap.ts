@@ -81,6 +81,8 @@ export function avProfile(present: AvLayerId[], layers: AvLayers): 'aero' | 'aer
 export interface AvPlane {
   key: string; icao?: string; reg?: string; flight?: string; type?: string;
   lat?: number; lon?: number; alt?: number; trk?: number; gs?: number; ground?: boolean;
+  /** ★★ 11-28 `trk` is DERIVED (the server's "trkSrc":"derived": from two fixes of one source) — turns the icon only */
+  trkDerived?: boolean;
   posSrc?: string; posAge?: number; posTime?: string; from?: string; to?: string;
   label?: string; labelName?: string; app?: string; via?: string;
   /** the last OUT / OFF / ON / IN (the live datalink report's) */
@@ -150,7 +152,7 @@ export function sharedSanitise(j: any): SharedAircraft | null {
     aircraft.push({
       key, icao: str(a.icao, 6), reg: str(a.reg, 11), flight: str(a.flight, 11), type: str(a.type, 7),
       lat: ok ? lat : undefined, lon: ok ? lon : undefined, alt: alt != null && alt > -2000 && alt < 70000 ? alt : undefined,
-      trk: num(a.trk), gs: num(a.gs), ground: a.ground === 1, posSrc: str(a.posSrc, 6), posAge: num(a.posAge), posTime: str(a.posTime, 11),
+      trk: num(a.trk), ...(a.trkSrc === 'derived' && num(a.trk) != null ? { trkDerived: true } : {}), gs: num(a.gs), ground: a.ground === 1, posSrc: str(a.posSrc, 6), posAge: num(a.posAge), posTime: str(a.posTime, 11),
       from: icao4(a.from) && icao4(a.to) ? icao4(a.from) : undefined, to: icao4(a.from) && icao4(a.to) ? icao4(a.to) : undefined,
       label: str(a.label, 3), labelName: str(a.labelName, 60), app: str(a.app, 7), via: str(a.via, 40),
       src, srcAge, age: Math.max(0, num(a.age) ?? 0), n: Math.max(0, num(a.n) ?? 0),
@@ -185,6 +187,7 @@ export function planeFromLive(a: AvAircraft, i: number): AvPlane {
   return {
     key: a.icao || (a.reg ? `r:${regKey(a.reg)}` : a.flight ? `f:${fltKey(a.flight)}` : `row${i}`),
     icao: a.icao, reg: a.reg, flight: a.flight, lat: a.lat, lon: a.lon, alt: a.alt, posAge: a.posAge, posTime: a.posTime,
+    ...(a.trk != null && a.lat != null ? { trk: a.trk, trkDerived: true } : {}),   // ★★ 11-28 the live report's derived heading
     posSrc: a.posSrc === 'ADS-C' ? 'ADS-C' : a.lat != null ? (src[0] ?? undefined) : undefined,
     posApp: a.posSrc, from: a.from, to: a.to, oooi: a.oooi, oooiTime: a.oooiTime, label: a.label, labelName: a.labelName, app: a.app, via: a.via, src, srcAge, age: a.age, n: a.n, live: true,
   };
@@ -224,6 +227,7 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
     if (!hit.from && s.from) { hit.from = s.from; hit.to = s.to; }
     if (s.lat != null && (hit.lat == null || avFixBetter(s, hit))) {
       hit.lat = s.lat; hit.lon = s.lon; hit.alt = s.alt; hit.trk = s.trk; hit.gs = s.gs; hit.ground = s.ground; hit.posSrc = s.posSrc; hit.posAge = s.posAge; hit.posTime = s.posTime;
+      if (s.trkDerived) hit.trkDerived = true; else delete hit.trkDerived;   // ★★ 11-28 the mark goes with the heading
       if (s.offsite) hit.offsite = true; else delete hit.offsite;   // ★★ b96-2 the mark goes with the position it describes
     }
     if (s.icao && !hit.key.match(/^[0-9A-F]{6}$/)) hit.key = s.icao;
@@ -288,6 +292,13 @@ export function avHave(planes: AvPlane[], stations: AvStation[]): AvHave {
   for (const p of planes) for (const s of p.src) { const id = SRC_LAYER[s]; if (id) h[id]++; }
   return h;
 }
+/** ★★★ beta97 hotfix (Stuart: the LAYERS chip said ✈ 28 with no aircraft drawn — none had sent a position) the same counts,
+ *  only the aircraft WITH a position (what the map can draw). Beside avHave: "0/25" and "25 aircraft · 0 with position". */
+export function avHavePos(planes: AvPlane[]): Omit<AvHave, 'stations'> {
+  const h = { adsb: 0, acars: 0, vdl2: 0, hfdl: 0, adsc: 0 };
+  for (const p of planes) if (p.lat != null && p.lon != null) for (const s of p.src) { const id = SRC_LAYER[s] as keyof typeof h | undefined; if (id && id in h) h[id]++; }
+  return h;
+}
 /** ★ Drawn while ANY source that heard it is shown. */
 export function avVisible(p: AvPlane, present: AvLayerId[], layers: AvLayers): boolean {
   return p.src.some((s) => { const id = SRC_LAYER[s]; return !!id && avOn(id, present, layers); });
@@ -318,7 +329,8 @@ export function avPlaneCard(p: AvPlane, rx: LatLon | null, wrap: 'web' | 'app' =
     add(p.lastSeen ? 'Last seen' : 'Position', `${Math.abs(p.lat).toFixed(3)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(3)}°${p.lon >= 0 ? 'E' : 'W'}`
       + `${p.posSrc ? ` · from ${p.posSrc}` : ''}${p.lastSeen ? ` · at ${p.lastSeen} UTC — not heard there since` : p.posAge != null ? ` · ${heardAgo(p.posAge)}` : ''}`);
     if (p.alt != null) add('Altitude', p.ground ? 'on the ground' : `${Math.round(p.alt).toLocaleString('en-GB')} ft`);
-    if (p.gs != null) add('Speed', `${Math.round(p.gs)} kt${p.trk != null ? ` · track ${Math.round(p.trk)}°` : ''}`);
+    if (p.gs != null) add('Speed', `${Math.round(p.gs)} kt${p.trk != null && !p.trkDerived ? ` · track ${Math.round(p.trk)}°` : ''}`);
+    if (p.trk != null && p.trkDerived) add('Heading', `${Math.round(p.trk)}° (from its last two positions)`);
     if (p.posTime) add('Fix time', p.posTime.startsWith(':') ? `${p.posTime} past the hour (as reported)` : `${p.posTime} UTC (as reported)`);
     if (rx) { const rb = rangeBearing(rx, p.lat, p.lon); add('From here', `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM ${compass8(rb.brg)}`); }
   }
@@ -345,6 +357,8 @@ export interface AvAdsbShape {
   desc?: string; wtc?: string; eng?: string; species?: string; country?: string; countryName?: string; mil?: 1;
   op?: string; opName?: string; logo?: string; sil?: string; route?: AdsbRoute;
   alt_baro?: number | 'ground'; gs?: number; track?: number; seen_pos?: number; seen?: number;
+  /** ★★ 11-28 'derived': `track` came from two fixes, not the aircraft — the layer turns the icon only */
+  trkSrc?: 'derived'; posSrc?: string;
   sparse?: boolean; rowsExtra?: [string, string][];
   /** ★★ b96-2 an off-site feed's position only: the layer draws it, its live RANGE outline skips it (adsblayer.js) */
   offsite?: true;
@@ -379,6 +393,9 @@ export function avPlaneAdsb(p: AvPlane): AvAdsbShape | null {
     ...info, ...(route && !(p.from && p.to) ? { route } : {}),
     hex: icao || stableHex(p.key), flight: p.flight, r: p.reg, t: p.type, lat: p.lat, lon: p.lon,
     alt_baro: p.ground ? 'ground' : p.alt, gs: p.gs, track: p.trk,
+    // ★★ 11-28 a derived heading is marked (the layer turns the icon, never flies on it); the position's source lets the
+    //   layer derive one itself, from its own two fixes, for an older server (adsblayer.js derivedFace)
+    ...(p.trk != null && p.trkDerived ? { trkSrc: 'derived' as const } : {}), ...(p.posSrc ? { posSrc: p.posSrc } : {}),
     // ★ a "last seen" ADS-B fix is old by construction: drawn stale, never as live
     seen_pos: p.lastSeen ? Math.max(AV_FADE_SEC + 1, p.posAge ?? 0) : p.posAge, seen: p.age, sparse, rowsExtra: rows,
     ...(p.offsite ? { offsite: true as const } : {}),

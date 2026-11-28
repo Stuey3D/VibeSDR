@@ -4,7 +4,7 @@
 // view opened, never a listed one.   npx tsx scripts/test_map_wf.ts
 import { readFileSync } from 'node:fs';
 import { mwfCrop } from '../src/utils/mapChrome';
-import { avBandFor, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
+import { avBandFor, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, wfModelIsm, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -100,6 +100,19 @@ console.log('── ★★★ beta97 the swap needs a beta97 server ("specPause"
   ok(/const wfOffered = !asViewer && isVibeServer && specPauseOk && /.test(sdr) && /wf: wfOffered \? \{ offered: true/.test(sdr),
      'no flag → wf null → no ≋ on the LIST chip and no folder tab (ListDrawer wfOk = p.wf?.offered); with it → offered');
   ok(/if \(!isVibeServer \|\| !specPauseOk\) return;   \/\/ ★★★ beta97 only a server that says it honours it/.test(sdr), 'spec on / off is sent only to a server that honours it');
+}
+
+// ── ★★★ beta97 hotfix (Stuart, the MeshCore map at 868.600: "USB 868.600 · 13 kHz", four flat bins) ──
+{
+  const chs = [{ hz: 868.1e6, bw: 125e3, net: 'lorawan' }, { hz: 869.525e6, bw: 250e3, net: 'meshtastic' }, { hz: 869.618e6, bw: 62.5e3, net: 'meshcore' }];
+  const m = wfModelIsm({ band: '868', bandName: '868 MHz', centre: 868.95e6, rate: 2.4e6, lora: { chs } })!;
+  ok(!!m && m.lo <= 868.1e6 - 62.5e3 && m.hi >= 869.618e6 + 31.25e3, `ISM: the span holds every LoRa channel's width (${m && Math.round(m.lo)}–${m && Math.round(m.hi)})`);
+  ok(m.marks.length === 3 && /^LoRaWAN 868\.100$/.test(m.marks[0].label) && /^MeshCore 869\.618$/.test(m.marks[2].label), `one labelled marker per channel (${m.marks.map((x) => x.label).join(' | ')})`);
+  const c = wfModelIsm({ band: '868', bandName: '868 MHz', centre: 868.6e6, rate: 2.4e6 })!;
+  ok(!!c && c.hi - c.lo === 2.4e6, 'an older server (no channel list): the capture the decoder reads, never the dial\'s slice');
+  ok(wfModelIsm({ centre: 0 }) === null, 'nothing to go on: null (the caller falls back)');
+  const v = wfModelVfo({ frequency: 868.6e6, mode: 'usb', bandwidthLow: 0, bandwidthHigh: 2700 }, 16 * (2.4e6 / 1024));
+  ok(v.hi - v.lo >= 16 * (2.4e6 / 1024) - 1, `the dial's slice is never narrower than 16 of the radio's bins (${Math.round(v.hi - v.lo)} Hz)`);
 }
 
 console.log(`test_map_wf: ${pass} passed, ${fail} failed`);

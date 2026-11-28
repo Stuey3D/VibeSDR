@@ -83,7 +83,25 @@ struct Aircraft {
     // ★ V12 2026-11-16 the shared table (vibe_aircraft_share.h): which decoders heard it and when (wall seconds), and how many
     //   of its messages have already been handed over
     uint8_t srcMask = 0; double srcAt[vibeavshare::kNSrc] = {}; int countShared = 0;
+    /** ★★ 11-28 the heading DERIVED from its last two fixes of one source (vibe_aircraft_share.h derivedTrack) — NAN = none;
+     *  dSrc: the source of the fix it was derived at (a later fix of another source, or past the 30 min, ends it) */
+    double dTrk = NAN, dAt = -1; int dSrc = -1;
+    int fixSrc = -1;   ///< ★★ 11-28 the source of the fix now held (posSrcCode when it was set)
 };
+/** ★ The source a datalink row's POSITION came from (the shared table's code): ADS-C, HFDL, else the bearer it was heard on. */
+inline int posSrcCode(const Aircraft& a) {
+    return a.posSrc == "ADS-C" ? vibeavshare::kAdsc : a.posSrc == "HFDL" ? vibeavshare::kHfdl
+         : a.via.compare(0, 4, "VDL2") == 0 ? vibeavshare::kVdl2 : a.via.compare(0, 4, "HFDL") == 0 ? vibeavshare::kHfdl : vibeavshare::kAcars;
+}
+/** ★★ 11-28 a new fix for `a` (its posSrc / via already set for it): the derived heading from the fix before, then the fix. */
+inline void setFix(Aircraft& a, double lat, double lon, double now) {
+    const int src = posSrcCode(a), prevSrc = a.fixSrc;
+    const double d = std::isnan(a.lat) ? NAN
+        : vibeavshare::derivedTrack(prevSrc, a.lat, a.lon, (int64_t)std::llround(a.posAt * 1000), src, lat, lon, (int64_t)std::llround(now * 1000));
+    if (std::isfinite(d)) { a.dTrk = d; a.dAt = now; a.dSrc = src; }
+    else if (!(a.dSrc == src && now - a.dAt <= vibeavshare::kDeriveMaxGapMs / 1000.0)) { a.dTrk = NAN; a.dSrc = -1; }   // ★ a short hop keeps it
+    a.lat = lat; a.lon = lon; a.posAt = now; a.fixSrc = src;
+}
 
 /** ★ The HFDL ground stations (the public HFDL station list: id, name, position to a tenth of a degree). */
 struct GroundStation { int id; const char* name; double lat, lon; };
@@ -141,9 +159,49 @@ public:
         a.gsId = m.dstId; a.hfdlKhz = m.hz / 1e3; a.hfdlAt = now; a.hfdlLevel = m.snrDb; a.snr = m.snrDb;
         { const int bps = vibehfdl::bitRate(m.mode); a.snrMode = bps >= 1800 ? "hfdl1800" : bps >= 1200 ? "hfdl1200" : bps >= 600 ? "hfdl600" : "hfdl300"; }
         if (!m.flight.empty()) a.flight = m.flight;
-        if (!std::isnan(m.lat)) { a.lat = m.lat; a.lon = m.lon; a.posAt = now; a.posSrc = "HFDL"; a.posTime.clear(); a.hasAlt = false; }
+        if (!std::isnan(m.lat)) { a.posSrc = "HFDL"; setFix(a, m.lat, m.lon, now); a.posTime.clear(); a.hasAlt = false; }
         if (m.hasAcars && m.acarsCrcOk) acars_(a, m.acars, now);
         ++msgs_; heardAt_(now);
+    }
+    /** ★★★ beta97 hotfix (Stuart: "is the list limited to 200 messages only for VDL2?" — it showed each aircraft's latest
+     *  message as it changed, capped at 200, nothing from before the map opened) THE MESSAGE LOG: every decoded datalink
+     *  message (ACARS, VDL2, HFDL, ADS-C — every ACARS-bearing message this server decodes, server-wide), in arrival order,
+     *  each with a sequence number. BOUNDED for the 256 MB floor: the newest kLogMax, none older than kLogKeepS; a body is
+     *  kept only while the owner's bodies switch is on (the same rule as the aircraft table's lastText). */
+    static constexpr size_t kLogMax = 1500;
+    static constexpr double kLogKeepS = 86400;
+    static constexpr size_t kLogTextMax = 220;
+    /** {"seq":<newest>,"keep":<s>,"max":<n>,"trunc":bool,"msgs":[{id,t,icao?,reg?,flight?,src,via?,label,name?,text?,snr?,snrMode?}]}
+     *  newest first: those after `since` (a cursor: 0 = from the start), no older than `windowS`, at most `maxN` (the newest
+     *  of them — `trunc` says the cap bit). `withText`: the asker may see bodies (the report's own rule). */
+    std::string msgsJson(double now, unsigned long long since, double windowS, size_t maxN, bool withText) {
+        std::lock_guard<std::mutex> lk(m_);
+        trimLog_(now);
+        const double from = now - std::max(0.0, std::min(kLogKeepS, windowS));
+        const size_t cap = std::max<size_t>(1, std::min<size_t>(maxN, kLogMax));
+        std::string o = "{\"seq\":" + std::to_string(seq_) + ",\"keep\":" + std::to_string((long long)kLogKeepS) + ",\"max\":" + std::to_string(kLogMax) + ",\"msgs\":[";
+        size_t n = 0; bool trunc = false;
+        for (auto it = log_.rbegin(); it != log_.rend(); ++it) {
+            const Msg& m = *it;
+            if (m.seq <= since || m.t < from) break;   // newest first: everything after this is older still
+            if (n >= cap) { trunc = true; break; }
+            if (n) o += ',';
+            char hd[96]; std::snprintf(hd, sizeof hd, "{\"id\":%llu,\"t\":%.1f", (unsigned long long)m.seq, m.t);
+            o += hd;
+            if (m.icao) { char ic[24]; std::snprintf(ic, sizeof ic, ",\"icao\":\"%06X\"", m.icao); o += ic; }
+            if (!m.reg.empty()) o += ",\"reg\":\"" + jsonEsc(m.reg) + "\"";
+            if (!m.flight.empty()) o += ",\"flight\":\"" + jsonEsc(m.flight) + "\"";
+            o += ",\"src\":\"" + jsonEsc(m.src) + "\"";
+            if (!m.via.empty()) o += ",\"via\":\"" + jsonEsc(m.via) + "\"";
+            o += ",\"label\":\"" + jsonEsc(m.label) + "\"";
+            { const char* nm = labelName(m.label); if (nm && *nm) o += ",\"name\":\"" + jsonEsc(nm) + "\""; }
+            if (withText && !m.text.empty()) o += ",\"text\":\"" + jsonEsc(m.text) + "\"";
+            if (!std::isnan(m.snr)) { char sn[64]; std::snprintf(sn, sizeof sn, ",\"snr\":%.1f,\"snrMode\":\"%s\"", m.snr, m.snrMode); o += sn; }
+            o += '}';
+            ++n;
+        }
+        o += "],\"trunc\":"; o += trunc ? "true" : "false"; o += '}';
+        return o;
     }
     /** Rows heard in the last `keepS` seconds, newest first: {"aircraft":[{icao, reg, flight, lat, lon, via, n, age, label, text}]}. */
     /** `withText`: the asker may see message bodies (the owner's socket) — still only when the owner switched them on. */
@@ -176,6 +234,8 @@ public:
                 std::snprintf(b, sizeof b, "\"lat\":%.4f,\"lon\":%.4f,\"posAge\":%.0f,", a.lat, a.lon, now - a.posAt); o += b;
                 if (a.hasAlt) { std::snprintf(b, sizeof b, "\"alt\":%d,", a.altFt); o += b; }
                 if (!a.posSrc.empty()) o += "\"posSrc\":\"" + jsonEsc(a.posSrc) + "\",";
+                // ★★ 11-28 the heading derived from its last two fixes of one source — marked, it turns the icon only
+                if (std::isfinite(a.dTrk)) { std::snprintf(b, sizeof b, "\"trk\":%.0f,\"trkSrc\":\"derived\",", a.dTrk); o += b; }
                 if (!a.posTime.empty()) o += "\"posTime\":\"" + jsonEsc(a.posTime) + "\",";
             }
             if (!a.from.empty()) o += "\"from\":\"" + jsonEsc(a.from) + "\",\"to\":\"" + jsonEsc(a.to) + "\",";
@@ -257,8 +317,7 @@ public:
             u.heardMs = (int64_t)std::llround(a.last * 1000);
             if (!std::isnan(a.lat)) {
                 u.hasPos = true; u.lat = a.lat; u.lon = a.lon; u.posMs = (int64_t)std::llround(a.posAt * 1000);
-                u.posSrc = a.posSrc == "ADS-C" ? vibeavshare::kAdsc : a.posSrc == "HFDL" ? vibeavshare::kHfdl
-                         : a.via.compare(0, 4, "VDL2") == 0 ? vibeavshare::kVdl2 : a.via.compare(0, 4, "HFDL") == 0 ? vibeavshare::kHfdl : vibeavshare::kAcars;
+                u.posSrc = posSrcCode(a);
                 u.hasAlt = a.hasAlt; u.altFt = a.altFt; u.posTime = a.posTime;
             }
             u.count = (uint32_t)std::max(0, a.count - a.countShared); a.countShared = a.count;
@@ -278,6 +337,7 @@ private:
         if (!b.flight.empty()) a.flight = b.flight;
         a.lastLabel = b.label;
         if (bodies_) a.lastText = b.text; else a.lastText.clear();
+        logMsg_(a, b, now);   // ★★★ beta97 hotfix EVERY message, not each aircraft's latest (the MESSAGES list's own log)
         // ★ the applications: only once the whole message is in (ETB blocks joined), only what vibe_acars_apps.h is sure of
         std::string whole;
         if (!reasm_.add(b, now, whole)) return;
@@ -289,9 +349,9 @@ private:
         else if (r.app == "pos") { ++nPos_; a.app = r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "position"; }
         else a.app = "FMS";
         if (r.hasPos) {
-            a.lat = r.lat; a.lon = r.lon; a.posAt = now;
             a.hasAlt = r.hasAlt; a.altFt = r.altFt;
             a.posSrc = r.app == "adsc" ? "ADS-C" : r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "ACARS";
+            setFix(a, r.lat, r.lon, now);   // ★★ 11-28 with the heading from the fix before (same source)
             if (r.app == "adsc") heard_(a, vibeavshare::kAdsc, now);   // ★ the map names ADS-C beside its bearer
             a.posTime = vibeacarsapps::fixTimeText(r);
         }
@@ -332,6 +392,25 @@ private:
     }
     std::mutex m_;
     std::deque<Aircraft> rows_;
+    // ★★★ beta97 hotfix the message log (msgsJson): bounded by kLogMax and kLogKeepS
+    struct Msg { unsigned long long seq; double t; uint32_t icao; std::string reg, flight, src, via, label, text; float snr; const char* snrMode; };
+    std::deque<Msg> log_;
+    unsigned long long seq_ = 0;
+    void trimLog_(double now) {
+        while (log_.size() > kLogMax) log_.pop_front();
+        while (!log_.empty() && now - log_.front().t > kLogKeepS) log_.pop_front();
+    }
+    void logMsg_(const Aircraft& a, const vibeacars::Block& b, double now) {
+        if (b.label.empty() && b.text.empty()) return;
+        Msg m;
+        m.seq = ++seq_; m.t = now; m.icao = a.icao; m.reg = a.reg; m.flight = a.flight; m.via = a.via; m.label = b.label;
+        // the source: the decoder that heard THIS message (the row's via names it: "VDL2 136.975" · "ACARS 131.725" · "HFDL 8977 …")
+        m.src = a.via.compare(0, 4, "VDL2") == 0 ? "VDL2" : a.via.compare(0, 4, "HFDL") == 0 ? "HFDL" : "ACARS";
+        if (bodies_) m.text = b.text.size() > kLogTextMax ? b.text.substr(0, kLogTextMax) : b.text;
+        m.snr = a.snr; m.snrMode = a.snrMode ? a.snrMode : "";
+        log_.push_back(std::move(m));
+        trimLog_(now);
+    }
     std::map<int, GsHeard> gs_;   // ★ ≤ 128 ids
     bool bodies_;
     uint64_t msgs_ = 0, other_ = 0;

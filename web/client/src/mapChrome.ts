@@ -23,9 +23,11 @@ import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
 import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { CARD_IDS, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId, shortMap } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
+import { layerCountText } from '../../../src/utils/mapChrome';   // ★★★ beta97 hotfix ON THE MAP / HEARD
 import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT, edgeTabsLive } from './healthTuck';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
+import { ismMapIcon } from '../../../src/services/ism';   // ★★ 11-28 the MeshCore layer's glyph IS the map's marker
 
 /** ★★ b96-rangefeed `approx`: words for a position that is not exact (the locator square's centre — rxPosition.ts) */
 export type LatLon = { lat: number; lon: number; approx?: string };
@@ -202,6 +204,9 @@ const CSS = `
 .trkCard2 .btn.chip[aria-pressed="true"]{background:#1e2a36;color:#e8eef5;border-color:#7fc8ff}
 .trkCard2 .btn.chip[aria-pressed="false"]{opacity:.45}
 .trkCard2 .btn.chip[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
+.trkCard2 .btn.chip .lgm{display:inline-flex;flex:none}
+.trkCard2 .btn.chip .lgm svg{display:block;width:14px;height:14px}
+.trkCard2 .btn.chip[aria-pressed="false"] .lgm{filter:grayscale(1);opacity:.55}
 .trkCard2 .btn.chip .n{font-size:10px;opacity:.75;font-variant-numeric:tabular-nums}
 .trkCard2 .btn.chip .n:empty{display:none}
 /* ★ Stuart 15:24 ("what is the red here all about … it looks like an error"): a layer this radio is decoding NOW wears the
@@ -269,6 +274,13 @@ const CSS = `
  *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
  *  and a chip's own lit / open state only */
 .trkView{--chip-rim:rgba(120,200,120,.45)}
+/* ★★★ beta97 hotfix: an item's card (track layer) in the chip-free rectangle (noteTop), a smaller max height, its body
+ *  scrolling and its × always reachable at the top (sticky) */
+.trkView .vtl-card{top:var(--trk-vtl-t,10px)!important;right:var(--trk-vtl-r,10px)!important;left:auto!important;
+  max-width:min(320px,calc(100% - var(--trk-vtl-l,10px) - var(--trk-vtl-r,10px)))!important;
+  max-height:min(46vh,calc(100% - var(--trk-vtl-t,10px) - var(--trk-vtl-b,10px)))!important;overscroll-behavior:contain}
+.trkView .vtl-card .vtl-x{position:sticky!important;float:right;top:-6px!important;right:auto!important;margin:-6px -8px 0 6px;z-index:2;
+  background:rgba(10,14,20,.94);border-radius:6px;min-width:30px;min-height:30px}
 /* ★★ map notices: a strip under the pill, between the chip columns (noteTop) — never over the pill or a chip */
 .trkView .trkMapHost .trkNote{top:var(--trk-note-top,12px)!important;max-width:calc(100% - var(--trk-note-l,12px) - var(--trk-note-r,12px))}
 .trkView #adsbFeedWarn,.trkView #adsbGainPop{top:var(--trk-note-top,8px)!important;left:var(--trk-note-l,12px)!important;right:var(--trk-note-r,12px)!important}
@@ -853,18 +865,25 @@ const CARDS_KEY = 'vibesdr.mapCards';
 const CARD_SIDE_NOTE = 'mapCards.cardSide';
 /** ★★★ tweak 3 the LAYERS chip's glyphs — the shapes the map draws: the aircraft and ship silhouettes (airSeaTune's,
  *  as the TUNE list draws them), the NAVTEX station's disc and mast (navtexMap.ts navIcon), the balloon, the beacon. */
-export type LayerGlyph = 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid' | 'dot';
+export type LayerGlyph = 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid' | 'mesh' | 'dot';
+/** ★★ 11-28 (Stuart, the community map: "the MeshCore layer is shown with a plain GREEN DOT"): the MeshCore layer wears the
+ *  map's own MeshCore marker — the orange box with the repeater mast (src/services/ism.ts ismMapIcon, ONE source) — at
+ *  16 px, in its OWN colours (never currentColor: the box is the marker). */
+const markerSvg16 = (html: string) => html.replace(/\swidth="[^"]*"/, ' width="16"').replace(/\sheight="[^"]*"/, ' height="16"').replace(/\sstyle="[^"]*"/, '');
+/** The glyphs that are a map marker in their own colours: in a LAYERS card row they take the colour dot's place. */
+const MARKER_GLYPHS: ReadonlySet<LayerGlyph> = new Set<LayerGlyph>(['mesh']);
 const P16 = (d: string) => `<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="${d}"/></svg>`;
 const LAYER_GLYPH: Record<LayerGlyph, string> = {
   aircraft: P16(TUNE_ICON_PATH.aircraft), ship: P16(TUNE_ICON_PATH.ship), balloon: P16(TUNE_ICON_PATH.balloon),
   beacon: P16(TUNE_ICON_PATH.beacon), navaid: P16(TUNE_ICON_PATH.navaid),
   navtex: modeIconSvg('navtex', 'lgI'),   // ★★★ Stuart's NAVTEX glyph (modeIcons.ts — one source)
+  mesh: markerSvg16(ismMapIcon({ kind: 'meshcore', ntype: 'repeater', seen: 0 } as Parameters<typeof ismMapIcon>[0]).html),
   dot: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor"/></svg>',
 };
 /** A SHOW toggle's layer id → its glyph (the maps whose host gives no summary: the ISM maps). */
 function glyphOf(id: string): LayerGlyph {
   return /^(adsb|acars|vdl2|hfdl|adsc|aircraft)/.test(id) ? 'aircraft' : /^(ships|ais|dsc)/.test(id) ? 'ship' : /^(navst|navtex)/.test(id) ? 'navtex'
-    : /sonde/.test(id) ? 'balloon' : /^(ndb|beacon)/.test(id) ? 'beacon' : /^vor/.test(id) ? 'navaid' : 'dot';
+    : /sonde/.test(id) ? 'balloon' : /^(ndb|beacon)/.test(id) ? 'beacon' : /^vor/.test(id) ? 'navaid' : /^(mesh|meshcore)$/.test(id) ? 'mesh' : 'dot';
 }
 /** ★ the SERVERS and LIST chips' glyphs — the house set (modeIcons.ts): the servers glyph IS the app's ServersChip's */
 const SERVERS_SVG = modeIconSvg('servers', 'mIco');
@@ -893,6 +912,12 @@ export interface TrackViewOpts {
   fitOnOpen?: boolean;
   title: string;                 // "AIS" / "APRS"
   exitLabel: string;             // "EXIT AIS" / "CLOSE MAP"
+  /** ★★ 11-28 A HELP OF ITS OWN (Stuart, the community map: its HELP was the radio map's — SERVERS "leave this server",
+   *  TUNE, CHAT, SERVER HEALTH, TIME, the shared-tuner pill, the WATERFALL, none of which it has). Given: the HELP card
+   *  is drawn each time it opens FROM THE CHIPS PRESENT (cardsAvail, in MAP_HELP's order, each under its chip's caption —
+   *  a retitled chip by its new name), `words` replacing a chip's line, `exit` the ✕'s line and `notes` the notes; the
+   *  controller lines leave out tuning where there is no TUNE. Absent: the radio maps' help, as before. */
+  help?: { exit: string; words?: Partial<Record<CardId, string>>; notes: string[] };
   listTitle: string;             // "SHIPS" / "STATIONS"
   onExit: () => void;
   icon: (it: any) => { html: string; w: number; h: number };
@@ -1079,8 +1104,8 @@ export class TrackView {
       + `<div class="mChips mChipsScale"><div class="edgeDock mDock mScale" data-dock="scale" role="img" aria-label="Map scale"><div class="hCard"><div class="mScaleBody"><span class="vsLine"></span><span class="vsLbl"></span></div></div></div></div>`
       + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
       + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
-      + card('help', 'HELP', `<div class="hPad"></div><div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
-        + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
+      + card('help', 'HELP', `<div class="hPad"></div><div class="helpBody">${o.help ? '' : MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
+        + (o.help ? '' : MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('')) + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
         + `<button class="lPause" type="button" hidden>\u2016 <span class="n"></span></button><span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<span class="wfInfo" aria-live="off"></span></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div><div class="wfPane" aria-label="Live waterfall"></div></div>`
@@ -1308,6 +1333,16 @@ export class TrackView {
     padHighlight(this.root.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null);   // ★★ the pad's ring back on its chip
     return true;
   }
+  /** ★★ 11-28 the page's ONE back (gamepad.ts hooks.back) on a map of its own (mapChromeStandalone initMapPad): the
+   *  card on top — the map's own Escape rule: an item chosen (a LIST row) goes first, BACK clears it, then shuts the card.
+   *  False when this same press already shut one (the map's own Escape handler ran first — the highlight it put back on
+   *  the chip stays) or there was nothing to do. */
+  backPress(): boolean {
+    if (performance.now() - this.cardClosedAt < 80) return false;
+    if (this.closeTopCard()) return true;
+    if (this.sel) { this.select(''); return true; }
+    return false;
+  }
   isCardOpen(id: CardId): boolean { return this.cardOrder.includes(id); }
   get openCards(): CardId[] { return this.cardOrder.slice(); }
   private cardsKey(): string { return this.narrow() ? CARDS_KEY + '.narrow' : CARDS_KEY + '.wide'; }
@@ -1332,7 +1367,7 @@ export class TrackView {
     //     is the layout's (a phone shows the newest: LIST comes back when the transient one shuts)
     void cardToggle;
     this.cardOrder = cardOpenRule(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on);
-    if (on && id === 'help') this.helpPad();
+    if (on && id === 'help') { this.helpBody(); this.helpPad(); }
     if (on && !STICKY_CARDS.has(id)) this.shortEdgeTuck();
     if (save) this.cardsSave();
     this.cardsLayout();
@@ -1371,6 +1406,34 @@ export class TrackView {
     const right = Math.max(12, R && R.bottom > m.top + top ? m.right - R.left + 8 : 12);
     const set = (k: string, v: string) => { if (st.getPropertyValue(k) !== v) st.setProperty(k, v); };
     set('--trk-note-top', `${Math.round(top)}px`); set('--trk-note-l', `${Math.round(left)}px`); set('--trk-note-r', `${Math.round(right)}px`);
+    /* ★★★ beta97 hotfix (Stuart, iPhone Safari: a MeshCore node's card stuck UNDER the chips, its × out of reach): an item's
+     *  card from the track layer (.vtl-card) stands in the same chip-free rectangle — under the pill / top row, between the
+     *  chip columns and the safe insets, above the LIST drawer and the bottom-right group — never under a chip */
+    const cs = getComputedStyle(this.root), px = (k: string) => parseFloat(cs.getPropertyValue(k)) || 0;
+    const B = short ? null : chipW('.trkCards .sideB'), BL = chipW('.mChipsBL'), BR = chipW('.mChipsScale') ?? chipW('.mHelp');
+    let bottom = 10 + px('--sai-b');
+    if (B && B.top > m.top + m.height / 3) bottom = Math.max(bottom, m.bottom - B.top + 8);
+    for (const g of [BL, BR]) if (g && g.top > m.top + m.height / 2) bottom = Math.max(bottom, m.bottom - g.top + 8);
+    /* the columns by what is DRAWN in them (a column's box can be wider than its chips), and the top row's exit / pill: the
+     *  card starts below whichever of those its width would reach */
+    const drawn = (sel: string) => { const col = this.root.querySelector(sel) as HTMLElement | null; if (!col) return null;
+      let u: { l: number; r: number; t: number; b: number } | null = null;
+      const add = (e: HTMLElement) => { const b = e.getBoundingClientRect(); if (!b.width || !b.height || getComputedStyle(e).visibility === 'hidden') return;
+        u = u ? { l: Math.min(u.l, b.left), r: Math.max(u.r, b.right), t: Math.min(u.t, b.top), b: Math.max(u.b, b.bottom) } : { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+      for (const c of Array.from(col.children) as HTMLElement[]) { if (c.hidden || !c.getClientRects().length) continue;
+        // a dock by its card and tab as drawn — a TUCKED dock's box keeps the hidden card's width, only its tab shows
+        const parts = Array.from(c.querySelectorAll(':scope > .hCard, :scope > .hTab, :scope .hCard, :scope .hTab')) as HTMLElement[];
+        if (parts.length) parts.forEach(add); else add(c); }
+      return u as { l: number; r: number; t: number; b: number } | null; };
+    const DL = drawn('.mChipsL'), DR = drawn('.mChipsR');
+    const vl = Math.max(10 + px('--sai-l'), P ? P.right - m.left + 8 : DL ? DL.r - m.left + 8 : 12);
+    const vr = Math.max(10 + px('--sai-r'), DR ? m.right - DR.l + 8 : 12);
+    let vt = top;
+    for (const e of Array.from(this.root.querySelectorAll('.trkTop .exit, .trkTop .slot-share .mapShLine, #mapShLine')) as HTMLElement[]) {
+      if (!e.getClientRects().length) continue; const b = e.getBoundingClientRect();
+      if (b.top < m.top + m.height / 3 && b.right > m.left + vl && b.left < m.right - vr) vt = Math.max(vt, b.bottom - m.top + 6); }
+    set('--trk-vtl-t', `${Math.round(vt)}px`); set('--trk-vtl-r', `${Math.round(vr)}px`);
+    set('--trk-vtl-l', `${Math.round(vl)}px`); set('--trk-vtl-b', `${Math.round(bottom)}px`);
   }
   private navScope() {
     if (!this.open) { this.root.removeAttribute('data-navscope'); return; }
@@ -1398,6 +1461,16 @@ export class TrackView {
     const k = this.root.querySelector(d > 0 ? '.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in' : '.maplibregl-ctrl-zoom-out, .leaflet-control-zoom-out') as HTMLElement | null;
     k?.click();
   }
+  /** ★★ 11-28 the host's own help (TrackViewOpts.help): the chips PRESENT, by their captions, then the notes. */
+  private helpBody() {
+    const h = this.o.help, el = this.root.querySelector('.trkCard2[data-card="help"] .helpBody') as HTMLElement | null;
+    if (!h || !el) return;
+    const cap = (id: CardId, name: string) => (this.root.querySelector(`[data-cbtn="${id}"] .cap`) as HTMLElement | null)?.textContent?.trim() || name;
+    const present = (id: CardId) => this.cardAvail.has(id) && !(this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null)?.hidden;
+    el.innerHTML = `<div class="hRowH" data-help="x"><span class="hi">\u2715</span><span><b>\u2715</b> \u2014 ${esc(h.exit)}</span></div>`
+      + MAP_HELP.filter((x) => present(x.id)).map((x) => `<div class="hRowH" data-help="${x.id}"><span class="hi">${HELP_GLYPH[x.id]}</span><span><b>${esc(cap(x.id, x.name))}</b> \u2014 ${esc(h.words?.[x.id] ?? x.words)}</span></div>`).join('')
+      + h.notes.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('');
+  }
   /** ★ the HELP card's controller lines, in the layout in use (Switch-style face glyphs by POSITION, never letters) */
   private helpPad() {
     const el = this.root.querySelector('.trkCard2[data-card="help"] .hPad') as HTMLElement | null;
@@ -1406,8 +1479,10 @@ export class TrackView {
     const rows: Array<[string, string]> = sticks
       ? [['D-pad', 'move the highlight'], [padFace('bottom'), 'open / choose'], [padFace('right'), 'back / shut'], ['left stick turned', 'tune (where TUNE applies)'], ['right stick turned', 'zoom the map']]
       : [['D-pad', 'move the highlight'], ['R', 'open / choose'], ['L', 'back / shut'], [padFace('top') + ' ' + padFace('bottom'), 'zoom the map in / out'], [padFace('left') + ' ' + padFace('right'), 'tune down / up (where TUNE applies)']];
-    el.innerHTML = `<div class="hPadH">With a controller</div>` + rows.map(([k, w]) => `<div class="hPadR"><span class="k">${k}</span><span>${esc(w)}</span></div>`).join('')
-      + `<div class="hPadR"><span class="k">keyboard</span><span>arrows / WASD move · Enter · Esc back · &lt; &gt; tune · − + zoom</span></div>`;
+    const noTune = !!this.o.help && !this.cardAvail.has('tune');   // ★★ 11-28 nothing to tune here: say nothing of tuning
+    const rs = noTune ? rows.filter(([, w]) => !/tune/.test(w)) : rows;
+    el.innerHTML = `<div class="hPadH">With a controller</div>` + rs.map(([k, w]) => `<div class="hPadR"><span class="k">${k}</span><span>${esc(w)}</span></div>`).join('')
+      + `<div class="hPadR"><span class="k">keyboard</span><span>arrows / WASD move · Enter · Esc back${noTune ? '' : ' · &lt; &gt; tune'} · − + zoom</span></div>`;
   }
   /** Which cards may be offered (a card with nothing in it has no button — AGENTS.md: never a dead control). */
   /** A chip and its card offered (true) or withdrawn — mapChromeApi chips(). */
@@ -1565,7 +1640,10 @@ export class TrackView {
     { /* ★★★ Stuart 11:48 "wrong layering": the LIST never grows over the chips on its edge — its top stops under the left
        *  column of chips (SERVERS, TUNE, LAYERS …), so every tab stays visible and pressable */
       const col = this.root.querySelector('.mChipsL') as HTMLElement | null, cb = col?.getBoundingClientRect();
-      const capTop = cb && cb.height ? Math.round(cb.bottom - m.top + 8) : 0;
+      /* ★★★ beta97 hotfix (found in the app): the drawer's TABS (maximise, list ↔ waterfall) stand 19 px proud of its top —
+       *  the cap is for the tabs too, so a tall LIST never puts its swap tab over the lowest left chip (MAP CONTROLS) */
+      const tabH = this.shortNow ? 0 : 19;
+      const capTop = cb && cb.height ? Math.round(cb.bottom - m.top + 8 + tabH) : 0;
       setv('--trk-cb-top', `${capTop}px`);
       /* ★★★ Stuart 11:59 "the list should be a fixed height and scrollable": its OWN height — about half the map, 240 to
        *  480 px, never more than the room under the chips — so it never jumps as rows come and go; only the rows scroll */
@@ -1977,16 +2055,16 @@ export class TrackView {
    *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */
   private lsumSig = '';
   private lsumHost = false;
-  setLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; colour: string; words: string }>) {
+  setLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; pos?: number; colour: string; words: string }>) {
     this.lsumHost = true;
     this.drawLayerSummary(entries);
   }
-  private drawLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; colour: string; words: string }>) {
+  private drawLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; pos?: number; colour: string; words: string }>) {
     const sig = JSON.stringify(entries);
     if (sig === this.lsumSig) return;
     this.lsumSig = sig;
     const el = this.root.querySelector('.mDock[data-dock="layers"] .lsum') as HTMLElement;
-    el.innerHTML = entries.map((e) => `<span class="le" title="${esc(e.words)}"><span class="lg" style="color:${esc(e.colour)}">${LAYER_GLYPH[e.glyph] ?? LAYER_GLYPH.dot}</span><span class="ln">${esc(e.n)}</span></span>`).join('');
+    el.innerHTML = entries.map((e) => `<span class="le" title="${esc(e.words)}"><span class="lg" style="color:${esc(e.colour)}">${LAYER_GLYPH[e.glyph] ?? LAYER_GLYPH.dot}</span><span class="ln">${esc(layerCountText(e.n, e.pos))}</span></span>`).join('');
     const b = this.root.querySelector('[data-cbtn="layers"]') as HTMLElement;
     b.setAttribute('aria-label', `Layers — ${entries.map((e) => e.words).join(', ') || 'what the map shows'}`);
     // ★ its tucked tab: the main family's glyph in its colour (the aircraft where there are aircraft)
@@ -2294,7 +2372,7 @@ export class TrackView {
   }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string; others?: string[]; nMine?: number }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; nPos?: number; colour?: string; others?: string[]; nMine?: number; glyph?: LayerGlyph }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
     // ★★★ beta96 SHOW (Stuart 11-26): the counts change every second — written in place (below), never a redraw, so a poll
     //   cannot steal a focused chip
@@ -2308,13 +2386,16 @@ export class TrackView {
         const x = by.get(b.dataset.tgl || ''); if (!x) continue;
         const n = b.querySelector('.n') as HTMLElement | null, nm = b.querySelector('.nm') as HTMLElement | null;
         const sp = split(x);
-        const t = x.n != null ? String(sp ? Math.max(0, x.n - (x.nMine ?? 0)) : x.n) : '';
+        /* ★★★ beta97 hotfix ON THE MAP / HEARD (Stuart: ✈ 28 with no aircraft drawn): "0/25" where fewer can be drawn than were
+         *  heard (layerCountText, the app's rule); its title says it in words */
+        const t = x.n != null ? (sp ? String(Math.max(0, x.n - (x.nMine ?? 0))) : layerCountText(x.n, x.nPos)) : '';
         if (n && n.textContent !== t) n.textContent = t;
+        if (n && x.n != null && x.nPos != null && x.nPos !== x.n) n.title = `${x.nPos} of ${x.n} with a position — on the map`; else if (n) n.removeAttribute('title');
         if (nm) { const tm = sp ? String(x.nMine) : ''; if (nm.textContent !== tm) nm.textContent = tm; }
       }
     };
-    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|'), split(x)]), toggles.map((x) => toggled[x.id] !== false)]);
-    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` }))); return; }
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|'), split(x), x.glyph || '']), toggles.map((x) => toggled[x.id] !== false)]);
+    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: x.glyph ?? glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` }))); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
     this.viewSync();
@@ -2339,10 +2420,12 @@ export class TrackView {
     host.innerHTML = (toggles.length ? '<span class="lbl" title="What this map shows you — your own view, nothing changes on the radio">SHOW</span>' : '')
       + toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
       + `<button class="btn chip${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">`
-      + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
+      // ★★ 11-28 a layer whose glyph is a map marker in its own colours (MeshCore's box) wears it in the dot's place
+      + (x.glyph && MARKER_GLYPHS.has(x.glyph) ? `<span class="lgm" aria-hidden="true">${LAYER_GLYPH[x.glyph]}</span>`
+        : x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
       + `${esc(x.label)}${badge(x)}<span class="n"></span></button>`).join('');
     counts();
-    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` })));
+    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: x.glyph ?? glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` })));
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';

@@ -87,7 +87,8 @@ inline Parts rowParts(const vibeavshare::Row& w, const LabelFn& labelName = null
         y += b;
         if (w.posSrc >= 0) { y += ",\"posSrc\":\""; y += vibeavshare::srcName(w.posSrc); y += '"'; }
         if (w.flags & 2) { std::snprintf(b, sizeof b, ",\"alt\":%d", w.altFt); y += b; }
-        if (w.flags & 4) { std::snprintf(b, sizeof b, ",\"trk\":%.0f", (double)w.trk); y += b; }
+        { const vibeavshare::Heading hd = vibeavshare::headingOf(w);   // ★★ 11-28 reported, else derived (marked)
+          if (hd.has) { std::snprintf(b, sizeof b, ",\"trk\":%.0f%s", hd.deg, hd.derived ? ",\"trkSrc\":\"derived\"" : ""); y += b; } }
         if (w.flags & 8) { std::snprintf(b, sizeof b, ",\"gs\":%.0f", (double)w.gs); y += b; }
         if (w.flags & 16) y += ",\"ground\":1";
         if (!w.posTime.empty()) { y += ",\"posTime\":\""; y += jsonEsc(w.posTime); y += '"'; }

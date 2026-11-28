@@ -208,6 +208,56 @@ try {
   ok(await until(`(() => { const k = ${kmOrder}; const a = JSON.parse(k); return a.length >= 9 && a.every((x, i) => i === 0 || x >= a[i - 1]); })()`, 4000)
      && await ev(`localStorage.getItem('vibesdr.meshListSort') === 'nearest'`), 'NEAREST again (by keyboard), remembered');
 
+  /* ★★★ beta97 hotfix (Stuart, the MeshCore map at 868.600): the drawer's waterfall fits the LoRa decoder's CHANNELS (the
+   *  report's lora.chs), one labelled marker each — never the dial's 13 kHz slice of a wide capture */
+  console.log('── beta97 hotfix: the waterfall fits the LoRa channels ──');
+  { const has = await ev(`!!${view}.querySelector('.lSwapC') && !${view}.querySelector('.lSwapC').hidden`);
+    if (has) {
+      await ev(`${view}.querySelector('.lSwapC').click(); 1`);
+      ok(await until(`/LoRa channel|the capture/.test(${view}.querySelector('.wfInfo')?.textContent || '')`, 8000), `the waterfall's span is the LoRa channels or the capture, never a 13 kHz slice: "${await ev(`${view}.querySelector('.wfInfo')?.textContent`)}"`);
+      const info = await ev(`${view}.querySelector('.wfInfo')?.textContent || ''`);
+      const n = Number((/(\d+) LoRa channel/.exec(info) || [])[1] || 0);
+      const st = JSON.parse(await ev(`JSON.stringify(window.__vibeMapWf?.() || null)`));
+      ok(!!st && st.hi - st.lo >= 100e3 && (!n || st.marks === n), `span ${st ? Math.round((st.hi - st.lo) / 1e3) : '-'} kHz (≥ 100 kHz, never a few bins), ${st?.marks} markers for ${n} channels (${(st?.labels || []).slice(0, 4).join(' | ')})`);
+      await ev(`(() => { if (${view}.querySelector('.trkList')?.dataset.pane === 'wf') ${view}.querySelector('.lSwap')?.click(); return 1; })()`); await sleep(400);
+    } else console.log('   (no waterfall offered on this stack)');
+  }
+  /* ★★★ beta97 hotfix (Stuart, iPhone Safari: a MeshCore card stuck UNDER the chips, its × out of reach): a node's card stays
+   *  in the chip-free rectangle, its × the thing under its centre, at phone sizes, portrait and landscape */
+  console.log('── beta97 hotfix: a node\'s card on a phone ──');
+  for (const [w, h] of [[390, 844], [375, 667], [844, 390], [667, 375]]) {
+    /* mobile: false — Chrome's MOBILE emulation widens the layout viewport to the content, and the map view's min-width: 100vw
+     *  (563b843be) then holds it at the desktop's 1280 px after the switch (a flake: the view stuck wide, the later zoom checks
+     *  failing with it). iOS Safari with width=device-width keeps 100vw at the device width; the phone's size is what counts */
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: false }); await sleep(1500);
+    await ev(`(() => { const c = document.querySelector('.trkView:not([hidden])').querySelector('.vtl-card'); if (c && !c.hidden) c.querySelector('.vtl-x')?.click(); return 1; })()`); await sleep(300);
+    await ev(`(() => { const m = [...document.querySelector('.trkView:not([hidden])').querySelectorAll('.vtl-mk:not(.vtl-gone)')].find((x) => /Benson|MeshCore Repeater|Daventry/.test(x.getAttribute('aria-label') || x.textContent)); m && m.click(); return 1; })()`); await sleep(1200);
+    const r = JSON.parse(await ev(`JSON.stringify((() => { try { const c = document.querySelector('.trkView:not([hidden])').querySelector('.vtl-card'); if (!c || c.hidden || !c.getClientRects().length) return { card: null };
+      const b = c.getBoundingClientRect(), x = c.querySelector('.vtl-x'), xb = x.getBoundingClientRect(); const hit = document.elementFromPoint((xb.left + xb.right) / 2, (xb.top + xb.bottom) / 2);
+      const chips = [...document.querySelector('.trkView:not([hidden])').querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard, .mChipsR > :not([hidden]) .hCard, .mChipsR > .edgeDock:not(.mDock):not([hidden]) .hTab, .trkTop .exit, #mapShLine')].filter((e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden');
+      const overEl = chips.filter((e) => { const k = e.getBoundingClientRect(); return b.left < k.right - 1 && b.right > k.left + 1 && b.top < k.bottom - 1 && b.bottom > k.top + 1; }); const over = overEl.length;
+      return { card: [Math.round(b.left), Math.round(b.top), Math.round(b.right), Math.round(b.bottom)], xHit: !!hit && (hit === x || x.contains(hit)), over, inView: b.top >= 0 && b.bottom <= innerHeight + 1 && b.left >= 0 && b.right <= innerWidth + 1 }; } catch (e) { return { err: String(e).slice(0, 200), view: !!document.querySelector('.trkView:not([hidden])') }; } })())`));
+    if (process.env.ISM_SHOT) { const sh = await send('Page.captureScreenshot', { format: 'png' }); (await import('node:fs')).writeFileSync(`${process.env.ISM_SHOT}/card-${w}x${h}.png`, Buffer.from(sh.result.data, 'base64')); }
+    ok(!!r.card && r.xHit && !r.over && r.inView, `${w}×${h}: a node's card clear of every chip, on screen, its × reachable (${JSON.stringify(r)})`);
+    await ev(`(() => { const c = document.querySelector('.trkView:not([hidden])').querySelector('.vtl-card'); if (c && !c.hidden) c.querySelector('.vtl-x')?.click(); return 1; })()`); await sleep(300);
+  }
+  /* ★★★ beta97 hotfix (found in the app): with the LIST tall, its top tabs — the list ↔ waterfall swap among them, which this
+   *  map shows — stop below the lowest left chip (MAP CONTROLS), normal and maximised, on a phone and a desktop */
+  for (const [w, h, mob] of [[390, 844, true], [375, 667, true], [1280, 900, false]]) {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: mob ? 2 : 1, mobile: false }); await sleep(1200);
+    await ev(`(() => { const v = document.querySelector('.trkView:not([hidden])'), c = v.querySelector('.trkCard2[data-card="list"]'); if (!c || c.hidden) v.querySelector('[data-cbtn="list"]')?.click(); return 1; })()`); await sleep(700);
+    const hits = async () => JSON.parse(await ev(`JSON.stringify((() => { const v = document.querySelector('.trkView:not([hidden])'), c = v.querySelector('.trkCard2[data-card="list"]'); if (!c || c.hidden) return { list: false, why: !c ? 'none' : 'hidden' };
+      const tabs = [c, ...c.querySelectorAll('.lMax, .lSwap')].filter((e) => !e.hidden && e.getClientRects().length && getComputedStyle(e).display !== 'none');
+      const out = []; for (const e of tabs) { const b = e.getBoundingClientRect(); for (const k of v.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard')) { const q = k.getBoundingClientRect(); if (q.width && b.right > q.left && b.left < q.right && b.bottom > q.top + 0.5 && b.top < q.bottom - 0.5) out.push(e.className.split(' ')[0] + '/' + (k.closest('.mDock')?.dataset.dock || '?')); } }
+      return { list: true, swap: !!tabs.find((e) => e.classList.contains('lSwap')), hits: out }; })())`));
+    const n0 = await hits();
+    await ev(`(() => { const t = document.querySelector('.trkView:not([hidden])').querySelector('.lMax'); if (t && t.getAttribute('aria-pressed') !== 'true') t.click(); return 1; })()`); await sleep(800);
+    const n1 = await hits();
+    await ev(`(() => { const t = document.querySelector('.trkView:not([hidden])').querySelector('.lMax'); if (t && t.getAttribute('aria-pressed') === 'true') t.click(); return 1; })()`); await sleep(600);
+    ok(n0.list && n1.list && !n0.hits.length && !n1.hits.length, `${w}×${h}: the LIST and its tabs (swap tab ${n1.swap ? 'shown' : 'not shown'}) clear every left chip, normal and maximised (${JSON.stringify(n0.list && n1.list ? [n0.hits, n1.hits] : [n0, n1])})`);
+  }
+  await send('Emulation.clearDeviceMetricsOverride', {}); await sleep(1500);
+
   console.log('── LIVE: a node heard while the map is open ──');
   await ev(`window.__fakeAdd(${JSON.stringify(node('f10', 'meshcore', 'Newcomer Rptr', 'repeater', 'repeater', 52.0500, -0.7000, 3, 1))})`);
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(m => /Newcomer Rptr/.test(m.textContent) && m.classList.contains('vtl-pulse'))`, 12000),

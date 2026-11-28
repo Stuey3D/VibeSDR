@@ -53,9 +53,8 @@ function pageCss() {
 
 /** Modules a standalone page cannot have → stand-ins (only these names are imported from them by the chrome). */
 const STUBS = {
-  // ★ b97-integrate: b96-mapcards' controller support (mapChrome.ts imports padHighlight / activePadLayout / driveInput / pushBack) —
-  //   a standalone page (the community map) has no pad: nothing is driven, no layout, no BACK layer.
-  './gamepad': 'export function padRehighlight(){} export function padHighlight(){} export function activePadLayout(){return ""} export function driveInput(){return null} export function pushBack(){return function(){}}',
+  // ★★ 11-28 NO './gamepad' STUB any more: the REAL controller layer (gamepad.ts) is bundled — mapChromeStandalone's
+  //    initMapPad drives the community map with the pad and the keyboard, exactly as the radio maps are driven.
   './chunkCache': "export function loadVibemapSource(){return Promise.reject(new Error('no vibemap here'))}",
   './leafletAsset': 'export async function loadLeafletInto(){return false}',
   './mapgl': 'export async function probeMapGL(){return null} export async function loadMapGLScripts(){return false} export function mapglLoad(){return Promise.resolve(null)}',
@@ -70,7 +69,7 @@ const plugin = {
   setup(b) {
     b.onResolve({ filter: /^vibe:pagecss$/ }, () => ({ path: 'pagecss', namespace: 'vibe' }));
     b.onLoad({ filter: /.*/, namespace: 'vibe' }, () => ({ contents: 'export default ' + JSON.stringify(pageCss()) + ';', loader: 'js' }));
-    b.onResolve({ filter: /^\.\/(gamepad|chunkCache|leafletAsset|mapgl|origin|generated\/\w+)$/ }, (a) => (a.importer.includes('web/client/src') && STUBS[a.path] ? { path: a.path, namespace: 'stub' } : undefined));
+    b.onResolve({ filter: /^\.\/(chunkCache|leafletAsset|mapgl|origin|generated\/\w+)$/ }, (a) => (a.importer.includes('web/client/src') && STUBS[a.path] ? { path: a.path, namespace: 'stub' } : undefined));
     b.onLoad({ filter: /.*/, namespace: 'stub' }, (a) => ({ contents: STUBS[a.path], loader: 'js' }));
   },
 };

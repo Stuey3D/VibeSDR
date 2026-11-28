@@ -31420,7 +31420,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 #else
             reply("404 Not Found", "{\"ok\":false,\"error\":\"this build has no Icom support\"}");
 #endif
-        } else if (reqLine.rfind("GET /vibeserver/dxlog", 0) == 0 || reqLine.rfind("POST /vibeserver/dxlog", 0) == 0) {
+        } else if (reqLine.rfind("GET /vibeserver/dxlog", 0) == 0 || reqLine.rfind("POST /vibeserver/dxlog", 0) == 0
+                   /* ★★★ beta97 hotfix the datalink message log shares this block's query parsing — it was only reachable
+                    *  under the dxlog prefix (a 404 on every server; the web's e2e found it) */
+                   || reqLine.rfind("GET /vibeserver/avmsgs.json", 0) == 0) {
             if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
             auto reply = [&](const char* status, const std::string& body) {
                 sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
@@ -31442,6 +31445,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 return std::string();
             };
+            /* ★★★ beta97 hotfix THE DATALINK MESSAGE LOG (vibe_avi_service.h msgsJson): every decoded ACARS / VDL2 / HFDL / ADS-C
+             *  message, server-wide — the map's MESSAGES list backfills from it on open (?window=s) and then follows it (?since=id).
+             *  Bounded: at most `max` (≤ 1500, default 300) a call; bodies on the report's own rule. */
+            // the message log is the datalink's (its bodies on the report's own rule) - before the DX log's privacy gate
+            if (!post && path == "/vibeserver/avmsgs.json") {
+                const double t = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+                const unsigned long long since = std::strtoull(qv("since").c_str(), nullptr, 10);
+                const double win = std::atof(qv("window").c_str());
+                const int mx = std::atoi(qv("max").c_str());
+                bool owner;
+                { std::string sec; { std::lock_guard<std::mutex> lk(g_vsAdminMtx); sec = g_vsAdminSecret; }
+                  owner = sec.empty() || isLoopback(sock->peerAddress()) || adminOkFor(reqLine, sock); }
+                reply("200 OK", vibeavi::sharedTracker().msgsJson(t, since, win > 0 ? win : 3600.0, mx > 0 ? (size_t)mx : 300,
+                                                                 vsModeBlocked("avdata+text") && owner));
+                return;
+            }
             vibe::dx::Config cfg;
             { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
             if (cfg.viewAdmin && !adminOkFor(reqLine, sock)) { reply("403 Forbidden", "{\"ok\":false,\"error\":\"the owner keeps this server's DX log private\"}"); return; }

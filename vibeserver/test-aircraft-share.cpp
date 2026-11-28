@@ -309,6 +309,79 @@ int main(int argc, char** argv) {
         CHECK(sizeof(Rec) <= kRecSize, "the record still fits %u bytes (%zu)", kRecSize, sizeof(Rec));
         t.reset(); ::unlink((d + "/radios.idx").c_str()); ::rmdir(d.c_str());
     }
+    // ── 13. ★★ 11-28 the heading derived from two fixes of one source (Stuart: "with HFDL, UberSDR shows the planes pointing
+    //        the correct direction when they have provided a couple of messages") ──
+    {
+        std::printf("── 13. derived heading ──\n");
+        auto fix = [&](int src, uint32_t icao, int64_t ms, double lat, double lon) {
+            Update u = dl(src, icao, nullptr, "BAW1", ms); u.hasPos = true; u.lat = lat; u.lon = lon; u.posMs = ms; u.posSrc = src; return u; };
+        const double E = 0.5 / std::cos(55.25 * 3.14159265358979323846 / 180);   // 0.5 degree of latitude, as longitude here
+        std::vector<Row> rows(kCap);
+        mergeInto(rows, { fix(kHfdl, 0x400001, T, 55.0, -20.0) }, T);
+        const Row* r = find(rows, 0x400001);
+        CHECK(r && !headingOf(*r).has, "one fix: no heading");
+        mergeInto(rows, { fix(kHfdl, 0x400001, T + 600000, 55.5, -20.0 + E) }, T + 600000);
+        r = find(rows, 0x400001);
+        Heading h = r ? headingOf(*r) : Heading();
+        CHECK(h.has && h.derived && std::fabs(h.deg - 45) < 1.5, "two HFDL fixes NE of each other: derived ~45 (%.1f)", h.deg);
+        // a hop under 2 km keeps the heading it had (never recomputed from the jitter)
+        mergeInto(rows, { fix(kHfdl, 0x400001, T + 660000, 55.505, -20.0 + E - 0.005) }, T + 660000);
+        r = find(rows, 0x400001); h = r ? headingOf(*r) : Heading();
+        CHECK(h.has && std::fabs(h.deg - 45) < 1.5, "a fix 1 km on (another way): the heading unchanged (%.1f)", h.deg);
+        // two fixes 1 km apart on a fresh aircraft: nothing derived
+        mergeInto(rows, { fix(kVdl2, 0x400002, T, 51.0, 0.0) }, T);
+        mergeInto(rows, { fix(kVdl2, 0x400002, T + 60000, 51.009, 0.0) }, T + 60000);
+        r = find(rows, 0x400002);
+        CHECK(r && !headingOf(*r).has, "two VDL2 fixes 1 km apart: no derived heading");
+        // the previous fix 31 min older: stale, nothing derived
+        mergeInto(rows, { fix(kAcars, 0x400003, T, 50.0, 0.0) }, T);
+        mergeInto(rows, { fix(kAcars, 0x400003, T + 31 * 60000, 51.0, 1.0) }, T + 31 * 60000);
+        r = find(rows, 0x400003);
+        CHECK(r && !headingOf(*r).has, "the previous fix over 30 min old: no derived heading");
+        // an ACARS fix then a VDL2 fix: not the same source, nothing derived
+        mergeInto(rows, { fix(kAcars, 0x400004, T, 50.0, 0.0) }, T);
+        mergeInto(rows, { fix(kVdl2, 0x400004, T + 60000, 50.5, 0.5) }, T + 60000);
+        r = find(rows, 0x400004);
+        CHECK(r && !headingOf(*r).has, "ACARS then VDL2: different sources, no derived heading");
+        // ADS-C covered too
+        mergeInto(rows, { fix(kAdsc, 0x400005, T, 40.0, -40.0) }, T);
+        mergeInto(rows, { fix(kAdsc, 0x400005, T + 900000, 39.0, -40.0) }, T + 900000);
+        r = find(rows, 0x400005); h = r ? headingOf(*r) : Heading();
+        CHECK(h.has && h.derived && std::fabs(h.deg - 180) < 0.5, "two ADS-C fixes due south: 180 (%.1f)", h.deg);
+        // a REPORTED track wins: ADS-B with trk 90 after the HFDL pair
+        mergeInto(rows, { adsb(0x400001, "BAW1", nullptr, T + 700000, 55.6, -19.0) }, T + 700000);
+        r = find(rows, 0x400001); h = r ? headingOf(*r) : Heading();
+        CHECK(h.has && !h.derived && std::fabs(h.deg - 90) < 0.01, "a reported track wins (%.1f, derived %d)", h.deg, (int)h.derived);
+        CHECK(std::isnan(derivedTrack(kAdsb, 50, 0, T, kAdsb, 51, 0, T + 1000)), "ADS-B never derives");
+        // the JSON: trk + trkSrc derived; the record keeps it across the file
+        const std::string j = toJson(rows, {}, T + 900000);
+        { const size_t at = j.find("\"key\":\"400005\""); const size_t end = j.find('}', at);
+          const std::string one = at != std::string::npos ? j.substr(at, end - at) : "";
+          CHECK(one.find("\"trk\":180,\"trkSrc\":\"derived\"") != std::string::npos, "aircraft.json: trk 180 + trkSrc derived (%s)", one.c_str()); }
+        { const size_t at = j.find("\"key\":\"400001\""); const size_t end = j.find('}', at);
+          CHECK(at != std::string::npos && j.substr(at, end - at).find("trkSrc") == std::string::npos, "a reported track is not marked derived"); }
+        const Row back = fromRec(toRec(*find(rows, 0x400005)));
+        CHECK(headingOf(back).derived && std::fabs(headingOf(back).deg - 180) < 0.5, "the derived heading survives the file record");
+        Rec old = toRec(*find(rows, 0x400005)); old.flags &= ~kTrkDerived; old.dTrk = 0; old.dMs = 0;
+        CHECK(!headingOf(fromRec(old)).has, "an older build's record (no flag): no heading");
+        CHECK(sizeof(Rec) <= kRecSize, "the record still fits %u bytes (%zu)", kRecSize, sizeof(Rec));
+    }
+    // ── 14. the datalink table's own live report derives the same way ──
+    {
+        std::printf("── 14. the datalink live report ──\n");
+        const double E = 0.5 / std::cos(55.25 * 3.14159265358979323846 / 180);
+        vibeavi::Aircraft a; a.via = "HFDL 8977"; a.posSrc = "HFDL";
+        vibeavi::setFix(a, 55.0, -20.0, 1000.0);
+        CHECK(std::isnan(a.dTrk), "one fix: none");
+        vibeavi::setFix(a, 55.5, -20.0 + E, 1600.0);
+        CHECK(std::fabs(a.dTrk - 45) < 1.5, "two HFDL fixes NE: ~45 (%.1f)", a.dTrk);
+        vibeavi::setFix(a, 55.505, a.lon, 1660.0);
+        CHECK(std::fabs(a.dTrk - 45) < 1.5, "a 0.5 km hop keeps it (%.1f)", a.dTrk);
+        vibeavi::setFix(a, 57.0, a.lon, 1660.0 + 31 * 60);
+        CHECK(std::isnan(a.dTrk), "31 min later: stale, none");
+        a.posSrc = "ADS-C"; vibeavi::setFix(a, 56.0, a.lon, 4000.0);
+        CHECK(std::isnan(a.dTrk), "HFDL then ADS-C: different sources, none");
+    }
     std::printf("test-aircraft-share: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }
