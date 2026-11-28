@@ -218,6 +218,9 @@ const CSS = `
 .trkCard2 .fitSect .btn{border-radius:999px;padding:5px 12px;font:700 11px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkCard2 .slot-ctl:empty{display:none}
 .trkCard2 .slot-ctl .acKeys{display:flex;flex-wrap:wrap;gap:5px}
+.mapGainHost .gMore.gRo{opacity:.72}
+.mapGainHost .gMore.gRo input,.mapGainHost .gMore.gRo button{cursor:not-allowed}
+.trkCard2 .tgl .btn.chip .nm{color:#5BE36B;font-weight:800;margin-left:5px;font-variant-numeric:tabular-nums}
 .trkCard2 .slot-ctl .acKeys .btn[disabled]{opacity:.45;cursor:not-allowed}
 .trkCard2 .fitSel{display:flex;flex-wrap:wrap;gap:5px}
 .trkCard2 .note{color:#8596a7;font-size:11px;margin-top:6px}
@@ -266,6 +269,9 @@ const CSS = `
  *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
  *  and a chip's own lit / open state only */
 .trkView{--chip-rim:rgba(120,200,120,.45)}
+/* ★★ map notices: a strip under the pill, between the chip columns (noteTop) — never over the pill or a chip */
+.trkView .trkMapHost .trkNote{top:var(--trk-note-top,12px)!important;max-width:calc(100% - var(--trk-note-l,12px) - var(--trk-note-r,12px))}
+.trkView #adsbFeedWarn,.trkView #adsbGainPop{top:var(--trk-note-top,8px)!important;left:var(--trk-note-l,12px)!important;right:var(--trk-note-r,12px)!important}
 /* ★ the pad / keyboard highlight scrolls a row or a card's control into view WITH a margin (gamepad.ts scrollIntoView nearest) */
 .trkView .trkRow,.trkView .trkCard2 .cb button,.trkView .trkCard2 .cb [role="button"],.trkView .trkCard2 .cb [tabindex="0"]{scroll-margin-block:12px}
 .trkCard2[data-card="help"] .hPad:empty{display:none}
@@ -1330,7 +1336,8 @@ export class TrackView {
       // ★ the pad / keyboard: into the card (its first control), so Escape / BACK come straight back out
       const el = this.root.querySelector(`.trkCard2[data-card="${id}"]`) as HTMLElement | null;
       // ★ TUNE: onto the modes (the live one), not the gain row lent above them (map-shared e2e: keyboard / pad)
-      const first = (id === 'tune' ? el?.querySelector('.cb .tpRow[aria-checked="true"], .cb .tpRow') : null) ?? el?.querySelector('.cb button:not([disabled]):not([hidden]), .cb [tabindex="0"]');
+      // ★ a card with nothing to press in its body (HELP): its × — the highlight still goes INTO the card
+      const first = (id === 'tune' ? el?.querySelector('.cb .tpRow[aria-checked="true"], .cb .tpRow') : null) ?? el?.querySelector('.cb button:not([disabled]):not([hidden]), .cb [tabindex="0"]') ?? el?.querySelector(':scope > .ch .x');
       (first as HTMLElement | null)?.focus({ preventScroll: true });
       queueMicrotask(() => { this.navScope(); padHighlight((first as HTMLElement | null) ?? null); });   // ★★ the pad's ring goes in with it
     }
@@ -1341,6 +1348,24 @@ export class TrackView {
    *  until BACK shuts it and puts the highlight back on its chip. The map itself, its markers and popups are never
    *  stops (data-gpskip); its zoom keys and credits are (data-gpkeep). Zoom = MAP zoom (zoomBy); tune = the radio only
    *  where TUNE applies (main.ts hooks). */
+  /* ★★ MAP NOTICES ARE PART OF THE LAYOUT (Stuart 11-27, found in the app): the feed-lost banner, the capture warning, the
+   *  view's own notes sit in a strip directly UNDER the shared-tuner pill and between the chip columns — never over the
+   *  pill or a chip. Short landscape (the pill at the bottom): under the top row, right of the LIST panel. */
+  private noteTop() {
+    if (!this.open) return;
+    const st = this.root.style, short = this.root.hasAttribute('data-short');
+    const pill = this.root.querySelector('.trkTop .slot-share .mapShLine, #mapShLine') as HTMLElement | null;
+    const pb = pill && pill.getClientRects().length ? pill.getBoundingClientRect() : null;
+    const m = this.root.getBoundingClientRect();
+    const top = short ? (parseFloat(getComputedStyle(this.root).getPropertyValue('--trk-tab-h')) || 48) + 8
+      : pb && pb.top < m.top + m.height / 2 ? pb.bottom - m.top + 6 : 12 + (parseFloat(getComputedStyle(this.root).getPropertyValue('--sai-t')) || 0);
+    const chipW = (sel: string) => { const e = this.root.querySelector(sel) as HTMLElement | null; const b = e?.getBoundingClientRect(); return b && b.width ? b : null; };
+    const L = chipW('.mChipsL'), R = chipW('.mChipsR'), P = short ? chipW('.trkCards .sideB') : null;
+    const left = Math.max(12, P ? P.right - m.left + 8 : L && L.top < m.top + top + 60 ? L.right - m.left + 8 : 12);
+    const right = Math.max(12, R && R.bottom > m.top + top ? m.right - R.left + 8 : 12);
+    const set = (k: string, v: string) => { if (st.getPropertyValue(k) !== v) st.setProperty(k, v); };
+    set('--trk-note-top', `${Math.round(top)}px`); set('--trk-note-l', `${Math.round(left)}px`); set('--trk-note-r', `${Math.round(right)}px`);
+  }
   private navScope() {
     if (!this.open) { this.root.removeAttribute('data-navscope'); return; }
     const top = [...this.cardOrder].reverse().find((id) => !STICKY_CARDS.has(id) && this.cardAvail.has(id));
@@ -1355,6 +1380,9 @@ export class TrackView {
     const L = this.root.querySelector('.trkCard2[data-card="list"]') as HTMLElement | null;
     if (L && !L.hasAttribute('data-navbox')) {
       L.setAttribute('data-navbox', ''); L.dataset.navstart = '.trkRow:not(.nopos)';   // ★ the first row that has a place on the map
+      // ★ its own controls (the maximise and swap tabs, the bar's keys) are stops of their own in the walk (gamepad.ts
+      //   data-navout — Stuart 11-27); ENTER on the LIST itself goes into the rows
+      L.dataset.navout = '.lMax, .lSwap, .trkList .hd button, .trkList .hd [role="button"], .trkList .hd select';
       // ★ no data-navlist: BACK from a row leaves the list in one press (Stuart's flow — not its header bar first)
     }
   }
@@ -1400,7 +1428,7 @@ export class TrackView {
   cardsLayout() {
     if (!this.cardsEl) return;   // ★ still being made
     this.cardsTell();
-    queueMicrotask(() => { this.navScope(); this.navMarks(); });
+    queueMicrotask(() => { this.navScope(); this.navMarks(); this.noteTop(); });
     { /* ★★★ Stuart 11-27: a TALL window puts every chip down the LEFT (SERVERS, TUNE, LAYERS, MAP CONTROLS; LIST bottom-left);
        *  a shorter one flanks — MAP CONTROLS top-right. By the window, live as it is resized. */
       // ★ the whole stack measured: every offered chip's own height (a tucked one counts as out — no flapping as it tucks)
@@ -1744,8 +1772,10 @@ export class TrackView {
       x = left - GAP; rowH = Math.max(rowH, p.h);
     }
     { // the pill between the panel and the group (row 0's leftmost piece)
-      const pl = Math.round(leftUsed + GAP), pr = Math.round(W - row0Left + GAP);
-      this.root.style.setProperty('--trk-pill-pl', `${pl}px`); this.root.style.setProperty('--trk-pill-pr', `${Math.max(GAP, pr)}px`);
+      // ★ Stuart 11-27 (the app had it off-centre): the pill is CENTRED on the map — the same room both sides, the wider of
+      //   the two (the panel's side, the group's side), so it never meets either
+      const pl = Math.round(leftUsed + GAP), pr = Math.round(W - row0Left + GAP), pad = Math.max(GAP, pl, pr);
+      this.root.style.setProperty('--trk-pill-pl', `${pad}px`); this.root.style.setProperty('--trk-pill-pr', `${pad}px`);
     }
   }
   private shortGeomClear() {
@@ -2257,19 +2287,26 @@ export class TrackView {
   }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string; others?: string[] }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string; others?: string[]; nMine?: number }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
     // ★★★ beta96 SHOW (Stuart 11-26): the counts change every second — written in place (below), never a redraw, so a poll
     //   cannot steal a focused chip
+    /* ★★ Stuart 11-27 (the app): a row live on THIS radio AND on other sources shows both — the filled LIVE with this
+     *  radio's count in green, the outlined LIVE with the rest's in the usual colour ("ADS-B [LIVE] 0 [LIVE] 33"); the
+     *  LAYERS chip and every single-source row keep the layer's TOTAL */
+    const split = (x: { live?: boolean; others?: string[]; nMine?: number; n?: number }) => !!x.live && !!x.others?.length && x.nMine != null && x.n != null;
     const counts = () => {
-      const by = new Map(toggles.map((x) => [x.id, x.n]));
+      const by = new Map(toggles.map((x) => [x.id, x]));
       for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLElement[]) {
-        const n = b.querySelector('.n') as HTMLElement | null; if (!n) continue;
-        const v = by.get(b.dataset.tgl || ''); const t = v != null ? String(v) : '';
-        if (n.textContent !== t) n.textContent = t;
+        const x = by.get(b.dataset.tgl || ''); if (!x) continue;
+        const n = b.querySelector('.n') as HTMLElement | null, nm = b.querySelector('.nm') as HTMLElement | null;
+        const sp = split(x);
+        const t = x.n != null ? String(sp ? Math.max(0, x.n - (x.nMine ?? 0)) : x.n) : '';
+        if (n && n.textContent !== t) n.textContent = t;
+        if (nm) { const tm = sp ? String(x.nMine) : ''; if (nm.textContent !== tm) nm.textContent = tm; }
       }
     };
-    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|')]), toggles.map((x) => toggled[x.id] !== false)]);
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|'), split(x)]), toggles.map((x) => toggled[x.id] !== false)]);
     if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` }))); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
@@ -2283,7 +2320,9 @@ export class TrackView {
      *  = stored. Shown only when the rows differ — all alike, there is nothing to tell apart. */
     const stateOf = (x: { live?: boolean; others?: string[] }) => (x.live ? 'mine' : x.others?.length ? 'other' : 'stored');
     const liveMixed = new Set(toggles.map(stateOf)).size > 1;
-    const badge = (x: { live?: boolean; others?: string[] }) => {
+    const badge = (x: { live?: boolean; others?: string[]; nMine?: number; n?: number }) => {
+      if (split(x)) return `<span class="lv" title="This radio is decoding it now">LIVE</span><span class="nm" title="Heard by this radio"></span>`
+        + `<span class="lv o" title="Live on ${esc(x.others!.join(', '))} — this server's other sources">LIVE</span>`;
       if (!liveMixed) return '';
       if (x.live) return '<span class="lv" title="This radio is decoding it now">LIVE</span>';
       if (!x.others?.length) return '';

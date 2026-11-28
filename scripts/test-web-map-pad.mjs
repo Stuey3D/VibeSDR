@@ -83,13 +83,13 @@ async function radioDatalink(p, url) {
   await sleep(4000);   // a few datalink rows
   const HL = `JSON.stringify((() => { const e = document.querySelector('.gpFocus'); if (!e) return null; const v = ${V};
     return { inView: !!v && v.contains(e), cbtn: e.dataset.cbtn || '', card: e.closest('.trkCard2')?.dataset.card || '', row: e.classList.contains('trkRow'),
-      box: e.hasAttribute('data-navbox'), mapItem: !!e.closest('.maplibregl-map, .leaflet-container') && !e.closest('[data-gpkeep]'), zoomKey: !!e.closest('[data-gpkeep]') }; })())`;
+      box: e.hasAttribute('data-navbox'), lctl: e.closest('.trkCard2[data-card="list"]') && (e.matches('.lMax, .lSwap') || !!e.closest('.trkList .hd')) ? (e.matches('.lMax') ? 'max' : e.matches('.lSwap') ? 'swap' : 'bar:' + (e.className || e.tagName).slice(0, 20)) : '', mapItem: !!e.closest('.maplibregl-map, .leaflet-container') && !e.closest('[data-gpkeep]'), zoomKey: !!e.closest('[data-gpkeep]') }; })())`;
   const hl = async () => JSON.parse(await p.ev(HL));
   // ★ a seeded wander (a fixed cycle can orbit two stops for ever): every direction, in no set order
   let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
   const DIRS = ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft'];
-  const PAT = Array.from({ length: 240 }, () => DIRS[Math.floor(rnd() * 4)]);
-  async function walkTo(pred, max = 160) {
+  const PAT = Array.from({ length: 600 }, () => DIRS[Math.floor(rnd() * 4)]);
+  async function walkTo(pred, max = 400) {
     for (let i = 0; i < max; i++) { const h = await hl(); if (h && pred(h)) return h; await p.key(PAT[i % PAT.length]); await sleep(120); }
     return null;
   }
@@ -98,15 +98,24 @@ async function radioDatalink(p, url) {
     // the LIST drawer open (BACK with nothing else up shuts the top card — the LIST counts)
     await p.ev(`(() => { const b = ${V}?.querySelector('[data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(500);
     // ① the walk stays on the map, never the page under it, never a map item; it reaches chips, the LIST and the zoom keys
-    const seen = { chips: new Set(), list: false, zoom: false, out: 0, item: 0, row: 0 };
-    for (let i = 0; i < 80; i++) {
+    const seen = { chips: new Set(), list: false, zoom: false, out: 0, item: 0, row: 0, lctl: new Set() };
+    for (let i = 0; i < 200; i++) {
       await p.key(PAT[i % PAT.length]); await sleep(110);
       const x = await hl(); if (!x) continue;
       if (!x.inView) seen.out++; if (x.mapItem) seen.item++;
-      if (x.cbtn) seen.chips.add(x.cbtn); if (x.box && x.card === 'list') seen.list = true; if (x.zoomKey) seen.zoom = true; if (x.row) seen.row++;
+      if (x.cbtn) seen.chips.add(x.cbtn); if (x.box && x.card === 'list') seen.list = true; if (x.zoomKey) seen.zoom = true; if (x.row) seen.row++; if (x.lctl) seen.lctl.add(x.lctl.replace(/^bar:.*/, 'bar'));
     }
     ok(!seen.out && !seen.item, `${tag}: the highlight stays on the map's chrome (outside ${seen.out}, map items ${seen.item})`);
     ok(seen.chips.size >= 3, `${tag}: it reaches the chips (${[...seen.chips].join(' ')})`);
+    if (!seen.lctl.has('bar') && await walkTo((x) => /^bar/.test(x.lctl || ''))) seen.lctl.add('bar');
+    if (!seen.lctl.has('max') && await walkTo((x) => x.lctl === 'max')) seen.lctl.add('max');
+    ok(seen.lctl.has('max') && seen.lctl.has('bar'), `${tag}: the LIST's own controls are stops of their own — the maximise tab and the bar's keys, each ringed (${[...seen.lctl].join(' ')})`);
+    { // ENTER on the maximise tab maximises; again restores
+      const mx = await walkTo((x) => x.lctl === 'max');
+      if (mx) { await p.key('Enter'); await sleep(600); const on = await p.ev(`${V}.classList.contains('lMax')`); await p.key('Enter'); await sleep(600); const off = await p.ev(`!${V}.classList.contains('lMax')`);
+        ok(on && off, `${tag}: ENTER on the maximise tab maximises the LIST, and again restores it (${on} / ${off})`); }
+      else ok(false, `${tag}: the maximise tab never reached`);
+    }
     ok(!seen.row, `${tag}: the LIST is ONE stop — the walk never visits a row (${seen.row}), so what lies past it is one press away`);
     // ② ENTER on a chip opens its card and the highlight goes INSIDE it; BACK shuts it and puts the highlight on the chip
     const chip = await walkTo((x) => ['layers', 'map', 'stats', 'servers', 'help'].includes(x.cbtn));

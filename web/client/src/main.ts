@@ -4205,15 +4205,20 @@ function gainDriver(): GainDrv | null {
   };
   if (d === 'rtl' && hwGains.length) return { agc: 'gainAuto', slider: 'gain', name: nameOf('gainAuto', 'VIBE AGC'),
     val: () => { const on = document.getElementById('gainAuto')?.classList.contains('on'); const t = on && hwGainNow >= 0 ? hwGainNow : hwGains[Number((document.getElementById('gain') as HTMLInputElement | null)?.value ?? 0)] ?? 0; return `${(t / 10).toFixed(1)} dB`; } };
-  if (d === 'sdrplay' && document.getElementById('rspIfAgc')) return { agc: 'rspIfAgc', slider: 'rspIfGr', name: nameOf('rspIfAgc', 'IF AGC'),
-    val: () => (document.getElementById('rspSysGain')?.textContent || document.getElementById('rspIfGrVal')?.textContent || '').trim() };
+  /* ★★ Stuart 11-27 (SDRplay on the map): the row says "VibeAGC" and shows BOTH stages — RF (the LNA state / its gain
+   *  reduction) and IF (gain reduction) — read from the page's own RSP panel; ⌄ lends the rest of it */
+  if (d === 'sdrplay' && document.getElementById('rspIfAgc')) return { agc: 'rspIfAgc', slider: 'rspIfGr', name: 'VibeAGC',
+    val: () => { const t = (id: string) => (document.getElementById(id)?.textContent || '').trim();
+      const lna = (document.getElementById('rspLna') as HTMLInputElement | null)?.value ?? '', ifg = t('rspIfGrVal');
+      const ifv = ifg && ifg !== '—' ? (/dB/.test(ifg) ? ifg : `${ifg} dB`) : '';
+      return [lna !== '' ? `RF LNA ${lna}` : '', ifv ? `IF ${ifv}` : ''].filter(Boolean).join(' · ') || t('rspSysGain'); } };
   if (d === 'airspyhf' && document.getElementById('ahfAgc')) return { agc: 'ahfAgc', slider: 'ahfAtt', name: nameOf('ahfAgc', 'AGC'),
     val: () => `ATT ${(document.getElementById('ahfAttVal')?.textContent || '').trim()}` };
   return null;
 }
 /* ★ Stuart 15:35 ("no more gain options button yet"): the RTL's MORE is every hardware row the page has for it — the tuner
  *  bandwidth, PPM, bias-T, the RTL2832's digital AGC, direct sampling — each lent as its whole row (the element's .mrow) */
-const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw', 'ppm', 'biasT', 'agc', 'dsSeg'], sdrplay: ['rspCtls'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
+const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw', 'ppm', 'biasT', 'agc', 'dsSeg'], sdrplay: ['rspCtls', 'rowTunerBw', 'ppm'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
 const gainHome = new Map<HTMLElement, { parent: Node; next: Node | null }>();
 let gainMoreOpen = false, gainPwOpen = false;
 function mapGainLend(on: boolean) {
@@ -4259,7 +4264,8 @@ function mapGainRender() {
     const val = '<span class="gVal" aria-live="off"></span>';
     const lock = locked ? `<button type="button" class="gLock" aria-label="Gain locked by the owner — enter the admin password" title="Locked by the owner — enter the admin password">\u{1F512}</button>`
       : adminUnlocked && hwGainLocked ? '<span class="gLock open" title="Unlocked with the admin password">\u{1F513}</span>' : '';
-    const moreB = hasMore ? `<button type="button" class="gMoreB" aria-expanded="${gainMoreOpen}" aria-label="More radio controls">⌄</button>` : '';
+    // ★ ⌄ is not offered while the owner's lock holds (🔒 unlocks inline first) or when the driver lends nothing
+    const moreB = hasMore && !locked ? `<button type="button" class="gMoreB" aria-expanded="${gainMoreOpen}" aria-label="More radio controls">⌄</button>` : '';
     const manual = g && sl && !agcOn && !locked;
     row.innerHTML = g ? (manual ? `<input type="range" class="gSl" min="${sl!.min}" max="${sl!.max}" step="${sl!.step || 1}" aria-label="Gain">${val}${agc}` : `${agc}${val}${lock}`) + moreB : moreB;
     row.hidden = !g && !hasMore;
@@ -4278,7 +4284,9 @@ function mapGainRender() {
   if (sv && sl && document.activeElement !== sv && sv.value !== sl.value) sv.value = sl.value;
   const vEl = row.querySelector('.gVal') as HTMLElement | null;
   if (vEl && g) { const t = g.val(); if (vEl.textContent !== t) vEl.textContent = t; }
-  more.hidden = !gainMoreOpen;
+  more.hidden = !gainMoreOpen || locked;
+  // ★★ locked by the owner: the lent controls show their values read-only (the 🔒 above unlocks them inline)
+  if (more.inert !== locked) { more.inert = locked; more.classList.toggle('gRo', locked); }
   if (!locked && gainPwOpen) { gainPwOpen = false; mapGainPw(pw); }
 }
 /** 🔒 → the page's own admin unlock (doAdminUnlock: the same request, ticket and rate limit), inline in the card. */
@@ -4304,7 +4312,7 @@ function mapChromeAdopt(on: boolean) {
   mapGainLend(on);
   for (const v of [asView, ismMapView, ismGalView]) if (v) {   // ★★★ V12 every live map over this radio offers the waterfall
     v.onWaterfall = mapWfShow;
-    if (on && v.open) v.setWaterfall(!!spec);
+    if (on && v.open) v.setWaterfall(!!spec && specPauseOk);   // ★★★ beta97 only where the server can pause the spectrum
   }
   if (!on && mapWfInst) { mapWfShow(null); mapWfEnd(); }
   const h = document.getElementById('srvHealth');
@@ -10919,7 +10927,14 @@ function avReadCap(j: any) {
     avCap = { ok: false, why: why || 'The aircraft datalink is not available on this receiver' };
   } else avCap = null;
   avBands = parseAvBands(j?.avdataBands);
+  // ★★★ beta97 the fly-over waterfall swap needs the server's spectrum pause (hwinfo specPause) — absent: no ≋ at all
+  const sp = j?.specPause === 1;
+  specPauseSet(sp);
 }
+let specPauseOk = false;
+function specPauseSet(sp: boolean) { if (sp === specPauseOk) return; specPauseOk = sp; if (mapShOpenView()) mapChromeAdopt(true); }
+/** ★ for the drivers (test-web-map-waterfall): an older server (no specPause) — the swap must go */
+(window as any).__vibeSpecPauseSet = (on: boolean) => { specPauseSet(!!on); };
 /* ★★★ V12 2026-11-16 THE AVIATION MAP (src/services/aviationMap.ts, docs/v12/AVIATION.md §The aviation map) — the shipping
  *  map's shape for aircraft: ADS-B, ACARS, VDL2, HFDL and ADS-C on ONE map, each aircraft once with the sources that heard
  *  it, from GET /vibeserver/aircraft.json (vibe_aircraft_share.h — every radio on this server writes it). The DATALINK
@@ -11355,11 +11370,13 @@ function asRender() {
   /* ★★ Stuart 15:31: which layers are live on ANOTHER of this server's radios or its feeds (the same table SOURCES and
    *  RATE read — no fetch): an aircraft heard in the last minute, by a radio that is not this one, on that layer's mode */
   const others = new Map<string, Set<string>>();
+  const nMine = new Map<string, number>();   // ★★ Stuart 11-27: this radio's own count beside the other sources' (split rows)
   { const SRC_LAYER: Record<string, string> = { 'ADS-B': 'adsb', VDL2: 'vdl2', ACARS: 'acars', HFDL: 'hfdl', 'ADS-C': 'adsc' };
     const feedName = (avShared?.feeds ?? []).map((f) => f.title).filter(Boolean)[0] || 'FEED';
     for (const p of avShared?.aircraft ?? []) {
       if (!(p.age < 60)) continue;
       const rs: string[] = Array.isArray((p as any).radios) ? (p as any).radios : [];
+      if (asOnRadio() && rs.includes(mapMine)) for (const s of p.src) { const id = SRC_LAYER[s]; if (id) nMine.set(id, (nMine.get(id) ?? 0) + 1); }
       for (const r of rs) {
         if (r === mapMine && asOnRadio()) continue;
         const name = r === 'feed' ? feedName : asRadioNames?.get(r) ?? 'SDR';
@@ -11368,7 +11385,8 @@ function asRender() {
     }
   }
   v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id],
-                                                    others: others.has(c.id) ? [...others.get(c.id)!] : undefined })),
+                                                    others: others.has(c.id) ? [...others.get(c.id)!] : undefined,
+                                                    nMine: c.live && others.has(c.id) ? (c.id === 'adsb' && adsbOn && adsbR ? Math.max(nMine.get('adsb') ?? 0, (adsbR.aircraft as any[]).length) : nMine.get(c.id) ?? 0) : undefined })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
   // ★★★ beta96 OTHER RADIOS ON THIS SERVER: a SHOW chip of its own (only with 2+ sources, only on a radio)
   v.setScope(null, () => { /* ★ tweak 3: SOURCES in MAP CONTROLS (asCardsSync) */ });

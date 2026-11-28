@@ -85,6 +85,13 @@ async function radioDatalink(p, url) {
     await p.size(1440, 900, false); await sleep(1500);
     const WF = `(window.__vibeMapWf ? window.__vibeMapWf() : null)`;
     ok(await p.ev(`!!${V}.querySelector('.lSwapC') && !${V}.querySelector('.lSwapC').hidden`), 'a live map over a radio offers the waterfall (the ≋ tab)');
+    // ★★★ beta97 the SERVER publishes the capability per radio in vibeserver.json (the app reads it there)
+    { const vj = await p.ev(`fetch('/vibeserver.json').then((r) => r.json()).then((j) => j.specPause)`); ok(vj === 1, `vibeserver.json carries "specPause":1 (${vj})`); }
+    // ★★★ beta97 (Stuart): only a server that says it can pause the spectrum (hwinfo specPause) gets the swap — an older one none
+    ok(await p.ev(`window.__vibeSpecPauseSet && true`) && await p.ev(`(() => { window.__vibeSpecPauseSet(false); return 1; })()`) && await p.until(`${V}.querySelector('.lSwapC').hidden && ${V}.querySelector('.lSwap').hidden`, 3000),
+       'a server without specPause (pre-beta97): no ≋ on the chip, no swap tab on the drawer');
+    await p.ev(`window.__vibeSpecPauseSet(true); 1`);
+    ok(await p.until(`!${V}.querySelector('.lSwapC').hidden`, 3000), '…with it: the swap is back');
     // closed: no waterfall, no spectrum
     await p.ev(`(() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'); if (c && !c.hidden) c.querySelector(':scope > .ch').click(); return 1; })()`); await sleep(1200);
     ok(await p.ev(`${WF} === null && window.__vibeSpecUnderMap().off === true`), `closed: no waterfall and the spectrum is off at the server (${await p.ev(`JSON.stringify(window.__vibeSpecUnderMap())`)})`);

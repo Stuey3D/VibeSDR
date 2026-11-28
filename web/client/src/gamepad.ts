@@ -202,7 +202,10 @@ function candidates(root: HTMLElement): HTMLElement[] {
   if (root === grabbed) return all;
   // Outside a box, the box is ONE stop and what is inside it is not on the route.
   const boxes = [...root.querySelectorAll<HTMLElement>(NAVBOX)].filter(visible);
-  return [...all.filter((el) => !boxes.some((b) => b.contains(el))), ...boxes];
+  // ★★ V12 [data-navout] (the map's LIST, Stuart 11-27): the box's own controls — its maximise tab, its bar's keys — are
+  //    stops of their own in the walk, each with its ring; only the rows wait behind ENTER
+  const out = (el: HTMLElement, b: HTMLElement) => !!b.dataset.navout && el.matches(b.dataset.navout);
+  return [...all.filter((el) => !boxes.some((b) => b.contains(el) && !out(el, b))), ...boxes];
 }
 
 /** Enter on a box: it takes the D-pad, the highlight goes to its first list item (else its first key). */

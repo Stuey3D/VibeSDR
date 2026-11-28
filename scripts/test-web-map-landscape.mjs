@@ -429,6 +429,27 @@ async function radioDatalink(p, url) {
         ok(tOut && !after.time && after.map === 'true', `${tag}: opening a card tucks the TIME card (one out at a time) (${tOut} → ${JSON.stringify(after)})`);
         await p.ev(`${V}.querySelector('.trkCards .trkCard2[data-card="map"] > .ch .x')?.click(); 1`); await sleep(300);
       }
+      // ⑦ the shared-tuner pill is CENTRED on the map in every layout (Stuart: the app had it off-centre)
+      const pc = JSON.parse(await p.ev(`JSON.stringify((() => { const l = document.getElementById('mapShLine'); if (!l || !l.getClientRects().length) return null; const b = l.getBoundingClientRect(), m = ${V}.getBoundingClientRect(); return { off: Math.round(((b.left + b.right) / 2 - (m.left + m.right) / 2) * 10) / 10 }; })())`));
+      ok(!pc || Math.abs(pc.off) <= 2, `${tag}: the pill is centred on the map (${pc ? pc.off + ' px off' : 'no pill'})`);
+      // ⑧ LAYERS: a row live on THIS radio AND other sources shows both — [LIVE] green own count, [LIVE] outlined the rest
+      { const ex = await p.ev(`(() => { const v = window.__vibeTrkView; v.setToggles([{ id: 'adsb', label: 'ADS-B', words: 'ADS-B aircraft', live: true, n: 33, others: ['PiAware'], nMine: 0, colour: '#ffd34d' }, { id: 'vdl2', label: 'VDL2', words: 'VDL2 aircraft', live: true, n: 5, colour: '#5BE36B' }], { adsb: true, vdl2: true });
+          const row = (id) => ${V}.querySelector('.tgl [data-tgl="' + id + '"]'); const a = row('adsb'), b = row('vdl2');
+          return JSON.stringify({ aLv: a.querySelectorAll('.lv').length, aO: a.querySelectorAll('.lv.o').length, aMine: a.querySelector('.nm')?.textContent, aMineCol: a.querySelector('.nm') ? getComputedStyle(a.querySelector('.nm')).color : '', aN: a.querySelector('.n')?.textContent, bNm: b.querySelector('.nm')?.textContent ?? null, bN: b.querySelector('.n')?.textContent }); })()`);
+        const e = JSON.parse(ex);
+        ok(e.aLv === 2 && e.aO === 1 && e.aMine === '0' && /91, 227, 107/.test(e.aMineCol) && e.aN === '33' && e.bNm === null && e.bN === '5', `${tag}: a split LAYERS row reads "ADS-B [LIVE] 0 [LIVE] 33" (green own count), a single-source row its one count (${ex})`); }
+      // ⑥ map notices (Stuart, found in the app): a feed-lost banner and a view note sit UNDER the pill, clear of every chip
+      // ★ shown and measured in ONE turn (the page's own render re-hides the banner and clears notes on its next tick)
+      const nt = JSON.parse(await p.ev(`JSON.stringify((() => { const v0 = window.__vibeTrkView; const f = document.getElementById('adsbFeedWarn');
+        if (f) { if (!f.textContent.trim()) f.innerHTML = '<b>AIRCRAFT FEED</b><span>PiAware lost — reconnecting</span><button type="button">×</button>'; if (!${V}.contains(f)) ${V}.querySelector('.slot-over')?.appendChild(f); f.hidden = false; }
+        v0?.note('A note from the map'); v0?.noteTop?.();
+        const r = (e) => { if (!e || !e.getClientRects().length) return null; const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+        const pill = r(document.getElementById('mapShLine')), notes = [r(document.getElementById('adsbFeedWarn')), r(${V}.querySelector('.trkNote'))].filter(Boolean);
+        const chips = [...${V}.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard, .mChipsR > :not([hidden]) .hCard, .mChipsR > .edgeDock:not(.mDock):not([hidden]) .hTab, .trkTop .exit')].map(r).filter(Boolean);
+        const hit = (a, b) => a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
+        return { n: notes.length, pill: notes.filter((x) => pill && hit(x, pill)).length, chips: notes.reduce((k, x) => k + chips.filter((c) => hit(x, c)).length, 0), notes, pillR: pill }; })())`));
+      ok(nt.n >= 1 && !nt.pill && !nt.chips, `${tag}: a feed-lost banner and a map note sit under the pill, over no chip (${JSON.stringify(nt).slice(0, 300)})`);
+      await p.ev(`(() => { const f = document.getElementById('adsbFeedWarn'); if (f) f.hidden = true; window.__vibeTrkView?.note(''); return 1; })()`);
       await shot(`signoff-${w}x${h}.png`);
       await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b', '--sai-t']) v.style.removeProperty(k); return 1; })()`);
     }

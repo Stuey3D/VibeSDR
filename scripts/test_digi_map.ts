@@ -80,7 +80,8 @@ ok(d.sparse === true && d.track === undefined, 'a datalink position is sparse, w
 ok(avPlaneAdsb({ ...base, lat: undefined, lon: undefined }) === null, 'no position, nothing to draw');
 ok(avPlaneAdsb({ ...base, ground: true })!.alt_baro === 'ground', 'on the ground');
 const ls = avPlaneAdsb({ ...base, lastSeen: '12:00', posAge: 90 })!;
-ok(ls.sparse === true && (ls.seen_pos ?? 0) > 600, 'an ADS-B "last seen" fix is drawn old, never live');
+// ★ 88aef477b: ADS-B is never sparse (an ADS-B position, ADS-B's stale tone — test_aviation_map agrees); old = seen_pos past the fade
+ok(ls.sparse === false && (ls.seen_pos ?? 0) > 600, `an ADS-B "last seen" fix is drawn old, never live (${JSON.stringify({ sparse: ls.sparse, seen_pos: ls.seen_pos })})`);
 
 console.log('── beta92 APRS symbols: clear, our own, a fallback ──');
 {
