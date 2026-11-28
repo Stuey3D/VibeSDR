@@ -4,7 +4,7 @@
 // view opened, never a listed one.   npx tsx scripts/test_map_wf.ts
 import { readFileSync } from 'node:fs';
 import { mwfCrop, mwfMinSpan, MWF_MIN_BINS } from '../src/utils/mapChrome';
-import { mwfStoreNew, pushRow, mwfPaint, LUT_STRIDE, LEVEL_IDX } from '../src/utils/mapWfPaint';
+import { mwfStoreNew, pushRow, mwfPaint, mwfClampToCapture, LUT_STRIDE, LEVEL_IDX } from '../src/utils/mapWfPaint';
 import { getColorLUT } from '../src/assets/colormapUtils';
 import { ismSanitise } from '../src/services/ism';
 import { avBandFor, wfModelIsm, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
@@ -114,7 +114,7 @@ console.log('── ★★★ beta97 hotfix the minimum span: never fewer than 1
   ok(w.lo === 136.6e6 && w.hi === 137.1e6, 'a view already wider than 16 bins is untouched (VDL2\'s channels)');
   ok(mwfMinSpan(1, 2, 0).lo === 1, 'no bin width known: untouched');
   const mw = readFileSync(new URL('../src/components/MapMiniWaterfall.tsx', import.meta.url), 'utf8');
-  ok(/const v = mwfMinSpan\(m\.lo, m\.hi, f\.bins\.length \? f\.spanHz \/ f\.bins\.length : 0\);/.test(mw) && /mwfCrop\(f\.bins, f\.centreHz, f\.spanHz, v\.lo, v\.hi, z\.cols\)/.test(mw)
+  ok(/const v = mwfClampToCapture\(mwfMinSpan\(m\.lo, m\.hi, f\.bins\.length \? f\.spanHz \/ f\.bins\.length : 0\), f\.centreHz, f\.spanHz\);/.test(mw) && /mwfCrop\(f\.bins, f\.centreHz, f\.spanHz, v\.lo, v\.hi, z\.cols\)/.test(mw)
      && /\{ \.\.\.model, lo: s\.vlo, hi: s\.vhi \}/.test(mw), 'the drawer crops to the widened span, and its markers and stamps are placed on it');
 }
 
@@ -182,8 +182,31 @@ console.log('── ★★★ beta97 hotfix REAL FRAMES (Stuart, TestFlight 589:
     }
     ok(exact, `${name}: every pixel is EXACTLY its level's palette entry (the old 3-byte read straddled two entries: rainbow speckle)`);
     const tail = px.subarray(fx.frames.length * st.cols * 4, fx.frames.length * st.cols * 4 + 4);
-    ok(tail[0] === lut[LEVEL_IDX * 4] && tail[1] === lut[LEVEL_IDX * 4 + 1] && tail[2] === lut[LEVEL_IDX * 4 + 2], `${name}: below the history so far, the noise floor's colour — never a black block`);
+    ok(tail[0] === 0 && tail[1] === 0 && tail[2] === 0 && tail[3] === 255, `${name}: below the history so far BLACK until it draws in (Stuart, TF 590)`);
   }
+}
+
+console.log('── ★★★ beta97 hotfix the left-edge strip (Stuart, TF 590): the drawer\'s span stays INSIDE the capture ──');
+{
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/map_wf_frames.json', import.meta.url), 'utf8')) as { frames: Array<{ bins: number[]; centreHz: number; spanHz: number }> };
+  const f = fx.frames[0], f0 = f.centreHz - f.spanHz / 2, f1 = f.centreHz + f.spanHz / 2;
+  // a span that starts below the frame's lowest bin (a channel set near the capture's edge, plus its margin)
+  const want = { lo: f0 - 120e3, hi: f0 + 1.0e6 };
+  const before = mwfCrop(Float32Array.from(f.bins), f.centreHz, f.spanHz, want.lo, want.hi, 715);
+  const blank = before.findIndex((v) => Number.isFinite(v));
+  ok(blank > 40, `the old way: the first ${blank} of 715 columns had no data (the black strip down the left)`);
+  const v = mwfClampToCapture(want, f.centreHz, f.spanHz);
+  ok(v.lo === f0 && Math.abs(v.hi - v.lo - (want.hi - want.lo)) < 1e-6, 'slid inside the frame, its width kept');
+  const after = mwfCrop(Float32Array.from(f.bins), f.centreHz, f.spanHz, v.lo, v.hi, 715);
+  ok(after.every((x) => Number.isFinite(x)), 'every column now has data — no strip at either edge');
+  ok(mwfClampToCapture({ lo: f1 - 1e5, hi: f1 + 3e5 }, f.centreHz, f.spanHz).hi === f1, 'the high edge the same way');
+  const wide = mwfClampToCapture({ lo: f0 - 1e6, hi: f1 + 1e6 }, f.centreHz, f.spanHz);
+  ok(wide.lo === f0 && wide.hi === f1, 'wider than the capture: exactly the capture');
+  ok(mwfClampToCapture({ lo: f0 + 1e5, hi: f0 + 2e5 }, f.centreHz, f.spanHz).lo === f0 + 1e5, 'inside already: untouched');
+  const mw = readFileSync(new URL('../src/components/MapMiniWaterfall.tsx', import.meta.url), 'utf8');
+  ok(/const v = mwfClampToCapture\(mwfMinSpan\(m\.lo, m\.hi, f\.bins\.length \? f\.spanHz \/ f\.bins\.length : 0\), f\.centreHz, f\.spanHz\);/.test(mw),
+     'the drawer crops to the clamped span (the markers are placed on it — s.vlo / s.vhi)');
+  ok(!/Spectrum|specH/.test(mw), 'waterfall only — no spectrum in the drawer (Stuart: it would run too slowly at the map\'s rate)');
 }
 
 console.log(`test_map_wf: ${pass} passed, ${fail} failed`);

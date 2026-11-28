@@ -30,8 +30,8 @@ export const LEVEL_IDX = 70, LEVEL_SPAN_DB = 40;
 export const LUT_STRIDE = 4;
 
 /** ★ The visible rows, newest at the top, as RGBA: each palette index its own colour (LUT_STRIDE), the grey gap line, and
- *  where the history has not reached yet the NOISE FLOOR's colour (a fresh drawer fills downward at ≤ 10 rows a second —
- *  never a black block that reads as a fault). Pure: the drawer paints this, the fixture test checks it. */
+ *  where the history has not reached yet BLACK (Stuart, TF 590: "it looks better being black until it starts to draw in");
+ *  a cell with no data (index 0) black too. Pure: the drawer paints this, the fixture test checks it. */
 export function mwfPaint(s: MwfStore, h: number, lut: Uint8Array): Uint8Array {
   const rgba = new Uint8Array(s.cols * h * 4);
   const n = Math.min(h, s.seq);
@@ -40,15 +40,24 @@ export function mwfPaint(s: MwfStore, h: number, lut: Uint8Array): Uint8Array {
     for (let c = 0; c < s.cols; c++) {
       const v = s.ring[src + c], p = dst + c * 4;
       if (v === GAP) { rgba[p] = 90; rgba[p + 1] = 90; rgba[p + 2] = 90; }
-      else { const li = v * LUT_STRIDE; rgba[p] = lut[li]; rgba[p + 1] = lut[li + 1]; rgba[p + 2] = lut[li + 2]; }
+      else if (v !== 0) { const li = v * LUT_STRIDE; rgba[p] = lut[li]; rgba[p + 1] = lut[li + 1]; rgba[p + 2] = lut[li + 2]; }
       rgba[p + 3] = 255;
     }
   }
-  const fl = LEVEL_IDX * LUT_STRIDE;
-  for (let i = n * s.cols * 4; i < rgba.length; i += 4) { rgba[i] = lut[fl]; rgba[i + 1] = lut[fl + 1]; rgba[i + 2] = lut[fl + 2]; rgba[i + 3] = 255; }
+  for (let i = n * s.cols * 4 + 3; i < rgba.length; i += 4) rgba[i] = 255;   // black, opaque
   return rgba;
 }
 
+/** ★★★ THE DRAWER'S SPAN INSIDE THE CAPTURE (Stuart, TF 590: a black strip down the left edge — the span began below the
+ *  frame's lowest bin): slid inside the frame when it fits, else the frame's whole width. Markers are placed on the result. */
+export function mwfClampToCapture(v: { lo: number; hi: number }, centreHz: number, spanHz: number): { lo: number; hi: number } {
+  if (!(spanHz > 0) || !(v.hi > v.lo)) return v;
+  const f0 = centreHz - spanHz / 2, f1 = centreHz + spanHz / 2, w = v.hi - v.lo;
+  if (w >= f1 - f0) return { lo: f0, hi: f1 };
+  if (v.lo < f0) return { lo: f0, hi: f0 + w };
+  if (v.hi > f1) return { lo: f1 - w, hi: f1 };
+  return v;
+}
 /** One row into the ring: palette indices re-levelled (floor → LEVEL_IDX), or the grey gap line (null). */
 export function pushRow(s: MwfStore, row: Float32Array | null) {
   if (!s.cols || !s.rows) return;

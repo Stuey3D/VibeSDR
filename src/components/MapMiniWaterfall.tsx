@@ -22,7 +22,7 @@ import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkImage as S
 import { getColorLUT } from '../assets/colormapUtils';
 import { mwfCrop, mwfMinSpan, mwfDims, mwfDue, mwfX } from '../utils/mapChrome';
 import type { MapWfModel } from '../utils/mapWfModel';
-import { GAP_ROW as GAP, mwfPaint, pushRow, type MwfStore, type MwfFrame } from '../utils/mapWfPaint';   // ★ the pure half (tested)
+import { GAP_ROW as GAP, mwfPaint, pushRow, mwfClampToCapture, type MwfStore, type MwfFrame } from '../utils/mapWfPaint';   // ★ the pure half (tested)
 export { mwfStoreNew, type MwfStore, type MwfFrame } from '../utils/mapWfPaint';
 import { DECODER_FONT } from './DecoderShell';
 
@@ -78,7 +78,8 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
       const now = Date.now();
       if (!mwfDue(lastDraw.current, now)) return;
       lastDraw.current = now;
-      const v = mwfMinSpan(m.lo, m.hi, f.bins.length ? f.spanHz / f.bins.length : 0);
+      // ★★★ widened to 16 bins, then kept INSIDE the frame (never a span starting below its lowest bin: the left strip)
+      const v = mwfClampToCapture(mwfMinSpan(m.lo, m.hi, f.bins.length ? f.spanHz / f.bins.length : 0), f.centreHz, f.spanHz);
       if (z.vlo !== v.lo || z.vhi !== v.hi) { z.vlo = v.lo; z.vhi = v.hi; }
       const row = mwfCrop(f.bins, f.centreHz, f.spanHz, v.lo, v.hi, z.cols);
       pushRow(z, row);
