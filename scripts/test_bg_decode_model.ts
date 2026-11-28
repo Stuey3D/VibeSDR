@@ -6,7 +6,7 @@ import {
   parseBg, collectBg, parseBgCaps, bgNewProfile, bgHalfWindow, bgNdbSegment, bgNdbHint, bgBandReach, bgBandHint,
   bgDscWatch, bgLocal, bgTime, bgReach, bgDecoderSetsFreq, type BgSpotBand,
   bgSkimPoints, bgSkimPointAt, bgSkimPointLabel, bgSkimFits, bgSkimFirstFit, bgSkimHint, bgSkimDecoderChange, parseSkimBands, type BgVfo,
-  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX, bgSatBothFits, bgUsbOnly, type BgDecoderDef,
+  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX, bgSatBothFits, bgUsbOnly, BG_HFDL_NOTE, type BgDecoderDef,
 } from '../src/services/bgDecode.ts';
 
 let pass = 0, fail = 0;
@@ -181,6 +181,12 @@ console.log('── ★★★ beta97 the satellite digital-mode skimmer in satPa
   ok(bgUsbOnly(decs, 'usb').length === 0 && bgUsbOnly(decs, 'nfm').length === 0, '…and only on an LSB row');
   const j = '{"on":true,"waitMin":5,"profiles":[{"centre":7100000,"from":"00:00","to":"00:00","vfos":[{"hz":7171000,"mode":"lsb","dec":"sstv"}]}]}';
   ok(collectBg(parseBg(j)) === j, 'a 7171 kHz LSB SSTV VFO round-trips byte for byte');
+  // ★★ beta98 HFDL as a background VFO: in the engine's list (USB only), greyed on LSB, its profile round-trips
+  const hf = decs.find((d) => d.id === 'hfdl');
+  ok(!!hf && hf.label === 'HFDL' && hf.modes.join() === 'usb' && bgUsbOnly(decs, 'lsb').some((d) => d.id === 'hfdl'), 'the engine offers HFDL on USB (greyed "USB only" on LSB)');
+  const h = '{"on":true,"waitMin":5,"profiles":[{"centre":8900000,"from":"00:00","to":"00:00","vfos":[{"hz":8977000,"mode":"usb","dec":"hfdl"},{"hz":8942000,"mode":"usb","dec":"hfdl"}]}]}';
+  ok(collectBg(parseBg(h)) === h, 'two HFDL VFOs (8977 + 8942 kHz) round-trip byte for byte');
+  ok(/published HFDL frequency/.test(BG_HFDL_NOTE) && /1440 Hz above it/.test(BG_HFDL_NOTE), 'an HFDL row says the dial is the published frequency');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

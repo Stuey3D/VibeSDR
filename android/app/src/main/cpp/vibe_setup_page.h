@@ -9177,6 +9177,9 @@ const BG_DECODERS = [
   { id: "dsc-vhf",      label: "DSC (VHF channel 70)",         tone: 0,    modes: ["nfm"] },
   // ★★ V12 2026-10-29: SITOR-A — the maritime ARQ teleprinter, both stations of a link, tones 1 kHz from the dial
   { id: "sitora",       label: "SITOR-A (ARQ)",                tone: 1000, modes: ["usb", "lsb"] },
+  // ★★ beta98 HFDL (Stuart 11-28) — the dial is the PUBLISHED HFDL frequency (carrier 1440 Hz above it); messages go to the
+  //    radio's aircraft table: the HFDL map, the message log and the community map's HFDL layer. One frequency a VFO.
+  { id: "hfdl",         label: "HFDL",                         tone: 0,    modes: ["usb"] },
   // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"): every digital mode on the band
   //    the VFO's frequency is in (7074 = 40 m), the listener's own Band mode behind its CPU governor, ONE summary card
   //    for the band. Offered only where this radio has a band at all and Band is not switched off here (bgBandOk).
@@ -9191,6 +9194,8 @@ const BG_DECODERS = [
   //    every ticked one inside the window runs its own WEFAX decoder, all in ONE decoder slot. Its row has no frequency box.
   { id: "wefax-stations", label: "WEFAX stations (several in one slot)", tone: 1900, modes: ["usb"], fax: true },
 ];
+/** ★★ beta98 the line under an HFDL row (the app's BG_HFDL_NOTE says the same). */
+const BG_HFDL_NOTE = "The dial is the published HFDL frequency, in USB (the carrier is 1440 Hz above it). Every message goes to this radio\u2019s aircraft table \u2014 the HFDL map, the message log and the community map \u2014 never to the gallery. One frequency a VFO: add a VFO for each ground-station frequency you want watched.";
 /** ★★ beta98 the decoders an LSB row cannot run but a USB one can — listed greyed with "USB only" (bgdecode_config.h). */
 function bgUsbOnly(mode) {
   return mode !== "lsb" ? [] : BG_DECODERS.filter(function (d) { return d.modes.indexOf("usb") >= 0 && d.modes.indexOf("lsb") < 0; });
@@ -10503,6 +10508,7 @@ function bgRender() {
         v.dec = dc.value;
         if (v.dec !== "wefax-stations" && v.fax) delete v.fax;   // ★ ticks belong to a WEFAX stations row only
         if (was === "wefax-stations" && v.dec !== was && !bgDecoderSetsFreq(v.dec)) { bgRender(); return; }   // ★ its frequency box comes back
+        if ((v.dec === "hfdl") !== (was === "hfdl")) { bgRender(); return; }   // ★ beta98 HFDL's line comes or goes
         /* ★★ V12 beta90: a row becoming a skimmer keeps its band at the new width (40 m CW 48 → 96 kHz: 7024 → 7048), an
          *  owner's own centre stays theirs, and anything else lands on the first band this capture holds. */
         const nsk = bgSkimDef(v.dec), osk = bgSkimDef(was);
@@ -10585,6 +10591,8 @@ function bgRender() {
         card.appendChild(fb);
       }
       else if (sk) { bh = el("div", { class: "hint bgSkimNote" }); card.appendChild(bh); paintHint(); }
+      // ★★ beta98 HFDL: say what the frequency is and where the messages go (the row has no other line)
+      else if (v.dec === "hfdl") card.appendChild(el("div", { class: "hint bgHfdlNote" }, BG_HFDL_NOTE));
     });
     // ★ One radio: rows past the box's decoders are KEPT (a box that went from several radios back to one) but said
     //   plainly not to run; the server refuses a save with more, in words.

@@ -164,6 +164,15 @@ inline const std::vector<DecoderDef>& decoders() {
         // ★★ V12 2026-10-29: SITOR-A (AMTOR mode A, ARQ) — both stations of a link, the tones 1 kHz from the dial as for
         //    RTTY; either sense is found by the decoder. Kept as an RTTY-style run of text.
         { "sitora",       "SITOR-A (ARQ)",                "sitora", "sitora", "usb,lsb", 1000, 170, 100,  false, false, 0 },
+        // ★★ beta98 HFDL (Stuart 11-28: "the background VFO decoder list has NO HFDL") — the listener's own decoder
+        //    (vibe_hfdl_run.h, ext "hfdl", ~3 % of a Pi 2 core) on a USB VFO at the PUBLISHED HFDL frequency (the dial; the
+        //    carrier is 1440 Hz above it, which the decoder mixes down itself — tone 0). Every message goes into the radio's
+        //    aircraft table, exactly as a listener's: the HFDL map and /addon/hfdl/*, the server-wide message log
+        //    (/vibeserver/avmsgs.json; bodies on its own owner-only rule) and the community map's HFDL layer. Never a
+        //    message body anywhere else, and nothing in the gallery (a listener's HFDL keeps none either). USB only: the
+        //    burst is 8-PSK on the USB convention, and LSB mirrors its constellation. ONE frequency a VFO; several
+        //    ground-station frequencies = several VFOs, each its own decoder slot (one HfdlRun per audio channel).
+        { "hfdl",         "HFDL",                         "hfdl",   "hfdl",  "usb",     0,    0,   0,     false, false, 0 },
         // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"). Every digital mode on the
         //    band the VFO's frequency is in — FT8, FT4, WSPR, JS8, FT2, JTTY, PSK on their own dials, the listener's own
         //    Band mode (decoders/digi_spotter.h) with its CPU governor — kept as ONE summary for the band, as FT8's is.
@@ -203,7 +212,8 @@ inline bool decoderFitsDemod(const std::string& dec, const std::string& mode) {
 inline double passbandHz(const Vfo& v) {
     const DecoderDef* d = decoderDef(v.dec);
     if (d && d->widthHz > 0) return d->widthHz;     // ★ a skimmer's whole segment
-    return v.mode == "nfm" ? 12500.0 : v.dec == "ft8" ? 3000.0 : 2700.0;
+    // ★ beta98 HFDL: the burst is the carrier (dial + 1440 Hz) ± 1.2 kHz, so 240–2640 Hz of audio — 3 kHz, as FT8's
+    return v.mode == "nfm" ? 12500.0 : (v.dec == "ft8" || v.dec == "hfdl") ? 3000.0 : 2700.0;
 }
 /** ★ A skimmer VFO — CW, PSK or (V12 beta90) RTTY: fed IQ, no demodulator. */
 inline bool isSkimmer(const Vfo& v) { const DecoderDef* d = decoderDef(v.dec); return d && d->widthHz > 0; }
@@ -260,7 +270,7 @@ inline std::string attachMsg(const Vfo& v) {
     else if (id == "wefax" || id == "wefax-stations")
         std::snprintf(b, sizeof b, "{\"lpm\":120,\"image_width\":1809,\"carrier\":%.0f,\"deviation\":400,"
                       "\"auto_start\":true,\"auto_stop\":true}", d->toneHz);
-    else if (id == "sstv" || id == "ft8") std::snprintf(b, sizeof b, "{}");
+    else if (id == "sstv" || id == "ft8" || id == "hfdl") std::snprintf(b, sizeof b, "{}");
     else if (id == "aprs" || id == "aprs-hf") std::snprintf(b, sizeof b, "{\"baud_rate\":%.0f}", d->baud);
     else if (id == "dsc") std::snprintf(b, sizeof b, "{\"band\":\"hf\",\"center_frequency\":%.0f}", d->toneHz);
     else if (id == "dsc-vhf") std::snprintf(b, sizeof b, "{\"band\":\"vhf\"}");
