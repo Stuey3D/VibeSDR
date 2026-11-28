@@ -210,7 +210,7 @@ interface MapOverlayProps {
           ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string;
           /** ★★ V12 2026-11-01 the NAVTEX map: its layer keys, a card's gallery text (fetched when it opens), and TRANSCRIBE's
            *  TRANSLATE TO for the gallery's own TRANSLATE in the card ('' = the phone's language). */
-          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string; nOther?: number }>;   // ★★★ beta97 live / others = LAYERS' LIVE badges (mapChrome liveBadges)
+          toggles?: Array<{ id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string; nOther?: number; nPos?: number }>;   // ★★★ beta97 live / others = LAYERS' LIVE badges (mapChrome liveBadges)
           toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;   // ★★★ beta96 SHOW counts + dots
           /** ★ beta95 the map's padded view [s, w, n, e], rounded to 2° (the sea areas in view are sent — seaCompose's view) */
           onView?: (box: [number, number, number, number]) => void;
@@ -3317,8 +3317,8 @@ function MapCardsHost(p: {
   useEffect(() => () => { if (noteT.current) clearTimeout(noteT.current); }, []);
   // ── LAYERS: the SHOW toggles with their counts and LIVE (this radio's own layers) ──
   const layerRows: MapLayerRow[] = (t.toggles ?? []).map((x) => ({ id: x.id, label: x.label.replace(/^●\s*/, ''), words: x.words, n: x.n, colour: x.colour,
-    live: x.live ?? /^●/.test(x.label), others: x.others, group: x.group, nOther: x.nOther }));
-  const fam = layerFamilies(layerRows, t.toggled ?? {}).map((f) => ({ glyph: f.glyph as ModeIconName, n: f.n, colour: f.colour }));
+    live: x.live ?? /^●/.test(x.label), others: x.others, group: x.group, nOther: x.nOther, nPos: x.nPos }));
+  const fam = layerFamilies(layerRows, t.toggled ?? {}).map((f) => ({ glyph: f.glyph as ModeIconName, n: f.n, colour: f.colour, pos: f.pos }));
   // ── TUNE: the modes (2+), the one-row gain (ADS-B live: the server's ramp), the live mode's facts ──
   const g = p.adsbGain;
   const gain: GainRow = g ? adsbGainRow(g.view, false) : p.cards?.gain ?? { kind: 'none', more: false };

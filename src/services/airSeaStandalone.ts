@@ -9,7 +9,7 @@
  *    rows, the NAVTEX layers, storedLayers). Pure: the screen (AirSeaScreen.tsx) owns the state and the polls; this turns
  *    them into MapOverlay's `trk`. Tested in node (scripts/test_airsea_standalone.ts).
  */
-import { AV_EMPTY, AV_SRC, avCompose, avHave, avNowRule, avMerge, type AvLayers, type SharedAircraft } from './aviationMap';
+import { AV_EMPTY, AV_SRC, avCompose, avHave, avHavePos, avNowRule, avMerge, type AvLayers, type SharedAircraft } from './aviationMap';
 import { liveChrome, livePresent, liveChips, liveProfile, liveTabs, liveTabPick, aircraftOrder, msgFeedUpdate, msgFilter, avLayerOf, shipLayerOf,
          AV_ID, SHIP_ID, TAB_LABEL, LIVE_ROW_CAP, LIVE_CHIP_COLOUR, type LiveLayerId, type LiveTab, type AircraftSort, type LiveMsg } from './liveMaps';
 import { shipLayersFor, shipToggle, shipLayersPresent, shipOn, shipShips, shipItems, shipRows, shipStatus,
@@ -79,7 +79,9 @@ export function composeAirSeaStandalone(st: AirSeaState, h: AirSeaHandlers, msgs
   const effShipBase = shipLayersFor(st.shipLayers, nearAreas > 0);
   // ── the chips: each composer's own presence, the remembered sondes / VOR ──
   const have: Partial<Record<LiveLayerId, number>> = {};
-  const avCounts = avHave(avNowRule(avMerge(null, st.shared), st.shared).planes, st.shared?.stations ?? []) as unknown as Record<string, number>;
+  const avPlanes = avNowRule(avMerge(null, st.shared), st.shared).planes;
+  const avCounts = avHave(avPlanes, st.shared?.stations ?? []) as unknown as Record<string, number>;
+  const avPos = avHavePos(avPlanes) as unknown as Record<string, number>;   // ★★★ beta97 hotfix how many the map can draw
   for (const x of av.present ?? []) if (x !== 'airports' && (avCounts[x] ?? 0) > 0) have[AV_ID[x]] = avCounts[x];   // ★ no forced ADS-B chip
   for (const id of shipPresent.map((x) => SHIP_ID[x])) have[id] = 1;
   const vmMem = st.vmStored.length > 0, sdMem = st.sdStored.length > 0;
@@ -161,7 +163,9 @@ export function composeAirSeaStandalone(st: AirSeaState, h: AirSeaHandlers, msgs
      *  holds now; AIRPORTS / SEA AREAS carry none (they are reference layers) */
     toggles: liveChips(present, live).map((c) => ({ id: c.id, label: c.label, words: c.words, colour: LIVE_CHIP_COLOUR[c.id],
       n: c.id === 'airports' || c.id === 'areas' ? undefined : ({ ...have, ships: shipHave.ships, dsc: shipHave.dsc, navst: shipHave.stations,
-        warnings: shipHave.warnings, weather: shipHave.weather } as Partial<Record<LiveLayerId, number>>)[c.id] })),
+        warnings: shipHave.warnings, weather: shipHave.weather } as Partial<Record<LiveLayerId, number>>)[c.id],
+      // ★★★ beta97 hotfix the aircraft layers' positioned counts: "0/25" where none can be drawn
+      ...(avPos[c.id] != null ? { nPos: avPos[c.id] } : {}) })),
     toggled,
     onToggle: (id: string, v: boolean) => {
       const a = avLayerOf(id as LiveLayerId), sh = shipLayerOf(id as LiveLayerId);

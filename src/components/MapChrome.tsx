@@ -33,7 +33,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, LIST_CHIP_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, layerSplit, layerCountText, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -50,7 +50,9 @@ const F = DECODER_FONT;
 
 export interface MapLayerRow { id: string; label: string; words: string; n?: number; colour?: string; live?: boolean; others?: string[]; group?: string;
   /** ★★★ beta97 the layer's count from this server's OTHER sources (both badges + both counts when this radio is live too) */
-  nOther?: number }
+  nOther?: number;
+  /** ★★★ beta97 hotfix how many of the layer's items have a position (the map draws only those): "0/25" when they differ */
+  nPos?: number }
 export interface MapStatsSection { mode: string; rows: Array<{ key: string; label: string; value: string; name: string }> }
 export interface MapCtlState { auto: 'on' | 'off' | 'paused'; rings?: boolean; range?: boolean; rangeOffered?: boolean; labels?: boolean; aircraft: boolean }
 export interface MapGainHandlers { onAgc: (on: boolean) => void; onSet: (at: number) => void; onUnlock?: (password: string) => Promise<boolean>;
@@ -101,7 +103,7 @@ export interface MapChromeProps {
   tune: { rows: AirSeaTuneRow[]; facts?: string; onPick: (id: string) => void; onRefused: (why: string) => void;
           gain: GainRow; gainH: MapGainHandlers } | null;
   layers: { rows: MapLayerRow[]; toggled: Record<string, boolean>; onToggle: (id: string, on: boolean) => void;
-            fam: Array<{ glyph: ModeIconName; n: number; colour: string }>; note?: string } | null;
+            fam: Array<{ glyph: ModeIconName; n: number; colour: string; pos?: number }>; note?: string } | null;
   stats: { sections: MapStatsSection[]; onPick: (key: string) => void } | null;
   map: { ctl: MapCtlState; onCtl: (k: 'auto' | 'fit' | 'rings' | 'range' | 'labels' | 'centre') => void;
          ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void;
@@ -215,7 +217,9 @@ export default function MapChrome(p: MapChromeProps) {
     ...(p.stats && p.stats.sections.length ? ['stats' as const] : []), 'map', ...(p.chat ? ['chat' as const] : []),
     ...(p.health ? ['health' as const] : []), ...(p.time ? ['time' as const] : []), ...(rc.show ? ['rate' as const] : []),
   ];
-  const famText = p.layers?.fam.map((f) => String(f.n)) ?? [];
+  // ★★★ beta97 hotfix each family's count as drawn: "0/25" (on the map / heard) when they differ — the chip sizes itself to it
+  const famCount = (f: { n: number; pos?: number }) => (f.n > 999 ? '999+' : layerCountText(f.n, f.pos));
+  const famText = p.layers?.fam.map(famCount) ?? [];
   const k = chromeScale(p.winW, p.winH);
   const geo = chromeGeomAt({ w: p.winW, h: p.winH, insets: p.insets, chips,
                              layersW: 30 + famText.reduce((a, t) => a + 18 + t.length * 7, 0), layersCompactW: 30 + (famText[0]?.length ?? 1) * 7 + 18,
@@ -389,12 +393,12 @@ export default function MapChrome(p: MapChromeProps) {
     if (id === 'layers' && p.layers) {
       const fam = g.famCompact ? p.layers.fam.slice(0, 1) : p.layers.fam;
       return (
-        <ChipKey key={id} style={[s.chip, shape, pos, isOpen && s.chipOpen]} words={`Layers: ${p.layers.fam.map((f) => `${f.n}`).join(', ') || 'what is on the map'}`} onPress={() => toggle('layers')}>
+        <ChipKey key={id} style={[s.chip, shape, pos, isOpen && s.chipOpen]} words={`Layers: ${p.layers.fam.map((f) => (f.pos != null && f.pos !== f.n ? `${f.n}, ${f.pos} on the map` : `${f.n}`)).join('; ') || 'what is on the map'}`} onPress={() => toggle('layers')}>
           <View style={g.short ? s.famRow : s.famCol}>
             {fam.length ? fam.map((f, i) => (
               <View key={i} style={g.short ? s.famItemRow : s.famItem}>
                 <ModeIcon name={f.glyph} size={(g.short ? 15 : 15) * k} color={isOpen ? C.gold : f.colour} />
-                <Text style={[s.famN, isOpen && { color: C.gold }]} numberOfLines={1}>{f.n > 999 ? '999+' : f.n}</Text>
+                <Text style={[s.famN, isOpen && { color: C.gold }]} numberOfLines={1}>{famCount(f)}</Text>
               </View>
             )) : <ModeIcon name="aircraft" size={20 * k} color={col} />}
           </View>
@@ -699,7 +703,7 @@ function LayerRows({ l }: { l: NonNullable<MapChromeProps['layers']> }) {
           <React.Fragment key={r.id}>
             {!!head && <Text style={styles.grp}>{head}</Text>}
             <NavRow>
-              <ChipKey style={[styles.rowKey, !on && styles.dim]} words={`${r.words}${sp.split ? `, ${sp.mine} from this radio, ${sp.other} from ${r.others!.join(', ')}` : `${r.n != null ? `, ${r.n}` : ''}${b ? `, ${b.words}` : ''}`} — ${on ? 'shown; hide it' : 'hidden; show it'}`}
+              <ChipKey style={[styles.rowKey, !on && styles.dim]} words={`${r.words}${sp.split ? `, ${sp.mine} from this radio, ${sp.other} from ${r.others!.join(', ')}` : `${r.n != null ? `, ${r.n}` : ''}${b ? `, ${b.words}` : ''}`}${r.n != null && r.nPos != null && r.nPos !== (sp.total ?? r.n) ? `, ${r.nPos} with position` : ''} — ${on ? 'shown; hide it' : 'hidden; show it'}`}
                        onPress={() => l.onToggle(r.id, !on)}>
                 {!!r.colour && <View style={[styles.dot, { backgroundColor: r.colour }]} />}
                 <Text style={[styles.rowKeyTxt, { flex: 1 }]} numberOfLines={1}>{r.label}</Text>
@@ -711,7 +715,7 @@ function LayerRows({ l }: { l: NonNullable<MapChromeProps['layers']> }) {
                 ) : (
                   <>
                     {b && <Text style={[styles.lv, b.kind === 'other' && styles.lvOut]}>{b.text}</Text>}
-                    {r.n != null && <Text style={styles.layerN}>{r.n}</Text>}
+                    {r.n != null && <Text style={styles.layerN}>{layerCountText(r.n, r.nPos)}</Text>}
                   </>
                 )}
                 <View style={[styles.toggle, on && styles.toggleOn]}><View style={[styles.toggleKnob, on && { alignSelf: 'flex-end' }]} /></View>
