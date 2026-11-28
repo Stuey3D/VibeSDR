@@ -680,6 +680,13 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{bottom:var(--cardsBrB,0px)!important;}
   /* ★★★ beta97 the KEY is the MAP card's fold (React Native) — the page's legend never opens on a card map */
   #legend{display:none!important;}
+  /* ★★★ beta97 hotfix (Stuart, 11-28: a MeshCore node's card under the chips, its × unreachable) a map item's own card sits
+     in the room React Native gives it (__cardsArea — itemCardArea): below the top corners, clear of both chip columns,
+     above the LIST and the bottom-right group; its body scrolls and its × stays at the top, a full-size target */
+  .vtl-card{top:var(--caT,10px)!important;right:var(--caR,10px)!important;bottom:auto!important;
+    max-width:min(340px,calc(100% - var(--caR,10px) - var(--caL,10px)))!important;max-height:calc(100% - var(--caT,10px) - var(--caB,10px))!important;}
+  .vtl-card .vtl-x{position:sticky!important;top:-10px;float:right;margin:-8px -10px 0 6px;min-width:40px;min-height:40px;font-size:20px!important;
+    z-index:2;background:rgba(10,14,20,.94)!important;border-radius:8px;}
   /* ★★ THE ATTRIBUTION STAYS READABLE BESIDE THE LIST: its text is narrowed to the room right of the list (the list
      reports its width, __adsbListW; 0 as a pill) and wraps upwards instead of running underneath it. */
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib,.leaflet-bottom.leaflet-right .leaflet-control-attribution{
@@ -1887,6 +1894,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'||KIN
       labels:!cs||cs.labels!==false,mpp:Math.round(mpp*100)/100};
     var sig=JSON.stringify(o);if(!force&&sig===cardsSig)return;cardsSig=sig;trkPost(o);}catch(e){}}
   window.__cardsTell=cardsTell;
+  window.__cardsArea=function(t,r,b,l){var s=document.documentElement.style;s.setProperty('--caT',(Math.max(0,Number(t)||0))+'px');
+    s.setProperty('--caR',(Math.max(0,Number(r)||0))+'px');s.setProperty('--caB',(Math.max(0,Number(b)||0))+'px');s.setProperty('--caL',(Math.max(0,Number(l)||0))+'px');};
   window.__cardsBr=function(px){document.documentElement.style.setProperty('--cardsBrB',(Math.max(0,Number(px)||0))+'px');};
   setInterval(function(){if(document.visibilityState!=='hidden')cardsTell(false);},1000);
   (function(){var mm=GLVM?GLVM.map:map;try{mm.on('moveend',function(){cardsTell(false);});
@@ -3378,6 +3387,7 @@ function MapCardsHost(p: {
         scale={p.mpp > 0 ? { mpp: p.mpp, nm: p.kind === 'airsea' || p.kind === 'avdata' || p.kind === 'vormap' || p.kind === 'ais' || p.kind === 'navtex' || p.kind === 'dsc' } : null}
         onZoom={(d) => p.pageCall('__cardsZoom', d)}
         mapTapSeq={p.mapTapSeq} notice={feedNotice(p.feedWarn)} onBrTop={(px) => p.pageCall('__cardsBr', px)}
+        onItemCardArea={(a) => p.pageCall('__cardsArea', Math.round(a.top), Math.round(a.right), Math.round(a.bottom), Math.round(a.left))}
         onFootprint={(w, h) => p.onFootprint(w, h)} />
       {nb.card}
       {nb.dialog}

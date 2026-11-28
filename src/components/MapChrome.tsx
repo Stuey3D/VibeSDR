@@ -33,7 +33,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, LIST_CHIP_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, itemCardArea, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -134,6 +134,8 @@ export interface MapChromeProps {
   notice?: { title: string; text: string } | null;
   /** ★★★ beta97 the bottom-right group's top, from the window's foot (measured): the page opens its credits above it */
   onBrTop?: (px: number) => void;
+  /** ★★★ beta97 hotfix the room a map item's own card may use (itemCardArea): the page places it there, never under a chip */
+  onItemCardArea?: (a: { top: number; right: number; bottom: number; left: number }) => void;
   /** LIST's footprint for the page (the attribution, the fit's obstacle). */
   onFootprint?: (w: number, h: number, side: boolean) => void;
   /** the cards / maximised list cover the map: AUTO pauses (and resumes without a glide). */
@@ -267,6 +269,11 @@ export default function MapChrome(p: MapChromeProps) {
   // ── LIST's footprint for the page ──
   const listH = !listShown ? LIST_CHIP_H * k : listMax ? g.list.maxH : Math.min(g.list.maxH, (g.list.rows * ROW_H + 34) * k);
   useEffect(() => { p.onFootprint?.(listShown ? g.list.w : 120, listH, g.list.side); }, [listShown, g.list.w, listH, g.list.side]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★★★ beta97 hotfix the item card's room, told to the page whenever the chrome moves (its keys: whole points) */
+  const [brTop, setBrTop] = useState(0);
+  const cardArea = itemCardArea(g, { winW: p.winW, winH: p.winH, insets: p.insets, k, listH, listW: g.list.w, listShown, brTop });
+  const cardAreaKey = [cardArea.top, cardArea.right, cardArea.bottom, cardArea.left].map(Math.round).join(',');
+  useEffect(() => { p.onItemCardArea?.(cardArea); }, [cardAreaKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { p.wf?.onShown(listShown && pane === 'wf' && !!p.wf?.offered); }, [listShown, pane, p.wf?.offered]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!p.wf?.offered && pane === 'wf') setPane('list'); }, [p.wf?.offered]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -371,7 +378,7 @@ export default function MapChrome(p: MapChromeProps) {
                     onMax={(v) => { setListMax(v); keep(LIST_MAX_KEY, v); }} onPane={setPane} height={listH} />
 
         {/* ── bottom-right: ? · scale · [− +] ── */}
-        <BottomRight g={g} scale={p.scale} credits={p.map.credits} onTop={p.onBrTop} helpOpen={open('help')} onHelp={() => toggle('help')} onZoom={p.onZoom}
+        <BottomRight g={g} scale={p.scale} credits={p.map.credits} onTop={(px) => { setBrTop(px); p.onBrTop?.(px); }} helpOpen={open('help')} onHelp={() => toggle('help')} onZoom={p.onZoom}
                      lift={!g.short && listShown && g.list.w >= p.winW - 60 ? listH : 0} hide={listMax && !g.short && g.list.w >= p.winW - 60} />   {/* ★★★ beta97 (Stuart, build 587 on the Mac: the group was GONE with the list maximised) a maximised list beside the map leaves the map its zoom / ? / (i) — only a full-width one hides them */}
       </View>
     </NavCtx.Provider>

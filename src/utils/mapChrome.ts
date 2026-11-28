@@ -119,6 +119,28 @@ export function feedNotice(w: string | null | undefined): { title: string; text:
   return { title: /on the map|Map time/.test(t) ? 'TIME LIMIT' : /reconnecting|lost/.test(t) ? 'AIRCRAFT FEED' : 'CHECK THE ANTENNA', text: t };
 }
 
+/** ★★★ beta97 hotfix (Stuart, 11-28: a MeshCore node's card stuck UNDER the chips, its × out of reach) THE ROOM FOR A MAP
+ *  ITEM'S OWN CARD (the track layer's .vtl-card — AIS, APRS, DSC, ISM / mesh, NAVTEX, sondes, datalink): inside the safe
+ *  area, below the top corners (and a top pill), clear of BOTH chip columns, above the LIST and the bottom-right group —
+ *  as the aircraft card already sits. Distances in screen points from each window edge; the page reads them as CSS. */
+export function itemCardArea(g: ChromeGeom, o: { winW: number; winH: number; insets: Insets; k: number; listH: number; listW: number; listShown: boolean; brTop: number }): { top: number; right: number; bottom: number; left: number } {
+  const gap = GAP * o.k;
+  const boxes = Object.values(g.boxes).filter((b): b is Box => !!b);
+  if (g.short) {
+    const top = Math.max(o.insets.top, ...boxes.map((b) => b.y + b.h)) + gap;
+    const left = o.listShown && g.list.side ? g.list.x + o.listW + gap : o.insets.left + gap;
+    return { top, right: o.insets.right + gap, bottom: Math.max(o.insets.bottom, g.pill.h, o.brTop) + gap, left };
+  }
+  const leftCol = boxes.filter((b) => b.x < o.winW / 2), rightCol = boxes.filter((b) => b.x >= o.winW / 2);
+  const corner = Math.max(o.insets.top, ...boxes.filter((b) => b.y <= 1).map((b) => b.y + b.h), g.pill.at === 'top' ? g.pill.y + g.pill.h : 0);
+  const left = Math.max(o.insets.left, ...leftCol.map((b) => b.x + b.w)) + gap;
+  const right = Math.max(o.insets.right, ...rightCol.map((b) => o.winW - b.x)) + gap;
+  // ★ the LIST at the foot: a full-width drawer, or one under the card's column, holds the card above it
+  const listUnder = o.listShown && !g.list.side && (o.listW >= o.winW - right - 40);
+  const bottom = Math.max(o.insets.bottom, o.brTop, listUnder ? o.listH : 0) + gap;
+  return { top: corner + gap, right, bottom, left };
+}
+
 /** ★★★ THE LAYOUT, from the window and the real insets. */
 export function chromeGeom(p: ChromeIn): ChromeGeom {
   const w = Math.max(0, finite(p.w)), h = Math.max(0, finite(p.h));

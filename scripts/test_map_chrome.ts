@@ -5,7 +5,7 @@
 //   npx tsx scripts/test_map_chrome.ts
 import { readFileSync } from 'node:fs';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, listStops, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -258,6 +258,28 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
      'the extras are the hardware panel\'s own body (per radio.driver, hwinfo-driven) — the map never opens the controls sheet');
   ok(/if \(p\.inline\) return <View style=\{styles\.inlineBody\}>\{body\}<\/View>;/.test(lhp), 'LocalHardwarePanel draws its body alone, inline (no Modal, no keys of its own)');
   ok(/agcName: drv === 'sdrplay' && rspIfAgc !== false && \(rspVagcRunning !== undefined/.test(sdr) && /\? vagcIfOwner\(!!rspVagcRunning\) : undefined,/.test(sdr), 'the name from the server\'s report (rspstat vagc → VibeAGC / SDRplay)');
+}
+
+// ── ★★★ beta97 hotfix: a map item's own card (mesh node, ship, station…) never under the chips (Stuart 11-28) ──
+{
+  const chips = ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[];
+  const ins = { top: 62, bottom: 34, left: 0, right: 0 };
+  const g = chromeGeom({ w: 402, h: 874, insets: ins, chips });
+  const a = itemCardArea(g, { winW: 402, winH: 874, insets: ins, k: 1, listH: 160, listW: 402, listShown: true, brTop: 150 });
+  const boxes = Object.values(g.boxes) as Array<{ x: number; y: number; w: number; h: number }>;
+  const cardL = 402 - a.right - Math.min(340, 402 - a.right - a.left), cardR = 402 - a.right;
+  const under = boxes.filter((b) => b.x < cardR && b.x + b.w > cardL && b.y < 874 - a.bottom && b.y + b.h > a.top);
+  ok(under.length === 0, `iPhone: the card's room touches no chip (top ${a.top}, right ${a.right}, left ${a.left}, bottom ${a.bottom})`);
+  ok(a.top >= g.boxes.exit!.h && a.top >= g.boxes.rate!.h && a.top >= g.pill.y + g.pill.h, 'below the ✕ / RATE corners and the pill (the × reachable)');
+  ok(a.bottom >= 160 && a.bottom >= 150, 'above a full-width LIST and the bottom-right group');
+  const s2 = chromeGeom({ w: 956, h: 376, insets: { top: 0, bottom: 20, left: 62, right: 62 }, chips });
+  const b2 = itemCardArea(s2, { winW: 956, winH: 376, insets: { top: 0, bottom: 20, left: 62, right: 62 }, k: 1, listH: 300, listW: s2.list.w, listShown: true, brTop: 60 });
+  ok(b2.top >= 44 && b2.left >= s2.list.x + s2.list.w && b2.right >= 62, 'short landscape: under the top row, right of the side panel, inside the notch');
+  const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
+  ok(/\.vtl-card\{top:var\(--caT,10px\)!important;right:var\(--caR,10px\)!important;/.test(mo) && /max-height:calc\(100% - var\(--caT,10px\) - var\(--caB,10px\)\)!important;/.test(mo),
+     'the page places the track layer\'s card in that room; its body scrolls inside it');
+  ok(/\.vtl-card \.vtl-x\{position:sticky!important;top:-10px;float:right;margin:-8px -10px 0 6px;min-width:40px;min-height:40px;/.test(mo), 'its × stays at the top while the body scrolls, a full-size target');
+  ok(/onItemCardArea=\{\(a\) => p\.pageCall\('__cardsArea'/.test(mo) && /window\.__cardsArea=function\(t,r,b,l\)/.test(mo), 'React Native tells the page (on every change of the chrome)');
 }
 
 // ── the pill's words ──
