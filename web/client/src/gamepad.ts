@@ -236,7 +236,12 @@ function autoGrab(): boolean {
   return true;
 }
 
-function box(el: HTMLElement): Box { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }
+/* ★ [data-navrect]: a big stop (the map's LIST drawer) is measured by a part of it (its first row) — measured whole, its
+ *  centre lay so far from everything that the walk could miss it entirely in portrait (test-web-map-pad) */
+function box(el: HTMLElement): Box {
+  const part = el.dataset.navrect ? el.querySelector<HTMLElement>(el.dataset.navrect) : null;
+  const r = (part && part.getClientRects().length ? part : el).getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };
+}
 /** ★★ A WIDE STOP IS STRAIGHT AHEAD OF WHATEVER IS ABOVE OR BELOW IT ([data-navwide] — the menu's category headers,
  *  2026-11-12). pickNext scores by centre-to-centre distance, so a full-width header's centre sat far to the side of the
  *  CENTRE key above it, and down skipped every header to land on a narrow key further down that happened to line up
@@ -517,10 +522,7 @@ function onKey(e: KeyboardEvent) {
   const focused = t instanceof HTMLElement && t !== document.body && t.matches(FOCUSABLE) ? t : null;
   // ★ A control holding real focus (reached with Tab) keeps the browser's own Enter — Tab users and screen readers
   //   press what they are on, and a control with its own Enter handler (the frequency box) is never pressed twice.
-  // ★ …unless the highlight stands somewhere else (a card shut by BACK hands real focus back to its chip while the ring
-  //   moved on): Enter presses what is HIGHLIGHTED (the map's LIST stop, found by test-web-map-pad)
-  if (a === 'enter' && focused && (!current || current === focused || !current.isConnected || !visible(current))) return;
-  if (a === 'enter' && focused && focused !== current) focused.blur();
+  if (a === 'enter' && focused) return;
   // ★ Arrows start from it, so Tab and the arrows share one place on the page…
   if (keyDir(a) && focused && focused !== current && visible(focused)) highlight(focused);
   e.preventDefault();

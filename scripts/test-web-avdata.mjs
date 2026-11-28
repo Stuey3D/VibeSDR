@@ -92,7 +92,7 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   await ev(`document.querySelector('.trkView:not([hidden]) .trkList .hd .tab[data-tab="aircraft"]')?.click()`);
   ok(await until(`document.querySelectorAll('.trkView:not([hidden]) .trkRow').length >= 5`, 30000), `aircraft listed: ${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .trkRow b')].map(x => x.textContent).join(' | ')`)}`);
   const rows = await ev(`document.querySelector('.trkView:not([hidden]) .rows')?.textContent`) || '';
-  ok(/FR1234\s*EI-EST · 4CA97B · VDL2/.test(rows), 'a row: the flight, then registration · ICAO address · the source (the AVIATION MAP\'s list)');
+  ok(/FR1234[\s\S]{0,40}?EI-EST · 4CA97B · VDL2/.test(rows), `a row (its FL | NM pill after the flight, Stuart 13:10): the flight, then registration · ICAO address · the source (the AVIATION MAP's list) — ${rows.slice(0, 200)}`);
   ok(/^AVIATION & MARITIME · DATALINK$/.test(await ev(`document.querySelector('.trkView:not([hidden]) .ttl')?.textContent`) || ''), 'the view is the AIR & SEA map, DATALINK live');
   ok(!/TEST MESSAGE BODY/.test(rows), '★ no message text without the owner\'s opt-in');
   ok(/VDL2 136\.\d+ MHz · \d+ aircraft/.test(await ev(`document.querySelector('.trkView:not([hidden])')?.textContent`) || ''), 'the status names the band and the count');
@@ -111,8 +111,10 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   console.log('   screenshot', await shot('desktop'));
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1200);
+  // ★ map cards: a phone opens with no card — the LIST drawer opened from its chip first
+  await ev(`(() => { const b = document.querySelector('.trkView:not([hidden]) [data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(900);
   const r = JSON.parse(await ev(`JSON.stringify(document.querySelector('.trkView:not([hidden]) .trkList').getBoundingClientRect())`));
-  ok(r.left >= 5 && r.right <= 390 - 5 && r.bottom <= 844, `the list fits a phone: ${Math.round(r.left)}–${Math.round(r.right)}, bottom ${Math.round(r.bottom)}`);
+  ok(r.left >= -2 && r.right <= 390 + 1 && r.bottom <= 844, `the list fits a phone (the LIST drawer joins the left edge, its border just past it — map cards): ${Math.round(r.left)}–${Math.round(r.right)}, bottom ${Math.round(r.bottom)}`);
   const sw = await ev(`document.documentElement.scrollWidth`);
   ok(sw <= 390, `no sideways scroll at 390 px (${sw})`);
   console.log('   screenshot', await shot('phone'));
