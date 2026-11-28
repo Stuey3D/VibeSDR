@@ -102,7 +102,7 @@ await session('ais', AIS, 162000000, 96100000, 'wfm', async ({ ev, send, shot, u
   await ev(`(() => { const b = document.querySelector('.trkView:not([hidden]) [data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`);
   await sleep(500);
   const r = JSON.parse(await ev(`JSON.stringify(document.querySelector('.trkView:not([hidden]) .trkList').getBoundingClientRect())`));
-  ok(r.left >= 5 && r.right <= 390 - 5 && r.bottom <= 844, `the list fits a phone: ${Math.round(r.left)}–${Math.round(r.right)}, bottom ${Math.round(r.bottom)}`);
+  ok(r.left >= -2 && r.right <= 390 + 1 && r.bottom <= 844, `the list fits a phone (the LIST drawer joins the left edge, its border just past it — map cards): ${Math.round(r.left)}–${Math.round(r.right)}, bottom ${Math.round(r.bottom)}`);
   const sw = await ev(`document.documentElement.scrollWidth`);
   ok(sw <= 390, `no sideways scroll at 390 px (${sw})`);
   console.log('   screenshot', await shot('ais-phone'));
