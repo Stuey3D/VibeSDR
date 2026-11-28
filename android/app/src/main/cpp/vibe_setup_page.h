@@ -447,25 +447,6 @@ body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #ba
       <div class="hint" id="orderMsg"></div>
       </div>
 
-
-      <!-- ★★★ b97-cpu-budget BACKGROUND PRIORITY (vibe_bg_budget.h; Stuart 11-28: "a drag-to-order priority list"). ONE CARD,
-           its own anchor (#bgPrioCard) and its own script (bgPrio*), so the Setup grouping work can move it whole into the
-           THIS BOX / performance group. Shown only when a radio here has a background profile. The order is the MACHINE's:
-           every radio's background decoding sheds by it (lowest first). Saved at once (sdr-change "bgorder"), live at the
-           radios' next health tick. ▲▼ and the arrow keys as well as drag — a TV remote and a keyboard reach it. -->
-      <div class="card" id="bgPrioCard" style="display:none">
-      <h2>Background decoding priority</h2>
-      <p class="why">When this machine runs short of CPU, background decoding gives way in this order &mdash; the
-         <b>bottom row first</b>. A row gives up decode depth first (fewer weak and deep decodes), then its extra
-         modes (CW, RTTY, wide PSK), and only then whole bands or decoders. The top row keeps its full depth longest.
-         Satellite passes and anything a listener is decoding always come before all of these, and the DSC and NAVTEX
-         distress watches are never cut. Press and hold a row, then drag it (or select it and use the arrow keys, or
-         &#9650;&#9660;). Applies to every radio on this machine.</p>
-      <div id="bgPrioPower" class="hint"></div>
-      <div id="bgPrioList" role="list" aria-label="Background decoding priority, top first"></div>
-      <div class="hint" id="bgPrioMsg"></div>
-      </div>
-
       <div class="card" id="benchCard">
       <h2>What this box can carry</h2>
       <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
@@ -8107,7 +8088,6 @@ function renderTabs() {
          + `${esc(r.label || r.driver || "Radio " + (i + 1))}${dot}</button>`;
   }).join("");
   renderOrder();
-  bgPrioRender();   // ★★★ b97 the background priority card (self-contained, below)
   Array.from(tabs.querySelectorAll("button")).forEach(b => {
     b.onclick = () => {
       // ★ Switching tabs KEEPS what you typed, in memory, so flipping between two radios to
@@ -11271,117 +11251,6 @@ async function sdrAct(action, serial, newSerial) {
   msg.textContent = "";
   // ★ A moment for the radios behind the door to start (or fail) before asking again.
   setTimeout(sdrChangesLoad, 6000);
-}
-
-
-// ── ★★★ b97-cpu-budget BACKGROUND DECODING PRIORITY — the box's order (vibe_bg_budget.h) ─────────────────────────────
-// Self-contained: its own card (#bgPrioCard), state, save and drag. The rows and their live state come from the front
-// door ("bgstate"); a reorder is saved at once ("bgorder"). Refreshed every 10 s while the page is visible.
-let BGPRIO = {rows: [], timer: 0, drag: null, keyTimer: 0, busy: false};
-function bgPrioWanted() { return (cfg.radios || []).some(r => r && r.bgDecode && String(r.bgDecode).length > 2); }
-function bgPrioRender() {
-  const card = $("bgPrioCard");
-  if (!card) return;
-  const want = bgPrioWanted();
-  card.style.display = want ? "" : "none";
-  if (!want) { clearInterval(BGPRIO.timer); BGPRIO.timer = 0; return; }
-  if (!BGPRIO.timer) { bgPrioLoad(); BGPRIO.timer = setInterval(() => { if (!document.hidden && !BGPRIO.drag) bgPrioLoad(); }, 10000); }
-}
-async function bgPrioPost(body) {
-  const r = await fetch("/vibeserver/sdr-change?" + await authQuery(), {method: "POST", body: JSON.stringify(body)});
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(r.status === 403 ? "this server refused it from here" : (j.error || ("error " + r.status)));
-  return j;
-}
-async function bgPrioLoad() {
-  if (BGPRIO.busy) return;
-  try { bgPrioShow(await bgPrioPost({action: "bgstate"})); }
-  catch (e) { $("bgPrioMsg").textContent = "Could not read the priority list — " + ((e && e.message) || e); }
-}
-function bgPrioShow(j) {
-  if (!j || !Array.isArray(j.rows)) return;
-  BGPRIO.rows = j.rows;
-  $("bgPrioPower").textContent = j.power ? ("Note: " + j.power + " — the budget measures what it can actually do.") : "";
-  const list = $("bgPrioList");
-  const focusId = document.activeElement && document.activeElement.closest && document.activeElement.closest(".ordItem")
-                ? document.activeElement.closest(".ordItem").getAttribute("data-id") : null;
-  list.innerHTML = j.rows.map((r, i) =>
-    `<div class="ordItem" role="listitem" tabindex="0" data-id="${esc(r.id)}"`
-    + ` aria-label="${i + 1}: ${esc(r.label)} — ${esc(r.state)}. Press and hold to drag, or use the arrow keys">`
-    + `<span class="ordGrip" aria-hidden="true">≡</span>`
-    + `<span style="min-width:1.4em;color:var(--dim)">${i + 1}</span>`
-    + `<span style="flex:1">${esc(r.label)}<br><span class="hint" style="margin:0">${esc(r.state)}</span></span>`
-    + `<button type="button" class="ordMv ghost" data-mv="-1" aria-label="Move up">▲</button>`
-    + `<button type="button" class="ordMv ghost" data-mv="1" aria-label="Move down">▼</button></div>`).join("");
-  Array.from(list.children).forEach(bgPrioWire);
-  if (focusId) { const el = list.querySelector(`[data-id="${focusId}"]`); if (el) el.focus(); }
-}
-function bgPrioMove(el, dir) {
-  const list = el.parentNode;
-  if (dir < 0) { if (!el.previousElementSibling) return false; list.insertBefore(el, el.previousElementSibling); }
-  else { if (!el.nextElementSibling) return false; list.insertBefore(el.nextElementSibling, el); }
-  return true;
-}
-function bgPrioSoon() { clearTimeout(BGPRIO.keyTimer); BGPRIO.keyTimer = setTimeout(bgPrioSave, 600); }   // ★ one save for a run of presses
-function bgPrioWire(el) {
-  el.addEventListener("pointerdown", e => {
-    if (e.button !== undefined && e.button !== 0) return;
-    if (e.target.closest && e.target.closest(".ordMv")) return;
-    const st = {el, id: e.pointerId, x: e.clientX, y: e.clientY, live: false, mouse: e.pointerType === "mouse"};
-    const lift = () => { st.live = true; el.classList.add("lift"); try { el.setPointerCapture(st.id); } catch (_) {}
-                         if (!st.mouse && navigator.vibrate) try { navigator.vibrate(15); } catch (_) {} };
-    if (st.mouse) { e.preventDefault(); lift(); } else st.timer = setTimeout(lift, 220);   // ★ a finger holds first: a swipe still scrolls
-    BGPRIO.drag = st;
-  });
-  el.addEventListener("pointermove", e => {
-    const st = BGPRIO.drag;
-    if (!st || st.el !== el || e.pointerId !== st.id) return;
-    if (!st.live) { if (Math.abs(e.clientX - st.x) > 8 || Math.abs(e.clientY - st.y) > 8) { clearTimeout(st.timer); BGPRIO.drag = null; } return; }
-    e.preventDefault();
-    const list = el.parentNode;
-    let before = null;
-    for (const c of Array.from(list.children).filter(c => c !== el)) {
-      const b = c.getBoundingClientRect();
-      if (e.clientY < b.top + b.height / 2) { before = c; break; }
-    }
-    if (before !== el.nextSibling) list.insertBefore(el, before);
-  });
-  const end = () => {
-    const st = BGPRIO.drag;
-    if (!st || st.el !== el) return;
-    clearTimeout(st.timer); BGPRIO.drag = null;
-    if (!st.live) return;
-    el.classList.remove("lift");
-    bgPrioSave();
-  };
-  el.addEventListener("pointerup", end);
-  el.addEventListener("pointercancel", end);
-  el.addEventListener("touchmove", e => { if (BGPRIO.drag && BGPRIO.drag.live && BGPRIO.drag.el === el) e.preventDefault(); }, {passive: false});
-  el.addEventListener("contextmenu", e => { if (BGPRIO.drag) e.preventDefault(); });
-  el.querySelectorAll(".ordMv").forEach(b => b.addEventListener("click", () => {
-    if (bgPrioMove(el, Number(b.getAttribute("data-mv")))) { b.focus(); bgPrioSoon(); }
-  }));
-  el.addEventListener("keydown", e => {
-    if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-    e.preventDefault();
-    if (bgPrioMove(el, e.key === "ArrowUp" ? -1 : 1)) { el.focus(); bgPrioSoon(); }
-  });
-}
-async function bgPrioSave() {
-  const order = Array.from($("bgPrioList").children).map(c => c.getAttribute("data-id"));
-  const msg = $("bgPrioMsg");
-  msg.textContent = "Saving the order…";
-  BGPRIO.busy = true;
-  try {
-    const j = await bgPrioPost({action: "bgorder", order});
-    BGPRIO.busy = false;
-    bgPrioShow(j);
-    msg.textContent = "Saved — every radio follows the new order within a few seconds.";
-  } catch (e) {
-    BGPRIO.busy = false;
-    msg.textContent = "Could not save the order — " + ((e && e.message) || e);
-    bgPrioLoad();
-  }
 }
 
 // ── ★★ RADIO ORDER — display only (RadioConfig::order) ───────────────────────────────────────────

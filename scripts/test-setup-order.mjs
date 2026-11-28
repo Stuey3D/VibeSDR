@@ -19,7 +19,7 @@ ok(inOrder(radio, wantRadio), `radio tab: ${radio.join(' · ')}`);
 const pos = (h) => radio.indexOf(h);
 ok(pos('Where new listeners land') === pos('Background decoding') - 1, '10 where new listeners land, then 11 background decoding');
 const server = heads(pane('serverPane', 'radioPane'));
-const wantServer = ['Radio order', 'Background decoding priority', 'What this box can carry', 'Processor', 'Wi-Fi', 'On your network', 'Where this receiver is', 'Network port',
+const wantServer = ['Radio order', 'What this box can carry', 'Processor', 'Wi-Fi', 'On your network', 'Where this receiver is', 'Network port',
   'Behind a reverse proxy', 'Advertise on VibeSDR.net', 'SSH', 'VibeSDR community map',
   // ★★ beta96 b96-sbsfeed: the standalone map's limits, the server-level feed sources and the flight-tracker hub, before PSK Reporter
   'Air & sea map', 'Aircraft feeds from other receivers', 'Share ADS-B with flight trackers', 'PSK Reporter',
