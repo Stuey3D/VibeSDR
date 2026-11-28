@@ -53,7 +53,9 @@ function pageCss() {
 
 /** Modules a standalone page cannot have → stand-ins (only these names are imported from them by the chrome). */
 const STUBS = {
-  './gamepad': 'export function padRehighlight(){}',
+  // ★ b97-integrate: b96-mapcards' controller support (mapChrome.ts imports padHighlight / activePadLayout / driveInput / pushBack) —
+  //   a standalone page (the community map) has no pad: nothing is driven, no layout, no BACK layer.
+  './gamepad': 'export function padRehighlight(){} export function padHighlight(){} export function activePadLayout(){return ""} export function driveInput(){return null} export function pushBack(){return function(){}}',
   './chunkCache': "export function loadVibemapSource(){return Promise.reject(new Error('no vibemap here'))}",
   './leafletAsset': 'export async function loadLeafletInto(){return false}',
   './mapgl': 'export async function probeMapGL(){return null} export async function loadMapGLScripts(){return false} export function mapglLoad(){return Promise.resolve(null)}',
