@@ -440,6 +440,15 @@ export function mwfCrop(bins: ArrayLike<number>, centreHz: number, spanHz: numbe
   }
   return out;
 }
+/** ★★★ beta97 hotfix THE MINIMUM SPAN (the web's rule too): the drawer never shows fewer than this many of the frame's
+ *  bins — a narrower view on a wide capture is widened about its centre, so there is always signal structure to see. */
+export const MWF_MIN_BINS = 16;
+export function mwfMinSpan(lo: number, hi: number, binHz: number, minBins = MWF_MIN_BINS): { lo: number; hi: number } {
+  const want = binHz > 0 && Number.isFinite(binHz) ? binHz * minBins : 0;
+  if (!(hi > lo) || !(hi - lo < want)) return { lo, hi };
+  const c = (lo + hi) / 2;
+  return { lo: c - want / 2, hi: c + want / 2 };
+}
 /** A marker's x (0…1 of the drawer) — null when it falls outside the span. */
 export function mwfX(hz: number, lo: number, hi: number): number | null { return hi > lo && hz >= lo && hz <= hi ? (hz - lo) / (hi - lo) : null; }
 

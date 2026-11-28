@@ -20,7 +20,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkImage as SkImageT } from '@shopify/react-native-skia';
 import { getColorLUT } from '../assets/colormapUtils';
-import { mwfCrop, mwfDims, mwfDue, mwfX } from '../utils/mapChrome';
+import { mwfCrop, mwfMinSpan, mwfDims, mwfDue, mwfX } from '../utils/mapChrome';
 import type { MapWfModel } from '../utils/mapWfModel';
 import { DECODER_FONT } from './DecoderShell';
 
@@ -35,6 +35,9 @@ export interface MwfStore {
   floor: number;
   stamps: Array<{ seq: number; x: number; text: string }>;
   hiddenAt: number;
+  /** ★★★ beta97 hotfix the span actually drawn (the model's, widened to MWF_MIN_BINS of the frame's bins) — the markers
+   *  and the stamps are placed on it, so they line up with the picture */
+  vlo?: number; vhi?: number;
 }
 export function mwfStoreNew(): MwfStore { return { cols: 0, rows: 0, ring: new Uint8Array(0), seq: 0, key: '', floor: NaN, stamps: [], hiddenAt: 0 }; }
 export type MwfFrame = { bins: Float32Array; centreHz: number; spanHz: number };
@@ -91,9 +94,11 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
       const now = Date.now();
       if (!mwfDue(lastDraw.current, now)) return;
       lastDraw.current = now;
-      const row = mwfCrop(f.bins, f.centreHz, f.spanHz, m.lo, m.hi, z.cols);
+      const v = mwfMinSpan(m.lo, m.hi, f.bins.length ? f.spanHz / f.bins.length : 0);
+      if (z.vlo !== v.lo || z.vhi !== v.hi) { z.vlo = v.lo; z.vhi = v.hi; }
+      const row = mwfCrop(f.bins, f.centreHz, f.spanHz, v.lo, v.hi, z.cols);
       pushRow(z, row);
-      for (const sp of pending.current) { if (sp.key !== m.key) continue; const x = mwfX(sp.hz, m.lo, m.hi); if (x != null) z.stamps.push({ seq: z.seq - 1, x, text: sp.text }); }
+      for (const sp of pending.current) { if (sp.key !== m.key) continue; const x = mwfX(sp.hz, v.lo, v.hi); if (x != null) z.stamps.push({ seq: z.seq - 1, x, text: sp.text }); }
       pending.current = [];
       if (z.stamps.length > 200) z.stamps = z.stamps.slice(-200);
       setTick((t) => (t + 1) & 0xffff);
@@ -125,8 +130,9 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
   }, [tick, width, height, lut]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { setImg((prev) => { if (prev) setTimeout(() => prev.dispose(), 300); return null; }); }, []);
 
-  const m = model;
   const s = store.current;
+  // ★★★ the markers on the span actually drawn (a widened narrow view keeps them in line with the picture)
+  const m = model && s.key === model.key && s.vlo != null && s.vhi != null ? { ...model, lo: s.vlo, hi: s.vhi } : model;
   return (
     <View style={[mw.wrap, { width, height }]} pointerEvents="none" accessibilityLabel={m?.info ?? 'Live waterfall'}>
       {img && <Canvas style={StyleSheet.absoluteFill}><SkImage image={img} x={0} y={0} width={width} height={height} fit="fill" /></Canvas>}

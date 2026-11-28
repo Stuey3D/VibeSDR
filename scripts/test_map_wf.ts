@@ -3,7 +3,7 @@
 // changes); a DECODED ident is stamped at its frequency when it is read (again on a later reading), never before the
 // view opened, never a listed one.   npx tsx scripts/test_map_wf.ts
 import { readFileSync } from 'node:fs';
-import { mwfCrop } from '../src/utils/mapChrome';
+import { mwfCrop, mwfMinSpan, MWF_MIN_BINS } from '../src/utils/mapChrome';
 import { avBandFor, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
 
 let pass = 0, fail = 0;
@@ -100,6 +100,19 @@ console.log('── ★★★ beta97 the swap needs a beta97 server ("specPause"
   ok(/const wfOffered = !asViewer && isVibeServer && specPauseOk && /.test(sdr) && /wf: wfOffered \? \{ offered: true/.test(sdr),
      'no flag → wf null → no ≋ on the LIST chip and no folder tab (ListDrawer wfOk = p.wf?.offered); with it → offered');
   ok(/if \(!isVibeServer \|\| !specPauseOk\) return;   \/\/ ★★★ beta97 only a server that says it honours it/.test(sdr), 'spec on / off is sent only to a server that honours it');
+}
+
+console.log('── ★★★ beta97 hotfix the minimum span: never fewer than 16 of the frame\'s bins (the web\'s rule too) ──');
+{
+  const bin = 6e6 / 2048;   // a wide capture's bins (~2.9 kHz)
+  const v = mwfMinSpan(869.5e6 - 6500, 869.5e6 + 6500, bin);
+  ok(MWF_MIN_BINS === 16 && Math.abs(v.hi - v.lo - 16 * bin) < 1e-6 && Math.abs((v.lo + v.hi) / 2 - 869.5e6) < 1e-6, `a 13 kHz view on ${(bin / 1e3).toFixed(1)} kHz bins widens to 16 bins (${((v.hi - v.lo) / 1e3).toFixed(1)} kHz), about its centre`);
+  const w = mwfMinSpan(136.6e6, 137.1e6, bin);
+  ok(w.lo === 136.6e6 && w.hi === 137.1e6, 'a view already wider than 16 bins is untouched (VDL2\'s channels)');
+  ok(mwfMinSpan(1, 2, 0).lo === 1, 'no bin width known: untouched');
+  const mw = readFileSync(new URL('../src/components/MapMiniWaterfall.tsx', import.meta.url), 'utf8');
+  ok(/const v = mwfMinSpan\(m\.lo, m\.hi, f\.bins\.length \? f\.spanHz \/ f\.bins\.length : 0\);/.test(mw) && /mwfCrop\(f\.bins, f\.centreHz, f\.spanHz, v\.lo, v\.hi, z\.cols\)/.test(mw)
+     && /\{ \.\.\.model, lo: s\.vlo, hi: s\.vhi \}/.test(mw), 'the drawer crops to the widened span, and its markers and stamps are placed on it');
 }
 
 console.log(`test_map_wf: ${pass} passed, ${fail} failed`);
