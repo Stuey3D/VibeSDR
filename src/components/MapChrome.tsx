@@ -33,7 +33,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, itemCardArea, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, LIST_CHIP_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, itemCardArea, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, FTAB_H, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -953,9 +953,9 @@ function ListDrawer({ g, p, shown, max, pane, winW, winH, onOpen, onMax, onPane,
       <NavCtx.Provider value={inside ? scope.navCtx : outerNav}>
       {/* the folder tabs: swap (top-left), maximise (top-right) */}
       <NavRow>
-        {wfOk && <ChipKey style={[styles.ftab, g.list.side ? { right: -34 * k, top: 0 } : { left: 8 * k, top: -26 * k }]} words={pane === 'wf' ? 'Show the list' : 'Show the live waterfall'}
+        {wfOk && <ChipKey style={[styles.ftab, g.list.side ? { right: -34 * k, top: 0 } : { left: 8 * k, top: -FTAB_H * k }]} words={pane === 'wf' ? 'Show the list' : 'Show the live waterfall'}
                           onPress={() => onPane(pane === 'wf' ? 'list' : 'wf')}><ModeIcon name={pane === 'wf' ? 'list' : 'waterfall'} size={17 * k} color={C.ink} /></ChipKey>}
-        {!g.list.side && <ChipKey style={[styles.ftab, { right: 8 * k, top: -26 * k }]} words={max ? 'Restore the list' : 'Maximise the list'} onPress={() => onMax(!max)}>
+        {!g.list.side && <ChipKey style={[styles.ftab, { right: 8 * k, top: -FTAB_H * k }]} words={max ? 'Restore the list' : 'Maximise the list'} onPress={() => onMax(!max)}>
           <Text style={styles.ftabTxt}>{max ? '⌄' : '⌃'}</Text></ChipKey>}
       </NavRow>
       {/* ★★ the side panel's tabs: their own row at its head, wrapping — the foot bar is too narrow for them beside the keys */}
@@ -1182,7 +1182,7 @@ const RAW = {
   itemCard: { zIndex: 60, paddingBottom: 8 },
   mapState: { position: 'absolute', right: -7, bottom: -6, backgroundColor: 'rgba(12,14,12,0.95)', borderRadius: 7 },
   drawerFlush: { borderLeftWidth: 0, borderBottomWidth: 0, borderBottomLeftRadius: 0, borderTopLeftRadius: 0 },
-  ftab: { position: 'absolute', width: 34, height: 26, backgroundColor: C.ground, borderWidth: 1, borderBottomWidth: 0, borderColor: C.rim, borderTopLeftRadius: 8, borderTopRightRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  ftab: { position: 'absolute', width: 34, height: FTAB_H, backgroundColor: C.ground, borderWidth: 1, borderBottomWidth: 0, borderColor: C.rim, borderTopLeftRadius: 8, borderTopRightRadius: 8, alignItems: 'center', justifyContent: 'center' },
   ftabTxt: { color: C.ink, fontSize: 13 },
   foot: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.rim },
   footChip: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 30, paddingHorizontal: 6 },

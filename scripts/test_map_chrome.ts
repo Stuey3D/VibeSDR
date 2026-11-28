@@ -5,7 +5,7 @@
 //   npx tsx scripts/test_map_chrome.ts
 import { readFileSync } from 'node:fs';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, FTAB_H, LIST_CHIP_H, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -280,6 +280,30 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
      'the page places the track layer\'s card in that room; its body scrolls inside it');
   ok(/\.vtl-card \.vtl-x\{position:sticky!important;top:-10px;float:right;margin:-8px -10px 0 6px;min-width:40px;min-height:40px;/.test(mo), 'its × stays at the top while the body scrolls, a full-size target');
   ok(/onItemCardArea=\{\(a\) => p\.pageCall\('__cardsArea'/.test(mo) && /window\.__cardsArea=function\(t,r,b,l\)/.test(mo), 'React Native tells the page (on every change of the chrome)');
+}
+
+// ── ★★★ beta97 hotfix the LIST and its folder tabs never on a chip, at any list height (Stuart, TestFlight 589) ──
+{
+  const chips = ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate', 'health'] as ChipId[];
+  const wins = [{ n: 'iPhone 17', w: 402, h: 874, ins: { top: 62, bottom: 34, left: 0, right: 0 }, k: 1 },
+                { n: 'iPhone SE', w: 375, h: 667, ins: { top: 20, bottom: 0, left: 0, right: 0 }, k: 1 },
+                { n: 'iPad', w: 820, h: 1180, ins: { top: 24, bottom: 20, left: 0, right: 0 }, k: chromeScale(820, 1180) },
+                { n: 'Mac window', w: 1440, h: 900, ins: { top: 28, bottom: 0, left: 0, right: 0 }, k: chromeScale(1440, 900) }];
+  for (const W of wins) {
+    const { g } = chromeGeomAt({ w: W.w, h: W.h, insets: W.ins, chips, layersTallH: 110 }, W.k);
+    let worst = '';
+    for (let listH = LIST_CHIP_H * W.k; listH <= g.list.maxH + 0.5; listH += 8) {
+      const top = W.h - listH - FTAB_H * W.k;   // the tabs' top edge (the drawer sits on the window's foot, tall layout)
+      for (const [id, b] of Object.entries(g.boxes) as Array<[string, { x: number; y: number; w: number; h: number }]>) {
+        const xOverlap = b.x < g.list.w && b.x + b.w > 0;
+        if (xOverlap && b.y + b.h > top + 0.5) { worst = `${id} at list ${Math.round(listH)} (chip foot ${Math.round(b.y + b.h)} > tabs ${Math.round(top)})`; break; }
+      }
+      if (worst) break;
+    }
+    ok(!worst, `${W.n}: the drawer and its ≋ / ⌃ tabs stay below every chip they run under, up to the maximised list${worst ? ' — ' + worst : ''}`);
+  }
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  ok((mc.match(/top: -FTAB_H \* k/g) ?? []).length === 2 && /ftab: \{ position: 'absolute', width: 34, height: FTAB_H,/.test(mc), 'the tabs drawn at the height the layout allows for (FTAB_H)');
 }
 
 // ── the pill's words ──

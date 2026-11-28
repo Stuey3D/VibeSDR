@@ -41,6 +41,8 @@ export const LIST_MAX_ROWS = 7;
 export const LIST_FRAC = 0.22;
 /** The collapsed LIST chip's height. */
 export const LIST_CHIP_H = 40;
+/** The LIST drawer's folder tabs (≋ swap, ⌃ maximise): this tall, standing above the drawer's top edge. */
+export const FTAB_H = 26;
 /** The shared-tuner pill's height. */
 export const PILL_H = 30;
 /** The short layout's bottom-right row (scale bar ≤ 80 · [− +] 78 · ? 36 · (i) 36 + its margins and gaps): what the pill
@@ -212,7 +214,11 @@ export function chromeGeom(p: ChromeIn): ChromeGeom {
   const exitR = boxes.exit.w + GAP, rateL = boxes.rate ? boxes.rate.x - GAP : w - ins.right - GAP;
   return {
     short, oneSide: one, famCompact: false, safe, boxes, cardFrom,
-    list: { x: 0, bottom: 0, w: listWidthFor(w), rows: listRowsFor(h), maxH: Math.max(LIST_CHIP_H, h - leftFoot - GAP), side: false, top: 0 },
+    /* ★★★ beta97 hotfix (Stuart, TestFlight 589: a tall LIST's swap tab sat on the MAP CONTROLS chip's bottom edge) the drawer
+     *  AND its folder tabs (FTAB_H above its top edge) stop below the lowest chip of every column the drawer reaches — the left
+     *  one always, the right one where the drawer runs under it — at any list height */
+    list: { x: 0, bottom: 0, w: listWidthFor(w), rows: listRowsFor(h), side: false, top: 0,
+            maxH: Math.max(LIST_CHIP_H, h - Math.max(leftFoot, listWidthFor(w) > w - (CHIP + ins.right) - GAP ? ry : 0) - GAP - FTAB_H) },
     pill: { x: exitR, w: Math.max(0, rateL - exitR), y: 0, at: 'top', h: PILL_H + ins.top, pad: ins.top },
     br: { right: ins.right + GAP, bottom: ins.bottom + GAP, horizontal: false },
     zoomTop: ry,
