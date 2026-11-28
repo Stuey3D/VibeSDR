@@ -33,7 +33,7 @@ import EdgeChip, { HealthTabIcon, ClockTabIcon } from './EdgeChip';
 import MapMiniWaterfall, { type MwfFrame, type MwfStore } from './MapMiniWaterfall';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { CARD_IDLE_MS, MAP_HELP, MAP_HELP_NOTES } from '../utils/mapCards';
-import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, itemCardArea, layerSplit, pillLeft, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, FTAB_H, LIST_CHIP_H, ROW_H,
+import { chromeGeom, chromeGeomAt, cardBoxAt, cardRise, itemCardArea, layerSplit, pillBox, chromeScale, liveBadges, rateChip, pillWords, ASK_PULSE_MS, GAP, CHIP, FTAB_H, LIST_CHIP_H, ROW_H,
          type ChipId, type Insets, type GainRow, type RateRow } from '../utils/mapChrome';
 import { TUNE_GROUP_LABEL, TUNE_ICON_PATH, type AirSeaTuneRow } from '../services/airSeaTune';
 import type { TrackRow } from '../services/tracks';
@@ -525,12 +525,15 @@ function PulseWrap({ pulseAt, reduce, style, children }: { pulseAt: number; redu
 function Pill({ g, winW, text, locked, pulseAt, reduce, onPress, disabled }: { g: ReturnType<typeof chromeGeom>; winW: number; text: string; locked: boolean; pulseAt: number; reduce: boolean; onPress: () => void; disabled: boolean }) {
   const styles = useStyles();
   const k = useK();
-  const words = pillWords(text, Math.floor((g.pill.w - 24 * k) / (7.2 * k))   /* 11 pt mono ≈ 0.6 em + 0.5 spacing = 7.1 pt a character (6.4 let it ellipsise through the count) */);
-  const w = Math.min(g.pill.w, Math.max(80 * k, (words.length * 7.2 + 26) * k));
+  // ★★★ centred on the window, ALWAYS: the room is the widest CENTRED box its band allows; the words fit that room
+  const room = pillBox(g.pill, Infinity, winW).room;
+  const words = pillWords(text, Math.floor((room - 24 * k) / (7.2 * k))   /* 11 pt mono ≈ 0.6 em + 0.5 spacing = 7.1 pt a character (6.4 let it ellipsise through the count) */);
+  const box = pillBox(g.pill, Math.max(80 * k, (words.length * 7.2 + 26) * k), winW);
+  const w = box.w;
   // ★★★ attached to its edge (the web's): the inset is padding inside it, so its words sit clear of the notch / home bar
   const edgePad = g.pill.at === 'top' ? { paddingTop: g.pill.pad } : { paddingBottom: g.pill.pad };
   return (
-    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: pillLeft(g.pill, w, winW), width: w, height: g.pill.h }}>
+    <PulseWrap pulseAt={pulseAt} reduce={reduce} style={{ position: 'absolute', top: g.pill.y, left: box.left, width: w, height: g.pill.h }}>
       <NavRow>
         <ChipKey style={[styles.pill, locked && styles.pillLocked, g.pill.at === 'top' ? styles.pillTop : styles.pillBottom, edgePad, { width: '100%', height: '100%' }]}
                  words={`${text} — ${disabled ? 'chat is not available here' : 'open the chat'}`} onPress={() => { if (!disabled) onPress(); }}>

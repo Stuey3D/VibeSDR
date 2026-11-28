@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { adsbRowSizes } from '../src/services/adsbList';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, FTAB_H, LIST_CHIP_H, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillLeft, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, FTAB_H, LIST_CHIP_H, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillBox, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -214,8 +214,9 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(!layerSplit({ n: 12, live: true }).split && layerSplit({ n: 12, live: true }).total === 12, 'one source: one badge / count as before');
   const fam = layerFamiliesX([row, { id: 'navst', n: 46 }], {});
   ok(fam.length === 2 && fam[0].glyph === 'aircraft' && fam[0].n === 33 && fam[1].n === 46, `the LAYERS chip: ✈ 33 over NAVTEX 46 — a family never vanishes because this radio has 0 (${JSON.stringify(fam)})`);
-  ok(pillLeft({ x: 80, w: 1000 }, 300, 1200) === 450, 'the pill centred on the WINDOW (not its band)');
-  ok(pillLeft({ x: 80, w: 300 }, 280, 1200) === 100, 'slid only as far as it must to stay inside its band');
+  ok(pillBox({ x: 80, w: 1000 }, 300, 1200).left === 450, 'the pill centred on the WINDOW (not its band)');
+  const nb = pillBox({ x: 80, w: 600 }, 500, 1200);
+  ok(nb.left + nb.w / 2 === 600 && nb.w === 2 * (680 - 600) / 1 && nb.left >= 80, 'a band that cannot hold it centred: it NARROWS about the centre, never slides');
   ok(feedNotice('UberSDR HFDL lost — reconnecting · PiAware still live')?.title === 'AIRCRAFT FEED' && feedNotice('')=== null && feedNotice('Map time: 4 min on the map')?.title === 'TIME LIMIT', 'the notice\'s heading from its words; nothing to say → no strip');
   const mo = readFileSync(new URL('../src/components/MapOverlay.tsx', import.meta.url), 'utf8');
   const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
@@ -324,6 +325,31 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(/row: +\{ height: z\.rowH,/.test(al) && /call: +\{ fontFamily: F, fontSize: z\.call, lineHeight: z\.callLine,/.test(al) && /info: +\{ fontFamily: F, fontSize: z\.sub, lineHeight: z\.subLine,/.test(al)
      && /cell: +\{ fontFamily: F, fontSize: z\.cell, lineHeight: z\.callLine,/.test(al), 'every size in the row from adsbRowSizes (none fixed)');
   ok(/const lay = useMemo\(\(\) => adsbRowLayout\(listW \/ z\.k\), \[listW, z\.k\]\);/.test(al), 'the column layout judged in base points (the list\'s width ÷ the scale), then drawn × the scale');
+}
+
+// ── ★★★ beta97 hotfix the pill EXACTLY centred, whatever the LIST and RATE do (Stuart, Mac 2380 px: 270 px left) ──
+{
+  const sizes = [{ n: 'Mac 2380', w: 2380, h: 1300, ins: { top: 32, bottom: 0, left: 0, right: 0 } }, { n: 'Mac 1440', w: 1440, h: 900, ins: { top: 28, bottom: 0, left: 0, right: 0 } },
+                 { n: 'iPad', w: 820, h: 1180, ins: { top: 24, bottom: 20, left: 0, right: 0 } }, { n: 'iPhone', w: 402, h: 874, ins: { top: 62, bottom: 34, left: 0, right: 0 } },
+                 { n: 'iPhone landscape', w: 956, h: 376, ins: { top: 0, bottom: 20, left: 62, right: 62 } }];
+  const rateWs = [60, 100, 130, 150];   // "ADS-B 210/s", "VDL2 36/min +2" … the RATE corner's width follows its words (MapChrome caps it at 150)
+  let worst = 0, where = '';
+  for (const S of sizes) for (const rateW of rateWs) for (const listOpen of [false, true]) {
+    const k = chromeScale(S.w, S.h);
+    const { g } = chromeGeomAt({ w: S.w, h: S.h, insets: S.ins, chips: ['servers', 'tune', 'layers', 'stats', 'map', 'chat', 'rate'] as ChipId[], rateW, layersTallH: 110 }, k);
+    void listOpen;   // the pill's band never reads the LIST in the tall layout; the short one's band is its side panel's (open or not)
+    for (const text of ['Shared VFO: Ask before changing mode or exiting 2/5', 'SHARED TUNER · FREE TO EXIT', 'Ask · 2/5']) {
+      const room = pillBox(g.pill, Infinity, S.w).room;
+      const words = pillWords(text, Math.floor((room - 24 * k) / (7.2 * k)));
+      const b = pillBox(g.pill, Math.max(80 * k, (words.length * 7.2 + 26) * k), S.w);
+      const off = Math.abs(b.left + b.w / 2 - S.w / 2);
+      if (off > worst) { worst = off; where = `${S.n} RATE ${rateW}`; }
+      if (b.left < g.pill.x - 0.5 || b.left + b.w > g.pill.x + g.pill.w + 0.5) { worst = 999; where = `${S.n} RATE ${rateW}: outside its band`; }
+    }
+  }
+  ok(worst < 1, `|pill centre − window centre| < 1 pt on every size, RATE width and LIST state, never outside its band${where ? ' (worst ' + worst.toFixed(2) + ' at ' + where + ')' : ''}`);
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  ok(/left: box\.left,/.test(mc) && !/pillLeft/.test(mc), 'the pill is placed by pillBox only (centred), never slid');
 }
 
 // ── the pill's words ──

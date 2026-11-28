@@ -106,11 +106,16 @@ export interface ChromeGeom {
 
 const finite = (v: number, d = 0) => (Number.isFinite(v) ? v : d);
 
-/** ★★★ beta97 (Stuart, build 587: the pill sat left of centre on the Mac) the pill CENTRED ON THE WINDOW, slid only as far
- *  as it must to stay inside its band (clear of the ✕ / RATE corners, or the side panel and the bottom-right row). */
-export function pillLeft(band: { x: number; w: number }, w: number, winW: number): number {
-  const lo = band.x, hi = band.x + Math.max(0, band.w - w);
-  return Math.max(lo, Math.min(hi, winW / 2 - w / 2));
+/** ★★★ beta97 hotfix THE PILL IS ALWAYS EXACTLY CENTRED ON THE WINDOW (Stuart, Mac, 2380 px: "still off centre and on a
+ *  notched mac looks especially stupid" — it sat 270 px left). It was SLID to stay inside its band, and the band's right
+ *  edge is the RATE corner, whose width follows its words ("VDL2 36/min +2"): a wider RATE pushed the pill left. Now it is
+ *  never moved: it NARROWS symmetrically about the centre to the room its nearer corner leaves (and its words shorten to
+ *  fit — pillWords' short forms). On a notched Mac / an iPhone island it hangs centred under the notch. */
+export function pillBox(band: { x: number; w: number }, wantW: number, winW: number): { left: number; w: number; room: number } {
+  const cx = winW / 2;
+  const room = Math.max(0, 2 * Math.min(cx - band.x, band.x + band.w - cx));   // the widest centred box inside the band
+  const w = Math.max(0, Math.min(wantW, room));
+  return { left: cx - w / 2, w, room };
 }
 
 /** ★★★ beta97 a map's NOTICE (the feed lost, the time limit, the antenna) in the cards' own layout — never the page's banner
