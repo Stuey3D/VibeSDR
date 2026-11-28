@@ -182,6 +182,9 @@ public:
         std::function<std::vector<geo::Candidate>()> geoCandidates;
         std::function<bool(vibe::sat::Observer&)> geoObserver;
         std::function<double()> nowUnix;
+        /** ★★★ b97-lrpt-clock: OUR clock has been checked against internet time (vibe_clock.h clockMeasured) — a
+         *  satellite clock that reads out is then placed by our capture times, not refused. Null = unchecked. */
+        std::function<bool()> hostClockChecked;
     };
     /** ★ The live preview's outline is recomputed at most this often while the picture grows. */
     static constexpr double kLiveGeoSec = 20.0;
@@ -396,7 +399,8 @@ private:
             int s0, s1; rx_->stripRange(s0, s1);
             const geo::Overlay ov = overlay(s0, s1, 1.0, rot);
             for (auto& p : pics) { if (ov.ok) p.geoJson = ov.json; else p.geoWhy = ov.why; }
-            if (o_.log) o_.log(ov.ok ? "lrpt: map outline made (" + std::to_string(ov.points) + " points)" : "lrpt: no map outline \xe2\x80\x94 " + ov.why);
+            if (o_.log) o_.log(ov.ok ? "lrpt: map outline made (" + std::to_string(ov.points) + " points)" + (ov.note.empty() ? "" : " \xe2\x80\x94 " + ov.note)
+                                   : "lrpt: no map outline \xe2\x80\x94 " + ov.why);
         }
         if (!pics.empty() && o_.pictures) o_.pictures(pics, partial);
         havePictures_ = false;
@@ -411,7 +415,8 @@ private:
         for (int s = s0; s < s1; s++) ms.push_back(rx_->stripTimeMs(s));
         std::vector<geo::Candidate> cs = o_.geoCandidates ? o_.geoCandidates() : std::vector<geo::Candidate>{};
         vibe::sat::Observer ob; const bool haveObs = o_.geoObserver && o_.geoObserver(ob) && ob.valid;
-        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale, geo::Instrument{}, rot180);
+        const bool checked = o_.hostClockChecked && o_.hostClockChecked();
+        return geo::makeOverlay(ms, (s1 - s0) * 8, wallAt_, wallStamp_, cs, haveObs ? &ob : nullptr, scale, geo::Instrument{}, rot180, checked);
     }
     /** ★★★ beta96 NORTH UP: which way this pass goes (geo::northbound), decided once a picture exists and then kept for the
      *  pass — the clients turn the live preview by it (lrpt_status "rot"), the gallery's pictures are turned by it. Asked

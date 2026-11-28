@@ -129,8 +129,37 @@ int main() {
     }
     {
         auto v = strips(1231.14, 50, ms0);   // ★ METEOR-M2 3, Oct 2023 shape: the satellite's clock hours out
-        why.clear(); CHECK(!checkClock(v, day + ms0 / 1000.0 - 3 * 3600.0, ms0, c, why) && why == "the satellite's clock reads 3 h 0 min ahead of ours", "3 h out: %s", why.c_str());
-        why.clear(); CHECK(!checkClock(v, day + ms0 / 1000.0 + 41, ms0, c, why) && why.find("41.0 s behind") != std::string::npos, "41 s out: %s", why.c_str());
+        why.clear(); CHECK(!checkClock(v, day + ms0 / 1000.0 - 3 * 3600.0, ms0, c, why) && why.find("the satellite's clock reads 3 h 0 min ahead of ours") == 0
+                           && why.find("has not been checked against internet time") != std::string::npos, "3 h out, our clock unchecked: %s", why.c_str());
+        why.clear(); CHECK(!checkClock(v, day + ms0 / 1000.0 + kDownlinkLagSec + 41, ms0, c, why) && why.find("41.0 s behind") != std::string::npos, "41 s out: %s", why.c_str());
+    }
+    /* ★★★ b97-lrpt-clock: the line goes out ~5 s after MSU-MR scans it. Live, every pass on every server read the stamps
+     *  4.3–5.6 s before our capture (Pi 500 13:50 28 Nov, METEOR-M2 4, max 78°: "the satellite's clock reads 5.6 s behind
+     *  ours" — refused by the old ±5 s window). That is a normal satellite: placed by its own stamps. */
+    std::printf("── b97: the ~5 s downlink lag is normal; a satellite clock that is out is placed by OUR checked clock ──\n");
+    {
+        auto v = strips(1231.14, 100, ms0);
+        const int32_t newest = v.back();
+        for (double lag : { 4.27, 5.1, 5.6, 6.1, 8.9 }) {
+            why.clear();
+            const bool ok = checkClock(v, day + newest / 1000.0 + lag, newest, c, why);   // our clock UNCHECKED: no help from it
+            CHECK(ok && !c.byServer && std::fabs(c.unixAt(0) - (day + ms0 / 1000.0)) < 0.01,
+                  "★ stamps %.2f s before our capture (M2-4 13:50 read 5.6): placed by the SATELLITE's stamps (%s)", lag, why.c_str());
+        }
+        why.clear();
+        CHECK(!checkClock(v, day + newest / 1000.0 + 9.6, newest, c, why) && why.find("4.6 s behind ours") != std::string::npos
+              && why.find("not been checked") != std::string::npos, "9.6 s with our clock unchecked: refused, the reason in words (%s)", why.c_str());
+        // ★ our clock checked against internet time: the satellite's is the wrong one — placed by OUR capture time
+        for (double off : { 9.6, 41.0, -3 * 3600.0 }) {
+            why.clear();
+            const double cap = day + newest / 1000.0 + off;
+            const bool ok = checkClock(v, cap, newest, c, why, true);
+            CHECK(ok && c.byServer && std::fabs(c.unixAt((v.size() - 1)) - (cap - kDownlinkLagSec)) < 0.01 && std::fabs(c.bMs - 1231.14) < 0.05
+                  && c.note.find("placed by this server's clock") != std::string::npos,
+                  "★ satellite %.0f s out, our clock checked: placed by OUR capture − %.0f s, its line spacing kept (%s)", off, kDownlinkLagSec, c.note.c_str());
+        }
+        why.clear();
+        CHECK(checkClock(v, day + newest / 1000.0 + 5.6, newest, c, why, true) && !c.byServer && c.note.empty(), "5.6 s with our clock checked: still the satellite's own stamps");
     }
     {
         auto v = strips(1231.14, 40, 86400000 - 20000);   // across midnight
@@ -209,8 +238,10 @@ int main() {
         double fed = 0;
         o.geoCandidates = [&] { return cands; };
         o.geoObserver = [&](vibe::sat::Observer& ob) { ob = obs; return true; };
-        // our clock: the stamps' time + 1.5 s of delay (or 3 h out for the second run)
-        o.nowUnix = [&] { return day + ms0 / 1000.0 + fed + 1.5 + (bad ? 10800.0 : 0.0); };
+        /* our clock: the air placed by the stream's LAST scan period (as the capture-time test below) + the real ~5 s
+         *  downlink lag (b97-lrpt-clock) — or 3 h out for the second run */
+        const double airEnd = double(iq.size() / 2) / tc.sampleRate;
+        o.nowUnix = [&] { return day + ms0 / 1000.0 + 8.620 - airEnd + kDownlinkLagSec + fed + (bad ? 10800.0 : 0.0); };
         std::vector<Picture> got; int live = 0; std::string lastLive;
         o.pictures = [&](const std::vector<Picture>& ps, bool) { got = ps; };
         o.json = [&](const std::string& j) { if (j.find("\"type\":\"lrpt_geo\"") != std::string::npos) { live++; lastLive = j; } };
@@ -247,9 +278,10 @@ int main() {
      *  outline; the same lag with no capture time (the old behaviour) → refused; an on-board clock 30 s out → refused with
      *  the reason, lag or no lag. */
     std::printf("── the clock check reads the CAPTURE time, not the decode time (8 s of queue lag) ──\n");
-    for (int k = 0; k < 3; k++) {
+    for (int k = 0; k < 4; k++) {
         const bool passCapture = k != 1;              // k 1: no capture time — what beta96 did
-        const double boardOff = k == 2 ? 30.0 : 0.0;  // k 2: the satellite's clock 30 s out
+        const double boardOff = k >= 2 ? 30.0 : 0.0;  // k 2: the satellite's clock 30 s out (k 3: the same, OUR clock checked)
+        const double downlink = 5.6;                  // ★ b97: the line reaches us ~5 s after its scan (M2-4 13:50: 5.6 s)
         tx::TxConfig tc; tc.esn0Db = 25; tc.startMs = uint32_t(ms0);
         const auto iq = tx::modulate(tc, tx::codeBits(tc, tx::buildVcdus(tc, 8)));
         Run::Opts o; o.symbolRate = 72000;
@@ -262,8 +294,9 @@ int main() {
          *  period: stamped ms0 + 8620 ms and heard at the stream's end — a correct satellite clock then reads ~0 s at the
          *  end of the pass (the newest stamp is what the check compares; error ≤ one period's air time). */
         const double airEnd = double(iq.size() / 2) / tc.sampleRate;
-        const double air0 = day + ms0 / 1000.0 + 8.620 - airEnd;   // our clock at the stream's first sample
+        const double air0 = day + ms0 / 1000.0 + 8.620 - airEnd + downlink;   // our clock at the stream's first sample
         o.nowUnix = [&] { return air0 + boardOff + fed + lag; };
+        if (k == 3) o.hostClockChecked = [] { return true; };
         std::vector<Picture> got;
         o.pictures = [&](const std::vector<Picture>& ps, bool) { got = ps; };
         o.json = [](const std::string&) {};
@@ -287,7 +320,10 @@ int main() {
         auto readsSec = [](const std::string& w) { const size_t p = w.find("reads "); return p == std::string::npos ? -1.0 : std::strtod(w.c_str() + p + 6, nullptr); };
         if (k == 1) CHECK(readsSec(got[0].geoWhy) > 6.5 && readsSec(got[0].geoWhy) < 9.5, "…the lag itself is what it read (%.1f s)", readsSec(got[0].geoWhy));
         if (k == 2) CHECK(got[0].geoJson.empty() && readsSec(got[0].geoWhy) > 28.5 && readsSec(got[0].geoWhy) < 31.5 && got[0].geoWhy.find("behind ours") != std::string::npos,
-                          "★ an on-board clock 30 s out is still refused, with the reason: \"%s\"", got[0].geoWhy.c_str());
+                          "★ an on-board clock 30 s out, OUR clock unchecked: refused, with the reason: \"%s\"", got[0].geoWhy.c_str());
+        if (k == 3) CHECK(!got[0].geoJson.empty() && got[0].geoWhy.empty() && got[0].geoJson.find("\"placedBy\":\"server\"") != std::string::npos,
+                          "★ an on-board clock 30 s out, OUR clock checked: the outline, placed by our clock (%s)", got[0].geoWhy.c_str());
+        if (k == 0) CHECK(got[0].geoJson.find("\"placedBy\":\"satellite\"") != std::string::npos, "…a 5.6 s downlink lag: placed by the satellite's own stamps");
     }
 
     std::printf("── north up: a northbound pass turned round once, a southbound one not ──\n");
@@ -339,7 +375,8 @@ int main() {
             Run::Opts o; o.symbolRate = 72000; double fed = 0;
             o.geoCandidates = [&] { return cands; };
             o.geoObserver = [&](vibe::sat::Observer& ob) { ob = obs; return true; };
-            o.nowUnix = [&] { return dayX + msX / 1000.0 + fed + 1.5; };
+            const double airEnd = double(iq.size() / 2) / tc.sampleRate;   // ★ b97: the air by its last period + the ~5 s downlink lag
+            o.nowUnix = [&] { return dayX + msX / 1000.0 + 8.620 - airEnd + kDownlinkLagSec + fed; };
             std::vector<Picture> got; std::string lastStatus;
             o.pictures = [&](const std::vector<Picture>& ps, bool) { got = ps; };
             o.json = [&](const std::string& j) { if (j.find("lrpt_status") != std::string::npos) lastStatus = j; };

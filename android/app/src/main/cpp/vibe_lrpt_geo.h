@@ -14,7 +14,7 @@
 // ★★★ FAIL CLOSED. A wrong outline is worse than none (a coast drawn 30 km off reads as "the picture is wrong"). The pass's
 //     clock is checked before anything is drawn: every heard strip's stamp must sit on ONE straight line (the 1.231 s
 //     scan period) within a few ms, the period itself must be MSU-MR's, the stamps must agree with OUR clock when they
-//     were received (within kMaxClockSkewSec), and the satellite must have been above the horizon then. Any miss → no
+//     were received (kDownlinkLagSec ± kMaxClockSkewSec; outside it, placed by OUR checked clock), and the satellite must have been above the horizon then. Any miss → no
 //     overlay and a plain-English reason (`why`) the clients show. (METEOR-M2 3 sent wrong on-board times in Oct 2023.)
 //
 // ★★ HOW (forward and inverse). Each image row r has a time t(r); SGP4 gives the satellite's Earth-fixed position p and its

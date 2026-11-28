@@ -1832,6 +1832,7 @@ private:
         }
         if (env_.lrptGeoObserver) o.geoObserver = env_.lrptGeoObserver;
         o.nowUnix = env_.nowUnix ? env_.nowUnix : std::function<double()>([] { return vibeUtcNow(); });
+        o.hostClockChecked = [] { return clockMeasured().load(std::memory_order_relaxed); };   // ★★★ b97-lrpt-clock
         o.log = [this](const std::string& l) { log(l); };
         if (env_.satGainNote) o.gainNote = env_.satGainNote;   // ★ beta92 the per-pass summary's "gain"
         lrpt_.reset(new vibelrpt::Run(std::move(o)));

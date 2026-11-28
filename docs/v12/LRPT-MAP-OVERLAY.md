@@ -66,11 +66,24 @@ sub-satellite point to < 0.5 km; the swath 2750–3000 km; a pixel 0.95–1.25 k
 | ≥ 3 strips heard | "too little of the pass to place it on the map" |
 | the period 1225–1238 ms | "the satellite's line times step N ms, not MSU-MR's 1231 ms" |
 | every stamp within 8 ms of the line | "the satellite's line times jump (one is N ms off the rest)" |
-| the stamps within **5 s** of OUR clock when they arrived | "the satellite's clock reads 3 h 0 min ahead of ours" (METEOR-M2 3, Oct 2023, sent wrong on-board times — this is that case) |
+| the stamps **5 s ± 4 s** before OUR capture of them (b97-lrpt-clock) | with OUR clock checked against internet time: **not refused** — placed by our capture times instead (`"placedBy":"server"`, the log says why); with our clock unchecked: "the satellite's clock reads 3 h 0 min ahead of ours, and this server's clock has not been checked against internet time, so neither can place the picture" (METEOR-M2 3, Oct 2023, sent wrong on-board times — this is that case) |
 | elements ≤ 5 days from the pass | "the orbit data is more than 5 days old" |
 | a METEOR above our horizon at the picture's middle (the pick first; two up and no pick, or no location and two candidates = refused) | "no METEOR satellite was above this server's horizon…", "two METEOR satellites were up at once…", "this server's location is not set…" |
 
-5 s, not more: a stamp error of a few seconds is ~7 km a second along the track. The real skew is −1.4 / −1.6 s.
+★★★ **b97-lrpt-clock (28 Nov): the line goes out ~5 s after its scan.** Live, with the capture-time stamp (beta97), every
+pass on every server reads the stamps 4.3–5.6 s before our capture — METEOR-M2 3 AND M2 4 alike (Pi 500: −4.27, −4.55,
+−4.78, −4.81, −4.99, −5.6 s; Sony −5.1; Mac Ha's phone −5.5). Our clocks were within 2 ms of internet time each time.
+The stamps themselves are right: placed by them the coast sits on the coast (27 Nov 14:12, M2 4 over Ireland; and the
+row check above), moved by 5 s (~32 rows, ~35 km) it visibly does not. So the stamp is the SCAN time, and the on-board
+compression + buffer sends it ~5 s later — normal, not a wrong clock. The old window (±5 s around zero) sat right on that
+lag and refused the 5.6 / 6.1 s passes as "the satellite's clock reads … behind ours". (The −1.4 / −1.6 s below were
+replays, timed from the capture file's name, not a capture-time stamp.)
+
+Now: `kDownlinkLagSec` = 5 s expected, `kMaxClockSkewSec` = 4 s around it — a pass reading 1–9 s behind is placed by the
+satellite's own stamps (the error a few km). Outside that, if OUR clock is checked (vibe_clock.h `clockMeasured`) the
+satellite's clock is the wrong one: its line spacing is kept and it is re-based on our capture (the newest line =
+capture − 5 s; ~±0.7 s spread between passes, ~5 km). Refused only when our own clock is unchecked — then nothing says
+which of the two is wrong. The JSON carries `satClockOffSec` (the lag taken off) and `placedBy`.
 
 ## Measured on Stuart's passes
 

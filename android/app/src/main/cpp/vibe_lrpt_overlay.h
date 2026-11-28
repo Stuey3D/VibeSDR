@@ -12,8 +12,18 @@
 //    · the strips' stamps sit on ONE line: each within kMaxStampResidualMs of the least-squares fit (whole-ms stamps of a
 //      ~1231.1 ms period step 1228 / 1232: a residual of ≤ 3 ms is normal), at least kMinStrips heard;
 //    · the period is MSU-MR's (kPeriodMinMs … kPeriodMaxMs for 8 lines);
-//    · the satellite's time agrees with OURS when the frames were CAPTURED, within kMaxClockSkewSec (METEOR-M2 3 sent wrong
-//      on-board times in Oct 2023 — that is what this catches). ★★★ b96-satgrace: the capture time (DecoderHost's block
+//    · the satellite's time agrees with OURS when the frames were CAPTURED, within kMaxClockSkewSec of the usual
+//      kDownlinkLagSec (METEOR-M2 3 sent wrong on-board times in Oct 2023 — that is what this catches).
+//      ★★★ b97-lrpt-clock (Stuart's Pi 500 + Sony, 26–28 Nov): EVERY pass, both METEOR-M2 3 and M2 4, on every server,
+//      reads the line stamps 4.3–5.6 s BEFORE our capture of them (Pi 500 beta97: −4.27, −4.55, −4.78, −4.81, −4.99, −5.6;
+//      Sony −5.1; Mac Ha −5.5). Placed by those stamps the coast sits ON the coast (27 Nov 14:12, Ireland); moved by 5 s
+//      (~35 km along track) it visibly does not. So the stamp is when MSU-MR SCANNED the line and the line goes out about
+//      5 s later (on-board compression + buffering) — a normal satellite, not a wrong clock. The old check (±5 s around
+//      zero) refused passes that read 5.6 / 6.1 s as "the satellite's clock reads … behind ours".
+//      Outside the window: with THIS server's clock checked against internet time (vibe_clock.h clockMeasured), the
+//      picture is placed by OUR capture times instead (the newest line = its capture − kDownlinkLagSec, the satellite's
+//      own line spacing kept) and the JSON says so ("placedBy":"server"); with our clock unchecked we cannot tell which
+//      clock is wrong, so it is refused with that reason. ★★★ b96-satgrace: the capture time (DecoderHost's block
 //      stamp, vibe_lrpt_run.h feedIq), never the decode time — a busy phone's decode queue lagged the air by 5+ s and a
 //      correct satellite clock was refused as "behind" (Mac Ha). Left: the stamp's frame inside one block (tens of ms) and
 //      our own clock's error (vibe_clock.h: the system clock + our SNTP offset);
@@ -41,7 +51,10 @@ namespace geo {
 constexpr int kMinStrips = 3;
 constexpr double kMaxStampResidualMs = 8.0;
 constexpr double kPeriodMinMs = 1225.0, kPeriodMaxMs = 1238.0;
-constexpr double kMaxClockSkewSec = 5.0;
+/** ★★★ b97-lrpt-clock: how long after MSU-MR scans a line its stamp reaches us (measured, see the header). */
+constexpr double kDownlinkLagSec = 5.0;
+/** How far a pass may read from kDownlinkLagSec and still be placed by the satellite's own stamps. */
+constexpr double kMaxClockSkewSec = 4.0;
 constexpr double kMaxElementDays = 5.0;
 constexpr size_t kMaxJsonBytes = 1u << 20;
 constexpr double kGridDeg = 5.0;
@@ -51,6 +64,9 @@ constexpr double kGridDeg = 5.0;
  *  satellite's time was from ours. */
 struct Clock {
     double dayStartUnix = 0, aMs = 0, bMs = 0, skewSec = 0, maxResidualMs = 0;
+    double satOffSec = 0;   // ★ b97: the satellite's clock against ours, the downlink lag taken off (+ = ahead)
+    bool byServer = false;  // ★ b97: placed by OUR capture times (the satellite's clock was out, ours is checked)
+    std::string note;       // ★ b97: why, in words, when byServer
     int heard = 0;
     double unixAt(double stripF) const { return dayStartUnix + (aMs + bMs * stripF) / 1000.0; }
 };
@@ -66,8 +82,11 @@ inline std::string spanWords(double sec) {
 }
 
 /** ★★ The clock checks. `stripMs[i]` = strip i's stamp (ms of day, −1 = not heard); `wallUnix` = OUR clock (UTC) when
- *  the IQ carrying stamp `wallStampMs` was CAPTURED (b96-satgrace — not when the decode thread reached it). */
-inline bool checkClock(const std::vector<int32_t>& stripMs, double wallUnix, int32_t wallStampMs, Clock& c, std::string& why) {
+ *  the IQ carrying stamp `wallStampMs` was CAPTURED (b96-satgrace — not when the decode thread reached it).
+ *  `hostClockChecked`: OUR clock has been checked against internet time (vibe_clock.h clockMeasured) — then a satellite
+ *  clock that is out is placed by our clock instead of refused (b97-lrpt-clock). */
+inline bool checkClock(const std::vector<int32_t>& stripMs, double wallUnix, int32_t wallStampMs, Clock& c, std::string& why,
+                       bool hostClockChecked = false) {
     c = Clock{};
     std::vector<std::pair<double, double>> pts;
     double first = -1;
@@ -105,10 +124,19 @@ inline bool checkClock(const std::vector<int32_t>& stripMs, double wallUnix, int
         if (std::fabs(s) < std::fabs(best)) { best = s; c.dayStartUnix = day0 + d * 86400.0; }
     }
     c.skewSec = best;
-    if (std::fabs(best) > kMaxClockSkewSec) {
-        why = "the satellite's clock reads " + spanWords(best) + (best > 0 ? " ahead of" : " behind") + " ours";
+    c.satOffSec = best + kDownlinkLagSec;   // ★ b97: ~−5 s is a normal satellite (the line goes out ~5 s after its scan)
+    if (std::fabs(c.satOffSec) <= kMaxClockSkewSec) return true;
+    const std::string off = "the satellite's clock reads " + spanWords(c.satOffSec) + (c.satOffSec > 0 ? " ahead of" : " behind") + " ours";
+    if (!hostClockChecked) {
+        why = off + ", and this server's clock has not been checked against internet time, so neither can place the picture";
         return false;
     }
+    /* ★★★ b97-lrpt-clock: OUR clock is checked, so the satellite's is the one that is out. Keep its line spacing (the fit,
+     *  already proven one straight line) and re-base it on our capture: the newest stamp was scanned kDownlinkLagSec before
+     *  we captured it. Error left: the lag's spread between passes (~±0.7 s, ~5 km along track). */
+    c.dayStartUnix -= c.satOffSec;
+    c.byServer = true;
+    c.note = off + " \xe2\x80\x94 placed by this server's clock (checked against internet time)";
     return true;
 }
 
@@ -157,7 +185,7 @@ inline int northbound(const std::vector<Candidate>& cs, const vibe::sat::Observe
     return v[2] > 0 ? 1 : 0;
 }
 /** The output: `ok` + the JSON, or why not. */
-struct Overlay { bool ok = false; std::string why, json; double latC = 0, lonC = 0; int points = 0; };
+struct Overlay { bool ok = false; std::string why, json, note; double latC = 0, lonC = 0; int points = 0; };   // ★ b97 note: placed by our clock, why
 
 namespace detail {
 inline void num(std::string& o, double v) { char b[24]; std::snprintf(b, sizeof b, "%.4f", v); o += b; }
@@ -173,11 +201,12 @@ inline std::string gridLabel(double deg, bool lat) {
  *  shrinks the output coordinates (the live preview is a quarter size: 0.25). */
 inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double wallUnix, int32_t wallStampMs,
                            const std::vector<Candidate>& cands, const vibe::sat::Observer* obs, double scale = 1.0,
-                           const Instrument& ins = Instrument{}, bool rot180 = false) {
+                           const Instrument& ins = Instrument{}, bool rot180 = false, bool hostClockChecked = false) {
     Overlay ov;
     if (rows < 16) { ov.why = "too little of the pass to place it on the map"; return ov; }
     Clock clk;
-    if (!checkClock(stripMs, wallUnix, wallStampMs, clk, ov.why)) return ov;
+    if (!checkClock(stripMs, wallUnix, wallStampMs, clk, ov.why, hostClockChecked)) return ov;
+    ov.note = clk.note;
     const double tMid = clk.unixAt(rows / 16.0);
     const int si = chooseSatellite(cands, obs, tMid, ov.why);
     if (si < 0) return ov;
@@ -318,6 +347,8 @@ inline Overlay makeOverlay(const std::vector<int32_t>& stripMs, int rows, double
     char b[200];
     std::snprintf(b, sizeof b, ",\"start\":%.3f,\"end\":%.3f,\"periodMs\":%.2f,\"clockSkewSec\":%.2f,\"stampResidualMs\":%.1f,\"elementsAgeDays\":%.2f,\"halfScanDeg\":%.2f",
                   clk.unixAt(0), clk.unixAt(rows / 8.0), clk.bMs, clk.skewSec, clk.maxResidualMs, (tMid - c.el.epochUnix()) / 86400.0, ins.halfScanDeg);
+    o += b;
+    std::snprintf(b, sizeof b, ",\"satClockOffSec\":%.2f,\"placedBy\":\"%s\"", clk.satOffSec, clk.byServer ? "server" : "satellite");
     o += b;
     // corners (top-left, top-right, bottom-left, bottom-right) and the centre
     o += ",\"corners\":[";
