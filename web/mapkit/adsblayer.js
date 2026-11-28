@@ -99,6 +99,20 @@
     return 2 * RE_M * Math.asin(Math.min(1, Math.sqrt(h))) / NM_M;
   }
   /** Initial great-circle bearing a → b, degrees true, 0–360. */
+  /* ★★ 11-28 A HEADING FROM TWO FIXES (Stuart: "with HFDL, UberSDR shows the planes pointing the correct direction when
+   *  they have provided a couple of messages, can we do the same" — and VDL2, ACARS, ADS-C). The server's own rule
+   *  (vibe_aircraft_share.h derivedTrack), kept here for an older server that sends no "trkSrc":"derived": the initial
+   *  bearing from the previous fix to the newest, both from the SAME source (raw.posSrc), at least DERIVE_MIN_KM apart
+   *  and the previous no more than DERIVE_MAX_GAP_MS older. A REPORTED track always wins; a derived heading only TURNS
+   *  the icon (fix.face) — it is never a track to fly on (fix.track stays null, so nothing dead-reckons on it). */
+  const DERIVE_MIN_KM = 2, DERIVE_MAX_GAP_MS = 30 * 60 * 1000;
+  /** prev / next: {lat, lon, pt (ms the position was made), src}. Degrees, or null. */
+  function derivedFace(prev, next) {
+    if (!prev || !next || !prev.src || prev.src !== next.src || prev.src === 'ADS-B') return null;
+    if (!(next.pt > prev.pt) || next.pt - prev.pt > DERIVE_MAX_GAP_MS) return null;
+    if (distNm(prev.lat, prev.lon, next.lat, next.lon) * NM_M / 1000 < DERIVE_MIN_KM) return null;
+    return bearingDeg(prev.lat, prev.lon, next.lat, next.lon);
+  }
   function bearingDeg(aLat, aLon, bLat, bLon) {
     const p1 = aLat * D2R, p2 = bLat * D2R, dl = (bLon - aLon) * D2R;
     const y = Math.sin(dl) * Math.cos(p2);
@@ -681,7 +695,7 @@
     return e;
   }
 
-  const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT,
+  const maths = { GLIDE_MS, RING_MS, RING_REPEATS, BREATHE_MS, MAX_DR_S, SNAP_NM, SETTLE_MS, TRANSITION_FT, derivedFace, DERIVE_MIN_KM, DERIVE_MAX_GAP_MS,
                   wrapLon, distNm, bearingDeg, destination, rangeRing, rangeLabelPoint, RANGE_LABEL, rangeConsistent, rangeOffer, rangeMerge, rangeSmooth, rangeShape, RANGE_GAP_DEG, RANGE_CLOSE_DEG, RANGE_TAPER, RANGE_SPREAD_DEG, RANGE_BINS, cardinal, deadReckon, iconFor, iconClassOf, altText, altShort,
                   vsText, vsLabel, vsCardText, emergencyOf, nmPerPx, ringStep, RING_LADDER, merc, unmerc, cameraFor, screenOffset,
                   anyOutside, AutoZoom, placeLabels, easeInOut, easeOut, breath, angleTo, toneKey, isMilitary, insetFor, altHue, trendOf, altColour, ALT_HUES,
@@ -1592,7 +1606,7 @@
       for (const s of ac.values()) {
         if (!s.fix) continue;
         const tone = toneKey(s.a), glow = s.hex === selected;
-        const to = s.fix.track != null && isFinite(s.fix.track) ? s.fix.track : (s.hdg || 0);
+        const to = s.fix.track != null && isFinite(s.fix.track) ? s.fix.track : s.fix.face != null && isFinite(s.fix.face) ? s.fix.face : (s.hdg || 0);
         if (s.gpuTo !== to) { const fr = s.gpuTo != null ? s.gpuTo : (s.hdg != null ? s.hdg : to); s.gpuFrom = Math.abs(angleTo(fr, to)) < 3 ? to : fr; s.gpuTo = to; s.gpuT0 = t; }
         list.push({ id: s.hex, lat: s.fix.lat, lon: s.fix.lon, t: s.fix.t, gs: s.fix.gs, track: s.fix.track, maxDrMs: MAX_DR_S * 1000,
                     key: s.kind + '|' + tone + '|' + (glow ? 'g' : '') + '|' + th, hdgFrom: s.gpuFrom, hdgTo: s.gpuTo, hdgT0: s.gpuT0,
@@ -1711,7 +1725,7 @@
       row('Altitude', altText(a.alt_baro) + (num(a.alt_geom) != null && a.alt_baro !== 'ground' ? '  (GNSS ' + Math.round(a.alt_geom).toLocaleString('en-GB') + ' ft)' : ''));
       row(vsLabel(a.baro_rate), vsCardText(a.baro_rate, a.alt_baro === 'ground' ? null : a.alt_baro));
       row('Speed', num(a.gs) != null ? Math.round(a.gs) + ' kt' : '');
-      row('Track', num(a.track) != null ? Math.round(a.track) + '° ' + cardinal(a.track) : '');
+      row('Track', num(a.track) != null ? Math.round(a.track) + '° ' + cardinal(a.track) + (a.trkSrc === 'derived' ? ' (from its last two positions)' : '') : '');
       row('Squawk', a.squawk ? String(a.squawk).replace(/[^0-7]/g, '').slice(0, 4) : '');
       rows.push(...commbRows(a.commb));
       if (rx && s.disp) {
@@ -2074,18 +2088,23 @@
         if (!hasPos) { if (s.disp && !s.goneAt) s.goneAt = t; continue; }
         if (s.goneAt) { s.goneAt = 0; s.fadeIn = true; s.shownAt = t; }
         anyPos = true;
-        const fix = { lat, lon, gs: num(raw.gs), track: num(raw.track) != null ? num(raw.track) : num(raw.mag_heading),
+        // ★★ 11-28 a "derived" track (the server's, from two fixes of one source) turns the icon only — never flown on
+        const derivedIn = raw.trkSrc === 'derived' && num(raw.track) != null;
+        const fix = { lat, lon, gs: num(raw.gs), track: derivedIn ? null : num(raw.track) != null ? num(raw.track) : num(raw.mag_heading),
+                      face: derivedIn ? num(raw.track) : null, src: typeof raw.posSrc === 'string' ? raw.posSrc : '',
+                      pt: t - Math.max(0, num(raw.seen_pos) || 0) * 1000,
                       t: t - Math.max(0, Math.min(60, num(raw.seen_pos) || 0)) * 1000 };
         const same = s.fix && Math.abs(s.fix.lat - fix.lat) < 1e-7 && Math.abs(s.fix.lon - fix.lon) < 1e-7;
-        /* ★★ V12 beta90 FACING ITS WAY (Stuart, 2026-11-21): an aircraft that sends no track (ACARS, VDL2, HFDL, ADS-C) and has
-         *  two fixes points along the line between them — the bearing from the one before to this one (a hop under
-         *  0.05 NM says nothing: the last bearing stays). It never moves on that bearing: with no speed there is no dead
-         *  reckoning, only the glide to each new fix. */
-        if (fix.track == null && s.fix) {
-          if (!same && distNm(s.fix.lat, s.fix.lon, lat, lon) >= 0.05) fix.track = bearingDeg(s.fix.lat, s.fix.lon, lat, lon);
-          else fix.track = s.fix.track;
+        /* ★★ V12 beta90 → 11-28 FACING ITS WAY: an aircraft that sends no track (ACARS, VDL2, HFDL, ADS-C) faces along its
+         *  last two fixes (derivedFace: the same source, ≥ 2 km, ≤ 30 min) — the server's answer where it sends one. A hop
+         *  too short to say keeps the face it had; another source, or a stale previous fix, gives none (the default glyph).
+         *  It never moves on that bearing: only the glide to each new fix. */
+        if (fix.track == null && fix.face == null && s.fix) {
+          const d = same ? null : derivedFace(s.fix, fix);
+          if (d != null) fix.face = d;
+          else if (s.fix.face != null && s.fix.src === fix.src && (same || distNm(s.fix.lat, s.fix.lon, lat, lon) * NM_M / 1000 < DERIVE_MIN_KM)) fix.face = s.fix.face;
         }
-        if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; continue; }   // ★ the same fix again: keep flying it
+        if (same) { s.fix.gs = fix.gs; s.fix.track = fix.track; s.fix.face = fix.face; continue; }   // ★ the same fix again: keep flying it
         // ★ beta95 the outline grows live (b96-rangefeed: the position's own time, not the glide's clamped one)
         /* ★★ b96-2 "NOT AT THIS SITE" (Stuart 11-27): a position the server marked offsite (an off-site feed's only —
          *  vibe_aircraft_share.h offsiteOnly) is drawn like any other but says nothing about this receiver's range: never
@@ -2094,7 +2113,7 @@
         if (!s.tr) s.tr = [];
         if (trailPush(s.tr, lat, lon, trailAlt(raw)) && hex === trail.hex) trail.dirty = true;
         if (!s.disp) {
-          s.fix = fix; s.disp = deadReckon(fix, t); s.corr = null; s.hdg = fix.track;
+          s.fix = fix; s.disp = deadReckon(fix, t); s.corr = null; s.hdg = fix.track != null ? fix.track : fix.face;
           s.shownAt = t;
           // ★★ Born quietly unless the initial load is over (SETTLE_MS and the first positioned batch).
           s.bornAt = (firstPosBatchSeen && t - firstUpdateAt > SETTLE_MS) ? t : 0;
@@ -2162,7 +2181,7 @@
         }
         s.disp = p;
         // ★ The heading eases too (≈0.4 s), so a turn reads as a turn and a noisy track never twitches.
-        const want = s.fix.track;
+        const want = s.fix.track != null ? s.fix.track : s.fix.face;   // ★★ 11-28 a derived face turns it too
         if (want != null) {
           if (s.hdg == null) s.hdg = want;
           else s.hdg = (s.hdg + angleTo(s.hdg, want) * (1 - Math.exp(-dt / 400)) + 360) % 360;
@@ -2347,7 +2366,7 @@
        *  it faces, whether a glide is under way. */
       shown() {
         const out = [];
-        for (const s of ac.values()) if (s.disp && !s.goneAt) out.push({ hex: s.hex, lat: s.disp.lat, lon: s.disp.lon, hdg: s.hdg, track: s.fix ? s.fix.track : null, gliding: !!s.corr, sparse: !!(s.a && s.a.sparse) });
+        for (const s of ac.values()) if (s.disp && !s.goneAt) out.push({ hex: s.hex, lat: s.disp.lat, lon: s.disp.lon, hdg: s.hdg, track: s.fix ? s.fix.track : null, face: s.fix ? s.fix.face : null, gliding: !!s.corr, sparse: !!(s.a && s.a.sparse) });
         return out;
       },
       setReceiver(lat, lon, approx) {

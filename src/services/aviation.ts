@@ -30,6 +30,9 @@ export interface AvAircraft {
   lat?: number; lon?: number; posAge?: number;
   /** ★ the applications: feet; "ADS-C" | "FMS" | "ACARS" | "HFDL"; the fix time AS REPORTED ("21:57:54", ":06:36" = past the hour) */
   alt?: number; posSrc?: string; posTime?: string;
+  /** ★★ 11-28 a heading the server DERIVED from the aircraft's last two fixes of one source ("trkSrc":"derived" — it turns
+   *  the icon only, never a track to fly on); undefined from an older server */
+  trk?: number;
   from?: string; to?: string; oooi?: string; oooiTime?: string; app?: string;
   label?: string; labelName?: string; text?: string;
   level: number; n: number; age: number; via: string;
@@ -72,6 +75,7 @@ export function parseAvReport(m: unknown): AvReport | null {
       lat: lat != null && Math.abs(lat) <= 90 ? lat : undefined, lon: lon != null && Math.abs(lon) <= 180 ? lon : undefined,
       posAge: num(a.posAge),
       alt: alt != null && alt > -2000 && alt < 70000 ? alt : undefined, posSrc: str(a.posSrc, 8), posTime: str(a.posTime, 9),
+      trk: a.trkSrc === 'derived' && typeof a.trk === 'number' && a.trk >= 0 && a.trk < 360 ? a.trk : undefined,
       from: icao4(a.from) && icao4(a.to) ? icao4(a.from) : undefined, to: icao4(a.from) && icao4(a.to) ? icao4(a.to) : undefined, oooi: oooi && /^(out|off|on|in)$/.test(oooi) ? oooi : undefined, oooiTime: str(a.oooiTime, 5),
       app: str(a.app, 10), label: str(a.label, 4), labelName: str(a.labelName, 60), text: str(a.text, 300),
       level: num(a.level) ?? -120, n: num(a.n) ?? 0, age: num(a.age) ?? 0, via: str(a.via, 60) ?? '',

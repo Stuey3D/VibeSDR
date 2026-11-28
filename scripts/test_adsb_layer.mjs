@@ -55,6 +55,20 @@ near(M.wrapLon(179, -179), -181, 1e-9, 'wrapLon unwraps across the antimeridian'
   ok(early.lat === 0 && early.lon === 0, 'never reckons backwards');
 }
 
+// ── ★★ 11-28 the heading from two fixes (derivedFace — the server's vibe_aircraft_share.h derivedTrack, for an older server) ──
+{
+  const E = 0.5 / Math.cos(55.25 * Math.PI / 180);
+  const a = { lat: 55, lon: -20, pt: 0, src: 'HFDL' }, b = { lat: 55.5, lon: -20 + E, pt: 600000, src: 'HFDL' };
+  near(M.derivedFace(a, b), 45, 1.5, 'two HFDL fixes NE of each other: ≈ 45°');
+  ok(M.derivedFace(a, { lat: 55.009, lon: -20, pt: 60000, src: 'HFDL' }) === null, 'fixes 1 km apart: none (jitter never spins it)');
+  ok(M.derivedFace(a, { ...b, pt: 31 * 60000 }) === null, 'the previous fix over 30 min old: none');
+  ok(M.derivedFace(a, { ...b, src: 'VDL2' }) === null, 'two sources: none');
+  ok(M.derivedFace({ ...a, src: 'ADS-B' }, { ...b, src: 'ADS-B' }) === null, 'ADS-B never derives (it reports its track)');
+  ok(M.derivedFace({ ...a, src: 'VDL2' }, { ...b, src: 'VDL2' }) !== null && M.derivedFace({ ...a, src: 'ACARS' }, { ...b, src: 'ACARS' }) !== null
+     && M.derivedFace({ ...a, src: 'ADS-C' }, { ...b, src: 'ADS-C' }) !== null, 'VDL2, ACARS and ADS-C derive too');
+  ok(M.DERIVE_MIN_KM === 2 && M.DERIVE_MAX_GAP_MS === 1800000, 'the server\'s numbers: 2 km, 30 min');
+}
+
 // ── the icon table ──
 const want = { A1: 'light', A2: 'regional', A3: 'jet', A4: 'b757', A5: 'heavy', A6: 'fighter', A7: 'heli',
                B1: 'glider', B2: 'balloon', B3: 'parachute', B4: 'ultralight', B6: 'uav', B7: 'space',

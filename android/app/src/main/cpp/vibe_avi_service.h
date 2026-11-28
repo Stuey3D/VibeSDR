@@ -83,7 +83,25 @@ struct Aircraft {
     // ★ V12 2026-11-16 the shared table (vibe_aircraft_share.h): which decoders heard it and when (wall seconds), and how many
     //   of its messages have already been handed over
     uint8_t srcMask = 0; double srcAt[vibeavshare::kNSrc] = {}; int countShared = 0;
+    /** ★★ 11-28 the heading DERIVED from its last two fixes of one source (vibe_aircraft_share.h derivedTrack) — NAN = none;
+     *  dSrc: the source of the fix it was derived at (a later fix of another source, or past the 30 min, ends it) */
+    double dTrk = NAN, dAt = -1; int dSrc = -1;
+    int fixSrc = -1;   ///< ★★ 11-28 the source of the fix now held (posSrcCode when it was set)
 };
+/** ★ The source a datalink row's POSITION came from (the shared table's code): ADS-C, HFDL, else the bearer it was heard on. */
+inline int posSrcCode(const Aircraft& a) {
+    return a.posSrc == "ADS-C" ? vibeavshare::kAdsc : a.posSrc == "HFDL" ? vibeavshare::kHfdl
+         : a.via.compare(0, 4, "VDL2") == 0 ? vibeavshare::kVdl2 : a.via.compare(0, 4, "HFDL") == 0 ? vibeavshare::kHfdl : vibeavshare::kAcars;
+}
+/** ★★ 11-28 a new fix for `a` (its posSrc / via already set for it): the derived heading from the fix before, then the fix. */
+inline void setFix(Aircraft& a, double lat, double lon, double now) {
+    const int src = posSrcCode(a), prevSrc = a.fixSrc;
+    const double d = std::isnan(a.lat) ? NAN
+        : vibeavshare::derivedTrack(prevSrc, a.lat, a.lon, (int64_t)std::llround(a.posAt * 1000), src, lat, lon, (int64_t)std::llround(now * 1000));
+    if (std::isfinite(d)) { a.dTrk = d; a.dAt = now; a.dSrc = src; }
+    else if (!(a.dSrc == src && now - a.dAt <= vibeavshare::kDeriveMaxGapMs / 1000.0)) { a.dTrk = NAN; a.dSrc = -1; }   // ★ a short hop keeps it
+    a.lat = lat; a.lon = lon; a.posAt = now; a.fixSrc = src;
+}
 
 /** ★ The HFDL ground stations (the public HFDL station list: id, name, position to a tenth of a degree). */
 struct GroundStation { int id; const char* name; double lat, lon; };
@@ -141,7 +159,7 @@ public:
         a.gsId = m.dstId; a.hfdlKhz = m.hz / 1e3; a.hfdlAt = now; a.hfdlLevel = m.snrDb; a.snr = m.snrDb;
         { const int bps = vibehfdl::bitRate(m.mode); a.snrMode = bps >= 1800 ? "hfdl1800" : bps >= 1200 ? "hfdl1200" : bps >= 600 ? "hfdl600" : "hfdl300"; }
         if (!m.flight.empty()) a.flight = m.flight;
-        if (!std::isnan(m.lat)) { a.lat = m.lat; a.lon = m.lon; a.posAt = now; a.posSrc = "HFDL"; a.posTime.clear(); a.hasAlt = false; }
+        if (!std::isnan(m.lat)) { a.posSrc = "HFDL"; setFix(a, m.lat, m.lon, now); a.posTime.clear(); a.hasAlt = false; }
         if (m.hasAcars && m.acarsCrcOk) acars_(a, m.acars, now);
         ++msgs_; heardAt_(now);
     }
@@ -216,6 +234,8 @@ public:
                 std::snprintf(b, sizeof b, "\"lat\":%.4f,\"lon\":%.4f,\"posAge\":%.0f,", a.lat, a.lon, now - a.posAt); o += b;
                 if (a.hasAlt) { std::snprintf(b, sizeof b, "\"alt\":%d,", a.altFt); o += b; }
                 if (!a.posSrc.empty()) o += "\"posSrc\":\"" + jsonEsc(a.posSrc) + "\",";
+                // ★★ 11-28 the heading derived from its last two fixes of one source — marked, it turns the icon only
+                if (std::isfinite(a.dTrk)) { std::snprintf(b, sizeof b, "\"trk\":%.0f,\"trkSrc\":\"derived\",", a.dTrk); o += b; }
                 if (!a.posTime.empty()) o += "\"posTime\":\"" + jsonEsc(a.posTime) + "\",";
             }
             if (!a.from.empty()) o += "\"from\":\"" + jsonEsc(a.from) + "\",\"to\":\"" + jsonEsc(a.to) + "\",";
@@ -297,8 +317,7 @@ public:
             u.heardMs = (int64_t)std::llround(a.last * 1000);
             if (!std::isnan(a.lat)) {
                 u.hasPos = true; u.lat = a.lat; u.lon = a.lon; u.posMs = (int64_t)std::llround(a.posAt * 1000);
-                u.posSrc = a.posSrc == "ADS-C" ? vibeavshare::kAdsc : a.posSrc == "HFDL" ? vibeavshare::kHfdl
-                         : a.via.compare(0, 4, "VDL2") == 0 ? vibeavshare::kVdl2 : a.via.compare(0, 4, "HFDL") == 0 ? vibeavshare::kHfdl : vibeavshare::kAcars;
+                u.posSrc = posSrcCode(a);
                 u.hasAlt = a.hasAlt; u.altFt = a.altFt; u.posTime = a.posTime;
             }
             u.count = (uint32_t)std::max(0, a.count - a.countShared); a.countShared = a.count;
@@ -330,9 +349,9 @@ private:
         else if (r.app == "pos") { ++nPos_; a.app = r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "position"; }
         else a.app = "FMS";
         if (r.hasPos) {
-            a.lat = r.lat; a.lon = r.lon; a.posAt = now;
             a.hasAlt = r.hasAlt; a.altFt = r.altFt;
             a.posSrc = r.app == "adsc" ? "ADS-C" : r.kind.compare(0, 3, "FMS") == 0 ? "FMS" : "ACARS";
+            setFix(a, r.lat, r.lon, now);   // ★★ 11-28 with the heading from the fix before (same source)
             if (r.app == "adsc") heard_(a, vibeavshare::kAdsc, now);   // ★ the map names ADS-C beside its bearer
             a.posTime = vibeacarsapps::fixTimeText(r);
         }

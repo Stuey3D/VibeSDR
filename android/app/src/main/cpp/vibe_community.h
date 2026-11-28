@@ -195,7 +195,9 @@ inline std::string ndbRows(std::vector<NdbRow> rows, int64_t now, size_t maxRows
 }
 
 /** ★ Compact aircraft rows — [key, lat, lon, position age s, alt ft|null, track|null, speed kt|null, sources (bit mask: 1 ADS-B,
- *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type, what, position source]. The rows as aircraftRows() chose them.
+ *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type, what, position source, track derived]. The rows as aircraftRows() chose them.
+ *  ★★ 11-28 `track derived` (field 13): 1 = the track (field 5) is not reported but DERIVED from two fixes of one source
+ *  (vibe_aircraft_share.h derivedTrack) — it turns the icon only, never flown on; 0 = reported, or none.
  *  ★★ 11-28 `position source` (field 12; Stuart, the community map: "ADS-B furthest 2540 km"): the ONE source the position
  *  came from, as a bit of the same mask (posSrc — 1 ADS-B … 16 ADS-C; 0 = not known). The sources field is every source
  *  that has HEARD the aircraft, so an aircraft first heard on ADS-B that later moved to HFDL still has ADS-B's bit; a
@@ -224,7 +226,8 @@ inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, in
         else std::snprintf(key, sizeof key, "%s", jsonEsc(!w.reg.empty() ? "r:" + w.reg : "f:" + w.flight).substr(0, 30).c_str());
         auto opt = [](bool has, double v, char* out, size_t n) { if (has) std::snprintf(out, n, "%.0f", v); else std::snprintf(out, n, "null"); };
         char alt[16], trk[16], gs[16];
-        opt(w.flags & 2, w.altFt, alt, sizeof alt); opt(w.flags & 4, w.trk, trk, sizeof trk); opt(w.flags & 8, w.gs, gs, sizeof gs);
+        const vibeavshare::Heading hd = vibeavshare::headingOf(w);   // ★★ 11-28 reported, else derived from two fixes
+        opt(w.flags & 2, w.altFt, alt, sizeof alt); opt(hd.has, hd.deg, trk, sizeof trk); opt(w.flags & 8, w.gs, gs, sizeof gs);
         std::snprintf(b, sizeof b, "%s[\"%s\",%.4f,%.4f,%lld,%s,%s,%s,%u,\"", i ? "," : "", key, w.lat, w.lon,
                       (long long)std::max<int64_t>(0, (nowMs - w.posMs) / 1000), alt, trk, gs, (unsigned)w.srcMask);
         o += b;
@@ -232,7 +235,7 @@ inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, in
         if (extra) extra(w, ex);
         const std::string& type = w.type.empty() ? ex.type : w.type;
         o += jsonEsc(w.flight.substr(0, 10)) + "\",\"" + jsonEsc(w.reg.substr(0, 10)) + "\",\"" + jsonEsc(type.substr(0, 8)) + "\",\""
-           + jsonEsc(aircraftWhat(ex)) + "\"," + std::to_string(w.posSrc >= 0 && w.posSrc < vibeavshare::kNSrc ? 1u << w.posSrc : 0u) + "]";
+           + jsonEsc(aircraftWhat(ex)) + "\"," + std::to_string(w.posSrc >= 0 && w.posSrc < vibeavshare::kNSrc ? 1u << w.posSrc : 0u) + (hd.derived ? ",1]" : ",0]");
     }
     return o;
 }

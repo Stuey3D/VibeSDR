@@ -275,5 +275,28 @@ console.log('── b96-2 "Not at this site": an off-site feed\'s aircraft are d
   }
   yes2(flips === 0 && cur.at === 'adsb', `interleaved ADS-B and ADS-C reports: the position never leaves ADS-B (${flips} flips)`);
 }
+// ── ★★ 11-28 the heading DERIVED from two fixes (the server's "trk" + "trkSrc":"derived") — turns the icon only ──
+{
+  const t = sharedSanitise({ now: 1800000000, aircraft: [
+    { key: '406D4D', icao: '406D4D', flight: 'BAW1', lat: 55.5, lon: -19.1, trk: 45, trkSrc: 'derived', gs: 470, posSrc: 'HFDL', posAge: 30, src: ['HFDL'], srcAge: { HFDL: 30 }, age: 30, n: 3 },
+    { key: '4CA97B', icao: '4CA97B', flight: 'RYR1', lat: 52.6, lon: -1.3, trk: 90, gs: 450, posSrc: 'ADS-B', posAge: 1, src: ['ADS-B'], srcAge: { 'ADS-B': 1 }, age: 1, n: 9 },
+    { key: '400001', icao: '400001', flight: 'EZY1', lat: 51, lon: 0, posSrc: 'VDL2', posAge: 10, src: ['VDL2'], srcAge: { VDL2: 10 }, age: 10, n: 1 },
+  ] })!;
+  const hf = t.aircraft.find((x) => x.key === '406D4D')!, ad = t.aircraft.find((x) => x.key === '4CA97B')!, vd = t.aircraft.find((x) => x.key === '400001')!;
+  yes('the server\'s derived heading is read and MARKED', hf.trk === 45 && hf.trkDerived === true);
+  yes('a reported track is not marked', ad.trk === 90 && !ad.trkDerived);
+  const sh = avPlaneAdsb(hf)!, sa = avPlaneAdsb(ad)!, sv = avPlaneAdsb(vd)!;
+  yes('the layer gets it as trkSrc derived (turn the icon, never fly on it), with the position\'s source', sh.track === 45 && sh.trkSrc === 'derived' && sh.posSrc === 'HFDL');
+  yes('…a reported track goes as a track', sa.track === 90 && sa.trkSrc === undefined);
+  yes('…no heading at all: the layer derives its own from two fixes of the same source (posSrc given)', sv.track === undefined && sv.posSrc === 'VDL2');
+  yes('the card says where a derived heading came from, never "track"', /Heading<\/?[^>]*>?[^]*45° \(from its last two positions\)/.test(avPlaneCard(hf, null)) && !/track 45/.test(avPlaneCard(hf, null)));
+  const live = parseAvReport({ type: 'avdata', aircraft: [{ icao: '406D4D', flight: 'BAW1', lat: 55.5, lon: -19.1, posAge: 5, posSrc: 'HFDL', trk: 45, trkSrc: 'derived', via: 'HFDL 8977', level: -20, n: 2, age: 5 },
+                                                          { icao: '400002', lat: 50, lon: 0, posAge: 5, posSrc: 'ACARS', trk: 10, via: 'ACARS 131.725', level: -20, n: 1, age: 5 }] } as any);
+  const lp = live ? live.aircraft.map(planeFromLive) : [];
+  yes('the live datalink report\'s derived heading reaches the plane, marked', lp[0]?.trk === 45 && lp[0]?.trkDerived === true);
+  yes('…a live row\'s unmarked trk is never taken (the report sends only derived ones)', lp[1]?.trk === undefined);
+  const mg = avMerge(null, t).find((x) => x.key === '406D4D')!;
+  yes('the merge keeps the mark with the heading', mg.trk === 45 && mg.trkDerived === true);
+}
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
