@@ -39375,7 +39375,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  idle radio"): background may run as many VFO channels as there are FREE listener slots — so a listener is never
          *  refused or told "full" because of it; the lowest VFO gives up its channel the moment one is needed. Read from
          *  the cached listener count: lock-free, safe on the runner's thread. */
-        if (bgLocked()) p.channelBudget = [] { return std::max(0, g_vsMaxUsers.load() - s_listenersCached.load(std::memory_order_relaxed)); };
+        /* ★★★ b97 (Stuart 11-28): a locked radio's background runs ALL THE TIME, alongside its listeners. The user-slot cap
+         *  (each free user slot = one VFO) stays only where a background VFO costs a channel of its own — a locked radio
+         *  WITHOUT the shared bank. With it (the RSP1B), a VFO is a slice of the bank everybody already pays for: no cap;
+         *  the box's CPU budget is what gives way (listeners first, then the owner's priority list). */
+        if (bgLocked() && !perClientDsp()) p.channelBudget = [] { return std::max(0, g_vsMaxUsers.load() - s_listenersCached.load(std::memory_order_relaxed)); };
         /* ★★ V12 2026-10-27 — A BAND DIGITAL-SPOTS VFO (Stuart: "Also full band digital modes too") runs behind the SAME
          *  governor a listener's Band does: the owner's word per mode, the benchmark's budget (shared between the
          *  profile's Band VFOs by the runner), engines told to go light when the server is loaded — and not at all where
@@ -46105,7 +46109,11 @@ bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& e
         g_bgCfg = c;
     }
     g_bgCfgGen.fetch_add(1);
-    LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
+    // ★★★ b97 (Stuart 11-28): a LOCKED radio never waits — say so, not "wait 300 s"
+    if (c.on && g_vsLockedCentre.load() > 0.0)
+        LOGI("background decoding: ON, %zu profile(s) â this radio's range is locked: it runs all the time, at once and "
+             "alongside listeners (listeners come first for the CPU)", c.profiles.size());
+    else LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
     return true;
 }
 /* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h, docs/v12/ADSB-FEED.md). Live. The decoder's sink is

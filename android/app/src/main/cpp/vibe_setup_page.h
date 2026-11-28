@@ -10097,7 +10097,9 @@ function bgRender() {
     const half = rate > 0 ? rate / 2 - Math.min(50000, rate * 0.15) - 3000 : 0;
     box.appendChild(el("p", { class: "why", id: "bgLockedNote" },
       "This radio\u2019s range is locked (" + (Math.max(0, r0.lockFreq - half) / 1e6).toFixed(3) + "\u2013" + ((r0.lockFreq + half) / 1e6).toFixed(3)
-      + " MHz): background VFOs must sit inside it. They decode all through their profile\u2019s hours, listeners or not \u2014 the radio is never moved."));
+      + " MHz): background VFOs must sit inside it. Background decoding runs all the time \u2014 at once (the wait above does not"
+      + " apply) and alongside listeners, all through the profile\u2019s hours: the radio is never moved, so every VFO stays in range."
+      + " Listeners come first for the CPU."));   // ★★★ b97 (Stuart 11-28)
   }
   if (tiers) {
     box.appendChild(el("p", { class: "why", id: "bgTierNote" },
