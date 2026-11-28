@@ -590,6 +590,89 @@ try {
        'labels fade out first (7 → 8) and are optional — a label never hides an icon');
     await js(`DATA.delete('syn'); render(); true`);
   }
+  console.log('── ★★ 11-28 the KEYBOARD / PAD drive the map (gamepad.ts, as the radio maps) and HELP is this map\'s own ──');
+  {
+    await call('Emulation.clearDeviceMetricsOverride');
+    await call('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await call('Page.navigate', { url: PAGE });
+    await until(`window.__cm && window.__cm.up === 3`, 20000); await sleep(1500);
+    await card('list', false); await sleep(500);
+    const KEYS = { ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Enter: 13, Escape: 27, '+': 187, '-': 189 };
+    const key = async (k) => {
+      const base = { key: k, code: k.startsWith('Arrow') ? k : k === '+' ? 'Equal' : k === '-' ? 'Minus' : k, windowsVirtualKeyCode: KEYS[k], nativeVirtualKeyCode: KEYS[k] };
+      await call('Input.dispatchKeyEvent', Object.assign({ type: 'rawKeyDown' }, base));
+      if (k.length === 1) await call('Input.dispatchKeyEvent', Object.assign({ type: 'char', text: k }, base));
+      await call('Input.dispatchKeyEvent', Object.assign({ type: 'keyUp' }, base));
+      await sleep(140);
+    };
+    const hl = `(() => { const e = document.querySelector('.gpFocus'); if (!e) return ''; return e.dataset.cbtn ? 'chip:' + e.dataset.cbtn : e.dataset.tgl ? 'tgl:' + e.dataset.tgl : e.matches('.trkCard2[data-card="list"]') ? 'list-box' : e.closest('.trkRow') ? 'row' : e.className.split(' ')[0] || e.tagName; })()`;
+    const centre0 = await js(`gl.getCenter().toArray().join()`), zoom0 = await js(`gl.getZoom()`);
+    // the walk: every chip is a stop, and the arrows never pan the map
+    const seen = new Set();
+    for (const k of ['ArrowRight', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowRight', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'ArrowUp', 'ArrowUp']) { await key(k); seen.add(await js(hl)); }
+    const chips = await js(`[...document.querySelectorAll('[data-cbtn]')].filter((b) => b.getClientRects().length && !b.closest('[hidden]')).map((b) => 'chip:' + b.dataset.cbtn)`);
+    ok(chips.length >= 5 && chips.every((c) => seen.has(c)), `★★ arrows walk the highlight to every chip (${chips.filter((c) => !seen.has(c)).join(' ') || 'all ' + chips.length}; walked ${[...seen].join(' ')})`);
+    ok(await js(`gl.getCenter().toArray().join()`) === centre0 && await js(`gl.getZoom()`) === zoom0 && await js(`!gl.keyboard.isEnabled()`), '★★ …and never pan or zoom the map (MapLibre’s own keyboard handler is off)');
+    // LAYERS: onto its chip, Enter opens it, Enter on a row toggles it, Esc shuts it with the highlight back on the chip
+    const goto = async (want, max = 24) => { for (let i = 0; i < max && (await js(hl)) !== want; i++) { const order = ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft']; await key(order[Math.floor(i / 6) % 4]); } return (await js(hl)) === want; };
+    ok(await goto('chip:layers'), 'the highlight reaches the LAYERS chip');
+    await key('Enter'); await sleep(400);
+    ok(await js(`MC.view.isCardOpen('layers')`), '★★ Enter on LAYERS opens its card');
+    await key('ArrowDown');
+    let h = await js(hl);
+    for (let i = 0; i < 6 && !/^tgl:(adsb|ais|mesh|ndb|aprs)$/.test(h); i++) { await key('ArrowDown'); h = await js(hl); }
+    const was = await js(`document.querySelector('.gpFocus')?.getAttribute('aria-pressed')`);
+    await key('Enter');
+    const now = await js(`document.querySelector('.trkCard2 [data-tgl="${h.slice(4)}"]')?.getAttribute('aria-pressed')`);
+    ok(/^tgl:/.test(h) && was !== now, `★★ …the arrows move into its rows and Enter toggles one (${h}: ${was} → ${now})`);
+    await key('Enter'); await sleep(200);
+    await key('Escape'); await sleep(400);
+    ok(!(await js(`MC.view.isCardOpen('layers')`)) && (await js(hl)) === 'chip:layers', `★★ Esc shuts LAYERS, the highlight back on its chip (${await js(hl)})`);
+    // − + zoom the map (the help's keys)
+    const z1 = await js(`gl.getZoom()`); await key('+'); await sleep(700);
+    const z2 = await js(`gl.getZoom()`); await key('-'); await sleep(700);
+    ok(z2 > z1 && (await js(`gl.getZoom()`)) < z2, `− + zoom the map (${z1.toFixed(2)} → ${z2.toFixed(2)} → ${(await js('gl.getZoom()')).toFixed(2)})`);
+    // the LIST: Enter on its chip opens it, Enter goes into the rows, Enter on a row opens that item's card, Esc shuts the card back onto the row
+    ok(await goto('chip:list'), 'the highlight reaches the LIST chip');
+    await key('Enter'); await sleep(600);
+    // ★ the AIRCRAFT tab (as test-web-map-pad picks its tab): rows with a place on the map (MESSAGES' rows open in place)
+    await js(`(() => { const t = document.querySelector('.trkList .hd .tab[data-tab="air"]'); if (t && t.getAttribute('aria-selected') !== 'true') t.click(); return 1; })()`); await sleep(700);
+    let at = await js(hl);
+    // ★ the radio maps' test-web-map-pad walk: a seeded random walk until the LIST stop is lit (it is ONE stop: no row on the way)
+    let seed = 7, rows = 0, n = 0;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (; n < 160 && at !== 'list-box'; n++) { await key(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'][Math.floor(rnd() * 4)]); at = await js(hl); if (at === 'row') rows++; }
+    ok(at === 'list-box' && !rows, `the walk reaches the LIST as ONE stop, never a row on the way (${n} presses, ${rows} rows)`);
+    if (at === 'list-box') { await key('Enter'); at = await js(hl); }
+    ok(at === 'row', `★★ …into the LIST's rows (${at})`);
+    const rowKey = await js(`document.querySelector('.gpFocus')?.closest('[data-key]')?.dataset.key || ''`);
+    await key('Enter'); await sleep(1600);
+    ok(await js(`!!(popup && popup.isOpen())`), `★★ Enter on a row opens its item's card (${rowKey})`);
+    ok(await js(`!!document.querySelector('.maplibregl-popup .gpFocus')`), '★★ …and the highlight moves INTO the card (its first control), as on the radio maps');
+    await key('Escape'); await sleep(500);
+    ok(await js(`!(popup && popup.isOpen())`) && (await js(hl)) === 'row' && await js(`MC.view.isCardOpen('list')`), `★★ Esc shuts the item's card first — the highlight back on its row, the LIST still open (${await js(hl)})`);
+    await key('Escape');
+    const left = await js(hl);
+    // ★ the radio maps' rule (test-web-map-pad): the item chosen from the LIST goes first — BACK clears it, then shuts the card
+    let esc = 0; for (; esc < 3 && await js(`MC.view.isCardOpen('list')`); esc++) await key('Escape');
+    ok(left === 'list-box' && !(await js(`MC.view.isCardOpen('list')`)) && esc <= 2, `…Esc again leaves the rows (${left}), then clears the chosen item and shuts the LIST (${esc} more)`);
+    // HELP: this map's own — a line per chip PRESENT (by its caption), none of the radio map's
+    await card('help'); await sleep(500);
+    const hp = await js(`(() => { const b = document.querySelector('.trkCard2[data-card="help"]'); const rows = [...b.querySelectorAll('.helpBody .hRowH')].map((r) => r.dataset.help);
+      const caps = Object.fromEntries([...document.querySelectorAll('[data-cbtn]')].map((x) => [x.dataset.cbtn, (x.querySelector('.cap')?.textContent || '').trim()]));
+      const named = [...b.querySelectorAll('.helpBody .hRowH b')].map((x) => x.textContent.trim());
+      const shown = [...document.querySelectorAll('.mDock[data-dock]')].filter((d) => !d.hidden && d.getClientRects().length).map((d) => d.dataset.dock).filter((d) => d !== 'scale');
+      return { rows, named, shown, caps, text: b.textContent }; })()`);
+    const chipRows = hp.rows.filter((r) => r !== 'x');
+    ok(hp.rows[0] === 'x' && /directory/.test(hp.text), '★★ HELP: the ✕ = back to the directory');
+    ok(chipRows.every((r) => hp.shown.includes(r)) && hp.shown.every((d) => chipRows.includes(d)), `★★ HELP names every chip the map HAS and no other (help ${chipRows.join(' ')} · chips ${hp.shown.join(' ')})`);
+    ok(chipRows.every((r, i) => !hp.caps[r] || hp.named[i + 1] === hp.caps[r]), `…each under its own caption (${hp.named.join(', ')})`);
+    const radioOnly = ['SERVERS', 'leave this server', 'Leave this server', 'TUNE', 'CHAT', 'SERVER HEALTH', 'TIME (', 'WATERFALL', 'waterfall', 'tune down', '< > tune', 'shares the radio', 'LIVE (in LAYERS)'];
+    ok(radioOnly.every((w) => !hp.text.includes(w)), `★★ none of the radio map's words (${radioOnly.filter((w) => hp.text.includes(w)).join(' | ') || 'none'})`);
+    ok(/grid square/.test(hp.text) && /HEARD IN/.test(hp.text) && /keyboard/.test(hp.text) && /Esc back/.test(hp.text), '…and what this map shows: the grid-square privacy, HEARD IN, the controller / keyboard lines');
+    await shot('community-help.png');
+    await card('help', false);
+  }
   ok(errors.length === 0, `no script errors (${errors.slice(0, 3).join(' | ')})`);
 } catch (e) { fail++; console.log('   FAIL ' + (e && e.stack || e)); }
 clearTimeout(deadline);

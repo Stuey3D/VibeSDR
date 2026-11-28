@@ -97,6 +97,8 @@ function makeMap(holder) {
     if (gl) gl.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
   } catch (e) { console.error('GPU map unavailable: ' + e); }
   if (!gl) { MC.view.note('This map needs WebGL 2, which this browser does not offer.'); return null; }
+  // ★★ 11-28 the arrows / WASD / + − are the controller layer's (initMapPad below), never MapLibre's own pan and zoom
+  if (gl.keyboard) gl.keyboard.disable();
   gl.on('zoomend', metZoom);
   gl.on('load', scheduleRender);
   // ★ the scale chip reads a Leaflet-zoom map (MapLibre's zoom + 1 — 512 px tiles)
@@ -600,7 +602,10 @@ function showCard(key, ll) {
   if (!it || !gl) return;
   const now = Math.floor(Date.now() / 1000);
   if (popup) popup.remove();
-  popup = new maplibregl.Popup({ maxWidth: `${Math.min(340, window.innerWidth - 24)}px` }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
+  popup = new maplibregl.Popup({ maxWidth: `${Math.min(340, window.innerWidth - 24)}px`, focusAfterOpen: false }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
+  // ★★ 11-28 focusAfterOpen off: the card never steals the focus — the pad / keyboard highlight is the one place (the
+  //   chrome's own LIST flow, padIntoCard, moves it INTO this card and BACK brings it back to the row), and an Escape is
+  //   the controller layer's, not the map view's own (which would shut the LIST under the card).
   cardFit(popup);  if (it.kind === 'aircraft') openAircraft(it, popup);
   // ★ a NAVTEX card's message: fetched now, from the receiver that holds its cleanest copy (never in the poll)
   const pre = popup.getElement().querySelector('.nvTx');
@@ -1099,7 +1104,30 @@ const MC = VibeMapChrome.mountMapChrome({
   // the item drawing is this page's own (MapLibre layers, the servers' cards) — the chrome draws none
   icon: () => ({ html: '', w: 0, h: 0 }), label: () => '', card: () => '',
   hostMap: makeMap,
+  /* ★★ 11-28 THIS MAP'S OWN HELP (Stuart: the HELP card was the radio map's — SERVERS "leave this server", TUNE, CHAT,
+   *  SERVER HEALTH, TIME, the pill, the WATERFALL). The chrome draws a line per chip PRESENT, under its own caption, so
+   *  the help cannot name a chip this page does not have; the words here only say what each one does on this map. */
+  help: {
+    exit: 'back to the directory.',
+    words: {
+      servers: 'Every receiver sharing to this map — LISTEN opens it, ONLY THIS shows just what it heard. Tap a row to fly to it.',
+      layers: 'Aviation, maritime and misc, and each mode in them: tap a row to show or hide it. SEA AREAS draws the forecast areas.',
+      map: 'HEARD IN (how far back), NAVTEX’s own filters, AUTO / FIT, and the KEY to every glyph on the map.',
+      list: 'Everything on the map, and NAVTEX’s messages — tap a row to fly to it and open its card.',
+      stats: 'The receivers sharing and the totals; per mode the newest and the furthest (aviation in nautical miles). Tap one to show it.',
+    },
+    notes: [
+      'What is on the map: what the stations themselves broadcast, read straight from each receiver whose owner switched on “Share to the VibeSDR community map”. The same aircraft, ship or message heard by several receivers is one marker that says so.',
+      'A receiver is drawn at the centre of its four-character grid square — never its address.',
+      'Tap a chip to open its card; the × at the top right of a card closes it. Escape or BACK closes it too. Tap anything on the map for its card.',
+      'On a phone-sized window one card opens at a time.',
+    ],
+  },
 });
+// ★★ 11-28 the PAD AND THE KEYBOARD (Stuart: "arrows/WASD/Enter/Esc just pan and zoom the map") — the radio maps' own
+//    controller layer: arrows / WASD / D-pad move the highlight over the chips, the cards and the LIST, Enter opens /
+//    chooses, Esc / Backspace / BACK goes back (the card on top, then an item's card), − + zoom the map.
+VibeMapChrome.initMapPad(MC);
 MC.chips({ layers: true, stats: true });
 MC.retitle('servers', 'RECEIVERS');
 // ★ the old footer's words (privacy: where a receiver is drawn) — HELP's credit line now
