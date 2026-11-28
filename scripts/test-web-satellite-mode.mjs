@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
-const DIST = path.join(root, 'web/dist');
+const DIST = process.env.WEB_DIST || path.join(root, 'web/dist');
 if (!fs.existsSync(EDGE) || !fs.existsSync(path.join(DIST, 'vibesdr.html'))) { console.log('   not run — Edge and web/dist needed'); process.exit(3); }
 const SHOTS = process.env.SAT_SHOTS || os.tmpdir();
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -162,12 +162,14 @@ try {
   ok(/Orbits: CelesTrak · 2 h old/.test(await ev(`document.querySelector('#satPanel .sat-credit').textContent`)), 'the CelesTrak credit stays');
   await shot('list-desktop');
   await ev(`document.querySelectorAll('#satPanel .sat-row')[4].click()`);
-  ok(JSON.stringify(await ev('window.__sent')) === '[]', 'a greyed row sends nothing…');
+  // ★★★ beta97 the pass preview asks the first rows' tracks for their verdicts (free reads) — they are not a pick
+  const picks = async () => (await ev('window.__sent')).filter((m) => !(m.track && !m.op));
+  ok(JSON.stringify(await picks()) === '[]', 'a greyed row sends nothing…');
   ok(/locked to 130–170 MHz/.test(await ev(`document.querySelector('#satPanel .sat-why').textContent`)), '…and says why');
 
   console.log('— a voice pick: the compact box');
   await ev(`document.querySelectorAll('#satPanel .sat-row')[0].click()`);
-  ok(JSON.stringify((await ev('window.__sent'))[0]) === '{"op":"pick","norad":25544,"tx":0,"doppler":true}', `op pick with AUTO DOPPLER on: ${JSON.stringify((await ev('window.__sent'))[0])}`);
+  ok(JSON.stringify((await picks())[0]) === '{"op":"pick","norad":25544,"tx":0,"doppler":true}', `op pick with AUTO DOPPLER on: ${JSON.stringify((await picks())[0])}`);
   ok(/Tuning…/.test(await ev(`document.querySelector('#satPanel .sat-box').textContent`)), 'pending: "Tuning…"');
   await ev(`window.__p.onPicked({ norad: 25544, tx: 0, decoder: '' }); window.__p.onReadout({ state: 'TRACK', name: 'ISS', norad: 25544, nominal: 437800000, offset: -8123, rate: -150, time: 'ok' }); true`);
   const box = JSON.parse(await ev(`JSON.stringify({ big: document.getElementById('satPanel').classList.contains('big'), hz: document.querySelector('#satPanel [data-s="hz"]').textContent, cd: document.querySelector('#satPanel [data-s="cd"]').textContent, img: document.querySelector('#satPanel .sat-img').hidden, st: document.querySelector('#satPanel [data-s="state"]').textContent, list: document.querySelector('#satPanel details').open })`));

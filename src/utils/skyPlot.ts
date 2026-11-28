@@ -258,8 +258,9 @@ export function skyPlotMerge(prev: SkyDot[], add: SkyDot[], max = SKY_MAX_DOTS):
 }
 
 /** "/vibeserver/skyplot.json?kind=orbcomm&radio=a1b2c3d4" (radio '' = every radio; days 0 = all kept). */
-export function skyPlotQuery(kind: string, radio = '', days = 0, norad = 0, png = false, mode: SkyMode = 'auto'): string {
+export function skyPlotQuery(kind: string, radio = '', days = 0, norad = 0, png = false, mode: SkyMode = 'auto', cellsOnly = false): string {
   let q = `/vibeserver/skyplot.${png ? 'png' : 'json'}?kind=${encodeURIComponent(kind || 'orbcomm')}`;
+  if (cellsOnly && !png) q += '&dots=0';   // ★★★ beta97 the pass preview's verdict: the heat map's cells, no dots (an older server sends them anyway)
   if (png && mode !== 'auto') q += `&mode=${mode}`;   // ★★★ beta94 the server's picture in the view chosen
   if (radio && /^[0-9a-z]{1,16}$/.test(radio)) q += `&radio=${radio}`;
   if (days > 0) q += `&days=${Math.floor(days)}`;

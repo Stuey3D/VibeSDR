@@ -82,6 +82,8 @@ export interface SatTrack {
   geo?: GeoPt[];
   /** the geo index of the pass's highest point (from the server's tca, geoT0, geoStep), when it says */
   tcaIdx?: number;
+  /** ★★★ beta97 PASS PREVIEW: geo[i]'s time is geoT0 + i·geoStep (unix s), and the server's tca — the preview's clock */
+  geoT0?: number; geoStep?: number; tca?: number;
 }
 export type GeoPt = [number, number, number] | null;
 
@@ -230,7 +232,9 @@ export function parseSatTrack(m: unknown): SatTrack | null {
       if (i >= 0 && i < geo.length && geo[i]) tcaIdx = i;
     }
   }
-  return { norad: num(o.norad) ?? 0, aos: num(o.aos) ?? 0, los: num(o.los) ?? 0, pts, ...(geo ? { geo } : {}), ...(tcaIdx != null ? { tcaIdx } : {}) };
+  const t0 = num(o.geoT0), st = num(o.geoStep), tca = num(o.tca);
+  return { norad: num(o.norad) ?? 0, aos: num(o.aos) ?? 0, los: num(o.los) ?? 0, pts, ...(geo ? { geo } : {}), ...(tcaIdx != null ? { tcaIdx } : {}),
+           ...(geo && t0 != null && st != null && st > 0 ? { geoT0: t0, geoStep: st } : {}), ...(tca != null && tca > 0 ? { tca } : {}) };
 }
 
 /** hwinfo → the button: absent = no button at all (the radio reaches no listed downlink); else live or greyed. */
@@ -878,12 +882,29 @@ export function globeBird(p: { x: number; y: number }, u: [number, number], d: [
  *  bird at radius 1 + its (exaggerated) height above its sub-point, hidden behind the globe or below the cut. `sat` null =
  *  no position (the scene still draws the dome and the receiver). `path` (1.7, the track reply's geo) = the pass's orbit,
  *  drawn at the same height, front side only, and the heading the bird's panels lie along. */
-export function globeScene(w: number, h: number, rx: { lat: number; lon: number }, sat: { lat: number; lon: number; altKm?: number } | null,
-                           path?: GeoPt[] | null, tcaIdx?: number): GlobeScene {
+/** ★★★ beta97 PASS PREVIEW: the half-globe's frame — its centre, radius and view, and the projection of a point at a height
+ *  (exaggerated by globeLift) — the ONE projection globeScene draws with, so the preview's trail sits on its orbit. */
+export interface GlobeFrame {
+  r: number; cx: number; cy: number; lat0: number; lon0: number;
+  lifted: (la: number, lo: number, altKm: number | undefined) => { x: number; y: number; vis: boolean };
+}
+export function globeFrame(w: number, h: number, rx: { lat: number; lon: number }): GlobeFrame {
   // ★ headroom: the highest bird (1 + 0.35), its panels and the label over it stay inside
   const r = Math.max(10, Math.min(w * 0.46, (h - 30) / 1.38));
   const cx = w / 2, cy = h - 2;
   const lat0 = Math.max(-90, rx.lat - GLOBE_TILT), lon0 = rx.lon;
+  /** a point above the ground at `altKm` (exaggerated) → the screen, and whether it is on the side we see, above the cut */
+  const lifted = (la: number, lo: number, altKm: number | undefined) => {
+    const [x, y, z] = orthoXYZ(la, lo, lat0, lon0, 1 + globeLift(altKm));
+    return { x: cx + x * r, y: cy - y * r, vis: y > 0 && !(z < 0 && Math.hypot(x, y) < 1) };
+  };
+  return { r, cx, cy, lat0, lon0, lifted };
+}
+/** `bare` (★★★ beta97 the preview's moving layer, drawn every frame over a cached picture of the rest): no graticule and no
+ *  coastlines — the two costly parts, which never move. */
+export function globeScene(w: number, h: number, rx: { lat: number; lon: number }, sat: { lat: number; lon: number; altKm?: number } | null,
+                           path?: GeoPt[] | null, tcaIdx?: number, bare = false): GlobeScene {
+  const { r, cx, cy, lat0, lon0, lifted } = globeFrame(w, h, rx);
   const P = (x: number, y: number) => `${(cx + x * r).toFixed(1)} ${(cy - y * r).toFixed(1)}`;
   let grid = '';
   const line = (pts: Array<[number, number]>) => {
@@ -894,20 +915,17 @@ export function globeScene(w: number, h: number, rx: { lat: number; lon: number 
       grid += `${pen ? 'L' : 'M'}${P(x, y)}`; pen = true;
     }
   };
-  for (let la = -60; la <= 60; la += 30) { const pts: Array<[number, number]> = []; for (let lo = -180; lo <= 180; lo += 6) pts.push([la, lo]); line(pts); }
-  for (let lo = -180; lo < 180; lo += 30) { const pts: Array<[number, number]> = []; for (let la = -90; la <= 90; la += 6) pts.push([la, lo]); line(pts); }
+  if (!bare) {
+    for (let la = -60; la <= 60; la += 30) { const pts: Array<[number, number]> = []; for (let lo = -180; lo <= 180; lo += 6) pts.push([la, lo]); line(pts); }
+    for (let lo = -180; lo < 180; lo += 30) { const pts: Array<[number, number]> = []; for (let la = -90; la <= 90; la += 6) pts.push([la, lo]); line(pts); }
+  }
   // ★ rough outlines (Stuart 11-20: "rough outlines would be fine, its just to show satellite pass status visually") —
   //   the same pen as the grid, written to `coast`; the far side and below the cut lift the pen
   const gridOnly = grid; grid = '';
-  for (const ring of GLOBE_COAST) { const pts: Array<[number, number]> = []; for (let k = 0; k + 1 < ring.length; k += 2) pts.push([ring[k + 1] / 10, ring[k] / 10]); line(pts); }
+  if (!bare) for (const ring of GLOBE_COAST) { const pts: Array<[number, number]> = []; for (let k = 0; k + 1 < ring.length; k += 2) pts.push([ring[k + 1] / 10, ring[k] / 10]); line(pts); }
   const coast = grid; grid = gridOnly;
   const [rxX, rxY, rxZ] = orthoXYZ(rx.lat, rx.lon, lat0, lon0);
   const rxPt = rxZ >= 0 && rxY >= 0 ? { x: cx + rxX * r, y: cy - rxY * r } : null;
-  /** a point above the ground at `altKm` (exaggerated) → the screen, and whether it is on the side we see, above the cut */
-  const lifted = (la: number, lo: number, altKm: number | undefined) => {
-    const [x, y, z] = orthoXYZ(la, lo, lat0, lon0, 1 + globeLift(altKm));
-    return { x: cx + x * r, y: cy - y * r, vis: y > 0 && !(z < 0 && Math.hypot(x, y) < 1) };
-  };
   // ★ 1.7 the orbit: the pen lifts behind the globe and below the cut, as the coastlines'
   let orbit = '', tca: { x: number; y: number } | null = null, tcaTick = '';
   const geo = path && path.filter(Boolean).length >= 2 ? path : null;
