@@ -22,28 +22,12 @@ import { AlphaType, Canvas, ColorType, Image as SkImage, Skia, type SkImage as S
 import { getColorLUT } from '../assets/colormapUtils';
 import { mwfCrop, mwfMinSpan, mwfDims, mwfDue, mwfX } from '../utils/mapChrome';
 import type { MapWfModel } from '../utils/mapWfModel';
+import { GAP_ROW as GAP, mwfPaint, pushRow, type MwfStore, type MwfFrame } from '../utils/mapWfPaint';   // ★ the pure half (tested)
+export { mwfStoreNew, type MwfStore, type MwfFrame } from '../utils/mapWfPaint';
 import { DECODER_FONT } from './DecoderShell';
 
 /** The history, owned by the map (one per map session) so it outlives this view while the list is showing. */
-export interface MwfStore {
-  cols: number; rows: number;
-  /** palette index per cell; 255 = the grey gap line, 0 = nothing */
-  ring: Uint8Array;
-  /** rows written so far (the newest is (seq - 1) % rows) */
-  seq: number;
-  key: string;
-  floor: number;
-  stamps: Array<{ seq: number; x: number; text: string }>;
-  hiddenAt: number;
-  /** ★★★ beta97 hotfix the span actually drawn (the model's, widened to MWF_MIN_BINS of the frame's bins) — the markers
-   *  and the stamps are placed on it, so they line up with the picture */
-  vlo?: number; vhi?: number;
-}
-export function mwfStoreNew(): MwfStore { return { cols: 0, rows: 0, ring: new Uint8Array(0), seq: 0, key: '', floor: NaN, stamps: [], hiddenAt: 0 }; }
-export type MwfFrame = { bins: Float32Array; centreHz: number; spanHz: number };
 
-const GAP = 255;
-const LEVEL_IDX = 70, LEVEL_SPAN_DB = 40;
 
 export default function MapMiniWaterfall({ width, height, screenW, screenH, model, colormap, store, sinkRef }: {
   width: number; height: number; screenW: number; screenH: number;
@@ -111,18 +95,7 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
     const s = store.current;
     const h = Math.max(1, Math.min(s.rows, Math.round(height)));
     if (!s.cols || !width) return;
-    const rgba = new Uint8Array(s.cols * h * 4);
-    const n = Math.min(h, s.seq);
-    for (let y = 0; y < n; y++) {
-      const src = ((s.seq - 1 - y) % s.rows) * s.cols, dst = y * s.cols * 4;
-      for (let c = 0; c < s.cols; c++) {
-        const v = s.ring[src + c], p = dst + c * 4;
-        if (v === GAP) { rgba[p] = 90; rgba[p + 1] = 90; rgba[p + 2] = 90; }
-        else { const li = v * 3; rgba[p] = lut[li]; rgba[p + 1] = lut[li + 1]; rgba[p + 2] = lut[li + 2]; }
-        rgba[p + 3] = 255;
-      }
-    }
-    for (let i = n * s.cols * 4; i < rgba.length; i += 4) { rgba[i] = lut[0]; rgba[i + 1] = lut[1]; rgba[i + 2] = lut[2]; rgba[i + 3] = 255; }
+    const rgba = mwfPaint(s, h, lut);
     const data = Skia.Data.fromBytes(rgba);
     const next = Skia.Image.MakeImage({ width: s.cols, height: h, colorType: ColorType.RGBA_8888, alphaType: AlphaType.Opaque }, data, s.cols * 4);
     setImg((prev) => { if (prev) setTimeout(() => prev.dispose(), 300); return next; });
@@ -155,26 +128,6 @@ export default function MapMiniWaterfall({ width, height, screenW, screenH, mode
   );
 }
 
-/** One row into the ring: palette indices re-levelled (floor → LEVEL_IDX), or the grey gap line (null). */
-function pushRow(s: MwfStore, row: Float32Array | null) {
-  if (!s.cols || !s.rows) return;
-  const off = (s.seq % s.rows) * s.cols;
-  if (!row) { s.ring.fill(GAP, off, off + s.cols); s.seq++; return; }
-  // the slice's noise floor: its 25th percentile, eased so a burst does not pump the picture
-  const vals: number[] = [];
-  for (let c = 0; c < row.length; c += Math.max(1, Math.floor(row.length / 128))) if (Number.isFinite(row[c])) vals.push(row[c]);
-  if (vals.length) {
-    vals.sort((a, b) => a - b);
-    const f = vals[Math.floor(vals.length * 0.25)];
-    s.floor = Number.isFinite(s.floor) ? s.floor + (f - s.floor) * 0.15 : f;
-  }
-  const scale = (255 - LEVEL_IDX) / LEVEL_SPAN_DB;
-  for (let c = 0; c < s.cols; c++) {
-    const v = row[c];
-    s.ring[off + c] = Number.isFinite(v) && Number.isFinite(s.floor) ? Math.max(1, Math.min(254, Math.round(LEVEL_IDX + (v - s.floor) * scale))) : 0;
-  }
-  s.seq++;
-}
 
 const mw = StyleSheet.create({
   wrap:  { overflow: 'hidden', backgroundColor: '#000' },

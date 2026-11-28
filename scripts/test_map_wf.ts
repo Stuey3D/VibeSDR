@@ -4,6 +4,8 @@
 // view opened, never a listed one.   npx tsx scripts/test_map_wf.ts
 import { readFileSync } from 'node:fs';
 import { mwfCrop, mwfMinSpan, MWF_MIN_BINS } from '../src/utils/mapChrome';
+import { mwfStoreNew, pushRow, mwfPaint, LUT_STRIDE, LEVEL_IDX } from '../src/utils/mapWfPaint';
+import { getColorLUT } from '../src/assets/colormapUtils';
 import { ismSanitise } from '../src/services/ism';
 import { avBandFor, wfModelIsm, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
 
@@ -138,6 +140,50 @@ console.log('── ★★★ beta97 hotfix ISM / LoRa: the decoder\'s channels 
   ok(i1 > 0 && i2 > i1 && i3 > i2, 'the app picks in the web\'s order: VOR · NDB · datalink · ISM · ADS-B (1090 ± 1 MHz) · the dial slice (16-bin floor)');
   const shared = readFileSync(new URL('../src/utils/mapWfModel.ts', import.meta.url), 'utf8');
   ok(/export function wfModelIsm\(/.test(shared) && /export function wfModelVfo\(v: \{ frequency: number; mode: string; bandwidthLow: number; bandwidthHigh: number \}, minSpan = 0\)/.test(shared), 'one shared module (src/utils/mapWfModel.ts) for the app and the web');
+}
+
+console.log('── ★★★ beta97 hotfix REAL FRAMES (Stuart, TestFlight 589: rainbow speckle) — captured through the app\'s own client ──');
+{
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/map_wf_frames.json', import.meta.url), 'utf8')) as { frames: Array<{ raw: string; bins: number[]; centreHz: number; spanHz: number; freq: number }> };
+  ok(fx.frames.length >= 4, `${fx.frames.length} real frames (a beta97 server's binary8 spectrum, received by VibeServerClient)`);
+  // ★ the documented binary8 rule, from the raw bytes: magic, version 2 (a 30-byte header with its Hz-per-bin), flags 3 = a
+  //   full u8 frame, dBFS = byte − 256, then the FFT's halves swapped (negative frequencies first)
+  let same = true, inRange = true;
+  for (const f of fx.frames) {
+    const raw = Buffer.from(f.raw, 'base64');
+    const ver = raw[4], flags = raw[5], hdr = ver === 2 ? 30 : 22, n = raw.length - hdr, half = n >> 1;
+    if (flags !== 3 || n !== f.bins.length) { same = false; continue; }
+    for (let i = 0; i < n; i++) {
+      const wrapped = i < half ? half + i : i - half;   // display index → wrapped (server) index
+      const db = raw[hdr + wrapped] - 256;
+      if (Math.abs(db - f.bins[i]) > 1e-6) same = false;
+      if (!(db >= -160 && db <= 0)) inRange = false;
+    }
+  }
+  ok(same, 'the bins the app hands its waterfall sinks == the raw frame decoded by the binary8 rule (dBFS = u8 − 256, halves unwrapped)');
+  ok(inRange, 'every value is a dBFS level (−160 … 0) — never raw bytes, never another message read as bins');
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  ok(/wfFrameSink\.current\?\.\(newBins, s\);/.test(sdr) && /if \(mapWfSink\.current\) mapWfSink\.current\(\{ bins: newBins, centreHz: s\.trueCenterHz \?\? s\.centerHz, spanHz: s\.trueBwHz \?\? s\.bwHz \}\);/.test(sdr),
+     'the drawer and the main waterfall get the SAME decoded array from the same onSpectrum call (one decode, never a second parser)');
+  // ★ the drawer's own path on them: crop → level → paint, with the user's palette
+  const st = mwfStoreNew(); st.cols = 240; st.rows = 400; st.ring = new Uint8Array(st.cols * st.rows);
+  for (const f of fx.frames) pushRow(st, mwfCrop(Float32Array.from(f.bins), f.centreHz, f.spanHz, f.centreHz - 600e3, f.centreHz + 600e3, st.cols));
+  const idx = Array.from(st.ring.subarray(0, st.cols * fx.frames.length));
+  const lo = Math.min(...idx), hi = Math.max(...idx);
+  ok(lo >= 1 && hi <= 254 && hi - lo <= 60, `the fake radio's flat noise (a few dB) stays a narrow band of the palette round the floor (indices ${lo}–${hi}, floor ${LEVEL_IDX})`);
+  for (const name of ['gqrx', 'turbo', 'viridis']) {
+    const lut = getColorLUT(name);
+    ok(lut.length === 256 * LUT_STRIDE, `${name}: the palette is RGBA (${lut.length / 256} bytes an entry) — the drawer reads it ${LUT_STRIDE} at a time`);
+    const px = mwfPaint(st, 40, lut);
+    let exact = true;
+    for (let y = 0; y < fx.frames.length; y++) for (let c = 0; c < st.cols; c++) {
+      const v = st.ring[((st.seq - 1 - y) % st.rows) * st.cols + c], p = (y * st.cols + c) * 4;
+      if (px[p] !== lut[v * 4] || px[p + 1] !== lut[v * 4 + 1] || px[p + 2] !== lut[v * 4 + 2]) exact = false;
+    }
+    ok(exact, `${name}: every pixel is EXACTLY its level's palette entry (the old 3-byte read straddled two entries: rainbow speckle)`);
+    const tail = px.subarray(fx.frames.length * st.cols * 4, fx.frames.length * st.cols * 4 + 4);
+    ok(tail[0] === lut[LEVEL_IDX * 4] && tail[1] === lut[LEVEL_IDX * 4 + 1] && tail[2] === lut[LEVEL_IDX * 4 + 2], `${name}: below the history so far, the noise floor's colour — never a black block`);
+  }
 }
 
 console.log(`test_map_wf: ${pass} passed, ${fail} failed`);
