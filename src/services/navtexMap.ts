@@ -9,6 +9,7 @@
 //    (a "?" here, its candidates in the card).
 // ★ Everything in a report came off the air or the gallery: every string is escaped where it meets HTML.
 import { navtexSubject } from '../utils/navtex';
+import { MODE_ICONS } from '../utils/modeIcons';
 import { radiosOf } from './mapScope';
 
 export interface NavCand { name: string; iso: string; lat: number; lon: number; km?: number }
@@ -132,6 +133,10 @@ const lettersOf = (g: NavSite) => g.letters.map((s) => s.b1).join(' ');
 export function navSiteColour(g: NavSite): string { return NAV_BAND_COLOURS[String(g.khz[0] ?? 518)] || '#4fc3f7'; }
 /** The marker: a transmitting mast on a disc in the band's colour (split when the site sends on two bands), its letters
  *  beside it; LIKELY has a dashed rim, AMBIGUOUS a "?" badge; fades over a week since last heard. */
+/** The NAVTEX glyph's parts as SVG (24-unit grid, stroked in the parent's colour) — from the house table. */
+export function navtexGlyphParts(): string {
+  return MODE_ICONS.navtex.map((q) => ('d' in q ? `<path d="${q.d}" stroke-width="${q.w ?? 1.8}"/>` : '')).join('');
+}
 export function navIcon(g: NavSite): { html: string; w: number; h: number } {
   const c1 = navSiteColour(g), c2 = g.khz.length > 1 ? (NAV_BAND_COLOURS[String(g.khz[1])] || c1) : c1;
   const op = navAgeOpacity(g.seen).toFixed(2);
@@ -139,8 +144,9 @@ export function navIcon(g: NavSite): { html: string; w: number; h: number } {
   const disc = c1 === c2
     ? `<circle cx="13" cy="13" r="11" fill="${c1}" stroke="#0b1420" stroke-width="1.4"${rim}/>`
     : `<path d="M13 2 A11 11 0 0 0 13 24 Z" fill="${c1}"/><path d="M13 2 A11 11 0 0 1 13 24 Z" fill="${c2}"/><circle cx="13" cy="13" r="11" fill="none" stroke="#0b1420" stroke-width="1.4"${rim}/>`;
-  const mast = '<path d="M13 7 L9.5 19 M13 7 L16.5 19 M10.6 15 H15.4" stroke="#0b1420" stroke-width="1.6" fill="none" stroke-linecap="round"/>'
-    + '<path d="M9 6 a5 5 0 0 0 0 5 M17 6 a5 5 0 0 1 0 5" stroke="#0b1420" stroke-width="1.2" fill="none" stroke-linecap="round"/>';
+  // ★★★ beta96 the NAVTEX glyph (modeIcons.ts MODE_ICONS.navtex — Stuart's pick 11-27): the mast sending, the printed sheet,
+  //     dark on the station's disc — the same drawing as LAYERS and the LIST tab, web and app
+  const mast = `<g transform="translate(3.2 3.2) scale(0.82)" stroke="#0b1420" fill="none" stroke-linecap="round" stroke-linejoin="round">${navtexGlyphParts()}</g>`;
   const q = g.conf === 'ambiguous' ? '<circle cx="22" cy="22" r="5.2" fill="#ffd34d" stroke="#0b1420" stroke-width="1"/><text x="22" y="25" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="8" font-weight="700" fill="#111">?</text>' : '';
   return { html: `<svg width="28" height="28" viewBox="0 0 28 28" style="opacity:${op}" aria-hidden="true">${disc}${mast}${q}</svg>`, w: 28, h: 28 };
 }
@@ -248,7 +254,7 @@ export const NAV_EMPTY = 'No NAVTEX message in the gallery for this time — the
 export function navItems(r: NavReport | null, wrap: 'web' | 'app' = 'app') {
   return navSites(r).map((g) => ({ key: g.key, lat: g.lat, lon: g.lon, _ic: navIcon(g), _lb: navLabel(g), _cd: navCard(g, wrap), _h: g.n,
                                    // ★ stations outrank the warnings and the met labels when names collide
-                                   _rk: 1e12 + navRank(g), _arc: true,
+                                   _rk: 1e12 + navRank(g),   // ★★★ beta96 no line from the receiver any more (Stuart 11-27: "loose the lines between receiver and navtex sites") — the distance stays in the label and card
                                    _aria: `Station ${navLabel(g)}, ${g.n} messages, last heard ${navAgo(g.seen)}. Press Enter for its card.` }));
 }
 const ageShort = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);

@@ -109,6 +109,18 @@ const GL_RING_ROWS = 2560;
  *  screen on a 1 GB board keeps ~2 screens of history instead of five (2026-11-01). */
 const GL_ROW_BYTES = RING_W + 1024 + 6 * 8;
 
+/** The trace's fill: a vertical gradient sampled from the palette — see Waterfall.specGradient (shared with mapWf.ts). */
+export function specGradientFor(ctx: CanvasRenderingContext2D, H: number, lut: Uint8Array): CanvasGradient {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  // Sample the LUT 90 -> 235 in 9 stops, NOT 0 -> 255 (the app does exactly this, WaterfallView specGradColors): black-based
+  // palettes are near-invisible below ~90, so the baseline starts where the palette has picked up colour.
+  for (let gi = 0; gi <= 8; gi++) {
+    const o = Math.max(0, Math.min(255, Math.round(90 + (gi / 8) * 145))) << 2;
+    g.addColorStop(1 - gi / 8, `rgb(${lut[o]},${lut[o + 1]},${lut[o + 2]})`);
+  }
+  return g;
+}
+
 export class Waterfall {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -429,23 +441,20 @@ export class Waterfall {
 
   private specGradient(ctx: CanvasRenderingContext2D, H: number): CanvasGradient {
     if (this.specGrad && this.specGradH === H) return this.specGrad;
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    const lut = this.lut;
-    // Sample the LUT 90 -> 235 in 9 stops, NOT 0 -> 255 (the app does exactly
-    // this, WaterfallView specGradColors). Black-based palettes — Sonar, Night
-    // Vision — are near-invisible below index ~90, so a fill that starts at 0
-    // fades into the black background and the base of the trace disappears. The
-    // baseline instead starts where the palette has actually picked up colour, so
-    // weak signals stay visible while the trace still inherits the waterfall hue.
-    for (let gi = 0; gi <= 8; gi++) {
-      const idx = Math.max(0, Math.min(255, Math.round(90 + (gi / 8) * 145)));
-      const o = idx << 2;
-      // Gradient runs top->bottom, hot colour at the top.
-      g.addColorStop(1 - gi / 8, `rgb(${lut[o]},${lut[o + 1]},${lut[o + 2]})`);
-    }
-    this.specGrad = g;
+    this.specGrad = specGradientFor(ctx, H, this.lut);
     this.specGradH = H;
-    return g;
+    return this.specGrad;
+  }
+  /** ★★★ V12 THE MAP DRAWER'S WATERFALL IS A MINIATURE OF THIS ONE (Stuart 11-27, mapWf.ts): every processed frame — the
+   *  palette indices of its row (this waterfall's own level mapping: brightness, the auto range, the clip), its smoothed
+   *  trace and peak hold — handed on, with the look to draw them in. Null = nobody is listening (the drawer is shut). */
+  onProcessed: ((f: { row: Uint8Array; spec: Float32Array; peak: Float32Array | null; centerHz: number; bwHz: number }) => void) | null = null;
+  /** The look the page draws in, read fresh each time (a palette or setting change shows at once). */
+  mapLook(): { lut: Uint8Array; specAlpha: number; peakColour: string; peakLine: string | null; gradient: (ctx: CanvasRenderingContext2D, H: number) => CanvasGradient } {
+    const lut = this.lut;
+    return { lut, specAlpha: this.specAlpha, peakColour: this.peakColour(),
+             peakLine: this.proc.getSettings().peakHold ? rgba(this.vfoColor, 0.85) : null,
+             gradient: (ctx, H) => specGradientFor(ctx, H, lut) };
   }
 
   /** Palette colour at the top of the range — used for the trace outline. */
@@ -777,6 +786,7 @@ export class Waterfall {
 
     const now = performance.now();
     const row = frame.row;
+    if (this.onProcessed) { try { this.onProcessed({ row, spec: frame.spec, peak: this.proc.getSettings().peakHold ? frame.peak : null, centerHz, bwHz }); } catch { /* the drawer's fault is its own */ } }
 
     // ★★★ DROP THE UNEMITTED REMAINDER — DO NOT FLUSH IT. This used to dump up to EIGHT leftover
     //     rows in one go so that "every pair contributes exactly emitTotal lines", and that burst

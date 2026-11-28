@@ -1328,30 +1328,9 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
    ★ z-index 47: above the card (40), the decoder box (45) and the floating chips (46); below the owner's notice
      (48, which outranks nothing else on a live radio), the panels (51), the tour (55), the health pill (60) and
      the START / idle / busy screens — so everything that must still be seen and used in ADS-B still is. */
-#adsbView { position: fixed; inset: 0; z-index: 47; display: flex; flex-direction: column; background: #090602; }
-#adsbView[hidden] { display: none; }
-#adsbTop { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-width: 0;
-  padding: 6px 10px; padding-top: max(6px, env(safe-area-inset-top, 0px));
-  padding-left: max(10px, env(safe-area-inset-left, 0px)); padding-right: max(10px, env(safe-area-inset-right, 0px));
-  background: var(--ov-panel98, rgba(8,6,2,0.98)); border-bottom: 1px solid rgba(255, 160, 0, 0.18); }
-#adsbTop button { flex: 0 0 auto; font: inherit; font-size: 13px; letter-spacing: 1px; padding: 6px 11px; min-height: 34px;
-  background: rgba(255, 160, 0, 0.08); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 8px;
-  color: rgba(255, 184, 51, 0.92); cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-#adsbTop button:hover { background: rgba(255, 160, 0, 0.14); }
-#adsbTop button:active { background: rgba(255, 160, 0, 0.20); }
-#adsbTop button:disabled { opacity: 0.4; cursor: default; }
 /* ★ The way out is the one key that must never be missed: the app's ← SDR, worded for what it does here. */
-#adsbExit { color: var(--btn-active-tx) !important; border-color: rgba(255, 184, 51, 0.55) !important; font-weight: 600; }
 /* ★ The strip beside EXIT: one row that scrolls sideways when it does not fit (the decoder box header's way — momentum,
    no scrollbar), never wraps, never squeezes a key. On a wide screen the title takes the spare room, centred. */
-#adsbTopScroll { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
-  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; overscroll-behavior-x: contain; }
-#adsbTopScroll::-webkit-scrollbar { display: none; }
-#adsbTitle { flex: 1 0 auto; text-align: center; font-size: 14px; letter-spacing: 2px;
-  color: rgba(255, 184, 51, 0.80); white-space: nowrap; }
-#adsbCntWrap { display: flex; align-items: center; gap: 5px; flex: 0 0 auto; color: rgba(255, 190, 40, 0.75); }
-#adsbCnt { color: var(--btn-active-tx); font-size: 16px; font-variant-numeric: tabular-nums; }
-#adsbStat { flex: 0 0 auto; font-size: 11px; letter-spacing: 0.5px; color: var(--text-dim); white-space: nowrap; }
 /* ★ GAIN in ADS-B (Stuart, 2026-10-24: "there is no way of accessing the gain control when ADSB is enabled"): the key
  *   says what the radio is at; its card holds AUTO and the radio's own gain steps */
 #adsbGain { font-size: 12px; padding: 6px 9px; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -1398,45 +1377,15 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 @media (max-width: 520px) { #adsbFeedWarn { flex-wrap: wrap; } #adsbFeedWarn b { flex: 1 0 auto; order: 0; }
   #adsbFeedWarn button { order: 1; } #adsbFeedWarn span { order: 2; flex-basis: 100%; } }
 /* ★ The map's own chrome in the bar's amber (as the popup map had it): the zoom keys and the credits. */
-#adsbView .maplibregl-ctrl-group { background: rgba(9, 6, 2, 0.92) !important; border: 1px solid rgba(255, 160, 0, 0.30); }
-#adsbView .maplibregl-ctrl-group button + button { border-top: 1px solid rgba(255, 160, 0, 0.20); }
-#adsbView .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: .7; }
-#adsbView .maplibregl-ctrl-attrib, #adsbView .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(9, 6, 2, 0.72); color: rgba(255, 184, 51, 0.55); font-size: 10px; }
-#adsbView .maplibregl-ctrl-attrib a { color: rgba(255, 184, 51, 0.55); }
-#adsbView .maplibregl-ctrl-attrib-button { filter: invert(0.7) sepia(1) saturate(3) hue-rotate(-10deg); opacity: .55; }
-#adsbView .leaflet-bar a { background: rgba(9, 6, 2, 0.92); color: var(--amber); border-color: rgba(255, 160, 0, 0.30); }
-#adsbView .leaflet-control-attribution { background: rgba(9, 6, 2, 0.72) !important; color: rgba(255, 184, 51, 0.55); }
-#adsbView .leaflet-control-attribution a { color: rgba(255, 184, 51, 0.55); }
 /* ★★ THE HEALTH PILL STAYS, BELOW THE MAP'S TOGGLES. Its corner (top right) is the bar's and then AUTO / FIT /
      RINGS's; --adsbTopH is the bar's measured height (adsbLayout in main.ts). The battery pill (an older
      server's) sits in the same corner. */
-body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48px) + 54px) !important; right: 10px !important; }
 /* ★ V12: the health pill joins the edge now (it tucks into it), so it keeps the map's height but not the 10 px gap. */
-body.adsbMap #srvHealth { right: 0 !important; }
 
 /* ── THE LIVE LIST — bottom left, clear of the toggles (top right), the zoom keys (top left) and the credits
    (bottom right). ~7 rows, then it scrolls; the head collapses it to a pill that covers almost nothing. */
-#adsbLive { position: absolute; left: max(10px, env(safe-area-inset-left, 0px)); bottom: max(10px, env(safe-area-inset-bottom, 0px));
-  z-index: 5; width: min(360px, calc(100% - 64px)); display: flex; flex-direction: column;
-  background: var(--ov-panel96, rgba(8,6,2,0.96)); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 10px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); font-variant-numeric: tabular-nums; overflow: hidden;
-  transition: bottom 0.2s ease; }
-#adsbLive.lift { bottom: calc(var(--adsbAttribH, 0px) + 18px); }
-#adsbLiveHead { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 7px 11px; min-height: 34px;
-  cursor: pointer; font-size: 11px; letter-spacing: 1.5px; color: rgba(255, 184, 51, 0.75); -webkit-tap-highlight-color: transparent; }
-#adsbLiveHead:hover { background: rgba(255, 160, 0, 0.08); }
-#adsbLiveHead:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: -2px; }
-#adsbLiveN { color: var(--btn-active-tx); font-size: 12px; }
-#adsbLiveHead .chev { margin-left: auto; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-top: 6px solid rgba(255, 184, 51, 0.7); }
-#adsbLive.min { width: auto; border-radius: 999px; }
-#adsbLive.min #adsbLiveHead { padding: 7px 14px; }
-#adsbLive.min #adsbLiveHead .chev { border-top: none; border-bottom: 6px solid rgba(255, 184, 51, 0.7); }
-#adsbLive.min #adsbList, #adsbLive.min #adsbChips { display: none; }
 /* ★ The list header's chips: small keys in a row under the head, the key word dimmed so the figure reads first */
 /* ★ a wide screen WRAPS them (height to spare there); a phone scrolls them, as the bar (media query below) */
-#adsbChips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 7px; }
-#adsbChips:not(:has(.adsbChip:not([hidden]))) { display: none; }
 .adsbChip { flex: 0 0 auto; font: inherit; font-size: 11px; letter-spacing: 0.4px; padding: 4px 7px; min-height: 26px; white-space: nowrap;
   font-variant-numeric: tabular-nums; background: rgba(255, 160, 0, 0.08); border: 1px solid rgba(255, 160, 0, 0.30); border-radius: 7px;
   color: rgba(255, 184, 51, 0.92); cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -1444,72 +1393,25 @@ body.adsbMap #srvHealth { right: 0 !important; }
 .adsbChip:active { background: rgba(255, 160, 0, 0.20); }
 .adsbChip:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
 .adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
-#adsbList { max-height: 259px; max-height: min(7 * 37px, 38vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
-  border-top: 1px solid rgba(255, 160, 0, 0.14); scrollbar-width: thin; scrollbar-color: rgba(255, 160, 0, 0.35) transparent; }
 /* ★ V12 beta91 the Mictronics ODC-By notice at the list's foot (adsbInfo.ts ADSB_DATA_CREDIT — the card's words) */
-#adsbList .adsbCredit { padding: 6px 8px 4px; font: 10px/1.35 ui-monospace, Menlo, monospace; color: rgba(255, 184, 51, 0.55); border-top: 1px solid rgba(255, 160, 0, 0.14); }
-#adsbList .adsbCredit a { color: rgba(255, 184, 51, 0.92); }
 /* ★★ beta95 ONE COLUMN TEMPLATE FOR EVERY ROW: fixed widths for altitude / speed / range (was auto, so each row sized its
    own and a row with "tracked 214 NM" squeezed its name column). Range fits "214 NM NE" and "tracked 999 NM". */
-#adsbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) 6.6em 4em 7.6em; gap: 0 8px; align-items: center;
-  padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
-#adsbList .adsbRow:hover, #adsbList .adsbRow:focus-visible { background: var(--btn-active-bg); }
-#adsbList .adsbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
 /* ★★ beta96 ADS-B's live list inside the AIR & SEA map's AIRCRAFT tab (TrackView scrolls it — no list of its own in it) */
-.trkView #adsbList { max-height: none; overflow: visible; border-top: 0; padding: 0; }
-.trkView #adsbList .adsbRow { border-bottom: 1px solid #151f29; border-radius: 0; }
-.trkView #adsbList .adsbRow.sel { background: #1a2632; border-left-color: #ffd34d; box-shadow: none; }
-.trkView #adsbList .adsbRow.em { background: #4a1515; }
-.trkView .slot-head #adsbChips { padding: 6px 10px 4px; }
 .trkView .slot-top { display: contents; }
-.trkView .scr .slot-top > * { flex: 0 0 auto; white-space: nowrap; }
 .trkView .slot-over > * { pointer-events: auto; }
 .trkView .slot-over { position: absolute; inset: 0; pointer-events: none; z-index: 8; }
 .trkView #adsbGainPop { top: 8px; }
 .trkView #adsbFeedWarn { top: 8px; }
-#adsbList .adsbRow .id { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
-#adsbList .adsbRow .id .l1 { display: flex; align-items: center; min-width: 0; }
-#adsbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
-#adsbList .adsbRow .id .ex { flex: 0 0 auto; display: inline-flex; align-items: center; white-space: nowrap; }
 /* ★ the chip's gap from the name (the TrackView's .trkRow .snrChip margin — 5 px on its RIGHT — glued it to the callsign) */
-#adsbList .adsbRow .id .ex .snrChip { margin: 0 0 0 5px; }
 /* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
 /* ★ The (i) beside the list's header: the map layer's colour key (toggleLegend), opened above the list. */
-#adsbLegendBtn { all: unset; box-sizing: border-box; position: absolute; top: 5px; right: 30px; width: 24px; height: 24px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; font: italic 600 12px Georgia, serif; color: rgba(255, 184, 51, 0.8);
-  border: 1px solid rgba(255, 160, 0, 0.35); cursor: pointer; }
-#adsbLegendBtn.on, #adsbLegendBtn:hover { background: rgba(255, 160, 0, 0.14); }
-#adsbLegendBtn:focus-visible { outline: 1px solid var(--btn-active-bdr); outline-offset: 1px; }
-#adsbLive.min #adsbLegendBtn { display: none; }
-#adsbList .adsbRow .id small { font-size: 9.5px; opacity: .6; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
    own, max 12 px high) or its ICAO code as a small badge, then type · registration · route */
-#adsbList .adsbRow .id .flag { font-size: 11px; margin-right: 5px; letter-spacing: 0; }
-#adsbList .adsbRow .id .cc { display: inline-block; font-size: 8px; line-height: 11px; padding: 0 3px; margin-right: 5px; border: 1px solid currentColor;
-  border-radius: 2px; opacity: .7; letter-spacing: .5px; vertical-align: 1px; }
-#adsbList .adsbRow .id small .op { display: inline-block; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font-size: 8.5px;
-  line-height: 10px; letter-spacing: .8px; font-weight: 700; }
-#adsbList .adsbRow .id small .oplogo { height: 11px; max-width: 48px; vertical-align: -2px; object-fit: contain; }
-#adsbList .adsbRow .alt, #adsbList .adsbRow .spd, #adsbList .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 11.5px; }
-#adsbList .adsbRow .alt, #adsbList .adsbRow .rng { overflow: hidden; }
-#adsbList .adsbRow .spd { opacity: .8; }
-#adsbList .adsbRow .rng .trk { display: block; font-size: 10px; opacity: .7; overflow: hidden; text-overflow: ellipsis; }
-#adsbList .adsbRow i { font-style: normal; font-size: 8px; margin-left: 3px; vertical-align: 1px; }
 /* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
-#adsbList .adsbRow .brg, #adsbList .adsbRow .dim { opacity: .6; }
-#adsbList .adsbRow.nopos { opacity: .55; cursor: default; }
 /* ★★ Emergencies at the top, breathing red (the map's breath: 1.2 s, never a hard blink); military beneath them in the
  *  map's military blue. Both carry a badge beside the callsign. */
 @keyframes adsbEmBreathe { 0%, 100% { background: rgba(224, 64, 64, 0.08); } 50% { background: rgba(224, 64, 64, 0.30); } }
-#adsbList .adsbRow.em { border-left-color: #e04040; animation: adsbEmBreathe 1.2s ease-in-out infinite; }
-#adsbList .adsbRow.mil { border-left-color: rgb(90, 170, 255); background: rgba(90, 170, 255, 0.07); }
-#adsbList .adsbRow.mil .id b { color: rgb(140, 195, 255); }
-#adsbList .adsbRow .tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 8.5px; font-weight: 700;
-  letter-spacing: .8px; line-height: 13px; vertical-align: 1px; }
-#adsbList .adsbRow .tag.em { background: #e04040; color: #fff; }
-#adsbList .adsbRow .tag.mil { background: rgba(90, 170, 255, 0.85); color: #06121f; }
-@media (prefers-reduced-motion: reduce) { #adsbList .adsbRow.em { animation: none; background: rgba(224, 64, 64, 0.22); } }
-#adsbList .adsbEmpty { padding: 10px 9px; opacity: .6; font-size: 11.5px; line-height: 1.5; }
+
 /* ★★★ beta96 THE LIST SIZES BY ITS OWN WIDTH, NEVER THE WINDOW'S (Stuart 11-26, a ~232 px panel on a wide Safari window:
  *  "the signal hides the aircraft details" — the fixed columns took the row, the chip beside the name never shrinks, so the
  *  callsign ellipsised to nothing; the only narrow rule was a viewport @media, which never fires for a narrow PANEL).
@@ -1520,50 +1422,18 @@ body.adsbMap #srvHealth { right: 0 !important; }
  *   < 320     altitude over range in one column at the end, "tracked" goes (a 320 px phone's panel is 308);
  *   < 210     the bearing word goes.
  *  scripts/test-web-adsb-list-width.mjs holds it (real page, real server: 232 / 300 / 400 / 600 px and two phones). */
-#adsbList { container-type: inline-size; container-name: adsblist; }
-@container adsblist (max-width: 419.98px) {
-  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em 7.6em; }
-  #adsbList .adsbRow .spd { display: none; }
-}
-@container adsblist (max-width: 359.98px) {
-  #adsbList .adsbRow .id { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
-  #adsbList .adsbRow .id .l1 { display: contents; }
-  #adsbList .adsbRow .id b { grid-column: 1 / -1; }
-  #adsbList .adsbRow .id .ex { grid-column: 1; grid-row: 2; margin-right: 5px; }
-  #adsbList .adsbRow .id .ex .snrChip { margin: 0; }
-  #adsbList .adsbRow .id small { grid-column: 2; grid-row: 2; min-width: 0; }
-}
-@container adsblist (max-width: 319.98px) {
-  #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em; grid-template-rows: auto auto; }
-  #adsbList .adsbRow .id { grid-row: 1 / span 2; }
-  #adsbList .adsbRow .alt { grid-column: 2; grid-row: 1; }
-  #adsbList .adsbRow .rng { grid-column: 2; grid-row: 2; font-size: 10.5px; }
-  #adsbList .adsbRow .rng .trk { display: none; }
-}
-@container adsblist (max-width: 209.98px) {
-  #adsbList .adsbRow .rng .brg { display: none; }
-}
+
+
+
+
 /* ★ A phone: the title loses its second word and the speed column goes before anything is squeezed to an
      ellipsis; the message rate goes too (the count is what matters at a glance). */
 @media (max-width: 560px) {
   /* ★ the bar SCROLLS now (#adsbTopScroll), so the stats stay — only the title's second word goes */
-  #adsbTitle .w { display: none; }
   /* ★ edges FADE, so a word scrolled half out of view thins away instead of being sliced ("%" alone beside EXIT) */
-  #adsbChips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-  #adsbChips::-webkit-scrollbar { display: none; }
-  #adsbTopScroll, #adsbChips { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
-    mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); padding-left: 6px; padding-right: 14px; }
-  #adsbTop { gap: 6px; }
-  #adsbTop button { padding: 6px 9px; font-size: 12px; }
-  #adsbList { max-height: 222px; max-height: min(6 * 37px, 30vh); }
-}
-/* ★ only a browser without container queries (before Safari 16) falls back to the window's width */
-@supports not (container-type: inline-size) {
-  @media (max-width: 560px) {
-    #adsbList .adsbRow { grid-template-columns: minmax(0, 1fr) 6.6em 7.6em; }
-    #adsbList .adsbRow .spd { display: none; }
   }
-}
+/* ★ only a browser without container queries (before Safari 16) falls back to the window's width */
+
 
 /* ── NDB: #adsbView's rules for #ndbView ── */
 #ndbView { position: fixed; inset: 0; z-index: 47; display: flex; flex-direction: column; background: #090602; }
@@ -1578,52 +1448,18 @@ body.adsbMap #srvHealth { right: 0 !important; }
 .adsbChip .k { opacity: 0.6; letter-spacing: 1px; }
 #ndbList { max-height: 259px; max-height: min(7 * 37px, 34vh); overflow-y: auto; overscroll-behavior: contain; padding: 0 3px 4px;
   border-top: 1px solid rgba(255, 160, 0, 0.14); scrollbar-width: thin; scrollbar-color: rgba(255, 160, 0, 0.35) transparent; }
-#ndbList .adsbRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 0 10px; align-items: center;
-  padding: 4px 8px; min-height: 36px; border-radius: 5px; border-left: 3px solid transparent; cursor: pointer; outline: none; }
-#ndbList .adsbRow:hover, #ndbList .adsbRow:focus-visible { background: var(--btn-active-bg); }
-#ndbList .adsbRow.sel { background: rgba(255, 229, 102, 0.12); border-left-color: rgba(255, 229, 102, 0.7); }
-#ndbList .adsbRow .id { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
-#ndbList .adsbRow .id b { font-weight: 600; font-size: 12px; letter-spacing: 1px; color: var(--freq); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ★ Signal bars beside the callsign (adsb.ts adsbBars): three ascending, the lit ones in the app's link colours. */
-#ndbList .adsbRow .sig { display: inline-flex; align-items: flex-end; gap: 1.5px; height: 9px; margin-left: 6px; vertical-align: 0; }
-#ndbList .adsbRow .sig i { display: block; width: 2.5px; background: rgba(255, 184, 51, 0.22); border-radius: 1px; }
-#ndbList .adsbRow .sig i:nth-child(1) { height: 40%; } #ndbList .adsbRow .sig i:nth-child(2) { height: 70%; } #ndbList .adsbRow .sig i:nth-child(3) { height: 100%; }
-#ndbList .adsbRow .sig.l1 i.on { background: #e04040; } #ndbList .adsbRow .sig.l2 i.on { background: #e0b020; } #ndbList .adsbRow .sig.l3 i.on { background: #33cc44; }
-#ndbList .adsbRow .id small { font-size: 9.5px; opacity: .6; letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
+    /* ★ V12 aircraft data in the row: the flag before the callsign; on the second line the operator's logo (the owner's
    own, max 12 px high) or its ICAO code as a small badge, then type · registration · route */
-#ndbList .adsbRow .id .flag { font-size: 11px; margin-right: 5px; letter-spacing: 0; }
-#ndbList .adsbRow .id .cc { display: inline-block; font-size: 8px; line-height: 11px; padding: 0 3px; margin-right: 5px; border: 1px solid currentColor;
-  border-radius: 2px; opacity: .7; letter-spacing: .5px; vertical-align: 1px; }
-#ndbList .adsbRow .id small .op { display: inline-block; padding: 0 3px; border: 1px solid currentColor; border-radius: 2px; font-size: 8.5px;
-  line-height: 10px; letter-spacing: .8px; font-weight: 700; }
-#ndbList .adsbRow .id small .oplogo { height: 11px; max-width: 48px; vertical-align: -2px; object-fit: contain; }
-#ndbList .adsbRow .alt, #ndbList .adsbRow .spd, #ndbList .adsbRow .rng { text-align: right; white-space: nowrap; font-size: 11.5px; }
-#ndbList .adsbRow .alt { min-width: 4.9em; }
-#ndbList .adsbRow .spd { min-width: 3.4em; opacity: .8; }
-#ndbList .adsbRow .rng { min-width: 4.6em; }
-#ndbList .adsbRow .rng .trk { display: block; font-size: 10px; opacity: .7; }
-#ndbList .adsbRow i { font-style: normal; font-size: 8px; margin-left: 3px; vertical-align: 1px; }
 /* ★ The arrow takes the altitude's colour from its span (adsb.ts altColour) — no colours of its own. */
-#ndbList .adsbRow .brg, #ndbList .adsbRow .dim { opacity: .6; }
-#ndbList .adsbRow.nopos { opacity: .55; cursor: default; }
 /* ★★ Emergencies at the top, breathing red (the map's breath: 1.2 s, never a hard blink); military beneath them in the
  *  map's military blue. Both carry a badge beside the callsign. */
 @keyframes adsbEmBreathe { 0%, 100% { background: rgba(224, 64, 64, 0.08); } 50% { background: rgba(224, 64, 64, 0.30); } }
-#ndbList .adsbRow.em { border-left-color: #e04040; animation: adsbEmBreathe 1.2s ease-in-out infinite; }
-#ndbList .adsbRow.mil { border-left-color: rgb(90, 170, 255); background: rgba(90, 170, 255, 0.07); }
-#ndbList .adsbRow.mil .id b { color: rgb(140, 195, 255); }
-#ndbList .adsbRow .tag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 8.5px; font-weight: 700;
-  letter-spacing: .8px; line-height: 13px; vertical-align: 1px; }
-#ndbList .adsbRow .tag.em { background: #e04040; color: #fff; }
-#ndbList .adsbRow .tag.mil { background: rgba(90, 170, 255, 0.85); color: #06121f; }
-@media (prefers-reduced-motion: reduce) { #ndbList .adsbRow.em { animation: none; background: rgba(224, 64, 64, 0.22); } }
+
 #ndbList .adsbEmpty { padding: 10px 9px; opacity: .6; font-size: 11.5px; line-height: 1.5; }
 /* ★ A phone: the speed column goes before anything is squeezed to an ellipsis. (beta96: the bar's and the old live
      list's rules went with #ndbTop / #ndbLive — NDB's pieces live in the AIR & SEA map's slots, ndb.ts NdbView.mount.) */
 @media (max-width: 560px) {
-  #ndbList .adsbRow { grid-template-columns: minmax(0, 1fr) auto auto; }
-  #ndbList .adsbRow .spd { display: none; }
   #ndbList { max-height: 222px; max-height: min(6 * 37px, 30vh); }
 }
 
@@ -4069,39 +3905,60 @@ select.btn { padding: 6px 8px; }
        fixed to the corner, no box of its own and no pointer events — holding the CARD (the frame you see, joined to
        the screen edge with a › on its left) and the TAB (a + and a ‹ that waits past the edge). Tucking slides the
        card out and the tab in. The dock keeps the id, so the ADS-B map, handheld mode and the tutorial still find it. */
-#srvHealth { position: fixed; top: 8px; right: 0; z-index: 60; pointer-events: none; --hc: #5BE36B; }
-#srvHealth .hCard { pointer-events: auto; display: flex; align-items: stretch; touch-action: pan-y; user-select: none;
+#srvHealth { position: fixed; top: 8px; right: 0; z-index: 60; }
+/* ★★★ beta96 THE EDGE DOCK is shared: the health pill and the map's TUNE / LAYERS / MAP / LIST chips (tracks.ts) — one
+       look, one slide (healthTuck.ts edgeDockSet / wireEdgeDock). `.left` mirrors it onto the left edge. */
+.edgeDock { pointer-events: none; --hc: #5BE36B; }
+.edgeDock .hCard { pointer-events: auto; display: flex; align-items: stretch; touch-action: pan-y; user-select: none;
              -webkit-user-select: none; cursor: grab;
              background: var(--ov-health, rgba(8,12,8,0.86)); border: 1.5px solid rgba(120,200,120,0.45);
              border-right-width: 0; border-radius: 12px 0 0 12px;
              padding: 4px calc(8px + env(safe-area-inset-right, 0px)) 5px 0;
              transition: transform .26s cubic-bezier(.215,.61,.355,1); }
-#srvHealth .hCard.dragging { transition: none; cursor: grabbing; }
-#srvHealth.tucked .hCard { transform: translateX(calc(100% + 4px)); pointer-events: none; }
+.edgeDock .hCard.dragging { transition: none; cursor: grabbing; }
+.edgeDock.tucked .hCard { transform: translateX(calc(100% + 4px)); pointer-events: none; }
 /* The › — inside the frame, on the left, pointing at the edge it tucks into (the app's arrow). */
-#srvHealth .hTuck { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+.edgeDock .hTuck { all: unset; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
              width: 18px; margin: -4px 2px -5px 0; padding-left: 3px; cursor: pointer; color: var(--hc);
              font: 700 18px/1 system-ui, sans-serif; border-radius: 10px 0 0 10px; }
-#srvHealth .hTuck:hover { background: rgba(255,255,255,0.06); }
-#srvHealth .hTuck:focus-visible, #srvHealth .hTab:focus-visible { outline: 2px solid var(--hc); outline-offset: 1px; }
-#srvHealth .hBody { min-width: 0; }
+.edgeDock .hTuck:hover { background: rgba(255,255,255,0.06); }
+.edgeDock .hTuck:focus-visible, .edgeDock .hTab:focus-visible { outline: 2px solid var(--hc); outline-offset: 1px; }
+.edgeDock .hBody { min-width: 0; }
 /* The tab: the app's 26 x 52, rounded on the left and open on the right, in the pill's own colour. */
-#srvHealth .hTab { all: unset; box-sizing: border-box; position: absolute; top: 0; right: 0; pointer-events: auto;
+.edgeDock .hTab { all: unset; box-sizing: border-box; position: absolute; top: 0; right: 0; pointer-events: auto;
              width: calc(26px + env(safe-area-inset-right, 0px)); padding-right: env(safe-area-inset-right, 0px);
              height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
              cursor: pointer; color: var(--hc); background: var(--ov-health, rgba(8,12,8,0.86));
              border: 1.5px solid var(--hc); border-right-width: 0; border-radius: 12px 0 0 12px;
              transform: translateX(calc(100% + 2px)); transition: transform .26s cubic-bezier(.215,.61,.355,1); }
-#srvHealth.tucked .hTab { transform: translateX(0); }
-#srvHealth:not(.tucked) .hTab { pointer-events: none; }
-#srvHealth .hTabPlus { font: 800 18px/18px system-ui, sans-serif; }
-#srvHealth .hTabChev { font: 700 20px/20px system-ui, sans-serif; margin-top: -2px; }
+.edgeDock.tucked .hTab { transform: translateX(0); }
+.edgeDock:not(.tucked) .hTab { pointer-events: none; }
+.edgeDock .hTabPlus { font: 800 18px/18px system-ui, sans-serif; }
+.edgeDock .hTabChev { font: 700 20px/20px system-ui, sans-serif; margin-top: -2px; }
+/* ★ the LEFT edge: the same dock, mirrored (the map's TUNE / LAYERS) */
+.edgeDock.left .hCard { border-right-width: 1.5px; border-left-width: 0; border-radius: 0 12px 12px 0; flex-direction: row-reverse;
+             padding: 4px 0 5px calc(8px + env(safe-area-inset-left, 0px)); }
+.edgeDock.left.tucked .hCard { transform: translateX(calc(-100% - 4px)); }
+.edgeDock.left .hTuck { margin: -4px 0 -5px 2px; padding-left: 0; padding-right: 3px; border-radius: 0 10px 10px 0; }
+.edgeDock.left .hTab { right: auto; left: 0; width: calc(26px + env(safe-area-inset-left, 0px)); padding-right: 0;
+             padding-left: env(safe-area-inset-left, 0px); border-right-width: 1.5px; border-left-width: 0; border-radius: 0 12px 12px 0;
+             transform: translateX(calc(-100% - 2px)); }
+.edgeDock.left.tucked .hTab { transform: translateX(0); }
+/* ★ the BOTTOM edge: the same dock turned to face UP (the map's LIST, bottom-left) — the card slides down into a tab */
+.edgeDock.bottom .hCard { flex-direction: column-reverse; align-items: stretch; border-right-width: 1.5px; border-bottom-width: 0;
+             border-radius: 12px 12px 0 0; padding: 0 8px calc(4px + env(safe-area-inset-bottom, 0px)) 8px; touch-action: pan-x; }
+.edgeDock.bottom.tucked .hCard { transform: translateY(calc(100% + 4px)); }
+.edgeDock.bottom .hTuck { width: auto; height: 15px; margin: 0 -8px 2px; padding: 0; border-radius: 10px 10px 0 0; }
+.edgeDock.bottom .hTab { top: auto; bottom: 0; right: auto; left: 0; width: 56px; padding: 0 0 env(safe-area-inset-bottom, 0px) 0;
+             height: calc(30px + env(safe-area-inset-bottom, 0px)); flex-direction: row; border-right-width: 1.5px; border-bottom-width: 0;
+             border-radius: 12px 12px 0 0; transform: translateY(calc(100% + 2px)); }
+.edgeDock.bottom.tucked .hTab { transform: translateY(0); }
 /* ★ Critical and tucked: the tab breathes as the card's border does — it comes back out anyway, but a box that was
      already sliding it home should not leave a silent red tab. */
-#srvHealth.crit .hTab { animation: hBorderPulse 1.4s ease-in-out infinite; }
+.edgeDock.crit .hTab { animation: hBorderPulse 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  #srvHealth .hCard, #srvHealth .hTab { transition: none; }
-  #srvHealth.crit .hTab { animation: none; }
+  .edgeDock .hCard, .edgeDock .hTab { transition: none; }
+  .edgeDock.crit .hTab { animation: none; }
 }
 /* ★ CENTRED, BOTH ROWS. Whichever line is wider sets the pill's width, and the other must sit
      under it rather than hang off one end: with no battery the icon row is NARROWER than the
@@ -4989,13 +4846,7 @@ select.btn { padding: 6px 8px; }
 <div id="adsbChrome" hidden>
   <span id="adsbCapture" hidden></span>
   <button type="button" id="adsbGain" class="btn" hidden title="The receiver's gain in ADS-B — automatic, or set it yourself"></button>
-  <button type="button" id="adsbChat" class="btn" title="Chat">CHAT<span class="unread" id="adsbChatUnread" hidden></span></button>
   <!-- ★ The list header's chips (Stuart, 2026-10-25): NEWEST, FURTHEST, LONGEST TRACKED. Tap = show it on the map. -->
-  <div id="adsbChips">
-    <button type="button" id="adsbNew" class="adsbChip" hidden title="The newest aircraft heard — tap to show it on the map"></button>
-    <button type="button" id="adsbFar" class="adsbChip" hidden title="The furthest aircraft from this receiver — tap to show it on the map"></button>
-    <button type="button" id="adsbLong" class="adsbChip" hidden title="The aircraft followed the furthest — tap to show it on the map"></button>
-  </div>
   <div id="adsbFeedWarn" hidden role="alert"><b>CHECK THE ANTENNA</b><span id="adsbFeedWarnTx"></span><button type="button" id="adsbFeedWarnX" title="Hide this until it changes" aria-label="Hide">×</button></div>
   <div id="adsbGainPop" hidden role="dialog" aria-label="ADS-B gain">
     <div class="hd">GAIN <span id="adsbGainNow"></span></div>

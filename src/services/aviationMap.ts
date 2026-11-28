@@ -115,7 +115,7 @@ export interface AvStation { id: number; name: string; lat: number; lon: number;
 export interface AvAdsbState { live: boolean | null; last: number; off: boolean }
 /** ★★ beta96 a server-level aircraft feed (vibe_feeds.h — another receiver's Beast or BaseStation output): its name, label
  *  and state as aircraft.json says (never an address). */
-export interface AvFeed { title: string; label: string; state: string; aircraft: number }
+export interface AvFeed { title: string; label: string; state: string; aircraft: number; /** ★ messages a second (the server's own count — vibe_feeds.h "perSec") */ perSec?: number }
 export interface SharedAircraft { now: number; count: number; off: boolean; aircraft: AvPlane[]; stations: AvStation[]; adsb: AvAdsbState;
   /** ★★ beta96 the server's aircraft feeds, and the banner when one is down ("PiAware lost — reconnecting… · HFDL still live") */
   feeds: AvFeed[]; feedWarn: string }
@@ -169,7 +169,7 @@ export function sharedSanitise(j: any): SharedAircraft | null {
   const feeds: AvFeed[] = [];
   if (Array.isArray(j.feeds)) for (const f of j.feeds.slice(0, 8)) {
     if (!f || typeof f !== 'object') continue;
-    feeds.push({ title: str(f.title, 40) ?? 'feed', label: str(f.label, 6) ?? '', state: str(f.state, 12) ?? '', aircraft: Math.max(0, num(f.aircraft) ?? 0) });
+    feeds.push({ title: str(f.title, 40) ?? 'feed', label: str(f.label, 6) ?? '', state: str(f.state, 12) ?? '', aircraft: Math.max(0, num(f.aircraft) ?? 0), perSec: num(f.perSec) != null ? Math.max(0, num(f.perSec)!) : undefined });
   }
   return { now: num(j.now) ?? 0, count: num(j.count) ?? aircraft.length, off: j.off === 1, aircraft, stations, adsb, feeds, feedWarn: str(j.feedWarn, 300) ?? '' };
 }
@@ -188,6 +188,18 @@ export function planeFromLive(a: AvAircraft, i: number): AvPlane {
     posSrc: a.posSrc === 'ADS-C' ? 'ADS-C' : a.lat != null ? (src[0] ?? undefined) : undefined,
     posApp: a.posSrc, from: a.from, to: a.to, oooi: a.oooi, oooiTime: a.oooiTime, label: a.label, labelName: a.labelName, app: a.app, via: a.via, src, srcAge, age: a.age, n: a.n, live: true,
   };
+}
+/** ★★ WHICH FIX WINS (Stuart 16:31, "an aircraft kept bouncing back and forth … repeatedly flies over my house"): D-AIJH
+ *  (3C6548) was heard LIVE by ADS-B and, on the preview, also in the sim's datalink clip as an ADS-C report at a fixed
+ *  place. Newest-by-age alone flipped between them every few seconds (both "0 s old"), and the sparse glide carried the
+ *  plane ~80 NM back and forth. A fresh ADS-B fix (≤ AV_ADSB_NOW_SEC) is the aircraft's real place: a datalink report
+ *  (FMS / label 16 / ADS-C — a report of where it was, coarser and often minutes behind) never replaces it; between two
+ *  of the same kind the newer wins. */
+export function avFixBetter(a: { posSrc?: string; posAge?: number }, b: { posSrc?: string; posAge?: number }): boolean {
+  const live = (p: { posSrc?: string; posAge?: number }) => p.posSrc === 'ADS-B' && (p.posAge ?? Infinity) <= AV_ADSB_NOW_SEC;
+  const la = live(a), lb = live(b);
+  if (la !== lb) return la;
+  return (a.posAge ?? 1e9) < (b.posAge ?? 1e9);
 }
 /** ★★ ONE AIRCRAFT ONCE: the live report's rows (this radio, now) and the shared table's (every radio), joined by ICAO
  *  address, else registration, else flight — the live row's fields win, the table adds the sources the other radios heard
@@ -210,7 +222,7 @@ export function avMerge(live: AvReport | null, shared: SharedAircraft | null): A
     hit.icao = hit.icao || s.icao; hit.reg = hit.reg || s.reg; hit.flight = hit.flight || s.flight; hit.type = hit.type || s.type;
     if (s.info) hit.info = { ...s.info, ...(hit.info ?? {}) };   // ★ beta91 the aircraft data (the live row has none)
     if (!hit.from && s.from) { hit.from = s.from; hit.to = s.to; }
-    if (s.lat != null && (hit.lat == null || (s.posAge ?? 1e9) < (hit.posAge ?? 1e9))) {
+    if (s.lat != null && (hit.lat == null || avFixBetter(s, hit))) {
       hit.lat = s.lat; hit.lon = s.lon; hit.alt = s.alt; hit.trk = s.trk; hit.gs = s.gs; hit.ground = s.ground; hit.posSrc = s.posSrc; hit.posAge = s.posAge; hit.posTime = s.posTime;
       if (s.offsite) hit.offsite = true; else delete hit.offsite;   // ★★ b96-2 the mark goes with the position it describes
     }
@@ -386,7 +398,7 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
     const rb = rx && p.lat != null && p.lon != null ? rangeBearing(rx, p.lat, p.lon) : null;
     // ★ beta91 the operator and the flag for every source (the ADS-B list's own: opName, else the badge code)
     const who = [p.reg && p.reg !== avName(p) ? p.reg : '', p.icao && p.icao !== avName(p) ? p.icao : '', p.type ?? '',
-                 p.info?.opName || p.info?.op || '', p.info?.mil ? 'MIL' : ''].filter(Boolean).join(' · ');
+                 p.info?.opName || p.info?.op || ''].filter(Boolean).join(' · ');   // ★ MIL is a tag beside the name now (acTags.ts)
     const dbRoute = !(p.from && p.to) ? routeShort(p.info?.route) : '';
     return {
       key: `a:${p.key}`, colour: avColour(p), flag: flagEmoji(p.info?.country), name: avName(p),
@@ -396,6 +408,8 @@ export function avPlaneRows(planes: AvPlane[], rx: LatLon | null): TrackRow[] {
       // ★ beta95 NM on the aviation map — the list, the card and the rings agree
       range: rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM` : p.lat == null ? 'no position' : '',
       brg: rb ? compass8(rb.brg) : '', noPos: p.lat == null, age: ago(Math.min(p.age, ...Object.values(p.srcAge))), em: false,
+      mil: !!p.info?.mil,
+      gs: p.gs != null && p.gs >= 0 && !p.ground ? `${Math.round(p.gs)}kt` : '',   // ★ beta96 the pill's ground speed (Stuart 14:14)
     };
   });
 }

@@ -18,7 +18,10 @@ import { useIslandSide } from '../hooks/useIslandSide';
 import { avoidRects, useReservedRegions } from '../hooks/useReservedRegions';
 
 export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIcon, label,
-                                   frameColour, children }: {
+                                   frameColour, onMap, children }: {
+  /** ★★★ beta97 on the MAP (MapChrome — the map control cards): the tab carries only its centred icon (no ‹) and the card
+   *  closes with a plain × top-right instead of the › arrow. Behaviour otherwise exactly as over the waterfall. */
+  onMap?: boolean;
   /** The card's frame (it draws ONE frame round the arrow and the content; the content is drawn bare).
    *  Default: the tab's colour. */
   frameColour?: string;
@@ -121,13 +124,19 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
             card can be collapsed away"). The child squares its right side (see the callers); the arrow sits inside
             its frame, on the left, and tapping it tucks the card too. */}
         <View style={[ec.row, { borderColor: frameColour ?? tabColour, paddingRight: geo.padRight }]}>
-          <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
+          {!onMap && <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
                                           .start(() => onTuckRef.current())}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 2 }} accessibilityRole="button" accessibilityLabel={`Hide ${label}`}
             style={ec.arrowHit}>
             <Text style={[ec.arrow, { color: tabColour }]}>›</Text>
-          </TouchableOpacity>
+          </TouchableOpacity>}
           {children}
+          {onMap && <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
+                                          .start(() => onTuckRef.current())}
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }} accessibilityRole="button" accessibilityLabel={`Close ${label}`}
+            style={ec.mapX}>
+            <Text style={ec.mapXTxt}>×</Text>
+          </TouchableOpacity>}
         </View>
       </Animated.View>
       <Animated.View {...tabPan.panHandlers} pointerEvents={tucked ? 'auto' : 'none'}
@@ -136,7 +145,7 @@ export default function EdgeChip({ top, tucked, onTuck, onShow, tabColour, tabIc
           accessibilityRole="button" accessibilityLabel={`Show ${label}`}
           style={[ec.tab, { borderColor: tabColour, width: geo.tabW, paddingRight: geo.tabW - EDGE_TAB_W }]}>
           {tabIcon}
-          <Text style={[ec.chev, { color: tabColour }]}>‹</Text>
+          {!onMap && <Text style={[ec.chev, { color: tabColour }]}>‹</Text>}
         </TouchableOpacity>
       </Animated.View>
     </>
@@ -154,6 +163,8 @@ const ec = StyleSheet.create({
   tab:      { width: EDGE_TAB_W, height: EDGE_TAB_H, borderTopLeftRadius: 12, borderBottomLeftRadius: 12,
               borderWidth: 1.5, borderRightWidth: 0, backgroundColor: 'rgba(14,12,8,0.88)',
               alignItems: 'center', justifyContent: 'center', gap: 2 },
+  mapX:     { alignSelf: 'flex-start', paddingHorizontal: 6, paddingTop: 2 },
+  mapXTxt:  { color: '#e8eef5', fontSize: 20, lineHeight: 22 },
   chev:     { fontSize: 20, fontWeight: '700', lineHeight: 20, marginTop: -2 },
 });
 

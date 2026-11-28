@@ -1,6 +1,8 @@
 // test-web-map-shared.mjs — beta96 (Stuart 11-26, "big issue"): the SHARED TUNER line, CHAT, TUNE / SHOW and the dial lock on
 // the full-screen AIR & SEA map, against the REAL server (fake rtl_tcp, no clip — nothing on air is needed), in headless Edge
 // with --mute-audio (tests are silent). docs/v12/MAP-SHARED.md.
+//   ★★★ beta96 TWEAK 2 (Stuart 11-27): the map bar's words are now "Shared VFO: Free to change mode or exit 1/4",
+//      "… Ask before changing mode or exiting 2/4", "… Locked: ask in chat to change mode or exit 2/4" (dialChat mapBarLine).
 //   1. a shared dial, the page alone, AIR & SEA LIVE from the mode menu lands on the last-used mode (AIS) → "FREE TO EXIT",
 //      CHAT beside it, TUNE (ADS-B · AIS …) and SHOW present; a raw listener joins → live "ASK BEFORE EXITING · 2/4"; CHAT
 //      opens the chat panel over the map; a SHOW chip toggled sends NOTHING to the server; VIEWS' AIR & SEA (the viewer) has
@@ -134,8 +136,8 @@ async function session(tag, users, before, run) {
 const MS = `window.__vibeMapShared && window.__vibeMapShared()`;
 const AS = `window.__vibeAirSea && window.__vibeAirSea()`;
 const TUNE_IDS = `[...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune]')].map(b => b.dataset.tune + (b.getAttribute('aria-checked') === 'true' ? '*' : '') + (b.classList.contains('dialLocked') ? '!' : ''))`;
-const CHIP = `(document.querySelector('.trkView:not([hidden]) .tuneChip') || {})`;
-const SHOW_IDS = `[...document.querySelectorAll('.trkView:not([hidden]) .trkTop .tgl [data-tgl]')].map(b => b.dataset.tgl)`;
+const CHIP = `(document.querySelector('.trkView:not([hidden]) [data-cbtn="tune"]') || {})`;
+const SHOW_IDS = `[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl]')].map(b => b.dataset.tgl)`;
 
 const ONLY = process.env.ONLY || '';
 console.log('── 1. a shared dial, the page alone, then company ──');
@@ -150,11 +152,12 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   await ev(`localStorage.setItem('vibesdr.airSeaLast', 'ais'); true`);
   await ev(`document.getElementById('mModeAirSea')?.click()`);
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'AIR & SEA LIVE lands on the last-used mode (AIS), the map open');
-  ok(await until(`(${MS})?.shown && /FREE TO EXIT/.test((${MS}).text)`, 8000), `alone on a shared dial: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
-  ok(await ev(`!!document.querySelector('.trkView:not([hidden]) .slot-share #mapChat') && !document.getElementById('mapChat').hidden`), 'CHAT sits beside the line in the map\'s top bar');
+  ok(await until(`(${MS})?.shown && /^Shared VFO: Free to change mode or exit 1\\/4$/.test((${MS}).text)`, 8000), `alone on a shared dial: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
+  ok(await ev(`!document.getElementById('mapChat') && !!document.querySelector('.trkView:not([hidden]) .mDock[data-dock="chat"]:not([hidden])')`), 'CHAT is the map\'s chip (the old CHAT key beside the line went in the purge)');
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.includes('adsb') && tune.includes('ais*'), `TUNE: ADS-B and AIS (AIS lit) — ${tune.join(' ')}`);
-  ok(await ev(`/^TUNE · AIS 161\\.975/.test(${CHIP}.textContent || '') && !${CHIP}.closest('.tune').hidden`), `ONE TUNE chip naming the live mode — "${await ev(`${CHIP}.textContent`)}"`);
+  // ★★★ beta96 map cards: TUNE is a card button now — the live mode is in its title and the TUNE card's first line
+  ok(await ev(`${CHIP}.textContent.trim() === 'TUNE' && !${CHIP}.closest('.mDock').hidden && /^TUNE · AIS 161\\.975/.test(${CHIP}.title || '')`), `ONE TUNE chip, its title naming the live mode — "${await ev(`${CHIP}.title`)}"`);
   // the chip opens the list; Escape shuts it
   await ev(`${CHIP}.click(); true`);
   ok(await until(`!document.querySelector('.trkView:not([hidden]) .tunePop').hidden && document.activeElement?.classList.contains('tpRow')`, 2000), 'the chip opens the TUNE list, focus on a row (keyboard / pad)');
@@ -162,17 +165,17 @@ if (!ONLY || ONLY === 'free') await session('free', 4, null, async ({ ev, until,
   ok(groups[0] === 'AVIATION' && groups.includes('MARITIME'), `grouped: ${groups.join(' / ')}`);
   ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tunePop .tpRow')].every(r => r.querySelector('svg path') && r.querySelector('.fq').textContent)`), 'every row has its icon and frequencies');
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
-  ok(await ev(`document.querySelector('.trkView:not([hidden]) .tunePop').hidden && (${AS}).open`), 'Escape shuts the list, the map stays');
+  ok(await ev(`${CHIP}.getAttribute('aria-expanded') === 'false' && !document.querySelector('.trkView:not([hidden]) .tunePop').getClientRects().length && (${AS}).open`), 'Escape shuts the TUNE card, the map stays');
   ok(!(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).exitLocked, 'EXIT is live (free)');
   await shot('free');
   // a second listener → the line follows live
   const b = await join('bbbb0001');
-  ok(await until(`/ASK BEFORE EXITING/.test((${MS})?.text || '') && /2\\/4/.test((${MS}).text)`, 8000), `a listener joins → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
+  ok(await until(`/^Shared VFO: Ask before changing mode or exiting 2\\/4$/.test((${MS})?.text || '')`, 8000), `a listener joins → "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}" (live)`);
   ok(!(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).exitLocked, 'the page was here first: EXIT stays live');
-  // CHAT opens the chat panel over the map
-  await ev(`document.getElementById('mapChat').click()`);
-  ok(await until(`document.getElementById('chatPanel')?.classList.contains('open')`, 3000), 'CHAT opens the chat panel over the map');
-  await ev(`document.getElementById('mapChat').click()`);
+  // CHAT opens its card on the map (the log and the canned replies)
+  await ev(`document.querySelector('.trkView:not([hidden]) [data-cbtn="chat"]').click()`);
+  ok(await until(`!!document.querySelector('.trkView:not([hidden]) .trkCard2[data-card="chat"]:not([hidden]) #chatLog')`, 3000), 'CHAT opens its card over the map');
+  await ev(`document.querySelector('.trkView:not([hidden]) .trkCard2[data-card="chat"] > .ch')?.click()`);
   // SHOW: toggling a chip sends nothing
   const show = JSON.parse(await ev(`JSON.stringify(${SHOW_IDS})`));
   if (show.length) {
@@ -204,9 +207,9 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   await sleep(1500);
 }, async ({ ev, until, shot, others, send }) => {
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'joining a radio in AIS opens the AIR & SEA map on AIS');
-  ok(await until(`/LOCKED/.test((${MS})?.text || '')`, 10000), `locked: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
+  ok(await until(`/^Shared VFO: (Locked|.*AWAITING|.*YOURS)/i.test((${MS})?.text || '')`, 10000), `locked: "${(JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text}"`);
   const st = JSON.parse(await ev(`JSON.stringify(${MS})`)) || {};
-  ok(/ASK IN CHAT TO EXIT/.test(st.text) && /2\/4/.test(st.text), 'the line says ASK IN CHAT TO EXIT with the count');
+  ok(/Locked: ask in chat to change mode or exit/.test(st.text) && /2\/4$/.test(st.text), `the line says Locked: ask in chat to change mode or exit, with the count (${st.text})`);
   ok(st.exitLocked && /chat/i.test(st.exitTitle), `EXIT greyed with its reason — "${st.exitTitle}"`);
   const tune = JSON.parse(await ev(`JSON.stringify(${TUNE_IDS})`));
   ok(tune.length > 0 && tune.every((t) => t.endsWith('!')), `every TUNE key greyed — ${tune.join(' ')}`);
@@ -215,13 +218,14 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   const n0 = await ev(`window.__sent.length`);
   await ev(`document.querySelector('.trkView:not([hidden]) .trkTop .exit').click(); true`);
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="adsb"]')?.click(); true`);
-  ok(await ev(`${CHIP}.classList.contains('dialLocked') && ${CHIP}.getAttribute('aria-disabled') === 'true'`), `the TUNE chip greyed with the reason — "${await ev(`${CHIP}.title`)}"`);
+  // ★★★ tweak 3 (Stuart 11-27): the TUNE chip FADES under the ask lock (the ask shield's look), and every row is greyed
+  ok(await ev(`${CHIP}.classList.contains('dialLocked') && ${CHIP}.closest('.mDock').classList.contains('askFaded') && [...document.querySelectorAll('.trkView:not([hidden]) .tunePop [data-tune]')].every(b => b.classList.contains('dialLocked') && b.getAttribute('aria-disabled') === 'true' && b.title.length > 10)`), `the TUNE chip faded and its rows greyed with the reason — "${await ev(`${CHIP}.title`)}"`);
   await sleep(1200);
   const sent = JSON.parse(await ev(`JSON.stringify(window.__sent.slice(${n0}))`));
   ok(!sent.some((s) => /"type":"(ais|adsb|avdata)"/.test(s)) && (JSON.parse(await ev(`JSON.stringify(${AS})`)) || {}).mode === 'ais', `EXIT and ADS-B refused while locked (no ais/adsb sent, still AIS)`);
   // the map stays the listener's own: tabs, SHOW chips, KEY, FIT never greyed
-  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .trkTop .rng:not(.tune) [data-rng]')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
-     'SHOW chips, tabs, FIT and the time filter are never greyed');
+  ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tgl [data-tgl], .trkView:not([hidden]) .tabs button, .trkView:not([hidden]) .fit, .trkView:not([hidden]) .rng:not(.tgl):not(.scope) [data-rng], .trkView:not([hidden]) [data-cbtn]:not([data-cbtn="tune"]):not([data-cbtn="rate"])')].every(b => b.getAttribute('aria-disabled') !== 'true' && !b.classList.contains('dialLocked'))`),
+     'SHOW chips, tabs, FIT, the time filter and the other chips are never greyed');
   const tabs = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.trkView:not([hidden]) .tabs [role=tab], .trkView:not([hidden]) .tabs button')].map(b => b.textContent.trim()))`) || '[]');
   if (tabs.length > 1) {
     await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .tabs button')].find(b => b.getAttribute('aria-selected') !== 'true')?.click(); true`);
@@ -245,17 +249,17 @@ if (!ONLY || ONLY === 'locked') await session('locked', 4, async ({ join }) => {
   /* ★ KNOWN (not this branch): after a raw listener leaves, the server's count (`users` AND the dial's `listeners`) stays at 2
    *  — the controls bar's own banner says "ASK TO TUNE · 2/4" too — while the ask lock does lift. The map's line reads the SAME
    *  inputs as the bar, so it is checked to AGREE with the bar and to lose LOCKED; FREE TO EXIT is reported, not required. */
-  const unlocked = await until(`!/LOCKED/.test((${MS})?.text || '')`, 20000);
+  const unlocked = await until(`!/Locked/.test((${MS})?.text || '')`, 20000);
   const bar = String(await ev(`document.getElementById('mShared')?.textContent || ''`));
   const line = (JSON.parse(await ev(`JSON.stringify(${MS})`)) || {}).text || '';
-  const cnt = (t) => (t.match(/(\d+\/\d+)/) || [])[1] || (/FREE/.test(t) ? 'alone' : '?');
+  const cnt = (t) => (/FREE|Free/.test(t) ? 'alone' : (t.match(/(\d+\/\d+)/) || [])[1] || '?');   // ★ tweak 2: the map's line counts "1/4" alone, the bar says FREE
   ok(unlocked && cnt(bar) === cnt(line), `the other listener leaves → the lock lifts live; the line agrees with the bar ("${line}" / bar "${bar}")`);
-  if (!/FREE TO EXIT/.test(line)) console.log('   (finding: the server still counts the departed listener — the bar says the same)');
-  ok(await until(`!(${MS}).exitLocked && !document.querySelector('.trkView:not([hidden]) .tuneChip.dialLocked, .trkView:not([hidden]) .tunePop .dialLocked')`, 5000), 'EXIT and TUNE are live again (the lock lifted)');
+  if (!/Free to change mode or exit/.test(line)) console.log('   (finding: the server still counts the departed listener — the bar says the same)');
+  ok(await until(`!(${MS}).exitLocked && !document.querySelector('.trkView:not([hidden]) [data-cbtn="tune"].dialLocked, .trkView:not([hidden]) .tunePop .dialLocked')`, 5000), 'EXIT and TUNE are live again (the lock lifted)');
   // pick → tune: ADS-B from the list
   await ev(`${CHIP}.click(); true`); await sleep(300);
   await ev(`document.querySelector('.trkView:not([hidden]) .tunePop [data-tune="adsb"]')?.click(); true`);
-  ok(await until(`(${AS})?.mode === 'adsb' && /^TUNE · ADS-B 1090/.test(${CHIP}.textContent || '')`, 12000), `a row picked tunes: ADS-B, the chip follows — "${await ev(`${CHIP}.textContent`)}"`);
+  ok(await until(`(${AS})?.mode === 'adsb' && /^TUNE · ADS-B 1090/.test(${CHIP}.title || '')`, 12000), `a row picked tunes: ADS-B, the TUNE button's title follows — "${await ev(`${CHIP}.title`)}"`);
 });
 
 console.log('── 3. a one-listener server ──');

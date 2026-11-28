@@ -47,7 +47,10 @@ export const SESSION_RANGE = { id: SESSION_ID, label: SESSION_LABEL, words: SESS
 export const SESSION_SLACK_SEC = 2;
 
 /** The scope a map draws under. `mine` '' = no id here (no switch); `t0` 0 = no session filter (unix seconds). */
-export interface MapScope { mine: string; others: boolean; t0: number }
+export interface MapScope { mine: string; others: boolean; t0: number;
+  /** ★★★ beta97 the MAP card's SOURCES (the app): radio ids / 'feed' this viewer hid — an entry heard ONLY by hidden sources is
+   *  left out. Optional: absent = nothing hidden (the web keeps its own asSrcHidden filter). */
+  hidden?: readonly string[] }
 export const SCOPE_ALL: MapScope = { mine: '', others: true, t0: 0 };
 
 /** ★ Is the switch drawn? Only on a map on a radio (never the viewer), only with an id, and only when the server has
@@ -65,7 +68,10 @@ export function sessionOffered(o: { viewer: boolean; onRadio: boolean }): boolea
 export function radiosOf(v: unknown): string[] { return entryRadios(v); }
 /** ★ OTHER RADIOS: does this entry pass? Unknown (no tag) always passes; else it must list this radio. */
 export function scopeRadioOk(radios: string[] | undefined | null, sc: MapScope): boolean {
-  if (sc.others || !sc.mine || !radios || !radios.length) return true;
+  if (!radios || !radios.length) return true;
+  // ★★★ beta97 SOURCES: heard only by sources this viewer hid → out (one source still shown keeps it)
+  if (sc.hidden?.length && radios.every((r) => sc.hidden!.includes(r))) return false;
+  if (sc.others || !sc.mine) return true;
   return radios.includes(sc.mine);
 }
 /** ★ THIS SESSION: does an entry first heard at `first` (unix s; null = not known) pass? */
@@ -79,7 +85,7 @@ export function scopeOk(radios: string[] | undefined | null, first: number | nul
 }
 /** A list through the scope (the same list back, untouched, when nothing filters). */
 export function scopeList<T>(list: T[], sc: MapScope, radios: (x: T) => string[] | undefined | null, first: (x: T) => number | null | undefined): T[] {
-  if ((sc.others || !sc.mine) && !sc.t0) return list;
+  if ((sc.others || !sc.mine) && !sc.t0 && !sc.hidden?.length) return list;
   return list.filter((x) => scopeOk(radios(x), first(x), sc));
 }
 

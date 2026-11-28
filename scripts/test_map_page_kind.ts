@@ -250,8 +250,9 @@ for (const [from, to] of [['airsea', 'ndb'], ['ndb', 'airsea']] as [K, K][]) {
   ok('MapOverlay: the page is dropped when the overlay closes', /useEffect\(\(\) => \{ if \(!visible\) setPage\(null\); \}, \[visible\]\)/.test(mo));
   ok('MapOverlay: the WebView is keyed by the page id', /<WebView[\s\S]{0,200}key=\{shownPage\?\.id \?\? 0\}/.test(mo));
   ok('★ stage 6 MapOverlay: kind \'adsb\' is retired (no page, no list of its own)', !/'adsb' \| 'ais'/.test(mo) && !/kind === 'adsb'/.test(mo) && !/KIND==='adsb'/.test(mo) && !/<AdsbLiveList/.test(mo));
-  ok('★ stage 6 MapOverlay: the AIR & SEA page is re-titled from the current mode on every change and every new page',
-     /pageCall\('__trkChrome', trk\.title, trk\.exitLabel \?\? 'CLOSE MAP'\); \}, \[visible, kind, trk\?\.title, trk\?\.exitLabel, pageUri\]\)/.test(mo));
+  // ★★★ beta97 THE MAP CARDS: no title in the page any more — the ✕ (React Native) wears the CURRENT mode's exit on every render
+  ok('★ stage 6 / beta97 MapOverlay: the ✕ wears the current mode\'s exit (trk.exitLabel) on every render — never baked into the page',
+     /const exitLabel = p\.only \? 'CLOSE MAP' : t\.exitLabel \?\? TRK_EXIT\[p\.kind\] \?\? 'CLOSE MAP';/.test(mo) && !/__trkChrome/.test(mo));
   ok('★ stage 6 MapOverlay: the ADS-B list body heads the AIRCRAFT tab while ADS-B is live', /adsb=\{adsbLive && trk\.tab === 'aircraft' \?/.test(mo));
   ok('★ stage 6 SDRScreen: ADS-B live is the AIR & SEA map\'s mode, EXIT ADS-B leaves it', /const airSeaMode: LiveMode = adsbLiveHere \? 'adsb'/.test(sdr) && /exitLabel === 'EXIT ADS-B'\) \{ exitAdsb\(\); return; \}/.test(sdr));
   ok('SDRScreen: the map shown comes from shownMapOf', /const shownMap: MapKind \| null = shownMapOf\(\{/.test(sdr));

@@ -136,8 +136,10 @@ const AS = `window.__vibeAirSea && window.__vibeAirSea()`;
 const SC = `window.__vibeMapScope && window.__vibeMapScope()`;
 const V = `document.querySelector('.trkView:not([hidden])')`;
 const CHIPN = (id) => `(() => { const b = ${V}?.querySelector('.tgl [data-tgl="${id}"] .n'); return b ? Number(b.textContent) : -1; })()`;
-const SCOPE = `${V}?.querySelector('.trkTop .scope [data-scope]')`;
-const RNG = `[...(${V}?.querySelectorAll('.trkTop .rng:not(.tgl):not(.scope) [data-rng]') || [])].map(b => b.dataset.rng + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''))`;
+// ★★★ tweak 3 (Stuart 11-27): OTHER RADIOS gave way to SOURCES in MAP CONTROLS — a show / hide row per radio and feed
+const SRC = (id) => `${V}?.querySelector('.srcBody [data-src="${id}"]')`;
+const SRCS = `JSON.stringify([...(${V}?.querySelectorAll('.srcBody [data-src]') || [])].map(b => b.dataset.src + (b.getAttribute('aria-pressed') === 'true' ? '' : '-')))`;
+const RNG = `[...(${V}?.querySelectorAll('.rng:not(.tgl):not(.scope) [data-rng]') || [])].map(b => b.dataset.rng + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''))`;
 
 /** The stub: aircraft.json and ais-ships.json answered with tagged rows; everything else goes to the real server. */
 function stubFor(mine) {
@@ -173,26 +175,28 @@ await session('scope', 4, async (ctx) => {
   await ev(`document.getElementById('mModeAirSea')?.click()`);
   ok(await until(`(${AS})?.open && (${AS}).mode === 'ais'`, 12000), 'AIR & SEA LIVE: the map on AIS');
   ok(await until(`window.__stubHits > 1 && ${CHIPN('vdl2')} === 4`, 10000), `SHOW: VDL2 counts every source's aircraft (${await ev(CHIPN('vdl2'))})`);
-  ok(await until(`!!${SCOPE} && !${SCOPE}.closest('.scope').hidden`, 4000), 'the OTHER RADIOS ON THIS SERVER chip is drawn (one radio + another source\'s entries)');
-  ok(await ev(`${SCOPE}?.textContent === 'OTHER RADIOS ON THIS SERVER' && ${SCOPE}.getAttribute('aria-pressed') === 'true'`), 'ON by default');
+  ok(await until(`!!${SRC('bbbb0002')} && !${V}.querySelector('.srcSect').hidden && !!${SRC('feed')} && ${V}.querySelectorAll('.srcBody [data-src]').length >= 3`, 6000), `SOURCES: a row for this radio, the other radio and the feed (${await ev(SRCS)})`);
+  ok(JSON.parse(await ev(SRCS)).every((x) => !x.endsWith('-')), 'every source shown by default');
   const n0 = await ev(`window.__sent.filter(s => !/"type":"(ping|state|keepalive)"/.test(s)).length`);
-  await ev(`${SCOPE}.click(); true`);
-  ok(await until(`${CHIPN('vdl2')} === 2`, 4000), `OFF: only this radio's own + the untagged one (VDL2 ${await ev(CHIPN('vdl2'))}; the other radio's and the feed's hidden)`);
-  ok(await ev(`${CHIPN('ships')}`) === 1, `OFF: the ships follow (${await ev(CHIPN('ships'))} — ours only)`);
-  ok(await ev(`localStorage.getItem('vibesdr.mapOtherRadios') === '0'`), 'remembered in this browser');
-  ok(/Only this radio/.test(await ev(`${V}?.querySelector('.trkTop .scopeNote')?.textContent || ''`)), 'the line says what is hidden');
+  await ev(`${SRC('bbbb0002')}.click(); true`); await sleep(200);
+  await ev(`${SRC('feed')}.click(); true`);
+  ok(await until(`${CHIPN('vdl2')} === 2`, 4000), `the other radio and the feed hidden: only this radio's own + the untagged one (VDL2 ${await ev(CHIPN('vdl2'))})`);
+  ok(await until(`${CHIPN('ships')} === 1`, 3000), `…the ships follow (${await ev(CHIPN('ships'))} — ours only)`);
+  ok(/bbbb0002/.test(await ev(`localStorage.getItem('vibesdr.mapSourcesHidden') || ''`)) && /feed/.test(await ev(`localStorage.getItem('vibesdr.mapSourcesHidden') || ''`)), 'remembered in this browser');
+  ok(await ev(`${SRC('bbbb0002')}.getAttribute('aria-pressed') === 'false' && ${SRC('feed')}.getAttribute('aria-pressed') === 'false'`), 'the rows say they are hidden');
   await sleep(800);
   const n1 = await ev(`window.__sent.filter(s => !/"type":"(ping|state|keepalive)"/.test(s)).length`);
   ok(n1 === n0, 'the switch sends nothing to the server');
   const rng = JSON.parse(await ev(`JSON.stringify(${RNG})`) || '[]');
   ok(rng.includes('session'), `THIS SESSION beside the window: ${rng.join(' ')}`);
-  await ev(`${V}.querySelector('.trkTop [data-rng="session"]').click(); true`);
+  await ev(`${V}.querySelector('[data-rng="session"]').click(); true`);
   ok(await until(`${CHIPN('vdl2')} === 1 && (${SC}).session`, 5000), `THIS SESSION + OFF: only ours first heard since the map opened (VDL2 ${await ev(CHIPN('vdl2'))}; OLD3, first heard 4000 s ago, gone)`);
-  await ev(`${SCOPE}.click(); true`);
-  ok(await until(`${CHIPN('vdl2')} === 3`, 4000), `THIS SESSION + ON: ours, the other radio's and the feed's new ones (${await ev(CHIPN('vdl2'))})`);
-  ok(/this session/.test(await ev(`${V}?.querySelector('.trkTop .scopeNote')?.textContent || ''`)), 'the line says THIS SESSION');
+  await ev(`${SRC('bbbb0002')}.click(); true`); await sleep(200);
+  await ev(`${SRC('feed')}.click(); true`);
+  ok(await until(`${CHIPN('vdl2')} === 3`, 4000), `THIS SESSION, every source shown: ours, the other radio's and the feed's new ones (${await ev(CHIPN('vdl2'))})`);
+  ok(/this session/.test(await ev(`${V}?.querySelector('.scopeNote2')?.textContent || ''`)), 'the line says THIS SESSION');
   await shot('session');
-  await ev(`${V}.querySelector('.trkTop [data-rng]:not([data-rng="session"])').click(); true`);
+  await ev(`${V}.querySelector('[data-rng]:not([data-rng="session"])').click(); true`);
   ok(await until(`${CHIPN('vdl2')} === 4 && !(${SC}).session`, 4000), 'another window key leaves the session: everything back');
   // AIR & SEA LIVE pressed while lit: the map stays, the mode carries on
   await ev(`document.getElementById('mMode')?.click()`); await sleep(500);
@@ -207,7 +211,7 @@ await session('scope', 4, async (ctx) => {
   await ev(`window.openAirSeaViewer(); true`);
   ok(await until(`(${AS})?.open`, 5000), 'the viewer opens');
   await sleep(1500);
-  ok(await ev(`!${SCOPE} || ${SCOPE}.closest('.scope').hidden`), 'the viewer: no OTHER RADIOS chip');
+  ok(await ev(`!${V}.querySelector('.scope [data-scope]') || ${V}.querySelector('.scope').hidden`), 'the viewer: no OTHER RADIOS chip (SOURCES took its place)');
   ok(!(JSON.parse(await ev(`JSON.stringify(${RNG})`) || '[]')).some((r) => r.startsWith('session')), 'the viewer: no THIS SESSION');
   ok(await ev(`${CHIPN('vdl2')}`) === 4, `the viewer shows every source (${await ev(CHIPN('vdl2'))})`);
 });

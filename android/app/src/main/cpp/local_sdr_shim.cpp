@@ -1095,6 +1095,16 @@ static inline bool vsNoAudioMode() {
         || g_avMode.load(std::memory_order_relaxed) || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
         || g_ndbMode.load(std::memory_order_relaxed);
 }
+/** ★★★ V12 A WHOLE-RADIO MAP MODE (Stuart 11-27, "shared VFO, everyone will be on the map anyway"): ADS-B, ISM, AIS, the
+ *  aircraft datalink, radiosondes, the VOR / ILS map and the NDB skimmer — every client covers its waterfall with the map, so
+ *  the DISPLAY spectrum is wanted only by a listener whose map drawer shows the live waterfall (spec on:1) — see
+ *  recomputeEngineRate. DAB is not one (its waterfall shows the blocks). */
+static inline bool vsMapMode() {
+    return g_adsbMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)
+        || g_aisMode.load(std::memory_order_relaxed) || g_avMode.load(std::memory_order_relaxed)
+        || g_sdMode.load(std::memory_order_relaxed) || g_vorMode.load(std::memory_order_relaxed)
+        || g_ndbMode.load(std::memory_order_relaxed);
+}
 /* ★★★ NO `dab` REPORT MAY FOLLOW `dab_off` (2026-10-05). The twice-a-second report is built and sent
  *  on the DSP thread; DAB is ended on a socket thread. Nothing ordered the two, so a report the DSP
  *  thread had already decided to send could reach the client AFTER `dab_off` — and a client that
@@ -10536,6 +10546,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** Phase accumulator per listener, advanced once per emitted frame. Fractional, so a client
      *  asking 7 fps off a 20 fps engine gets 7 — not the nearest integer divisor. */
     std::map<net::Socket*, double> clientFpsAcc;
+    /** ★★ V12 beta96 SPECTRUM PAUSED for this listener (Stuart 11-27: "the waterfall doesn't need to run at all under the
+     *  map"): {"type":"spec","on":0} while a full-screen map covers the page, {"on":1} after. Frames are simply not due
+     *  for it — no pipeline rebuild (fftRate would rebuild it and dip the audio), nothing else touched; an older client
+     *  never sends it. Touched only under clientMtx; forgotten with the socket. */
+    std::set<net::Socket*> specPaused;
     /** ★★★ WHAT THE ENGINE ACTUALLY EMITS, measured — see dueForFrame. The smoothed gap between
      *  emitted frames (ms); 0 = not measured yet. Touched only in dueForFrame, under clientMtx. */
     double emitGapEmaMs = 0.0, lastEmitMs = 0.0;
@@ -13405,9 +13420,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  Call WITHOUT clientMtx held. */
     void recomputeEngineRate() {
         double want = 0.0;
+        int watching = 0;   // ★ V12 listeners whose spectrum is ON (not paused under a map) — vsMapMode below
         {
             std::lock_guard<std::mutex> lk(clientMtx);
             auto acc = [&](const std::shared_ptr<net::Socket>& s) {
+                if (!specPaused.count(s.get())) watching++;
                 auto it = clientFps.find(s.get());
                 // A listener that has never asked wants the server default, not zero — otherwise
                 // a single silent client would hold the max at 0 and fall through to the floor.
@@ -13464,6 +13481,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  telemetry and the link meter alive. */
         if (g_ndbMode.load(std::memory_order_relaxed) && want > 1.0) want = 1.0;
         if (g_vorMode.load(std::memory_order_relaxed) && want > 1.0) want = 1.0;   // ★ V12 the VOR map likewise (the map covers it)
+        /* ★★★ V12 A MAP MODE: THE DISPLAY SPECTRUM ONLY FOR A MAP DRAWER'S WATERFALL (Stuart 11-27). Every client has the map
+         *  over its waterfall (spec on:0), so with nobody's drawer waterfall open the engine takes the housekeeping floor —
+         *  1 fps, NOT zero: the gain telemetry, the link meter and the RSP's AGC kick ride on it (the ADS-B rule above; DAB's
+         *  first build skipped the chain and every client read a dead link). With one open: LIGHT, ≤ 10 fps for everyone.
+         *  ★ Only the display FFT's rate (RxPipeline::setFftRate — a separate stage gathering its own window from the IQ; the
+         *    decoders' channel DSP, the audio and DAB never read it). The FFT SIZE is not changed: that restarts the engine
+         *    and dips everyone's audio — the client bins it down instead (mapWf.ts). A client too old to send `spec` counts as
+         *    watching, so it is never starved. Leaving the mode: the next recompute restores the full rates. */
+        if (vsMapMode()) {
+            const double light = std::min(10.0, baseFftRate > 0 ? baseFftRate : 10.0);
+            want = watching > 0 ? light : 1.0;
+            const double mr2 = g_vsMaxFftRate.load();
+            if (mr2 > 0 && want > mr2) want = mr2;
+        }
         /* ★★ V12 DAB WITH SEVERAL STATIONS PLAYING, ON A WEAK BOX: 2 fps (Stuart, 2026-11-17: "5FPS if all users are on
          *  the same station but as soon as users change to another station and multiple dab stations are running the
          *  waterfall throttles to 2FPS but only on weaker boxes" — "the waterfall is only really there on DAB to show you
@@ -13492,6 +13523,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vibespec::Load l;
         l.dspPct = tl.dspPct; l.demodBlocked = tl.demodBlocked; l.backlogMs = tl.backlogMs; l.cpuLevel = tl.cpuLevel;
         static unsigned lastEpoch = 0; static bool lastDab = false;
+        { static bool lastMap = false; const bool mm = vsMapMode();   // ★ V12 into / out of a map mode: the display rate follows
+          if (mm != lastMap) { lastMap = mm; recomputeEngineRate(); } }
         const unsigned ep = specLoadEpoch.load(std::memory_order_relaxed);
         const bool dab = g_dabMode.load(std::memory_order_relaxed);
         bool changed; double before, after, wantNow;
@@ -13573,6 +13606,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         lastEmitMs = nowMs;
         const double made = emitGapEmaMs > 0.0 ? std::min(engine, 1000.0 / emitGapEmaMs) : engine;
         for (size_t i = 0; i < peers.size(); i++) {
+            if (specPaused.count(peers[i].sock.get())) { due[i] = 0; continue; }   // ★ a map covers its waterfall
             const double want = peers[i].fps > 0 ? peers[i].fps : baseFftRate;
             if (want <= 0 || want >= made) clientFpsAcc[peers[i].sock.get()] = 0.0;
             else {
@@ -25650,6 +25684,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★★ V12 PRESENCE (Stuart 11-24): the app says when it goes to the background and comes back — see "PRESENCE"
         //    by holdStartLocked. Not gated: it moves nothing.
+        // ★★ V12 beta96 the spectrum paused / resumed for THIS listener (a full-screen map over its waterfall) — see specPaused
+        if (type == "spec") {
+            double onV = 1; jsonNum(msg, "on", onV);
+            if (sock) { std::lock_guard<std::mutex> lk(clientMtx); if (onV != 0) specPaused.erase(sock.get()); else specPaused.insert(sock.get()); }
+            recomputeEngineRate();   // ★ V12 in a map mode the engine runs only for a listener whose drawer shows the waterfall
+            return;
+        }
         if (type == "presence") {
             if (sock) { const std::string st = jsonStr(msg, "state");
                         std::lock_guard<std::mutex> lk(clientMtx); presenceNoteLocked(sock.get(), st == "background"); }
@@ -33228,7 +33269,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     listener is actually registered — see the note there. */
         if (!isAudio) {
             std::lock_guard<std::mutex> lk(clientMtx);
-            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); clientSpecAudit.erase(sock.get());
+            clientFps.erase(sock.get()); clientFpsAcc.erase(sock.get()); clientSpecAudit.erase(sock.get()); specPaused.erase(sock.get());
         }
 
         // A listener has arrived — wake the dongle if it was idled while nobody was connected. Idempotent
@@ -34118,6 +34159,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           clientFps.erase(sock.get());
           clientFpsAcc.erase(sock.get());
           clientSpecAudit.erase(sock.get());
+          specPaused.erase(sock.get());
           wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
           stampSubscribe(sock.get(), false);  // ★ V12 beta83 the span stamp (stampMtx_ is a leaf lock too)
           adsbDeltaSubscribe(sock.get(), false);   // ★ V12 beta96 ADS-B deltas (a leaf lock too)
@@ -48540,9 +48582,13 @@ static std::string vsTunableJson() {
             double cl = b.chans.front(), ch = b.chans.front();
             for (double c : b.chans) { cl = std::min(cl, c); ch = std::max(ch, c); }
             char e[320];
-            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f,\"channels\":%zu,\"chLo\":%.0f,\"chHi\":%.0f}", first ? "" : ",",
+            std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"region\":\"%s\",\"hz\":%.0f,\"channels\":%zu,\"chLo\":%.0f,\"chHi\":%.0f,\"chans\":[", first ? "" : ",",
                           b.id, b.name, b.region, b.centreHz, b.chans.size(), cl, ch);
             j += e; first = false;
+            /* ★★ V12 `chans`: every channel the band decodes (Hz) — the map drawer's live waterfall marks each one, labelled,
+             *  from this table, never a copy of its own (ACARS's channels are not evenly spaced: chLo / chHi cannot say them) */
+            for (size_t i = 0; i < b.chans.size() && i < 64; i++) { char c[24]; std::snprintf(c, sizeof c, "%s%.0f", i ? "," : "", b.chans[i]); j += c; }
+            j += "]}";
         }
         j += "]";
         if (vsModeBlocked("avdata+text")) j += ",\"avdataText\":true";

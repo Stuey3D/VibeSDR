@@ -12,6 +12,7 @@
  *   HTML, and the callsign is cut to the characters a callsign has.
  */
 import type { AdsbAircraft, AdsbReport } from './spectrum';
+import { acTagHtml } from '../../../src/utils/acTags';
 import { dataUrl } from './origin';
 import { snrChipHtml } from '../../../src/utils/snrColour';   // ★ beta96 the reply SNR chip
 import { flagEmoji, adsbInfoLine, adsbShowsData, adsbCreditHtml, type AdsbInfo } from '../../../src/services/adsbInfo';
@@ -83,11 +84,6 @@ export function emergencyBadge(squawk: unknown, state: unknown): string {
   return st && st !== 'none' && st !== '0' ? 'EMERGENCY' : '';
 }
 
-/** The map's top bar: how many have a position (the count, on the map) and, beside it, how many are heard
- *  at all and the message rate — "14 heard · 212 msg/s". */
-export function adsbOnMap(r: AdsbReport | null): number {
-  return r ? r.aircraft.filter((a) => num(a.lat) != null && num(a.lon) != null).length : 0;
-}
 export function adsbStatus(r: AdsbReport | null): string {
   if (!r) return 'listening on 1090 MHz…';
   const rate = num(r.msgRate);
@@ -101,28 +97,6 @@ export function adsbStatus(r: AdsbReport | null): string {
   return `${r.aircraft.length} heard${r1}${r2}${r3}`;
 }
 
-/** ★★ THE FURTHEST AIRCRAFT (Stuart, 2026-10-24: "We could put a Furthest aircraft here") — the located aircraft
- *  farthest from the receiver, for the top bar's key (tap = show it on the map). null without a receiver position or
- *  a located aircraft. ONE RULE, TWO READERS: the app's MapOverlay page (__adsbPush) picks it the same way. */
-export function adsbFurthest(r: AdsbReport | null, rx: LatLon | null): { hex: string; nm: number; name: string } | null {
-  if (!r || !rx) return null;
-  let best: { hex: string; nm: number; name: string } | null = null;
-  for (const a of r.aircraft) {
-    const lat = num(a.lat), lon = num(a.lon), hex = cleanHex(a.hex);
-    if (lat == null || lon == null || !hex) continue;
-    const nm = rangeBearing(rx, lat, lon).nm;
-    if (!best || nm > best.nm) best = { hex, nm, name: String(a.flight || '').trim() || hex.toUpperCase() };
-  }
-  return best;
-}
-/** "FURTHEST 182 NM · RYR12K" — one chip's text: the key dimmed, the figure, the flight. */
-export function adsbChipHtml(key: string, figure: string, name: string): string {
-  const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-  return `<span class="k">${esc(key)}</span>${figure ? ` ${esc(figure)}` : ''}<span class="n"> · ${esc(name)}</span>`;
-}
-export function adsbFurthestHtml(f: { nm: number; name: string } | null): string {
-  return f ? adsbChipHtml('FURTHEST', `${Math.round(f.nm)} NM`, f.name) : '';
-}
 /** ★ A chip names an aircraft as the list does: its callsign, else its registration (adsb_info), else its address. */
 const flightName = (a: { flight?: unknown; r?: unknown }, hex: string) => String(a.flight || '').trim() || String(a.r || '').trim() || hex.toUpperCase();
 const hasName = (a: { flight?: unknown; r?: unknown }) => !!(String(a.flight || '').trim() || String(a.r || '').trim());
@@ -135,46 +109,7 @@ const onMap = (a: { lat?: unknown; lon?: unknown }) => num(a.lat) != null && num
  *  furthest flight chip to just the header of the aircraft list, and with that we can add a newest flight detected,
  *  and furthest tracked chips too"). FURTHEST is adsbFurthest; these are the other two. Tap = show it on the map. */
 
-/** FURTHEST TRACKED: the aircraft the server has followed the furthest (tracked_nm, vibe_adsb.h setPos). */
-export function adsbLongestTracked(r: AdsbReport | null): { hex: string; nm: number; name: string } | null {
-  if (!r) return null;
-  let best: { hex: string; nm: number; name: string } | null = null;
-  for (const a of r.aircraft) {
-    const nm = num(a.tracked_nm), hex = cleanHex(a.hex);
-    if (nm == null || nm < 1 || !hex || !onMap(a)) continue;
-    if (!best || nm > best.nm) best = { hex, nm, name: flightName(a, hex) };
-  }
-  return best;
-}
 
-/** NEWEST: the aircraft first heard most recently. The report carries no "first heard", so the page notes when each
- *  hex FIRST appears (`firstSeen`, kept here: call once per report). ★ The aircraft already in the first report are
- *  not "new" — they were there before this listener arrived — so they are stamped 0 and never chosen; NEWEST stays
- *  hidden until a genuinely new one turns up. An aircraft that leaves the report is forgotten, so one that comes back
- *  counts as new again (the server forgets it too). */
-export function adsbNewest(r: AdsbReport | null, firstSeen: Map<string, number>, nowMs: number): { hex: string; name: string; ageS: number } | null {
-  if (!r) { firstSeen.clear(); return null; }
-  const fresh = firstSeen.size === 0;
-  const here = new Set<string>();
-  for (const a of r.aircraft) {
-    const hex = cleanHex(a.hex);
-    if (!hex) continue;
-    here.add(hex);
-    if (!firstSeen.has(hex)) firstSeen.set(hex, fresh ? 0 : nowMs);
-  }
-  for (const h of [...firstSeen.keys()]) if (!here.has(h)) firstSeen.delete(h);
-  /* ★★ ONLY ONE WITH A NAME (Stuart, 2026-10-25: "what is 408000 on the newest … the newest aircraft seem to just be codes
-   *  and not flights"). A new aircraft is heard by its ICAO address first; its callsign comes in a separate message every
-   *  ~5 s, so the very newest is almost always nameless. NEWEST = the newest arrival that has a callsign or a
-   *  registration; a nameless one waits until it has one (its arrival time is kept, so it takes its rightful place). */
-  const byHex = new Map<string, (typeof r.aircraft)[number]>();
-  for (const a of r.aircraft) { const h = cleanHex(a.hex); if (h) byHex.set(h, a); }
-  let best = '', at = 0;
-  for (const [h, t] of firstSeen) { const a = byHex.get(h); if (t > at && a && hasName(a) && onMap(a)) { at = t; best = h; } }
-  if (!best) return null;
-  const a = byHex.get(best)!;
-  return { hex: best, name: flightName(a, best), ageS: Math.max(0, Math.round((nowMs - at) / 1000)) };
-}
 /** ★★★ THE CAPTURE WARNING (Stuart, 2026-10-24) — the server counts the samples its ADS-B decoder RECEIVES against
  *  what the rate promises (vibe_adsb_capture.h CaptureMeter: the dongle/USB and the server's own IQ queue, not the
  *  decoder's own lag). Under 97 % the receiver is dropping samples, and replies are cut in half — the Pi 2 at 3.2 MS/s
@@ -187,27 +122,6 @@ export function adsbCaptureWarning(r: AdsbReport | null): { short: string; rest:
   return { short: `capture ${Math.round(c)} %`, rest: ' — the receiver is dropping samples (its USB bus or this server cannot keep up)' };
 }
 
-/** ★ The list, nearest first when the receiver's position is known (the app's AircraftPanel order),
- *  else the most recently heard first. Aircraft without a position sort after the located ones. */
-export function adsbRows(r: AdsbReport, rx: LatLon | null) {
-  const rows = r.aircraft.map((a) => {
-    const lat = num(a.lat), lon = num(a.lon);
-    const rb = rx && lat != null && lon != null ? rangeBearing(rx, lat, lon) : null;
-    // ★★ military: the SERVER SAYS (mil:1 — its Annex 10 + VRS block table, the Mictronics flag), else the old rule
-    const em = emergencyBadge(a.squawk, a.emergency), mil = a.mil === 1 || isMilitaryHex(String(a.hex || ''), a.flight);
-    return { a, hex: cleanHex(a.hex), rb, located: lat != null && lon != null, em, mil, rank: em ? 0 : mil ? 1 : 2 };
-  }).filter((x) => x.hex);
-  /** ★★ THE ORDER (Stuart, 2026-10-24): emergencies first, then military, then the nearest to the receiver. */
-  rows.sort((p, q) => {
-    if (p.rank !== q.rank) return p.rank - q.rank;
-    if (p.rb && q.rb) return p.rb.nm - q.rb.nm;
-    if (p.rb) return -1;
-    if (q.rb) return 1;
-    if (p.located !== q.located) return p.located ? -1 : 1;
-    return (num(p.a.seen) ?? 99) - (num(q.a.seen) ?? 99);
-  });
-  return rows;
-}
 
 
 /** ★ The live list's rows. Each is a button to the highlight (role) and to Tab (tabindex): tapped, clicked
@@ -235,59 +149,7 @@ function flagHtml(iso: unknown): string {
   const win = typeof navigator !== 'undefined' && /Windows/.test(navigator.userAgent || '');
   return win ? `<span class="cc" title="${esc(c)}">${esc(c)}</span>` : `<span class="flag" title="${esc(c)}">${flagEmoji(c)}</span>`;
 }
-/** ★ The row's second line: what the aircraft IS (operator logo or badge · type · registration · route), from the
- *  server's aircraft data; the hex and squawk when there is none (an older server, an unknown airframe). */
-export function adsbSecondLine(a: AdsbAircraft, hex: string, sq: string, imgBase: string): string {
-  const info = adsbInfoLine(a);
-  if (!info) return `${esc(hex.toUpperCase())}${sq ? ` · ${esc(sq)}` : ''}`;
-  const logo = imgBase && a.logo ? `<img class="oplogo" src="${esc(imgBase + 'logo/' + a.logo)}" alt="${esc(a.op || '')}">` : '';
-  // the operator code becomes a badge (or the logo replaces it); the rest is plain text
-  const parts = info.split(' \u00b7 ');
-  const head = a.op && parts[0] === a.op ? (logo || `<span class="op">${esc(a.op)}</span>`) : '';
-  const rest = (head ? parts.slice(1) : parts).map(esc).join(' · ');
-  return `${head}${head && rest ? ' ' : ''}${rest}${sq ? ` · ${esc(sq)}` : ''}`;
-}
 
-/** ★ beta96 `keyPrefix`: the rows are the AIR & SEA map's (TrackView) — each a .trkRow too, keyed `${keyPrefix}${hex}`
- *  (the map item's key), so the view's own press, highlight and focus rules apply. */
-export function adsbListHtml(r: AdsbReport | null, rx: LatLon | null, imgBase = '', keyPrefix = ''): string {
-  if (!r) return '<div class="adsbEmpty">Listening on 1090 MHz — aircraft appear here as they are heard.</div>';
-  const rows = adsbRows(r, rx);
-  if (!rows.length) return '<div class="adsbEmpty">No aircraft heard yet. Each one appears as its transponder is decoded.</div>';
-  return rows.map(({ a, hex, rb, located, em: badge, mil }) => {
-    const call = cleanFlight(a.flight);
-    const vs = num(a.baro_rate);
-    const altFt = num(a.alt_baro);
-    const trend = a.alt_baro === 'ground' || altFt == null ? ''
-      : vs != null && vs > 300 ? '<i class="up" title="Climbing">▲</i>' : vs != null && vs < -300 ? '<i class="dn" title="Descending">▼</i>'
-      : '<i class="lv" title="Level">●</i>';
-    const altStyle = altFt != null && a.alt_baro !== 'ground' ? ` style="color:${altColour(altFt)}"` : '';
-    const gs = num(a.gs);
-    const sq = String(a.squawk ?? '').replace(/[^0-7]/g, '').slice(0, 4);
-    const where = rb ? `${rb.nm < 10 ? rb.nm.toFixed(1) : Math.round(rb.nm)} NM <span class="brg">${COMPASS[Math.round(rb.brg / 45) % 8]}</span>`
-      : located ? '<span class="dim">located</span>' : '<span class="dim">no position</span>';
-    // ★ TRACKED FOR xx NM (Stuart, 2026-10-24): the path the server has followed it along, under its range
-    const trk = num(a.tracked_nm);
-    const tracked = trk != null && trk >= 1 ? `<small class="trk">tracked ${Math.round(trk)} NM</small>` : '';
-    const em = emergency(a);
-    const bars = snrChipHtml('adsb', num(a.snr));   // ★ beta96 (replaced the 3-bar meter)
-    const tag = badge ? `<span class="tag em">${esc(badge)}</span>` : mil ? '<span class="tag mil">MIL</span>' : '';
-    return `<div class="adsbRow${keyPrefix ? ' trkRow' : ''}${em ? ' em' : ''}${mil && !em ? ' mil' : ''}${located ? '' : ' nopos'}" role="button" tabindex="0" data-hex="${esc(hex)}"`
-      + (keyPrefix ? ` data-key="${esc(keyPrefix + hex)}"` : '')
-      + ` title="${located ? 'Show on the map' : 'No position yet — not on the map'}">`
-      // ★★ beta95 (Stuart 11-25: rows with an operator logo lost their bars): ONLY the name ellipsises; the SNR chip (beta96,
-      //    in the bars' place) and the MIL/emergency tag sit beside it in a span that never shrinks.
-      + `<span class="id"><span class="l1"><b>${flagHtml(a.country)}${esc(call || a.r || hex.toUpperCase())}</b>`
-      + `${bars || tag ? `<span class="ex">${bars}${tag}</span>` : ''}</span>`
-      + `<small>${adsbSecondLine(a, hex, sq, imgBase)}</small></span>`
-      + `<span class="alt"${altStyle}>${esc(altText(a.alt_baro))}${trend}</span>`
-      + `<span class="spd">${gs != null ? `${Math.round(gs)} kt` : ''}</span>`
-      + `<span class="rng">${where}${tracked}</span>`
-      + '</div>';
-  }).join('')
-    // ★★ V12 beta91 ODC-By 1.0 §4.3: the Mictronics notice at the list's foot while a row shows the aircraft data (the card's words)
-    + (adsbShowsData(rows.map((x) => x.a as AdsbInfo)) ? `<div class="adsbCredit">${adsbCreditHtml()}</div>` : '');
-}
 
 /* ══ THE MAP ══════════════════════════════════════════════════════════════════════════════════════
  * ★★★ beta96 RETIRED: ADS-B mode's map is the AIR & SEA map's ADS-B-live state (docs/v12/ONE-MAP.md stage 4). The view

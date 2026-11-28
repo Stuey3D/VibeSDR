@@ -29,7 +29,8 @@
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager' | 'balloon' | 'satellite'
+  | 'servers' | 'list' | 'navtex' | 'zoomAuto' | 'zoomPause' | 'zoomLens' | 'noEntry' | 'nearest' | 'stats' | 'statsLine' | 'waterfall';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -38,6 +39,63 @@ export type ModeIconPart =
   | { r: [number, number, number, number, number]; fill?: boolean; w?: number };
 
 export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
+  /* ★★★ beta96 the SERVERS glyph — network nodes — ONE source: the app's ServersChip (SectionIcon 'instance' draws these
+   *  parts) and the web map's SERVERS chip (Stuart 11-27: "servers glyph is not the one we use everywhere else") */
+  servers: [
+    { c: [6, 7, 2], w: 1.7 }, { c: [18, 7, 2], w: 1.7 }, { c: [12, 18, 2], w: 1.7 },
+    { d: 'M8 7h8M7.2 8.7 10.8 16.3M16.8 8.7 13.2 16.3', w: 1.7 },
+  ],
+  /* ★★★ beta96 THE NAVTEX GLYPH (Stuart 11-27 picked "C": "mast and sheet probably fits best as the icons for the
+   *  transmission stations are the same masts") — a coast-station mast (the station markers' own A-frame and crossbar,
+   *  navtexMap.ts navIcon) sending, its message coming out as a printed sheet with a torn edge: navigational telex.
+   *  Our own drawing. ONE source: the map's station markers, LAYERS, the LIST's NAVTEX tab — web and app. */
+  navtex: [
+    { d: 'M7 13 9.5 3l2.5 10M8 9.5h3' },
+    { d: 'M5.2 3.6a4.5 4.5 0 0 0 0 5.3M13.8 3.6a4.5 4.5 0 0 1 0 5.3', w: 1.6 },
+    { d: 'M11 13.5h9v6.6l-1.5-1-1.5 1-1.5-1-1.5 1-1.5-1-1.5 1Z' },
+    { d: 'M13 16h5', w: 1.5 },
+  ],
+  /* ★★★ beta96 THE AUTO-ZOOM STATE (Stuart 11-27) on the map's MAP chip and its AUTO key: a magnifier with an "A" (auto zoom
+   *  on); the magnifier PAUSED (‖ — a card is open, amber); the bare magnifier under a NO-ENTRY sign (off: you moved the
+   *  map — the sign drawn in red by its holder). One source for the web and the app. */
+  zoomAuto: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 }, { d: 'M7.4 13 10 6.8l2.6 6.2M8.3 11h3.4', w: 1.6 } ],
+  zoomPause: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 }, { d: 'M8.4 7.4v5.2M11.6 7.4v5.2', w: 2 } ],
+  zoomLens: [ { c: [10, 10, 6.5] }, { d: 'M14.8 14.8 20.5 20.5', w: 2.2 } ],
+  noEntry: [ { c: [12, 12, 10.2], w: 2.2 }, { d: 'M4.8 19.2 19.2 4.8', w: 2.4 } ],
+  // ★ the LIST's sort (Stuart 12:58): NEAREST — range rings round the receiver; LATEST is the house clock
+  nearest: [ { c: [12, 12, 8.5], w: 1.6 }, { c: [12, 12, 4.5], w: 1.6 }, { c: [12, 12, 1.5], fill: true } ],
+  /* ★ STATS (Stuart 11-27: "a bar graph with a line graph over it … more rounded"): four bars, uneven and rising, their
+   *  tops rounded, and one smooth wave above them clear of every top. Our own drawing. 'statsLine' = the bars outlined. */
+  stats: [
+    { d: 'M3 21v-4.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M8 21v-9.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M13 21v-6.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M18 21v-11.25a1.75 1.75 0 0 1 3.5 0V21z', fill: true },
+    { d: 'M2.5 11.5C5.5 9.2 7.2 6.2 10 6.6s4.2 2.4 6.6 0.6S19.5 2.8 21.6 2.6', w: 1.9 },
+  ],
+  statsLine: [
+    { d: 'M3.8 21v-4.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M8.8 21v-9.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M13.8 21v-6.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M18.8 21v-11.25a0.95 0.95 0 0 1 1.9 0V21', w: 1.6 },
+    { d: 'M2.5 11.5C5.5 9.2 7.2 6.2 10 6.6s4.2 2.4 6.6 0.6S19.5 2.8 21.6 2.6', w: 1.9 },
+  ],
+  /* ★ beta96 a list: three rows, each with its bullet — the web map's LIST chip (there was no house list glyph) */
+  /* ★★ V12 the map drawer's LIVE WATERFALL (Stuart 11-27): a spectrum trace over the waterfall's falling lines */
+  /* ★★ redrawn to Stuart's design (11-27 evening): the TRACE on top — a noise floor with three peaks of different heights;
+   *  below it a SOLID block (the waterfall) cut by dark lines of different widths, each straight under its peak: the
+   *  signals running down the waterfall. Single colour: the lines are the gaps between the block's filled columns. */
+  waterfall: [
+    { d: 'M3 10.5H6.5L8 3.5L9.5 10.5H12L13.5 6.5L15 10.5H17L18 8.5L19 10.5H21' },
+    { d: 'M4.5 13H7v8H4.5A1.5 1.5 0 0 1 3 19.5v-5A1.5 1.5 0 0 1 4.5 13Z', fill: true },
+    { r: [9, 13, 3.8, 8, 0], fill: true },
+    { r: [14.2, 13, 3.3, 8, 0], fill: true },
+    { d: 'M18.6 13H19.5A1.5 1.5 0 0 1 21 14.5v5A1.5 1.5 0 0 1 19.5 21H18.6Z', fill: true },
+  ],
+  list: [
+    { d: 'M9 6h11M9 12h11M9 18h11' },
+    { c: [4.5, 6, 1.2], fill: true }, { c: [4.5, 12, 1.2], fill: true }, { c: [4.5, 18, 1.2], fill: true },
+  ],
   aircraft: [
     { d: 'M12 1.8c.95 0 1.45.85 1.45 1.9v5.1l8 4.8v2.4l-8-2.45v4.95l2.3 1.75v1.85L12 21.1l-3.75 1v-1.85l2.3-1.75V13.55l-8 2.45v-2.4l8-4.8V3.7c0-1.05.5-1.9 1.45-1.9Z', fill: true },
   ],

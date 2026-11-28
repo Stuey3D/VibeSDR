@@ -7,8 +7,13 @@
  * Run: npx tsx scripts/test_adsb_furthest.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
-import { adsbFurthest, adsbFurthestHtml, adsbLongestTracked, adsbNewest, adsbChipHtml, adsbImageBase } from '../web/client/src/adsb.ts';
-import { adsbFurthestOf, adsbLongestTrackedOf, adsbNewestOf, adsbChips } from '../src/services/adsbList.ts';
+import { adsbImageBase } from '../web/client/src/adsb.ts';
+import { adsbFurthestOf, adsbLongestTrackedOf, adsbNewestOf } from '../src/services/adsbList.ts';
+/* ★★ V12 map purge (Stuart 11-27: "old and new fighting each other"): the web's own NEWEST / FURTHEST / LONGEST chips are gone
+ *  (the map's STATS card replaced them, every source merged), so the cases below run on the ONE rule left — the app's. */
+const adsbFurthest = (r: any, rx: any) => adsbFurthestOf((r?.aircraft ?? []) as never, rx);
+const adsbNewest = (r: any, seen: Map<string, number>, t: number) => adsbNewestOf(r ? (r.aircraft as never) : null, seen, t);
+const adsbLongestTracked = (r: any) => adsbLongestTrackedOf((r?.aircraft ?? []) as never);
 
 let fails = 0, passes = 0;
 const ok = (c: boolean, what: string) => { if (c) { passes++; return; } fails++; console.error(`FAIL ${what}`); };
@@ -27,8 +32,6 @@ ok(!!f && f.name === '~2A0B1C', 'web: no callsign → its address');
 ok(!!f && Math.round(f.nm) > 150 && Math.round(f.nm) < 250, `web: a sane distance (${f && Math.round(f.nm)} NM)`);
 ok(adsbFurthest(rep, null) === null, 'web: no receiver position → no key');
 ok(adsbFurthest({ type: 'adsb', aircraft: [ac[3]] } as never, rx) === null, 'web: nothing located → no key');
-ok(/FURTHEST<\/span> \d+ NM<span class="n"> · ~2A0B1C<\/span>/.test(adsbFurthestHtml(f)), 'web: the key reads "FURTHEST n NM · name"');
-ok(!/<b>/.test(adsbFurthestHtml({ nm: 1, name: '<b>' })), 'web: a callsign is escaped');
 
 // ── the app's list header (adsbList.ts), the same cases ──
 {
@@ -62,8 +65,6 @@ ok(!/<b>/.test(adsbFurthestHtml({ nm: 1, name: '<b>' })), 'web: a callsign is es
   const lg = adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 12 }, { hex: 'bbbbbb', flight: 'BAW12 ', tracked_nm: 140.6 }, { hex: 'cccccc', tracked_nm: 0.4 }]));
   ok(!!lg && lg.hex === 'bbbbbb' && lg.name === 'BAW12' && Math.round(lg.nm) === 141, `tracked: the longest (${JSON.stringify(lg)})`);
   ok(adsbLongestTracked(rep([{ hex: 'aaaaaa', tracked_nm: 0.5 }])) === null, 'tracked: under 1 NM is not a track');
-  ok(adsbChipHtml('LONGEST TRACKED', '141 NM', 'BAW12') === '<span class="k">LONGEST TRACKED</span> 141 NM<span class="n"> · BAW12</span>', 'tracked: the chip text');
-  ok(adsbChipHtml('NEWEST', '', '<b>') === '<span class="k">NEWEST</span><span class="n"> · &#60;b&#62;</span>', 'newest: the chip text, escaped');
   const seen = new Map<string, number>();
   ok(adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }]), seen, 1000) === null, 'newest: the first report is "already there", not new');
   const n1 = adsbNewest(rep([{ hex: 'aaaaaa' }, { hex: 'bbbbbb' }, { hex: 'cccccc', flight: 'EZY1' }]), seen, 5000);
@@ -104,9 +105,7 @@ ok(!/<b>/.test(adsbFurthestHtml({ nm: 1, name: '<b>' })), 'web: a callsign is es
     ok(JSON.stringify(lw) === JSON.stringify(la), `longest tracked, report ${i + 1}: app ${JSON.stringify(la)} = web ${JSON.stringify(lw)}`);
   });
   ok(adsbNewestOf(null, sa, 9999) === null && sa.size === 0, 'app newest: leaving forgets them all');
-  const chips = adsbChips(rep(seq[3]), rx, new Map(), 0);
-  ok(chips.map((c) => c.key).join(',') === 'FURTHEST,LONGEST TRACKED', `chips: in the web's order, only those with an aircraft (${chips.map((c) => c.key)})`);
-  ok(chips[1].figure === '141 NM' && chips[1].name === 'BAW12', 'chips: LONGEST TRACKED 141 NM · BAW12');
+  // ★★★ beta97 the header chips (adsbChips) were DELETED with the old list head — STATS (src/utils/mapStats.ts) holds them now
 }
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `adsb furthest: all ${passes} passed`);
 process.exit(fails ? 1 : 0);

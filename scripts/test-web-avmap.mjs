@@ -139,7 +139,7 @@ try {
     ok(!(await ev(`/TEST MESSAGE BODY|EGLLXYA|#M1BPOS/.test(${V}.querySelector('.rows').textContent)`)), '★ MESSAGES: labels only, never a body (not the owner)');
     await ev(`${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]').click()`);
     ok(await until(`${V}?.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab === 'aircraft'`, 3000), 'the AIRCRAFT tab');
-    ok(await ev(`${V}.querySelector('.trkList .hd .srt [aria-pressed="true"]')?.textContent`) === 'LATEST', 'DATALINK: the aircraft sort is LATEST');
+    ok(await ev(`${V}.querySelector('.trkList .hd .srt .srtT')?.dataset.srt`) === 'latest', 'DATALINK: the aircraft sort is LATEST (the one sort toggle wears the current sort)');
     const rowsTxt = () => ev(`${V}?.querySelector('.rows')?.textContent || ''`);
     ok(await until(`/BAW117/.test(${V}?.querySelector('.rows')?.textContent || '') && /VDL2 \\+ ADS-B|ADS-B \\+ VDL2/.test(${V}?.querySelector('.rows')?.textContent || '')`, 45000),
        `radio A's ADS-B joins radio B's datalink: ${(await rowsTxt()).slice(0, 300)}`);
@@ -150,8 +150,9 @@ try {
      *  heard each aircraft (vibe_aircraft_share.h radios) — radio A's tag is seen on radio B's page, so the switch is drawn;
      *  OFF hides 400F11 (radio A's ADS-B only) and keeps 4CA97B (heard by both: A's ADS-B and B's VDL2) */
     if (!process.env.SKIP_SCOPE) {
-      const SCOPE = `${V}?.querySelector('.trkTop .scope [data-scope]')`;
-      ok(await until(`!!${SCOPE} && !${SCOPE}.closest('.scope').hidden`, 8000), 'two radios: the OTHER RADIOS ON THIS SERVER chip is drawn on radio B\'s map');
+      // ★ tweak 3: OTHER RADIOS is the other radio's row in MAP CONTROLS → SOURCES
+      const SCOPE = `[...(${V}?.querySelectorAll('.srcBody [data-src]') || [])].find(b => /a radio on this server/.test(b.textContent || ''))`;
+      ok(await until(`!!${SCOPE}`, 8000), 'two radios: radio A has its SOURCES row on radio B\'s map');
       await ev(`${SCOPE}.click(); true`);
       ok(await until(`![...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:400F11')`, 6000), 'OFF: 400F11 (radio A\'s ADS-B only) is hidden on radio B\'s map');
       ok(await ev(`[...${V}.querySelectorAll('.trkRow')].some(r => r.dataset.key === 'a:4CA97B')`), 'OFF: 4CA97B stays (radio B heard it too, on VDL2)');
@@ -160,8 +161,8 @@ try {
       await ev(`localStorage.removeItem('vibesdr.mapOtherRadios'); true`);
     }
     // ★ NEAREST: the rows by range (the receiver's own position)
-    await ev(`${V}.querySelector('.trkList .hd .srt [data-srt="nearest"]').click()`);
-    { const nm = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow')].map(r => parseFloat((r.querySelector('.rg')?.textContent || '').replace(/[^0-9.]/g, ''))).filter(x => x === x))`) || '[]');
+    await ev(`(() => { const t = ${V}.querySelector('.trkList .hd .srt .srtT'); if (t && t.dataset.srt !== 'nearest') t.click(); return 1; })()`);
+    { const nm = JSON.parse(await ev(`JSON.stringify([...${V}.querySelectorAll('.trkRow')].map(r => [...r.querySelectorAll('.kv span')].map(s => s.textContent || '').find(t => /nm$/.test(t))).filter(Boolean).map(t => parseFloat(t)).filter(x => x === x))`) || '[]');
       ok(nm.length >= 2 && nm.every((x, i) => i === 0 || x >= nm[i - 1]), `NEAREST: by range (${nm.join(', ')} NM)`); }
     ok(await ev(`localStorage.getItem('vibesdr.airSeaSort')`) === 'nearest', '…remembered');
     await until(`[...${V}.querySelectorAll('[data-tgl]')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join(',').startsWith('VDL2,ACARS,ADS-C,ADS-B,AIRPORTS')`, 15000);
@@ -178,13 +179,15 @@ try {
     const rowTxt = (k) => `[...${V}.querySelectorAll('.trkRow')].find(r => r.dataset.key === '${k}')?.textContent || ''`;
     ok(await until(`/\u{1F1E9}\u{1F1EA}|\bDE\b/u.test(${rowTxt('a:3C6548')})`, 15000), `beta91: VDL2-only 3C6548's row has Germany's flag (${await ev(rowTxt('a:3C6548'))})`);
     ok(await until(`/Ryanair/.test(${rowTxt('a:4CA97B')})`, 15000), `beta91: 4CA97B's row names its operator (${await ev(rowTxt('a:4CA97B'))})`);
-    ok(await until(`/Mictronics/.test(${V}?.querySelector('.rows .avCredit')?.textContent || '') && !!${V}?.querySelector('.rows .avCredit a[href="https://opendatacommons.org/licenses/by/1-0/"]')`, 6000),
-       `beta91: the ODC-By notice at the list's foot (${await ev(`${V}?.querySelector('.rows .avCredit')?.textContent`)})`);
+    // ★★ Stuart 16:53: the licence words live in HELP with the map's other credits — never in the LIST
+    ok(await until(`/Mictronics/.test(${V}?.querySelector('.trkCard2[data-card="help"] .hCredit')?.textContent || '') && !!${V}?.querySelector('.trkCard2[data-card="help"] .hCredit a[href="https://opendatacommons.org/licenses/by/1-0/"]') && !${V}?.querySelector('.rows .avCredit')`, 6000),
+       `beta91: the ODC-By notice is in HELP, not the list (${await ev(`${V}?.querySelector('.trkCard2[data-card="help"] .hCredit')?.textContent`)})`);
     ok(await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`) === 'AUTO,FIT,RINGS,RANGE,LABELS,⌖',   // ★ beta94 + RANGE: the ADS-B layer's range outline key (b94-accard) is the aviation map's too
        `beta90: the ADS-B map's controls on the aviation map (${await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .vsadsb-ctl button')].map(b => b.textContent).join(',')`)})`);
     ok(await ev(`document.querySelectorAll('.trkView:not([hidden]) .vtl-mk[data-key^="a:"]').length === 0`), 'beta90: no aircraft drawn twice (the track layer has only the stations)');
-    const scale = await ev(`[...document.querySelectorAll('.trkView:not([hidden]) .maplibregl-ctrl-scale, .trkView:not([hidden]) .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
-    ok(/km/.test(scale || '') && /nm|NM/.test(scale || ''), `beta90: the scale bar, km and NM (${scale})`);
+    // ★ map cards: the scale is the vertical edge chip, NM on an aviation map (Stuart 11-27)
+    const scale = await ev(`document.querySelector('.trkView:not([hidden]) .mScale .vsLbl')?.dataset.t || ''`);
+    ok(/nm$/.test(scale || ''), `the vertical scale, in NM on the aviation map (${scale})`);
     // ★★ beta90 a datalink aircraft (no track, no speed): two fixes → it faces the bearing between them and GLIDES there
     const glide = JSON.parse(await ev(`(() => { const L = window.__vibeAcLayer; const a = { hex: '~abc123', flight: 'TST1', lat: 51.0, lon: -1.0, alt_baro: 35000, sparse: true, seen_pos: 30 };
       L.update([a]); L.update([Object.assign({}, a, { lat: 51.0, lon: 0.0 })]);
@@ -320,45 +323,41 @@ try {
       ok(await ev(`${V}.querySelector('.ttl').textContent`) === 'AVIATION & MARITIME · ADS-B 1090 MHz', '…titled AVIATION & MARITIME · ADS-B 1090 MHz');
       ok(await ev(`${V}.querySelector('.exit').textContent`) === 'EXIT ADS-B', '…EXIT ADS-B (the map is the mode)');
       ok(await ev(`!document.getElementById('adsbView')`), '#adsbView is retired');
-      ok(await until(`${V}.querySelectorAll('#adsbList .adsbRow.trkRow').length >= 3`, 30000), `AIRCRAFT is ADS-B's own live list (${await ev(`${V}.querySelectorAll('#adsbList .adsbRow').length`)} rows: altitude, speed, range, bars)`);
+      // ★★ Stuart 16:53: ONE list in ADS-B live too — the old ADS-B table and its chips are gone from the card; this radio's
+      //    aircraft are rows like every other, keyed as their map item (adsb:<hex>); FURTHEST / LONGEST are the STATS card's
+      const AROW = `${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="adsb:"]')`;
+      ok(await until(`${AROW}.length >= 3`, 30000), `AIRCRAFT lists this radio's live aircraft as rows (${await ev(`${AROW}.length`)})`);
       ok(await ev(`(${V}.querySelector('.trkList .hd .tab[aria-selected="true"]')?.dataset.tab || ${V}.querySelector('.trkList .hd .lt')?.textContent || '').toLowerCase()`) === 'aircraft', 'on AIRCRAFT');
-      ok(await ev(`[...${V}.querySelectorAll('#adsbList .adsbRow')].every(r => r.dataset.key === 'adsb:' + r.dataset.hex)`), '…each row keyed as its aircraft on the map');
-      ok(await ev(`${V}.querySelector('.trkList .hd .srt').hidden`), '…in its own order (emergencies, military, nearest): no sort chip');
+      ok(await ev(`!${V}.querySelector('#adsbList') && !${V}.querySelector('#adsbChips') && !${V}.querySelector('.trkCard2[data-card="list"] .adsbCredit, .trkCard2[data-card="list"] .avCredit')`), '…no old ADS-B table, chips or credit in the drawer');
+      ok(await ev(`!${V}.querySelector('.trkList .hd .srt').hidden`), '…nearest / latest, as every list');
       ok(await until(`[...${V}.querySelectorAll('[data-tgl].live')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join(',') === 'ADS-B' || (!${V}.querySelector('[data-tgl]'))`, 8000),
          `the ADS-B key is LIVE (or the only layer: no chip row) (${await ev(`[...${V}.querySelectorAll('[data-tgl]')].map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim() + (b.classList.contains('live') ? '*' : '')).join(',')`)})`);
-      ok(await ev(`!!${V}.querySelector('.trkTop #adsbChat') && !!${V}.querySelector('.trkTop #adsbGain') && !!${V}.querySelector('.trkTop #adsbCapture')`), 'CHAT, GAIN and the capture warning are in the map\'s top bar');
-      ok(await until(`(() => { const c = ${V}.querySelector('.slot-head #adsbChips'); return !!c && !c.hidden && [...c.querySelectorAll('.adsbChip')].some(b => !b.hidden); })()`, 20000),
-         `NEWEST / FURTHEST / LONGEST under the list's header (${await ev(`[...document.querySelectorAll('#adsbChips .adsbChip')].filter(b => !b.hidden).map(b => b.textContent).join(' | ')`)})`);
+      ok(await ev(`!document.getElementById('adsbChat') && !!${V}.querySelector('.slot-tune #adsbGain') && !!${V}.querySelector('.slot-tune #adsbCapture')`), 'GAIN and the capture warning in the TUNE card; no old ADS-B CHAT key (CHAT is the map\'s chip)');
+      ok(await until(`!${V}.querySelector('.mDock[data-dock="stats"]').hidden`, 20000), 'NEWEST / FURTHEST / LONGEST are the STATS card\'s');
       ok(await ev(`!!${V}.querySelector('.slot-over #adsbFeedWarn') && !!${V}.querySelector('.slot-over #adsbGainPop')`), 'the antenna warning and the gain pop-over are over the map');
       ok(await until(`(window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : 0) >= 3`, 15000), `the live aircraft on the map (${await ev(`window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1`)})`);
       ok(await ev(`${V}.querySelectorAll('.vtl-mk[data-key^="adsb:"]').length === 0`), '…drawn by the ADS-B layer only, never twice');
       ok((await ev(`${V}.querySelector('.trkTop .st').textContent`) || '').length > 3, `the status line is ADS-B's (${await ev(`${V}.querySelector('.trkTop .st').textContent`)})`);
       // a row pressed: that aircraft's card on the map, the row lit across the redraws
-      const hex = await ev(`(() => { const r = [...${V}.querySelectorAll('#adsbList .adsbRow')].find(x => !x.classList.contains('nopos')); r && r.click(); return r ? r.dataset.hex : ''; })()`);
-      ok(!!hex && await until(`!!document.querySelector('.vsadsb-pop-dark') && /${String(hex)}/i.test(document.querySelector('.vsadsb-pop-dark').textContent)`, 5000), `a row pressed opens its aircraft's card (${hex})`);
-      ok(await until(`!!${V}.querySelector('#adsbList .adsbRow.sel[data-hex="${hex}"]')`, 3000), '…and its row is lit');
+      const key = await ev(`(() => { const r = [...${AROW}].find(x => !x.classList.contains('nopos')); r && r.click(); return r ? r.dataset.key : ''; })()`);
+      const hex = String(key || '').replace(/^adsb:/, '');
+      ok(!!hex && await until(`!!document.querySelector('.vsadsb-pop-dark') && /${hex}/i.test(document.querySelector('.vsadsb-pop-dark').textContent)`, 5000), `a row pressed opens its aircraft's card (${hex})`);
+      ok(await until(`!!${V}.querySelector('.trkRow.sel[data-key="${key}"]')`, 3000), '…and its row is lit');
       await sleep(2500);
-      ok(await ev(`!!${V}.querySelector('#adsbList .adsbRow.sel[data-hex="${hex}"]')`), '…still lit after more reports');
+      ok(await ev(`!!${V}.querySelector('.trkRow.sel[data-key="${key}"]')`), '…still lit after more reports');
       await ev(`document.querySelectorAll('.vsadsb-pop-dark .maplibregl-popup-close-button').forEach(b => b.click())`);
-      if (await ev(`!document.getElementById('adsbFar').hidden`)) {
-        await ev(`document.getElementById('adsbFar').click()`);
-        ok(await until(`!!document.querySelector('.vsadsb-pop-dark')`, 4000), 'FURTHEST shows its aircraft on the map');
-      }
-      await ev(`document.getElementById('adsbChat').click()`);
-      ok(await until(`document.getElementById('chatPanel').classList.contains('open') && !document.getElementById('chatPanel').inert && getComputedStyle(document.getElementById('chatPanel')).zIndex === '700'`, 3000), 'CHAT opens its panel over the map');
-      await ev(`document.getElementById('adsbChat').click()`);
       console.log('   screenshot', await shot('adsb-mode'));
       await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
       await sleep(1500);
       ok(await ev(`document.documentElement.scrollWidth <= 390`), `no sideways scroll at 390 px (${await ev('document.documentElement.scrollWidth')})`);
       // ★ beta96 polish: an aircraft's card stays inside a 390 px map (the Leaflet card sat partly off its left edge)
       for (const pick of ['first', 'last']) {
-        await ev(`(() => { const rs = [...${V}.querySelectorAll('#adsbList .adsbRow')].filter(x => !x.classList.contains('nopos')); const r = ${pick === 'first' ? 'rs[0]' : 'rs[rs.length - 1]'}; r && r.click(); return !!r; })()`);
+        await ev(`(() => { const rs = [...${V}.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key^="adsb:"]')].filter(x => !x.classList.contains('nopos')); const r = ${pick === 'first' ? 'rs[0]' : 'rs[rs.length - 1]'}; r && r.click(); return !!r; })()`);
         await sleep(1500);
         const fit = await ev(`(() => { const w = document.querySelector('.vsadsb-pop-dark .leaflet-popup-content-wrapper, .vsadsb-pop-dark .maplibregl-popup-content'); const m = ${V}.querySelector('.trkMapHost');
           if (!w || !m) return 'no card'; const a = w.getBoundingClientRect(), b = m.getBoundingClientRect();
-          const z = ${V}.querySelector('.leaflet-top.leaflet-left .leaflet-control')?.getBoundingClientRect();
-          const underZoom = !!z && a.left < z.right && a.top < z.bottom && a.bottom > z.top;
+          const z = ${V}.querySelector('.leaflet-top.leaflet-left .leaflet-control, .maplibregl-ctrl-top-left .maplibregl-ctrl-group')?.getBoundingClientRect();
+          const underZoom = !!z && a.left < z.right - 1 && a.right > z.left + 1 && a.top < z.bottom - 1 && a.bottom > z.top + 1;   // ★ a real overlap (the zoom keys sit top-RIGHT since the map cards)
           return a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && !underZoom ? 'in'
             : 'out ' + Math.round(a.left) + '–' + Math.round(a.right) + ' × ' + Math.round(a.top) + '–' + Math.round(a.bottom) + ' of ' + Math.round(b.left) + '–' + Math.round(b.right) + ' × ' + Math.round(b.top) + (underZoom ? ' (under the zoom keys)' : ''); })()`);
         ok(fit === 'in', `the ${pick} aircraft's card is inside the 390 px map (${fit})`);
@@ -368,7 +367,7 @@ try {
       await sleep(800);
       await ev(`${V}.querySelector('.exit').click()`);
       ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 8000), 'EXIT ADS-B: the map goes with the mode');
-      ok(await ev(`document.getElementById('adsbChat').parentElement.id === 'adsbChrome' && document.getElementById('adsbChrome').hidden`), '…its chrome parked again');
+      ok(await ev(`document.getElementById('adsbGain').parentElement.id === 'adsbChrome' && document.getElementById('adsbChrome').hidden`), '…its chrome parked again');
     });
     if (fail === failA) fs.rmSync(dirA, { recursive: true, force: true }); else console.log(`   (kept ${dirA})`);
   }

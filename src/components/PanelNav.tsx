@@ -30,6 +30,7 @@ import { Animated, ScrollView, View } from 'react-native';
 import { addKeyListener, type HwKeyEvent } from '../utils/hardwareKeys';
 import { navMove } from '../utils/navMove';
 import { OverlayStack, type OverlayOpts } from '../utils/overlayStack';
+import { revealScrollTarget } from '../utils/navReveal';
 import { inputSource, type InputSource } from '../utils/inputSource';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { focusFor, focusTint, FOCUS_GREEN } from '../constants/decoderTokens';
@@ -619,11 +620,8 @@ export function revealIn(
   host.measureInWindow((_sx: number, svY: number, _sw: number, svH: number) => {
     (v as any).measureInWindow?.((_bx: number, bY: number, _bw: number, bH: number) => {
       if (!(svH > 0)) { estimate(); return; }
-      const rel = bY - svY;                       // distance from the top of the viewport
-      if (rel >= 0 && rel + bH <= svH) return;    // already fully visible — do not jump
-      // Centre it: from across a room, a row nudged just inside the edge is easy to lose.
-      const target = scrollY.current + rel - (svH - bH) / 2;
-      sv.scrollTo({ y: Math.max(0, target), animated: true });
+      const target = revealScrollTarget(bY - svY, bH, svH, scrollY.current);   // ★ src/utils/navReveal.ts (tested)
+      if (target != null) sv.scrollTo({ y: target, animated: true });
     });
   });
 }

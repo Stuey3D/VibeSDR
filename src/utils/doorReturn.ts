@@ -23,6 +23,9 @@ export interface DoorVisit {
   pins: Record<string, string>;
   /** The admin credential proved at the door ('' if none). */
   adminAuthQ: string;
+  /** ★★★ beta97 the map's SERVERS card: the radio to switch to — chosen straight away by the screen that shows the door
+   *  again (no list in between). Absent = the list, as Back always did. */
+  pick?: string;
 }
 
 let visit: DoorVisit | null = null;

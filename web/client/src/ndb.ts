@@ -183,7 +183,7 @@ export interface NdbHooks {
 }
 /** ★ beta96 what NdbView needs of the AIR & SEA map's view (tracks.ts TrackView) — kept narrow. */
 export interface NdbHost {
-  slot(where: 'top' | 'head' | 'over'): HTMLElement;
+  slot(where: 'top' | 'head' | 'over' | 'ctl'): HTMLElement;
   whenMap(cb: (m: { gl: any; lm: any } | null) => void): () => void;
   morePoints: (() => [number, number][]) | null;
   pickAircraft(x: number, y: number, touch: boolean): boolean;
@@ -236,7 +236,8 @@ export class NdbMap {
 interface Track { words: NdbCopy[]; snr: [number, number][] }
 
 /** The pieces moved into the map (by id) and where each goes. */
-const PIECES: Array<[string, 'top' | 'head' | 'over']> = [['ndbRings', 'top'], ['ndbUnheard', 'top'], ['ndbTiles', 'head'], ['ndbTools', 'head'], ['ndbList', 'head'], ['ndbListFoot', 'head'], ['ndbCard', 'over']];
+// ★★★ beta96 map cards: RINGS / UNHEARD are map controls — the MAP card's ('ctl'), not the bar
+const PIECES: Array<[string, 'top' | 'head' | 'over' | 'ctl']> = [['ndbRings', 'ctl'], ['ndbUnheard', 'ctl'], ['ndbTiles', 'head'], ['ndbTools', 'head'], ['ndbList', 'head'], ['ndbListFoot', 'head'], ['ndbCard', 'over']];
 
 export class NdbView {
   private last: NdbReport | null = null;

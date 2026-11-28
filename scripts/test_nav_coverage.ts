@@ -10,7 +10,7 @@
 // ★ The audit's SHOULD list is not done yet, so each file has a BASELINE of known unregistered touchables. The test fails
 //   when a file goes ABOVE its baseline (a new silent skip) or when a new nav file appears with any; when a file drops
 //   BELOW its baseline it says so, so the number is lowered and cannot creep back.
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 let fails = 0;
@@ -149,23 +149,24 @@ for (const f of ['src/components/NavCard.tsx', 'src/components/FieldPopupNav.tsx
 //    TrackLiveList's (RangeKey / Row — useNavButton + NavRing, counted above).
 {
   const mo = readFileSync(path.join(root, 'src/components/MapOverlay.tsx'), 'utf8');
-  const tl = readFileSync(path.join(root, 'src/components/TrackLiveList.tsx'), 'utf8');
-  const dk = readFileSync(path.join(root, 'src/components/DigiMapKeys.tsx'), 'utf8');
-  ok(/const amNav = usePanelNav\(visible && amOn, \{ flat: true \}\)/.test(mo), 'AMATEUR: the map owns one pad order while its list is up');
-  ok(/<TrackLiveList title="STATIONS"[^]*?tabs=\{amList\.tabs\}[^]*?nav=\{\{ navCtx: amNav\.navCtx/.test(mo), 'AMATEUR: the tabs and rows join it (TrackLiveList, nav)');
-  ok(/navCtx=\{amOn && amKeysNav \? amKeysNav : undefined\}/.test(mo), 'AMATEUR: the window keys join the same order');
-  ok(/usePanelNav\(!nb\.modal && !p\.nav,/.test(tl) && /const \{ navCtx, scrollProps \} = p\.nav \?\? own;/.test(tl), 'TrackLiveList: a shared order replaces its own (never two owners)');
-  ok(/usePanelNav\(!p\.navCtx,/.test(dk) && /const navCtx = p\.navCtx \?\? own\.navCtx;/.test(dk), 'DigiMapKeys: a shared order replaces its own');
-  ok(/accessibilityRole="tablist"[^]*?\{tabs\.map\(\(t\) => <RangeKey /.test(tl) && /function RangeKey[^]*?useNavButton\(onPress\)/.test(tl), 'TrackLiveList: every tab is a pad key');
-  // ★★ beta96 the MESH ROUTE key (the card's ROUTE lives in the map page, out of the pad's reach): a ToggleKey in its own NavRow
-  ok(/\{open && !!p\.route && \(\s*<NavRow>\s*<View style=\{s\.ranges\}>\s*<ToggleKey /.test(tl) && /function ToggleKey[^]*?useNavButton\(onPress\)/.test(tl),
-     'TrackLiveList: the mesh ROUTE key is a pad key (ISM and AMATEUR maps)');
+  // ★★★ beta97 the AMATEUR map is on the MAP CARDS: ONE pad order (MapChrome's) over its chips, cards and LIST — the old list
+  //     (TrackLiveList, DELETED) and the window keys' shared order are gone
+  ok(/\{amCards && !!amList && !!pageUri && !packError && \(\s*<MapChrome /.test(mo) && !/amNav|amKeysNav/.test(mo), 'AMATEUR: the MAP CARDS own its one pad order (no second owner)');
+  ok(/tabs: amList\.tabs, tab: amList\.tab, onTab: \(id\) => setAmPick\(id as AmLayer\)/.test(mo), 'AMATEUR: the tabs and rows are the LIST drawer\'s (pad keys)');
+  ok(!existsSync(path.join(root, 'src/components/DigiMapKeys.tsx')) && /\{!isTrkKind && !amCards && !!pageUri && !packError && \(kind === 'digi' \|\| kind === 'cw' \|\| kind === 'hfdl'\) && \(\(\) => \{/.test(mo),
+     'every other map (on-device FT8, UberSDR spots / CW / HFDL) on the MAP CARDS too — DigiMapKeys DELETED');
+  ok(/route: amSel && amateur\?\.mesh\.some/.test(mo) && /function ListDrawer/.test(readFileSync(path.join(root, 'src/components/MapChrome.tsx'), 'utf8')), 'the mesh ROUTE key is a pad key in the LIST drawer (ISM and AMATEUR maps)');
   // ★★ beta96 (Stuart 11-26) the NODES list's NEAREST | LATEST key: RangeKeys in the tabs' NavRow, handed through by MapOverlay,
   //    given by the ISM live map and the gallery's map
   const sd = readFileSync(path.join(root, 'src/screens/SDRScreen.tsx'), 'utf8');
-  ok(/\{open && \(tabs\.length > 0 \|\| !!p\.sort\) && \(\s*<NavRow>/.test(tl) && /!!p\.sort && \(\['nearest', 'latest'\] as const\)\.map\(\(x\) => <RangeKey /.test(tl),
-     'TrackLiveList: the sort key (NEAREST | LATEST) is a pad key in its own row');
-  ok(/sort=\{trk\.sort\} onSort=\{trk\.onSort\} sortWhat=\{trk\.sortWhat\}/.test(mo), 'MapOverlay: the list is handed the sort key');
+  // ★★★ beta97 the track maps' LIST is the MAP CONTROL CARDS' drawer (MapChrome): ONE sort toggle in its foot bar, a pad key
+  const mc = readFileSync(path.join(root, 'src/components/MapChrome.tsx'), 'utf8');
+  ok(/pane === 'list' && !!L\.sort && \(\s*<ChipKey /.test(mc) && /L\.onSort\?\.\(L\.sort === 'nearest' \? 'latest' : 'nearest'\)/.test(mc),
+     'MapChrome LIST: the sort (NEAREST | LATEST) is ONE toggle, a pad key in the foot bar');
+  ok(/sort: t\.sort \?\? null, onSort: t\.onSort/.test(mo), 'MapOverlay: the drawer is handed the sort key');
+  ok(/const nav = usePanelNav\(p\.visible, \{ flat: true, onBack:/.test(mc) && /if \(card\) \{ setCard\(null\); return true; \}/.test(mc) && /if \(listMax\) \{ setListMax\(false\)/.test(mc),
+     'MapChrome: one pad order; BACK folds a card, then un-maximises LIST, then passes on (the map\'s exit)');
+  ok(/addKeyListener\('down'/.test(mc) && /k === 'ZoomIn'/.test(mc) && /p\.onZoom\(1\)/.test(mc), 'MapChrome: the jog / right stick zooms the map (tuning only through TUNE)');
   ok((sd.match(/sort: meshSortOffered\(meshSort, (trkRx|rx)\), onSort: meshSortSet, sortWhat: 'nodes'/g) || []).length === 2,
      'SDRScreen: the ISM live map and the gallery map both give the NODES sort key');
 }

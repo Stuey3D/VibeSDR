@@ -10,6 +10,7 @@
  */
 import React from 'react';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
+import { MODE_ICONS } from '../utils/modeIcons';
 
 export type SectionIconName =
   | 'audio' | 'nr' | 'decoder' | 'station' | 'spectrum' | 'controls'
@@ -59,8 +60,10 @@ function glyph(
       return <>{p('M4 6h16', 4.4)}{p('M8.5 13h11', 2.8)}{p('M12.5 18.4h7', 2.8)}</>;
     case 'admin':      // wrench
       return p('M15.5 4.5a4 4 0 0 0-5 5L4 16v4h4l6.5-6.5a4 4 0 0 0 5-5l-2.8 2.8-2.2-.6-.6-2.2 2.6-2.8Z');
-    case 'instance':   // network nodes
-      return <><Circle cx={6} cy={7} r={2} fill="none" stroke={color} strokeWidth={1.7} /><Circle cx={18} cy={7} r={2} fill="none" stroke={color} strokeWidth={1.7} /><Circle cx={12} cy={18} r={2} fill="none" stroke={color} strokeWidth={1.7} />{p('M8 7h8M7.2 8.7 10.8 16.3M16.8 8.7 13.2 16.3')}</>;
+    case 'instance':   // network nodes — ★ beta96 the ONE servers glyph (modeIcons.ts MODE_ICONS.servers), the web map's too
+      return <>{MODE_ICONS.servers.map((q, i) => 'c' in q
+        ? <Circle key={i} cx={q.c[0]} cy={q.c[1]} r={q.c[2]} fill={q.fill ? color : 'none'} stroke={q.fill ? undefined : color} strokeWidth={q.w ?? 1.7} />
+        : 'd' in q ? <React.Fragment key={i}>{p(q.d, q.w ?? 1.7)}</React.Fragment> : null)}</>;
     case 'hardware':   // IC chip with pins
       return <><Rect x={6.5} y={6.5} width={11} height={11} rx={1.5} fill="none" stroke={color} strokeWidth={1.7} />{p('M9.5 6.5V3.5M14.5 6.5V3.5M9.5 20.5v-3M14.5 20.5v-3M6.5 9.5h-3M6.5 14.5h-3M20.5 9.5h-3M20.5 14.5h-3')}</>;
     case 'dab':        // broadcast arcs

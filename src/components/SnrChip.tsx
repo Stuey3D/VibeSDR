@@ -9,12 +9,14 @@ import { StyleSheet, Text, type StyleProp, type TextStyle } from 'react-native';
 import { DECODER_FONT } from './DecoderShell';
 import { snrChip, snrTokenParts, SNR_LOG_MAX_CHARS, SNR_LOG_MODE, type SnrMode } from '../utils/snrColour';
 
-export function SnrChip({ mode, db, small, bare }: { mode: SnrMode; db: number | null | undefined; small?: boolean; bare?: boolean }) {
+/** ★★★ beta97 `size` (Stuart, build 587 on the Mac: "the dB reading in the list is tiny"): the chip's font in points, for a
+ *  list drawn at a scale (the map LIST: its secondary text's size × the chrome's scale); omitted = the fixed sizes as before. */
+export function SnrChip({ mode, db, small, bare, size }: { mode: SnrMode; db: number | null | undefined; small?: boolean; bare?: boolean; size?: number }) {
   const c = snrChip(mode, db);
   if (!c) return null;
   return (
     <Text accessible accessibilityRole="text" accessibilityLabel={c.title} numberOfLines={1}
-          style={[st.chip, small && st.small, bare && st.bare, { backgroundColor: c.bg, color: c.fg }]}>{bare ? c.text.replace(/ dB$/, '') : c.text}</Text>
+          style={[st.chip, small && st.small, bare && st.bare, size ? { fontSize: size, lineHeight: Math.round(size * 1.3), paddingHorizontal: Math.round(size * 0.45), borderRadius: Math.round(size * 0.3) } : null, { backgroundColor: c.bg, color: c.fg }]}>{bare ? c.text.replace(/ dB$/, '') : c.text}</Text>
   );
 }
 

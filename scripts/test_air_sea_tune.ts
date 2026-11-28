@@ -4,7 +4,7 @@
 // 8+ MS/s (the covered families collapse to one row), an Airspy HF+ (0.5 kHz–31 MHz + 60–260 MHz, ~768 kS/s: NDB, ACARS, VDL2,
 // AIS, the VOR scan — never ADS-B or sondes, which have no capability field there).
 //   npx tsx scripts/test_air_sea_tune.ts
-import { airSeaTuneRows, airSeaTuneChip, avBandsShown, sondeBandsShown, mhz, tuneRowMode, TUNE_ICON_PATH, type AirSeaTuneSource } from '../src/services/airSeaTune';
+import { airSeaTuneRows, airSeaLiveModes, airSeaTuneChip, avBandsShown, sondeBandsShown, mhz, tuneRowMode, TUNE_ICON_PATH, type AirSeaTuneSource } from '../src/services/airSeaTune';
 import { mapSharedLine } from '../src/services/dialChat';
 import { parseAvBands } from '../src/services/aviation';
 import { readFileSync } from 'node:fs';
@@ -83,6 +83,30 @@ console.log('── every language has the exit words ──');
 for (const l of ['en', 'de', 'es', 'fr', 'it', 'nl', 'pl', 'pt-BR']) {
   const j = JSON.parse(readFileSync(new URL(`../i18n/chat/${l}.json`, import.meta.url), 'utf8'));
   ok(['bannerFreeExit', 'bannerAskExit', 'bannerLockedExit'].every((k) => typeof j.chrome?.[k] === 'string' && j.chrome[k].length > 2), `${l}: FREE TO EXIT / ASK BEFORE EXITING / LOCKED words`);
+}
+
+console.log('── ★★★ beta97 AIR & SEA LIVE in TUNES THE RADIO ITSELF: the app == the web for the same radio ──');
+{
+  // the web's rule, read from its source (main.ts airSeaModes / asAllowed): the same modes, the same order, the same gates
+  const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  const wm = /function airSeaModes\(\): string\[\] \{([^]*?)\n\}/.exec(web)?.[1] ?? '';
+  const webOrder = [...wm.matchAll(/out\.push\('([a-z]+)'\)/g)].map((m) => m[1]);
+  ok(webOrder.join() === 'adsb,av,vormap,ndb,ais,maritime,sd', `the web's order: ${webOrder.join(' · ')}`);
+  ok(/return !!cap\?\.ok && \(!only \|\| only === m\);/.test(web) && /return airSeaModes\(\)\.length \|\| airSeaOn\(\) \? \{ ok: true, why: '' \} : null;/.test(web),
+     'the web offers the key when any mode is ok under the only-mode rule (or a mode is on)');
+  // the Lenovo's SDRplay RSP1A as its vibeserver.json says (8 MS/s: ADS-B, the datalink, the VOR scan, NDB, AIS + DSC, sondes)
+  const rsp: AirSeaTuneSource = { adsb: { ok: true, why: '' }, avdata: { ok: true, why: '' }, vormap: { ok: true, why: '' }, ndb: { ok: true, why: '' },
+                                  ais: { ok: true, why: '' }, aisDsc: true, sondes: { ok: true, why: '' }, only: '' };
+  ok(airSeaLiveModes(rsp).join() === 'adsb,av,vormap,ndb,ais,maritime,sd', `RSP1A: every air / sea mode, in the web's order (${airSeaLiveModes(rsp).join(' · ')})`);
+  const hf: AirSeaTuneSource = { avdata: { ok: true, why: '' }, vormap: { ok: true, why: '' }, ndb: { ok: true, why: '' }, ais: { ok: true, why: '' }, aisDsc: false, only: '' };
+  ok(airSeaLiveModes(hf).join() === 'av,vormap,ndb,ais', 'Airspy HF+: no ADS-B, no sondes (no capability field there)');
+  ok(airSeaLiveModes({ ...rsp, adsb: { ok: false, why: 'too slow' }, avdata: undefined, vormap: undefined, ndb: undefined, ais: undefined, sondes: undefined }).length === 0,
+     'every mode refused: no key (a refused mode is not drawn unless on)');
+  ok(airSeaLiveModes({ ...rsp, only: 'ais' }).join() === 'ais,maritime', 'an only-mode server: only its mode');
+  // the app offers the key by this rule, never by a list computed while the client was missing (the build-586 fault)
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  ok(/airSeaAvail: asMenuOne && \(airSeaLiveModes\(/.test(sdr) && /const vibeHere = !IS_APPLE_TV && \(\(route\.params\.serverType \?\? 'ubersdr'\) === 'vibeserver' \|\| !!\(client\.current as any\)\?\.isVibe\);/.test(sdr)
+     && /\[vibeHere, adsbCap, avCap, vmCap, ndbCap, aisCap, sdCap,/.test(sdr), 'the app: the key from the web\'s rule; the TUNE rows recomputed once it is known to be a VibeServer');
 }
 
 console.log(`test_air_sea_tune: ${pass} passed, ${fail} failed`);

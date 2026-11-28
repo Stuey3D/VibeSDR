@@ -98,6 +98,9 @@ await session('ais', AIS, 162000000, 96100000, 'wfm', async ({ ev, send, shot, u
   console.log('   screenshot', await shot('ais'));
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1200);
+  // ★★★ beta96 map cards: a phone-width window opens with no card — the LIST card is opened, as a person would
+  await ev(`(() => { const b = document.querySelector('.trkView:not([hidden]) [data-cbtn="list"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`);
+  await sleep(500);
   const r = JSON.parse(await ev(`JSON.stringify(document.querySelector('.trkView:not([hidden]) .trkList').getBoundingClientRect())`));
   ok(r.left >= 5 && r.right <= 390 - 5 && r.bottom <= 844, `the list fits a phone: ${Math.round(r.left)}–${Math.round(r.right)}, bottom ${Math.round(r.bottom)}`);
   const sw = await ev(`document.documentElement.scrollWidth`);

@@ -93,6 +93,22 @@ export function airSeaTuneRows(s: AirSeaTuneSource, live: AirSeaLive): AirSeaTun
   return rows;
 }
 
+/** ★★★ beta97 AIR & SEA LIVE's modes — the WEB's rule, step for step (main.ts airSeaModes / asAllowed): each mode whose
+ *  capability says ok, under the only-mode rule, in the web's order. The key is offered when this has anything (or a mode
+ *  is on). One rule so the app's TUNES THE RADIO ITSELF matches the web's for the same server and radio (Stuart, build 586:
+ *  "AIR & SEA missing from TUNES THE RADIO ITSELF in the app too"). */
+export function airSeaLiveModes(s: AirSeaTuneSource): string[] {
+  const ok = (c: TuneCap, m: string) => !!c?.ok && (!s.only || s.only === m);
+  const out: string[] = [];
+  if (ok(s.adsb, 'adsb')) out.push('adsb');
+  if (ok(s.avdata, 'avdata')) out.push('av');
+  if (ok(s.vormap, 'vormap')) out.push('vormap');
+  if (ok(s.ndb, 'ndb')) out.push('ndb');
+  if (ok(s.ais, 'ais')) { out.push('ais'); if (s.aisDsc) out.push('maritime'); }
+  if (ok(s.sondes, 'sondes')) out.push('sd');
+  return out;
+}
+
 /** The chip's words: "TUNE · VDL2 136.700–136.975 MHz" (the live row), or "TUNE" when nothing here is live. */
 export function airSeaTuneChip(rows: AirSeaTuneRow[]): string {
   const l = rows.find((r) => r.live);

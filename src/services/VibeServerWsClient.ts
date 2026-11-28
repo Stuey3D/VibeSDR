@@ -1544,6 +1544,14 @@ export abstract class VibeServerWsClient {
   }
   private specOpenAt = 0;
 
+  /** ★★★ beta97 MAP-TEMPLATE rule 4: a full-screen LIVE map covers the waterfall — tell the server to stop (or restart) this
+   *  listener's spectrum frames ({"type":"spec","on":0|1}, the shim's specPaused). The socket stays open: every report
+   *  (ADS-B, AIS, the dial) still rides on it. Repeated on a reconnect so a new socket never forgets it. */
+  private specWant = true;
+  specOn(on: boolean) {
+    this.specWant = on;
+    this.sendSpectrum({ type: 'spec', on: on ? 1 : 0 });
+  }
   resumeSpectrum() {
     this.pausedByApp = false;
     if (this.destroyed) return;
@@ -1881,6 +1889,8 @@ export abstract class VibeServerWsClient {
         this._abNotify();
       }, RESYNC_MS + 50);
       this.dbg('Spectrum WS open');
+      // ★★★ beta97 a live map is still covering the waterfall: the new socket is told too (specOn)
+      if (!this.specWant) this.sendSpectrum({ type: 'spec', on: 0 });
       this.callbacks.onConnect();
       /* ★★★ THE VIEW IS NOT RESTORED HERE ANY MORE — IT WAITS FOR THE SERVER'S FIRST `config`
        *     (2026-09-22). This sent our own zoom the instant the socket opened, before we could

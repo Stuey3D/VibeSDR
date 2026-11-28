@@ -188,8 +188,22 @@
       attributionControl: { compact: true }, fadeDuration: 0,
       renderWorldCopies: true,          // ★ the world repeats sideways, as worldOffsets() drew by hand
       maxPitch: 0, dragRotate: false, pitchWithRotate: false, touchPitch: false,
+      /* ★ MEMORY (Stuart 14:06: Safari at 1.9 GB with only the map open): MapLibre keeps ~5 screens of tiles per source
+       *  by default — on a full-screen Retina window hundreds, the relief's 512-px rasters among them. A fixed cap per
+       *  source, and never more than 2× pixels (a 3× phone draws 2.25× fewer for the same sharpness at map scale). */
+      maxTileCacheSize: 60,
+      pixelRatio: Math.min(2, global.devicePixelRatio || 1),
     });
     map.touchZoomRotate.disableRotation();
+    /* ★ a layer may ask for one of OUR icons before its PNG has arrived (Stuart 14:10: 'Image "vs-port" could not be
+     *  loaded'): an empty stand-in at once, the real one in its place when it lands; any other missing image is
+     *  logged once (window.__vsMissingImages — the e2e fails on it) */
+    const placeholder = new Set(), missingSeen = new Set();
+    map.on('styleimagemissing', (e) => {
+      const id = e && e.id; if (!id || map.hasImage(id)) return;
+      if (ICONS.includes(id)) { placeholder.add(id); try { map.addImage(id, { width: 1, height: 1, data: new Uint8Array(4) }, { sdf: true }); } catch (x) { /* raced */ } return; }
+      if (!missingSeen.has(id)) { missingSeen.add(id); console.warn('vibemapgl: the style asked for image "' + id + '", which no one provides'); (global.__vsMissingImages = global.__vsMissingImages || []).push(id); }
+    });
     /* ★★ SAFARI'S TRACKPAD PINCH ZOOMS THE MAP, NOT THE PAGE. On a Mac, Safari reports a pinch as its own
      *  gesturestart/gesturechange/gestureend events (Chrome sends ctrl+wheel, which MapLibre handles);
      *  MapLibre does not listen for them, so Safari zoomed the WHOLE PAGE (Stuart, 2026-09-28, the spots
@@ -322,10 +336,11 @@
       if (attrib) attrib.classList.remove('maplibregl-compact-show');
       // ★ The icons are white SDFs: the style tints them (airports amber, heliports grey, aircraft by age).
       for (const n of ICONS) {
-        if (map.hasImage(n)) continue;
+        if (map.hasImage(n) && !placeholder.has(n)) continue;
         const buf = await o.load(base + 'icons/' + n + '.png', 'arraybuffer');
         if (!buf) continue;
         const bmp = await createImageBitmap(new Blob([buf], { type: 'image/png' }));
+        if (placeholder.has(n)) { placeholder.delete(n); try { map.removeImage(n); } catch (e) { /* gone */ } }
         map.addImage(n, bmp, { sdf: true, pixelRatio: 2 });
       }
       installAirportNames();

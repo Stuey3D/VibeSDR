@@ -123,7 +123,7 @@ try {
   ok(await until(`document.querySelectorAll('.vtl-mk').length >= ${nSites}`, 15000), `a marker per site: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
   await sleep(4000);
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
-  ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
+  ok(arcs === 0, `no line from the receiver to the sites (Stuart 11-27: "loose the lines") — ${arcs}`);
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => (b.textContent.slice(0, b.textContent.length - (b.querySelector('.n')?.textContent.length || 0))) + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === 'NAVTEX:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: NAVTEX (stations) · WARNINGS · WEATHER · SEA AREAS (2026-11-02; beta96 the AIR & SEA map names; read without SHOW\'s count), all on');
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
@@ -335,6 +335,9 @@ try {
   await ev(`${view}.querySelector('[data-rng="all"]').click()`);
   ok(await until(`!!document.querySelector('.vtl-mk.vtl-pulse') && window.__navMarker === 1`, 12000), 'LIVE: a new warning appears pulsing, without the map being reloaded');
   // 7 DAYS by keyboard
+  // ★★★ beta96 map cards: the time filter is in the MAP card — opened first (a hidden key cannot take focus)
+  await ev(`(() => { const b = ${view}.querySelector('[data-cbtn="map"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`);
+  await sleep(300);
   await ev(`${view}.querySelector('[data-rng="7d"]').focus()`);
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });

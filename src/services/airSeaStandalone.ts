@@ -11,7 +11,7 @@
  */
 import { AV_EMPTY, AV_SRC, avCompose, avHave, avNowRule, avMerge, type AvLayers, type SharedAircraft } from './aviationMap';
 import { liveChrome, livePresent, liveChips, liveProfile, liveTabs, liveTabPick, aircraftOrder, msgFeedUpdate, msgFilter, avLayerOf, shipLayerOf,
-         AV_ID, SHIP_ID, TAB_LABEL, LIVE_ROW_CAP, type LiveLayerId, type LiveTab, type AircraftSort, type LiveMsg } from './liveMaps';
+         AV_ID, SHIP_ID, TAB_LABEL, LIVE_ROW_CAP, LIVE_CHIP_COLOUR, type LiveLayerId, type LiveTab, type AircraftSort, type LiveMsg } from './liveMaps';
 import { shipLayersFor, shipToggle, shipLayersPresent, shipOn, shipShips, shipItems, shipRows, shipStatus,
          dscInRange, dscPinItems, dscPinRows, dscStatus, type ShipLayers, type ShipLayerId, type StoredShips, type DscPin } from './shippingMap';
 import { navItems, navListRows, navStatus, navName, NAV_RANGES, NAV_RANGE_HINT, type NavReport } from './navtexMap';
@@ -157,7 +157,11 @@ export function composeAirSeaStandalone(st: AirSeaState, h: AirSeaHandlers, msgs
     empty: tab === 'aircraft' ? AV_EMPTY : tab === 'messages' ? 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs \u2014 on any radio of this server.' : tab === 'ships' ? AIS_EMPTY : 'Nothing here in this time.',
     note: building,
     credit: tab === 'aircraft' && !!av.credit,
-    toggles: liveChips(present, live).map((c) => ({ id: c.id, label: c.label, words: c.words })),
+    /* ★★★ beta97 LAYERS' counts and colour dots on the viewer too (Stuart, build 586: "missing their counts") — what each layer
+     *  holds now; AIRPORTS / SEA AREAS carry none (they are reference layers) */
+    toggles: liveChips(present, live).map((c) => ({ id: c.id, label: c.label, words: c.words, colour: LIVE_CHIP_COLOUR[c.id],
+      n: c.id === 'airports' || c.id === 'areas' ? undefined : ({ ...have, ships: shipHave.ships, dsc: shipHave.dsc, navst: shipHave.stations,
+        warnings: shipHave.warnings, weather: shipHave.weather } as Partial<Record<LiveLayerId, number>>)[c.id] })),
     toggled,
     onToggle: (id: string, v: boolean) => {
       const a = avLayerOf(id as LiveLayerId), sh = shipLayerOf(id as LiveLayerId);

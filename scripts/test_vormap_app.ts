@@ -146,12 +146,12 @@ const vsc = read('src/services/VibeServerClient.ts'), wsc = read('src/services/V
 ok(/vormap\(on: boolean\) \{\n    if \(this\.askBlocked\(\)\) return;/.test(vsc) && /case 'vormap': \{/.test(vsc) && /case 'vormap_error':/.test(vsc), 'app: sent behind ask-before-tuning; report, off, refusal');
 ok((wsc.match(/this\.ndbHeld \|\| this\.vormapHeld/g) || []).length >= 5, 'app: every hold NDB has');
 ok(/vormap:    j\.vormap === true \|\| j\.vormap === false/.test(types), 'app: the capability\'s three states from vibeserver.json');
-ok(/vormapAvail: !asMenuOne && \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\.current as any\)\?\.isVibe && !IS_APPLE_TV,/.test(app) && /const asMenuOne = !IS_APPLE_TV && /.test(app),
+ok(/vormapAvail: !asMenuOne && \(vmCap\?\.ok === true \|\| vmOn\) && !!\(client\.current as any\)\?\.isVibe && !IS_APPLE_TV,/.test(app) && /const asMenuOne = vibeHere;/.test(app) && /const vibeHere = !IS_APPLE_TV && /.test(app),
    'app: its own key only where AIR & SEA LIVE does not stand in (never), and never on the Apple TV (no maps), as NDB — beta96 a TUNE row');
 ok((app.match(/onlyRefuses\('vormap'/g) || []).length >= 2 && /askLocked\(dialStateRef\.current\)\) \{ setVmMapOpen\(false\); askGate\(\); return; \}/.test(app),
    'app: EXIT and the Mode key refuse to leave the only mode; ask before tuning');
 ok(/case 'vormap': return \{ id, node: vmShown \? vmKey\(\) : null \};/.test(ms) && /addLegend\('VOR MAP', 'vormap'\)/.test(ms), 'app: the VOR MAP key in TUNES THE RADIO ITSELF, beside NDB');
-ok(/'EXIT VOR MAP'|EXIT VOR MAP<\/button>/.test(mo) && /KIND==='vormap'/.test(mo) && /kind === 'vormap' \? 'NAVAIDS'/.test(mo), 'app: its map — EXIT VOR MAP, the shared track layer, the NAVAIDS list');
+ok(/vormap: 'EXIT VOR MAP'/.test(mo) && /KIND==='vormap'/.test(mo), 'app: its map — EXIT VOR MAP (the cards\' ✕), the shared track layer');
 ok(/audioQuietFor\(\{ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn, vormap: vmOn \}\)/.test(app), 'app: nothing to hear — the audio session let go, as NDB');
 const setup = read('android/app/src/main/cpp/vibe_setup_page.h'), sms = read('src/screens/ServerModeScreen.tsx');
 ok(/\{ id: "vormap", label: "VOR \/ ILS map \(the whole navaid band, swept\)" \}/.test(setup) && /\{ id: 'vormap', label: 'VOR \/ ILS map \(the whole navaid band, swept\)' \}/.test(sms),
