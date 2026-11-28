@@ -356,7 +356,8 @@ try {
          'beta90: the time window keys (1H 24H 7D 30D ALL) — the server keeps stations — and beta96 THIS SESSION (a map on a radio)');
       ok(await mev(`document.querySelector('.mDock[data-dock="layers"]').hidden === true`), 'beta90: one layer (no APRS here) draws no LAYERS chip');
       ok(/VibeSDR — Amateur Map/.test(await mev(`document.title`) || ''), 'beta90: titled Amateur Map (the DIGI MODES MAP grown, beta96 adcc50806)');
-      const sc = await mev(`[...document.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+      // ★ b97-integrate: the scale is the MAP CARDS' chip (.mScaleBody) now — no MapLibre / Leaflet scale control (as test-web-ais-aprs, 9f8ae2c9b)
+      const sc = await mev(`[...document.querySelectorAll('.mScaleBody, .maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
       ok(/km/.test(sc || ''), `beta90: a scale bar (${sc})`);
       const st = await fetch(`http://127.0.0.1:${port}/vibeserver/stations.json?window=1h`).then((r) => r.json()).catch(() => null);
       ok(st && st.total >= 3 && st.stations.every((x) => /^[A-Z0-9/]+$/.test(x.call) && (x.src & 2)), `beta90: /vibeserver/stations.json holds the stations heard, from a listener (${st && st.total} stations, src ${st && [...new Set(st.stations.map((x) => x.src))].join(',')})`);
