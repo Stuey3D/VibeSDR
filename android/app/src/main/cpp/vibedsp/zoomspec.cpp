@@ -109,9 +109,14 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
     //     hop: 20 fps becomes 13 (Stuart, 2026-08-03, measured at 2/3 of target).
     //     ★ winPerFrame_ is also how many windows get AVERAGED into each frame, so a wider hop cap
     //       buys quieter frames rather than being wasted.
+    const int oldWpf = winPerFrame_, oldHop = hop_;
     winPerFrame_ = std::max(1, (int)((emitStride_ + (fftN_ / 2) - 1) / (fftN_ / 2)));
     hop_         = std::max(1, (int)(emitStride_ / winPerFrame_));
-    winCount_    = 0;
+    /* ★★★ b98: A PAN IS NOT A NEW FRAME CLOCK. Same decimation and same rate = the same window count to the next frame,
+     *     so it is KEPT. Resetting it on every configure() put the next frame a whole frame interval after each pan:
+     *     a view re-pointed every block (a moving centre — test-unlocked-bank, 1 kHz steps every 50 ms) lost one frame in
+     *     ten at 20 fps and EVERY frame at 10 fps. Only a change of shape or of rate restarts the count. */
+    if (!(sameShape && oldWpf == winPerFrame_ && oldHop == hop_)) winCount_ = 0;
 
     if (method_ == Method::Direct) {
         nco_.setFreq(offsetHz_ / sampleRate_);   // mix the view centre down to DC
