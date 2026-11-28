@@ -31,7 +31,7 @@ const P = (ids, screen, engine) => ({ ids, status: 'ports', screen, engine });
 const N = (ids, why) => ({ ids, status: 'not', why });
 const TABLE = [
   // ── Pocket / Linux machine maintenance: the phone IS the machine and has its own screens for these ──
-  N(['claimPass', 'claimPass2', 'claimPin', 'pass'], 'the Setup page\'s own sign-in and first-run claim; the phone\'s screen is on the device itself'),
+  N(['claimPass', 'claimPass2', 'claimPin', 'pass', 'adminLapsePass'], 'the Setup page\'s own sign-in and first-run claim; the phone\'s screen is on the device itself'),
   // ★★★ beta96 b96-serverchoice: the one-time SETUP CODE sign-in (vibe_setup_code.h) — the page's door for setting a TV / phone up from
   //     another device; on the device itself the phone's screen IS the setup (and sets the admin password and remote access there).
   N(['setupCode', 'codePw', 'codePw2', 'codeRemote'], 'the one-time setup code\'s sign-in, first admin password and Finish (remote access) — the page\'s door for setting a TV or phone up from another device; on the device the screen itself is the setup and sets these'),
