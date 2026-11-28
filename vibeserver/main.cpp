@@ -88,6 +88,7 @@
 #include "vibe_bgdecode_band.h"     // ★ …and where a Band digital-spots VFO's slice goes (the registry is linked here)
 #include "vibe_gallery.h"           // ★★ V12 the gallery's disk figures for the setup page
 #include "vibe_log_radio.h"         // ★★ V12 beta92 which radio heard each log entry (the logs' RADIO filter)
+#include "vibe_bg_budget.h"         // ★★★ b97 the background priority list (sdr-change bgorder)
 #include "vibe_bands.h"
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
 #include "vibe_benchmark_dab.h"   // ★ the server benchmark and its DAB rows — see setBenchmarkHandlers below
@@ -3535,6 +3536,9 @@ int main(int argc, char** argv) {
               if (!vibe::beast::parseConfig(next.adsbShare, fc, fe)) { err = "Share ADS-B with flight trackers \xe2\x80\x94 " + fe; return false; } }
             { std::vector<vibe::feeds::SourceCfg> fv; std::string fe;
               if (!vibe::feeds::parseSources(next.aircraftFeeds, fv, fe)) { err = "Aircraft feeds \xe2\x80\x94 " + fe; return false; } }
+            // ★★★ b97 the background priority list has its own card and its own save (sdr-change "bgorder"): a settings save
+            //     from a page (or an app) that never saw the key must not put the default back — the file's copy stays.
+            { vsconfig::ServerConfig disk; std::string de; if (vsconfig::loadServer(g_configPath, disk, de)) next.bgPriority = disk.bgPriority; }
             if (!vsconfig::saveServer(g_configPath, next, err)) return false;
             g_serverConfig = next;
             // ★★ V12 the gallery is the machine's — every process applies it from the saved file.
@@ -3835,6 +3839,30 @@ int main(int argc, char** argv) {
             vsconfig::ServerConfig next; std::string err;
             if (!vsconfig::loadServer(g_configPath, next, err)) next = g_serverConfig;
 
+            /* ★★★ b97-cpu-budget THE BACKGROUND PRIORITY LIST (vibe_bg_budget.h). "bgstate" = the card's read (the order, each
+             *  row's live state across the box, the power words); "bgorder" = the owner's new order, saved to the file and
+             *  to the live copy every radio process reads at its next health tick — no restart, nobody dropped. */
+            if (action == "bgstate") return LocalSdrShim::bgPriorityJson();
+            if (action == "bgorder") {
+                std::string ids;
+                const size_t a = body.find("\"order\"");
+                const size_t lb = a == std::string::npos ? a : body.find('[', a);
+                const size_t rb = lb == std::string::npos ? lb : body.find(']', lb);
+                if (rb == std::string::npos) return fail(400, "no order given");
+                const std::string arr = body.substr(lb + 1, rb - lb - 1);
+                if (arr.size() > 200) return fail(400, "too long");
+                for (size_t p = arr.find('"'); p != std::string::npos; ) {
+                    const size_t q = arr.find('"', p + 1);
+                    if (q == std::string::npos) break;
+                    ids += (ids.empty() ? "" : ",") + arr.substr(p + 1, q - p - 1);
+                    p = arr.find('"', q + 1);
+                }
+                next.bgPriority = vibe::bg::budget::parseOrder(ids).str();
+                if (!vsconfig::saveServer(g_configPath, next, err)) return fail(400, err);
+                g_serverConfig = next;
+                LocalSdrShim::setBgPriority(next.bgPriority, true);
+                return LocalSdrShim::bgPriorityJson();
+            }
             if (action == "order") {
                 // ★ Display only: /vibeserver/radios re-reads the file on every request, so the new
                 //   order is live at once — no restart, nobody dropped.
@@ -5828,6 +5856,8 @@ int main(int argc, char** argv) {
         LocalSdrShim::setDecoderSlotDir(handoffDir());
         LocalSdrShim::setDecoderMax(o.decoderMax >= 0 ? o.decoderMax : g_serverConfig.decoderMax);
         LocalSdrShim::setRttySkimWorkers(g_serverConfig.rttySkimWorkers);   // ★ V12 the RTTY skimmer's search workers
+        // ★★★ b97 the background priority list; the front door also writes the live copy the radios read (vibe_bg_budget.h)
+        LocalSdrShim::setBgPriority(g_serverConfig.bgPriority, g_amFrontDoor.load());
         // ★ Per radio, like everything else here: one machine may run a shared FM-DX dial and a
         //   private HF receiver at the same time, and they want opposite answers.
         // ★ Nothing to set for the shared dial: it IS "unlocked centre + more than one listener",

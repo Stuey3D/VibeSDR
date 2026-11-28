@@ -1004,6 +1004,11 @@ struct ServerConfig {
      *  searched for at once. 0 = the default — the benchmark's figure on a fresh setup, else this hardware's class
      *  (vibe::rttySkimDefaultWorkers: Pi 2 / R36S 1, Pi 4-5 2, PCs and Macs 4). The owner can change it. */
     int         rttySkimWorkers = 0;
+    /** ★★★ b97-cpu-budget THE OWNER'S BACKGROUND PRIORITY LIST (vibe_bg_budget.h): the box's background modes, top first,
+     *  comma-separated row ids ("band,skim,text,pictures"). Under load the LOWEST sheds first (depth, then modes, then
+     *  bands). MACHINE-level: one list for every radio. "" = the default order. Written only by the Setup page's own card
+     *  (sdr-change "bgorder"); the full settings save keeps what is on disk. */
+    std::string bgPriority;
     /** ★★ V12 THE GALLERY (vibe_gallery.h): what the decoders heard — background decoding's, and a listener's own
      *  unless `gallerySaveLive` is off. MACHINE-level: one directory every radio writes into, under the data dir.
      *  `galleryMb` is the owner's size (the setup page shows the disk's free space beside it); when full, the OLDEST

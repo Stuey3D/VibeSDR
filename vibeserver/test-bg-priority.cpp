@@ -539,7 +539,51 @@ static void frontEnd() {
     r.stop();
 }
 
+// ── ★★★ b97-cpu-budget: ONE FRONT END PER RADIO — a shared bank's blocks, no second full-rate FFT ──────────────────
+static void sharedFront() {
+    std::printf("── b97: background decoding on a SHARED radio takes the radio's own blocks (no second channeliser) ──\n");
+    const std::string dir = tmpDir("shfront");
+    FileSlots sl(dir, [] { return 8; });
+    bg::BgRegistry reg; reg.open(dir, "H");
+    bg::BgRunner r;
+    bg::BgRunner::Params p; p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sl; p.registry = &reg;
+    p.sharedFront = true;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{489500, "usb", "navtex"}, bg::Vfo{505000, "usb", "rtty-weather"} };
+    p.log = [](const std::string&) {};
+    r.start(p);
+    ok(r.sharedFront(), "the runner knows it is fed by the radio's bank");
+    std::vector<vibedsp::cf32> iq(16384, vibedsp::cf32{0.01f, 0.0f});
+    r.feedIq(iq.data(), (int)iq.size());
+    ok(r.queuedForTest() == 0, "★ IQ is refused: it never transforms the full-rate stream itself");
+    // the radio's own bank: one Channelizer, its blocks handed over as the DSP thread does
+    vibedsp::Channelizer bank(8192);
+    std::vector<vibedsp::cf32> tone(8192 * 40);
+    for (size_t i = 0; i < tone.size(); ++i) { const double ph = 2 * M_PI * 5000.0 * (double)i / 250000.0; tone[i] = { (float)std::cos(ph) * 0.1f, (float)std::sin(ph) * 0.1f }; }
+    int blocks = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (size_t off = 0; off < tone.size(); off += 4096) {
+        bank.feed(tone.data() + off, 4096, [&](const vibedsp::cf32* bins, int nb) { r.feedBlock(bins, nb, bank.blockIndex(), NAN, false); ++blocks; });
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    ok(waitFor([&] { return r.queuedForTest() == 0; }, 3000), "the worker took every block (" + std::to_string(blocks) + ")");
+    ok(r.droppedSamples() == 0, "nothing dropped");
+    const std::string js = r.statusJson();
+    ok(js.find("\"cpu\"") != std::string::npos || js.size() > 10, "the admin JSON still reads");
+    (void)t0;
+    std::vector<vibedsp::cf32> wrong(4096);
+    r.feedBlock(wrong.data(), (int)wrong.size(), 0, NAN, false);
+    ok(r.wrongBlocks() == 1, "a block of another size (the bank was rebuilt) is refused and counted");
+    r.stop();
+    // a radio without a shared bank: as before
+    bg::BgRunner q; bg::BgRunner::Params p2 = p; p2.sharedFront = false; q.start(p2);
+    q.feedIq(iq.data(), (int)iq.size());
+    ok(waitFor([&] { return q.queuedForTest() == 0; }, 3000) && !q.sharedFront(), "a radio with no shared bank still runs its own channeliser (feedIq)");
+    q.stop();
+}
+
 int main() {
+    sharedFront();
     frontEnd();
     fullCpu();
     eased();

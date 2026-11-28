@@ -377,6 +377,14 @@ public:
     /** ★ V12 the RTTY skimmer's search workers (vibeserver.json "rttySkimWorkers"); 0 = the default for this box. */
     static void setRttySkimWorkers(int n);
     static int  rttySkimWorkers();   ///< what a new skimmer gets: the owner's figure, else the default
+    /** ★★★ b97-cpu-budget THE OWNER'S BACKGROUND PRIORITY LIST (vibeserver.json "bgPriority", vibe_bg_budget.h): row ids top
+     *  first, comma-separated ("" = the default order). Set at start from the config; the front door's live copy in the
+     *  decoder-slot dir (bg-priority, written when the owner reorders) wins while it exists. setBgPriority also writes that
+     *  copy when `live` (the front door). */
+    static void setBgPriority(const std::string& order, bool live = false);
+    static std::string bgPriority();
+    /** ★ The Setup page's card: the order, each row's label and its live state across the box (the ledger), the power words. */
+    static std::string bgPriorityJson();
     /** ★★ V12 beta90 PSK REPORTER (vibe_spot_report.h, docs/v12/PSK-REPORTER.md): the owner's switch (OFF by default),
      *  the receiver's callsign (required — nothing is sent without one), the server's grid, the antenna text, and the
      *  second switch "Also send WSPR spots to WSPRnet". Live; starts the reporter's thread on first use. */
