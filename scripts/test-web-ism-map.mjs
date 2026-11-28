@@ -143,12 +143,14 @@ try {
     rect: m.filter(x => x.querySelector('svg rect')).length, circ: m.filter(x => x.querySelector('svg > circle[r="9.5"]')).length,
     dashed: m.filter(x => x.querySelector('[stroke-dasharray]')).length, orange: m.filter(x => /#ff9f43/.test(x.innerHTML)).length,
     green: m.filter(x => /#67ea94/.test(x.innerHTML)).length, faded: m.filter(x => /opacity:0\\.[3-6]/.test(x.innerHTML)).length,
-    labels: m.map(x => x.querySelector('.vtl-lb')).filter(l => l && getComputedStyle(l).display !== 'none').map(l => l.textContent) }; })())`));
+    labels: m.map(x => x.querySelector('.vtl-lb')).filter(l => l && getComputedStyle(l).display !== 'none').map(l => l.textContent), all: m.map(x => (x.querySelector('.vtl-lb')?.textContent || '-') + (x.querySelector('.vtl-lb.vtl-lbhide') ? '[hid]' : '')) }; })())`));
   ok(mk.rect >= 7 && mk.circ >= 2, `infrastructure squares ${mk.rect}, companion circles ${mk.circ}`);
   ok(mk.dashed >= 2, `the two people's nodes carry the approximate ring: ${mk.dashed}`);
   ok(mk.orange >= 7 && mk.green >= 2, `MeshCore orange ${mk.orange}, Meshtastic green ${mk.green}`);
   ok(mk.faded >= 1, `the node heard 20 h ago is faded: ${mk.faded}`);
-  ok(mk.labels.includes('Benson') && mk.labels.includes('MeshCore Repeater'), `names on the map: ${mk.labels.join(', ')}`);
+  // ★ map cards: the LIST card sits over part of the map, so AUTO frames tighter and the declutter may hide a name for a
+  //   neighbour's — the node keeps its icon and its name (shown, or hidden by the declutter), never lost
+  ok(mk.labels.includes('Benson') && (mk.labels.includes('MeshCore Repeater') || mk.all.includes('MeshCore Repeater[hid]')), `names on the map: ${mk.labels.join(', ')} (all: ${mk.all.join(', ')})`);
   // ★ DECLUTTER: no two shown names overlap, and none sits on another node's icon; every icon is still drawn
   const dc = JSON.parse(await ev(`JSON.stringify((() => {
     const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
@@ -171,8 +173,13 @@ try {
   { const rng = JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ');
     ok(rng === '1 H:false 24 H:true THIS SESSION:false', `the live map offers 1 H · 24 H (the receiver keeps 24 h), 24 H chosen, and beta96 THIS SESSION (${rng})`); }
   const n24 = await ev(`document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length`);
+  // ★ map cards: the time filter lives in MAP CONTROLS — its card opened first (a hidden key cannot take focus, and focus
+  //   left on CLOSE MAP made Enter close the map: '13 → 0', then 'Uncaught')
+  await ev(`(() => { const b = ${view}.querySelector('[data-cbtn="map"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(500);
   await ev(`${view}.querySelector('[data-rng="1h"]').focus()`);
+  if (process.env.ISM_DIAG) console.log('   DIAG', await ev(`JSON.stringify({ act: (document.activeElement?.outerHTML || '').slice(0, 120), vis: (() => { const b = ${view}.querySelector('[data-rng="1h"]'); return b ? b.getClientRects().length : -1; })(), hl: (document.querySelector('.gpFocus')?.outerHTML || '').slice(0, 120) })`));
   await key('Enter', 'Enter');
+  if (process.env.ISM_DIAG) console.log('   DIAG2', await ev(`JSON.stringify({ open: !!document.querySelector('.trkView:not([hidden])'), act: (document.activeElement?.outerHTML || '').slice(0, 80) })`));
   await sleep(1500);
   const n1 = await ev(`document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length`);
   ok(n1 === n24 - 1 && !/Kettering Hill/.test(await ev(`${view}.querySelector('.rows').textContent`)), `1 H (by keyboard): the node heard 20 h ago goes (${n24} → ${n1})`);
@@ -183,19 +190,20 @@ try {
   /* ★★ beta96 (Stuart 11-26: "meshcore list needs to filter by nearest first and latest first") NEAREST | LATEST */
   console.log('── beta96: the NODES list, NEAREST | LATEST ──');
   const srt = JSON.parse(await ev(`JSON.stringify((() => { const h = ${view}.querySelector('.hd .srt'); return { hidden: h.hidden, aria: h.getAttribute('aria-label'),
-    keys: [...h.querySelectorAll('[data-srt]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')) }; })())`));
-  ok(!srt.hidden && srt.aria === 'Sort the nodes' && srt.keys.join(' ') === 'NEAREST:true LATEST:false', `the list header's key (the AIR & SEA chip): ${srt.keys.join(' ')}, "${srt.aria}"`);
+    keys: [...h.querySelectorAll('[data-srt]')].map(b => b.dataset.srt + '>' + b.dataset.next) }; })())`));
+  // ★ map cards (Stuart 12:58): ONE toggle wearing the current sort (rings = nearest, clock = latest) — a press swaps
+  ok(!srt.hidden && srt.aria === 'Sort the nodes' && srt.keys.join(' ') === 'nearest>latest', `the list's sort key, one toggle on NEAREST: ${srt.keys.join(' ')}, "${srt.aria}"`);
   const kmOrder = `JSON.stringify([...${view}.querySelectorAll('.trkRow')].map(r => parseFloat((r.querySelector('.rg')?.textContent || '').replace(',', ''))).filter(n => isFinite(n)))`;
   const fakeOrder = `JSON.stringify([...${view}.querySelectorAll('.trkRow')].map(r => r.dataset.key).filter(k => /^f\\d+$/.test(k)))`;
   const kms = JSON.parse(await ev(kmOrder));
   ok(kms.length >= 9 && kms.every((k, i) => i === 0 || k >= kms[i - 1]), `NEAREST (the default): distances never go down: ${kms.join(', ')}`);
-  await ev(`${view}.querySelector('[data-srt="latest"]').click()`);
+  await ev(`${view}.querySelector('.hd .srt .srtT').click()`);
   const LATE = ['f1', 'f6', 'f11', 'f3', 'f8', 'f2', 'f7', 'f4', 'f5', 'f9'];   // their seen: 40 60 90 120 200 300 600 900 1800 72000
   ok(await until(`${fakeOrder} === ${JSON.stringify(JSON.stringify(LATE))}`, 4000), `LATEST: the most recently heard first: ${await ev(fakeOrder)}`);
-  ok(await ev(`${view}.querySelector('[data-srt="latest"]').getAttribute('aria-pressed') === 'true' && localStorage.getItem('vibesdr.meshListSort') === 'latest'`), '…pressed, and remembered for this viewer');
+  ok(await ev(`${view}.querySelector('.hd .srt .srtT')?.dataset.srt === 'latest' && localStorage.getItem('vibesdr.meshListSort') === 'latest'`), '…the toggle now on LATEST, and remembered for this viewer');
   ok(/\d+ on the map · \d+ repeaters/.test(await ev(`${view}.querySelector('.st').textContent`)) && await ev(`document.querySelectorAll('.vtl-mk:not(.vtl-gone)').length`) === n24,
      'the order changes nothing on the map: the same markers, the same status');
-  await ev(`${view}.querySelector('[data-srt="nearest"]').focus()`);
+  await ev(`${view}.querySelector('.hd .srt .srtT').focus()`);
   await key('Enter', 'Enter');   // ★ by keyboard
   ok(await until(`(() => { const k = ${kmOrder}; const a = JSON.parse(k); return a.length >= 9 && a.every((x, i) => i === 0 || x >= a[i - 1]); })()`, 4000)
      && await ev(`localStorage.getItem('vibesdr.meshListSort') === 'nearest'`), 'NEAREST again (by keyboard), remembered');
@@ -342,12 +350,12 @@ try {
      === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the gallery map offers all five ranges, ALL chosen');
   console.log('   screenshot', await shot('ismmap-gallery.png'));
   // ★★ beta96 the gallery's map: the same key, the same remembered pick (NEAREST, set on the live map)
-  ok(await ev(`(() => { const h = ${view}.querySelector('.hd .srt'); return !h.hidden && [...h.querySelectorAll('[data-srt]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')).join(' ') === 'NEAREST:true LATEST:false'; })()`),
-     'the gallery map\'s list has NEAREST | LATEST, the viewer\'s pick kept');
-  await ev(`${view}.querySelector('[data-srt="latest"]').click()`);
+  ok(await ev(`(() => { const h = ${view}.querySelector('.hd .srt'); return !h.hidden && h.querySelector('.srtT')?.dataset.srt === 'nearest'; })()`),
+     'the gallery map\'s list has the sort toggle, the viewer\'s pick (NEAREST) kept');
+  await ev(`${view}.querySelector('.hd .srt .srtT').click()`);
   const galLast = `JSON.stringify([...${view}.querySelectorAll('.trkRow .ag')].map(a => a.textContent))`;
   ok(await until(`(() => { const a = JSON.parse(${galLast}); return a.length >= 10 && a.every((x, i) => i === 0 || x <= a[i - 1]); })()`, 4000), `gallery LATEST: last heard, newest first: ${await ev(galLast)}`);
-  await ev(`${view}.querySelector('[data-srt="nearest"]').click()`);
+  await ev(`${view}.querySelector('.hd .srt .srtT').click()`);
 
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Benson/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2000);
