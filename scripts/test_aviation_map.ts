@@ -15,6 +15,8 @@ const eq = (what: string, got: unknown, want: unknown) => {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${what}${ok ? '' : `\n     got  ${JSON.stringify(got)}\n     want ${JSON.stringify(want)}`}`);
 };
 const yes = (what: string, c: boolean) => eq(what, c, true);
+// ★ b97-integrate: the 16:31 no-bounce block (from b96-mapcards 197bfae48) calls ok(cond, what) — it was never defined (ReferenceError)
+const ok = (c: boolean, what: string) => yes(what, c);
 
 // the server's shape (vibe_aircraft_share.h toJson): A on ADS-B, B on VDL2, one HFDL station
 const table = sharedSanitise({
@@ -188,7 +190,8 @@ console.log('── beta91: the ADS-B aircraft data on every source (vibe_aircra
   const rows = avPlaneRows([v, a, m], null);
   yes('the list: the flag, the operator, the type', rows[0].flag === '🇮🇪' && /Ryanair/.test(rows[0].second) && /B738/.test(rows[0].second));
   yes('the list: the database route where the aircraft named none', /AMS → LGW/.test(rows[1].second) && /easyJet/.test(rows[1].second));
-  yes('the list: MIL', /\bMIL\b/.test(rows[2].second) && rows[2].flag === '🇺🇸');
+  // ★ b97-integrate: MIL is a tag beside the name now (acTags.ts, Stuart 11-27) — the row carries mil, the subtitle no longer says it
+  yes('the list: MIL (the row\'s mil tag, not the subtitle)', (rows[2] as { mil?: boolean }).mil === true && !/\bMIL\b/.test(rows[2].second) && rows[2].flag === '🇺🇸');
   // the live DATALINK row (no data) joined with the table's row: the table's data carried over
   const live = parseAvReport({ type: 'avdata', aircraft: [{ icao: '4CA2D6', flight: 'RYR8CK', via: 'VDL2 136.975', age: 2, n: 1 }] });
   const merged = avMerge(live, t91).find((p) => p.icao === '4CA2D6')!;

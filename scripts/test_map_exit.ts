@@ -59,13 +59,15 @@ ok(doorOf('https://x.example/r/a') === 'https://x.example' && doorOf('https://x.
 console.log('── MapOverlay ──');
 const mo = rd('src/components/MapOverlay.tsx');
 const modal = mo.slice(mo.indexOf('<Modal'), mo.indexOf('</Modal>'));
-ok(/<ServersChip \{\.\.\.servers\} compact navId="serversChipMap"/.test(modal), '★ the Servers chip is drawn INSIDE the map\'s Modal, tucked to its tab, with its own pad id');
+// ★ beta97 (b97-integrate): the MAP CARDS replace the beta96 chip — the way off is the SERVERS card (LEAVE SERVER always works,
+//   MapChrome servers), drawn in the map's Modal; the old ServersChip is not drawn over the cards (two ways off, one hidden).
+ok(!/<ServersChip/.test(modal) && /servers=\{p\.cards\?\.servers \?\? null\}/.test(mo), '★ the way off on the map is the SERVERS card (inside the map\'s Modal), not the old chip');
 ok(/onRequestClose=\{onBackPress\}/.test(mo), '★ Android\'s Back on a map is onBackPress');
 ok(/useOverlay\(visible, \{ name: 'map', onBack: \(\) => backRef\.current\(\) \}\)/.test(mo) && /backRef\.current = onBackPress;/.test(mo), '…a pad\'s and a keyboard\'s Back too (one rule — it used to bypass the dial lock\'s guard)');
 ok(/mapBackAction\(\{ chipOpen, locked: leaveServer, exitLocked, canLeave: !!servers \}\)/.test(mo), 'onBackPress asks mapBackAction');
 ok(/case 'offer':[\s\S]{0,200}appAlert\(MAP_LEAVE_OFFER\.title[\s\S]{0,200}onPress: leave/.test(mo), 'the offer\'s "Leave this server" leaves');
-ok(/const leave = \(\) => \{ setChipClose\(\(t\) => t \+ 1\); servers\?\.onBack\(\); \};/.test(mo), 'leaving is the chip\'s own Back to server list');
-ok(/opts\?\.leave\s*\? '<button id="back"[^']*>LEAVE SERVER<\/button>'/.test(mo) && /leave: leaveServer/.test(mo), 'a locked map\'s page key reads LEAVE SERVER from the first paint');
+ok(/const leave = \(\) => \{ servers\?\.onBack\(\); \};/.test(mo), 'leaving is the chip\'s own Back to server list (the same onBack)');
+ok(/exit=\{p\.leaveServer \? \{ label: 'LEAVE SERVER',[^}]*locked: false, onPress: p\.onExit \}/.test(mo) && /leaveServer=\{leaveServer\}/.test(mo), 'a locked map\'s ✕ reads LEAVE SERVER from the first paint (before the only mode\'s CLOSE MAP; never dial-locked)');
 ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo), 'the page\'s EXIT keeps its dial-lock guard (a locked EXIT that would leave the MODE is refused with the reason)');
 
 console.log('── SDRScreen ──');

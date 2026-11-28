@@ -83,7 +83,8 @@ for (const k of ['adsb', 'ism', 'sondes', 'avdata']) ok(scr.includes(`only={only
 // ★ beta96 the AIR & SEA map ('airsea') is told for the whole-radio mode it is the screen of (ADS-B and AIS)
 ok(/only=\{shownMap === 'airsea' \? \(adsbLiveHere && onlyModeHere === 'adsb' \? onlyModeNote\('adsb'\) : aisViewOpen && onlyModeHere === 'ais' \? onlyModeNote\('ais'\) : airSeaMode === 'sondes' && onlyModeHere === 'sondes' \? onlyModeNote\('sondes'\) : airSeaMode === 'vormap' && onlyModeHere === 'vormap' \? onlyModeNote\('vormap'\) : airSeaMode === 'ndb' && onlyModeHere === 'ndb' \? onlyModeNote\('ndb'\) : undefined\) : shownMap && onlyModeHere === shownMap \? onlyModeNote\(shownMap\) : undefined\}/.test(scr), 'app: the map is told (ADS-B and AIS: the AIR & SEA map, stage 6)');
 // ★ beta96: a radio locked to a MAP mode says LEAVE SERVER before this (opts.leave — test_map_exit); any other only mode CLOSE MAP
-ok(/: opts\?\.only\s*\? `<button id="back"[^`]*>CLOSE MAP<\/button>`/.test(mo), '★ app: the map\'s EXIT becomes CLOSE MAP');
+// ★ beta97 the MAP CARDS: the ✕ (MapCardsHost) reads CLOSE MAP for the only mode, after a map-locked radio's LEAVE SERVER
+ok(/const exitLabel = p\.only \? 'CLOSE MAP'/.test(mo) && /exit=\{p\.leaveServer \? \{ label: 'LEAVE SERVER'/.test(mo), '★ app: the map\'s EXIT becomes CLOSE MAP');
 
 // ── the R36S ──
 const mm = read('handheld-ui/src/map_modes.h'), mp = read('handheld-ui/src/map_page.h');

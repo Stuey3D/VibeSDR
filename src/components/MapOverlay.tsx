@@ -3331,8 +3331,8 @@ function MapCardsHost(p: {
   const tuneRows = p.tune && p.tune.rows.length > 1 ? p.tune : null;
   const tuneOn = !!tuneRows || gain.kind !== 'none' || gain.more;
   // ★★ V12 THE ONLY MODE: the ✕ closes the map and the mode carries on (CLOSE MAP), with the note in its words
-  const exitLabel = p.leaveServer ? 'LEAVE SERVER' : p.only ? 'CLOSE MAP' : t.exitLabel ?? TRK_EXIT[p.kind] ?? 'CLOSE MAP';
-  const exitWords = p.leaveServer ? 'Leave this server \u2014 back to the server list. The map is this receiver\u2019s only screen' : p.only ? `Close the map \u2014 ${p.only}, and the mode carries on`
+  const exitLabel = p.only ? 'CLOSE MAP' : t.exitLabel ?? TRK_EXIT[p.kind] ?? 'CLOSE MAP';
+  const exitWords = p.only ? `Close the map \u2014 ${p.only}, and the mode carries on`
     : TRK_TITLE_WORDS[p.kind] ?? (/^EXIT /.test(exitLabel) ? `${exitLabel.replace(/^EXIT /, 'Exit ')} and give the receiver back` : 'Close the map');
   const pick = (r: TrackRow) => {
     if (!r.noPos) { const to = t.onPick?.(r.key); p.onFocus(typeof to === 'string' && to ? to : r.key); return; }
@@ -3349,7 +3349,10 @@ function MapCardsHost(p: {
   return (
     <>
       <MapChrome visible winW={p.winW} winH={p.winH} insets={p.insets}
-        exit={{ label: exitLabel, words: exitWords, locked: p.exitLocked, onPress: p.onExit }}
+        /* ★★★ beta96 a map-locked radio (mapExit): LEAVE SERVER before anything else — even the only mode's CLOSE MAP; never
+           dial-locked (leaving is not tuning). onExit is SDRScreen's onClose, which leaves the server there. */
+        exit={p.leaveServer ? { label: 'LEAVE SERVER', words: 'Leave this server \u2014 back to the server list. The map is this receiver\u2019s only screen', locked: false, onPress: p.onExit }
+          : { label: exitLabel, words: exitWords, locked: p.exitLocked, onPress: p.onExit }}
         servers={p.cards?.servers ?? null}
         tune={tuneOn ? { rows: tuneRows?.rows ?? [], facts, onPick: tuneRows?.onPick ?? (() => {}), onRefused: tuneRows?.onRefused ?? (() => {}), gain, gainH } : null}
         layers={layerRows.length ? { rows: layerRows, toggled: t.toggled ?? {}, onToggle: (id, on) => t.onToggle?.(id, on), fam, note: [p.cards?.listNote ?? ''].filter(Boolean).join('') } : null}

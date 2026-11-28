@@ -14,7 +14,7 @@ console.log('── MapOverlay ──');
 // ★ beta96: Android back is onBackPress (mapExit.mapBackAction — test_map_exit), whose ordinary case is closeGuarded
 ok(/if \(d === 'close'\) return closeGuarded\(\);/.test(mo) && /onRequestClose=\{onBackPress\}/.test(mo) && /default: closeGuarded\(\);/.test(mo), 'EXIT (the page key) and Android back both go through closeGuarded');
 ok(/const exitLocked = !!dialLock\?\.why && dialLock\.exitMoves;/.test(mo) && /dialLock\.onDialLocked\(dialLock\.why\); return;/.test(mo), 'a locked EXIT that would leave the mode is refused with the reason');
-ok(/exitLocked=\{exitLocked\} onExit=\{closeGuarded\}/.test(mo) && /exit=\{\{ label: exitLabel, words: exitWords, locked: p\.exitLocked, onPress: p\.onExit \}\}/.test(mo), 'the cards\' ✕ is closeGuarded, greyed while locked');
+ok(/exitLocked=\{exitLocked\} onExit=\{closeGuarded\}/.test(mo) && /: \{ label: exitLabel, words: exitWords, locked: p\.exitLocked, onPress: p\.onExit \}\}/.test(mo), 'the cards\' ✕ is closeGuarded, greyed while locked');
 ok(!existsSync(new URL('../src/components/MapTopStrip.tsx', import.meta.url)) && !/MapTopStrip|__backLock|t === 'mapTop'/.test(mo), '★★★ the old strip, its bar height and the page key\'s lock are DELETED, not hidden');
 ok(!/<div id="topbar">/.test(mo), '★★★ no map page has a top bar of its own (the cards)');
 // ★★★ beta97 (Stuart's controller flow): ONE walk for the chips / pill / LIST stop / bottom-right; an open card, the LIST's
