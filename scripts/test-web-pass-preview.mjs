@@ -181,7 +181,6 @@ try {
   ok(/ORBCOMM reception history/.test(marks.src), `which history: "${marks.src}"`);
   const rowV = await ev(`[...document.querySelectorAll('#satPanel .sat-vd')].map((e) => e.textContent).join(' | ')`);
   ok(/max 5[67]°/.test(rowV), `the verdict on the ISS row too: "${rowV.slice(0, 120)}"`);
-  ok(await ev(`(() => { const c = document.querySelector('#satPanel .sat-pv canvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let g = 0; for (let i = 0; i < d.length; i += 4) if (d[i+3] > 200 && Math.abs(d[i]-60) < 20 && Math.abs(d[i+1]-200) < 25 && Math.abs(d[i+2]-80) < 25) g++; return g > 80; })()`), 'the trail on the globe is green where this station hears');
 
   console.log('— pause, speed, LOS, replay');
   await ev(`document.querySelector('#satPanel [data-act="pvplay"]').click(); true`);
@@ -189,6 +188,9 @@ try {
   ok(f1 === f0 && (await ev(`document.querySelector('#satPanel [data-act="pvplay"]').textContent`)) === '▶', `❚❚ pauses: no frames (${f0} → ${f1})`);
   await ev(`document.querySelector('#satPanel [data-act="pvspeed"][data-v="2"]').click(); document.querySelector('#satPanel [data-act="pvplay"]').click(); true`);
   ok(await until(`window.__p.pv.state()?.ended === true`, 8000), '2× plays on to LOS and stops');
+  // at LOS the whole trail is drawn (mid-pass most of it sits under the bird's panels)
+  const greenPx = await ev(`(() => { const c = document.querySelector('#satPanel .sat-pv canvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let g = 0; for (let i = 0; i < d.length; i += 4) if (d[i+3] > 200 && d[i] < 78 && d[i+1] > 170 && d[i+2] < 100) g++;   /* the trail rgb(60,200,80), not the receiver dot #5BE36B */ return g; })()`);
+  ok(greenPx > 80, `the trail on the globe is green where this station hears at LOS (${greenPx} px)`);
   const f2 = await ev('window.__p.pv.frames'); await sleep(500);
   ok((await ev('window.__p.pv.frames')) === f2 && (await ev(`document.querySelector('#satPanel [data-act="pvplay"]').getAttribute('aria-label')`)) === 'Play the pass again', 'at LOS: no frames, ▶ replays');
   await ev(`document.querySelector('#satPanel [data-act="pvplay"]').click(); true`);
@@ -202,7 +204,7 @@ try {
 
   console.log('— ENTER on a focused ▶ (controller / keyboard)');
   await ev(`(() => { const b = [...document.querySelectorAll('#satPanel [data-act="pv"]')].pop(); b.focus(); return document.activeElement === b; })()`);
-  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   ok(await until(`!document.querySelector('#satPanel .sat-pv').hidden`, 800), 'ENTER on the focused ▶ opens the preview');
   ok(await until(`window.__p.pv.state()?.playing === true`, 1500), '…and plays it');

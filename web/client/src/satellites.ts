@@ -969,7 +969,7 @@ export class SatPanel {
         + `</div>`;
     }
     this.pv.askRows(pvRows);   // ★★★ beta97 the first few rows' tracks, one a second, for their verdicts
-    if (pvRows.length) h = `<div class="sat-sline sat-dim" data-s="pvhint">${esc(PASS_PREVIEW_HINT)}</div>` + h;   // ★★★ beta97 the help line
+    if (pvRows.length) h = `<div class="sat-pvhint sat-dim" data-s="pvhint">${esc(PASS_PREVIEW_HINT)}</div>` + h;   // ★★★ beta97 the help line
     // ★★★ beta96 why it is SCHEDULE / REMIND here, the overlap rule, the degraded note, and the schedule's own state
     if (anySched || anyRemind) { const sl = satSessionLine(sess, 'web'); if (sl) h += `<div class="sat-sline sat-dim">${esc(sl)}</div>`; }
     if (sess.kind === 'schedule' && sEntries.some((e) => (plan.get(e.key)?.over.length ?? 0) > 0)) h += `<div class="sat-sline sat-dim">${esc(SAT_SCHED_OVERLAP_RULE)}</div>`;

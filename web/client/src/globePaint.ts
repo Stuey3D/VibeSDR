@@ -8,7 +8,7 @@ import { GLOBE_ARROW_PX, GLOBE_GLYPH, GLOBE_RX_DOT, globeArrowPath, globeGlyph, 
  *  beam, the bird, the labels) over it every frame. */
 export interface GlobeInk { sc: number; ink: string; amber: string; ground: string; ly: ReturnType<typeof globeLayers>;
   labels: { rx: ReturnType<typeof globeLabels>['rx']; sat: ReturnType<typeof globeLabels>['sat'] }; font: number }
-export function paintGlobe(ctx: CanvasRenderingContext2D, g: ReturnType<typeof globeScene>, k: GlobeInk, part: 'all' | 'back' | 'front') {
+export function paintGlobe(ctx: CanvasRenderingContext2D, g: ReturnType<typeof globeScene>, k: GlobeInk, part: 'all' | 'back' | 'front', overFoot?: () => void) {
   const { sc, ink, amber, ground, ly } = k;
   const back = part !== 'front', front = part !== 'back';
   ctx.save();
@@ -24,6 +24,7 @@ export function paintGlobe(ctx: CanvasRenderingContext2D, g: ReturnType<typeof g
   if (front) {
     if (g.foot) { ctx.globalAlpha = 0.28; ctx.fillStyle = amber; ctx.fill(new Path2D(g.foot)); }
     if (ly.beam && g.beam) { ctx.globalAlpha = 0.35; ctx.fillStyle = amber; ctx.fill(new Path2D(g.beam)); }
+    if (overFoot) { ctx.save(); overFoot(); ctx.restore(); }   // ★★★ beta97 the preview's trail: over the footprint, under the bird
   }
   // ★ 1.7 the orbit, dotted, and its highest point
   if (back && g.orbit) {

@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EDGE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
-const DIST = path.join(root, 'web/dist');
+const DIST = process.env.WEB_DIST || path.join(root, 'web/dist');
 if (!fs.existsSync(EDGE) || !fs.existsSync(path.join(DIST, 'vibesdr.html'))) { console.log('   not run — Edge and web/dist needed'); process.exit(3); }
 const SHOTS = process.env.SAT_SHOTS || os.tmpdir();
 fs.mkdirSync(SHOTS, { recursive: true });

@@ -50,6 +50,7 @@ export const PREVIEW_CSS = `
 #satPanel .sat-pvv{margin-top:4px}
 #satPanel .sat-pvd{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:0;background:var(--text-dim)}
 #satPanel .sat-pvk{font-size:11px;margin-top:2px}
+#satPanel .sat-pvhint{font-size:12px;margin:2px 0 4px}
 #satPanel .sat-pvnote{border:1px solid var(--amber);color:var(--amber);border-radius:8px;padding:6px 8px;margin:0 0 6px}
 #satPanel .sat-pvb{flex:0 0 auto;align-self:center;min-height:30px;min-width:34px;padding:2px 8px !important;line-height:0}
 #satPanel .sat-pvb svg{width:10px;height:11px;fill:currentColor}
@@ -320,7 +321,7 @@ export class PassPreviewView {
     const g = globeScene(W, H, rx, { lat: s.lat, lon: s.lon, altKm: s.altKm }, pt.geo, pt.tcaIdx, true);
     // the trail so far, coloured by this station's history (haloed in the ground so it reads over the land)
     const fr = globeFrame(W, H, rx);
-    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, g.cy); ctx.clip();
+    const trail = () => {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const run of passTrailRuns(pt, this.histUsed.h, t)) {
       const p = new Path2D(); let pen = false;
@@ -328,9 +329,9 @@ export class PassPreviewView {
       ctx.globalAlpha = 0.8; ctx.strokeStyle = this.ink.ground; ctx.lineWidth = 5 * k.sc; ctx.stroke(p);
       ctx.globalAlpha = run.grade === 'none' ? 0.55 : 1; ctx.strokeStyle = run.grade === 'none' ? this.ink.ink : PASS_GRADE_CSS[run.grade]; ctx.lineWidth = 2.6 * k.sc; ctx.stroke(p);
     }
-    ctx.restore();
+    };
     const L = k.ly.labels ? globeLabels(g, this.d.rxName(), c.name, k.font) : { rx: null, sat: null };
-    paintGlobe(ctx, g, { ...k, labels: L }, 'front');
+    paintGlobe(ctx, g, { ...k, labels: L }, 'front', trail);
     // the sky plot's dot — a transform only
     const dot = this.q.sky.querySelector('[data-p="dot"]');
     if (dot) { const [x, y] = skyPlotXY(s.az, s.el, Number(this.q.sky.dataset.cx), Number(this.q.sky.dataset.cy), Number(this.q.sky.dataset.r)); dot.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`); }
