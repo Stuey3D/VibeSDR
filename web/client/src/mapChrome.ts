@@ -912,6 +912,12 @@ export interface TrackViewOpts {
   fitOnOpen?: boolean;
   title: string;                 // "AIS" / "APRS"
   exitLabel: string;             // "EXIT AIS" / "CLOSE MAP"
+  /** ★★ 11-28 A HELP OF ITS OWN (Stuart, the community map: its HELP was the radio map's — SERVERS "leave this server",
+   *  TUNE, CHAT, SERVER HEALTH, TIME, the shared-tuner pill, the WATERFALL, none of which it has). Given: the HELP card
+   *  is drawn each time it opens FROM THE CHIPS PRESENT (cardsAvail, in MAP_HELP's order, each under its chip's caption —
+   *  a retitled chip by its new name), `words` replacing a chip's line, `exit` the ✕'s line and `notes` the notes; the
+   *  controller lines leave out tuning where there is no TUNE. Absent: the radio maps' help, as before. */
+  help?: { exit: string; words?: Partial<Record<CardId, string>>; notes: string[] };
   listTitle: string;             // "SHIPS" / "STATIONS"
   onExit: () => void;
   icon: (it: any) => { html: string; w: number; h: number };
@@ -1098,8 +1104,8 @@ export class TrackView {
       + `<div class="mChips mChipsScale"><div class="edgeDock mDock mScale" data-dock="scale" role="img" aria-label="Map scale"><div class="hCard"><div class="mScaleBody"><span class="vsLine"></span><span class="vsLbl"></span></div></div></div></div>`
       + `<button type="button" class="mHelp" data-cbtn="help" aria-expanded="false" aria-label="Help — what the map's chips do" title="What the chips do">?</button>`
       + `<div class="trkCards"><div class="cSide sideL"></div><div class="cSide sideR"></div><div class="cSide sideB"></div><div class="cSide sideH"></div></div><div class="trkPark" hidden>`
-      + card('help', 'HELP', `<div class="hPad"></div><div class="helpBody">${MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
-        + MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('') + `</div>`)
+      + card('help', 'HELP', `<div class="hPad"></div><div class="helpBody">${o.help ? '' : MAP_HELP.map((h) => `<div class="hRowH"><span class="hi">${HELP_GLYPH[h.id]}</span><span><b>${esc(h.name)}</b> \u2014 ${esc(h.words)}</span></div>`).join('')}`
+        + (o.help ? '' : MAP_HELP_NOTES.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('')) + `</div>`)
       + card('list', 'LIST', `<div class="facts"></div><div class="trkList"><div class="hd"><span class="lt">${esc(o.listTitle)}</span><span class="tabWrap" hidden><button class="tArr l" type="button" tabindex="-1" aria-label="Earlier tabs">‹</button><span class="tabs" role="tablist" aria-label="Lists"></span><button class="tArr r" type="button" tabindex="-1" aria-label="More tabs">›</button></span> <span class="n">0</span>`
         + `<button class="lPause" type="button" hidden>\u2016 <span class="n"></span></button><span class="srt" role="group" aria-label="Sort the aircraft" hidden></span>`
         + `<span class="wfInfo" aria-live="off"></span></div><div class="safety" hidden></div><div class="filt" hidden></div><div class="rows"></div><div class="wfPane" aria-label="Live waterfall"></div></div>`
@@ -1327,6 +1333,16 @@ export class TrackView {
     padHighlight(this.root.querySelector(`[data-cbtn="${top}"]`) as HTMLElement | null);   // ★★ the pad's ring back on its chip
     return true;
   }
+  /** ★★ 11-28 the page's ONE back (gamepad.ts hooks.back) on a map of its own (mapChromeStandalone initMapPad): the
+   *  card on top — the map's own Escape rule: an item chosen (a LIST row) goes first, BACK clears it, then shuts the card.
+   *  False when this same press already shut one (the map's own Escape handler ran first — the highlight it put back on
+   *  the chip stays) or there was nothing to do. */
+  backPress(): boolean {
+    if (performance.now() - this.cardClosedAt < 80) return false;
+    if (this.closeTopCard()) return true;
+    if (this.sel) { this.select(''); return true; }
+    return false;
+  }
   isCardOpen(id: CardId): boolean { return this.cardOrder.includes(id); }
   get openCards(): CardId[] { return this.cardOrder.slice(); }
   private cardsKey(): string { return this.narrow() ? CARDS_KEY + '.narrow' : CARDS_KEY + '.wide'; }
@@ -1351,7 +1367,7 @@ export class TrackView {
     //     is the layout's (a phone shows the newest: LIST comes back when the transient one shuts)
     void cardToggle;
     this.cardOrder = cardOpenRule(this.cardOrder.filter((x) => this.cardAvail.has(x)), id, on);
-    if (on && id === 'help') this.helpPad();
+    if (on && id === 'help') { this.helpBody(); this.helpPad(); }
     if (on && !STICKY_CARDS.has(id)) this.shortEdgeTuck();
     if (save) this.cardsSave();
     this.cardsLayout();
@@ -1445,6 +1461,16 @@ export class TrackView {
     const k = this.root.querySelector(d > 0 ? '.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in' : '.maplibregl-ctrl-zoom-out, .leaflet-control-zoom-out') as HTMLElement | null;
     k?.click();
   }
+  /** ★★ 11-28 the host's own help (TrackViewOpts.help): the chips PRESENT, by their captions, then the notes. */
+  private helpBody() {
+    const h = this.o.help, el = this.root.querySelector('.trkCard2[data-card="help"] .helpBody') as HTMLElement | null;
+    if (!h || !el) return;
+    const cap = (id: CardId, name: string) => (this.root.querySelector(`[data-cbtn="${id}"] .cap`) as HTMLElement | null)?.textContent?.trim() || name;
+    const present = (id: CardId) => this.cardAvail.has(id) && !(this.root.querySelector(`.mDock[data-dock="${id}"]`) as HTMLElement | null)?.hidden;
+    el.innerHTML = `<div class="hRowH" data-help="x"><span class="hi">\u2715</span><span><b>\u2715</b> \u2014 ${esc(h.exit)}</span></div>`
+      + MAP_HELP.filter((x) => present(x.id)).map((x) => `<div class="hRowH" data-help="${x.id}"><span class="hi">${HELP_GLYPH[x.id]}</span><span><b>${esc(cap(x.id, x.name))}</b> \u2014 ${esc(h.words?.[x.id] ?? x.words)}</span></div>`).join('')
+      + h.notes.map((t) => `<div class="hNoteH">${esc(t)}</div>`).join('');
+  }
   /** ★ the HELP card's controller lines, in the layout in use (Switch-style face glyphs by POSITION, never letters) */
   private helpPad() {
     const el = this.root.querySelector('.trkCard2[data-card="help"] .hPad') as HTMLElement | null;
@@ -1453,8 +1479,10 @@ export class TrackView {
     const rows: Array<[string, string]> = sticks
       ? [['D-pad', 'move the highlight'], [padFace('bottom'), 'open / choose'], [padFace('right'), 'back / shut'], ['left stick turned', 'tune (where TUNE applies)'], ['right stick turned', 'zoom the map']]
       : [['D-pad', 'move the highlight'], ['R', 'open / choose'], ['L', 'back / shut'], [padFace('top') + ' ' + padFace('bottom'), 'zoom the map in / out'], [padFace('left') + ' ' + padFace('right'), 'tune down / up (where TUNE applies)']];
-    el.innerHTML = `<div class="hPadH">With a controller</div>` + rows.map(([k, w]) => `<div class="hPadR"><span class="k">${k}</span><span>${esc(w)}</span></div>`).join('')
-      + `<div class="hPadR"><span class="k">keyboard</span><span>arrows / WASD move · Enter · Esc back · &lt; &gt; tune · − + zoom</span></div>`;
+    const noTune = !!this.o.help && !this.cardAvail.has('tune');   // ★★ 11-28 nothing to tune here: say nothing of tuning
+    const rs = noTune ? rows.filter(([, w]) => !/tune/.test(w)) : rows;
+    el.innerHTML = `<div class="hPadH">With a controller</div>` + rs.map(([k, w]) => `<div class="hPadR"><span class="k">${k}</span><span>${esc(w)}</span></div>`).join('')
+      + `<div class="hPadR"><span class="k">keyboard</span><span>arrows / WASD move · Enter · Esc back${noTune ? '' : ' · &lt; &gt; tune'} · − + zoom</span></div>`;
   }
   /** Which cards may be offered (a card with nothing in it has no button — AGENTS.md: never a dead control). */
   /** A chip and its card offered (true) or withdrawn — mapChromeApi chips(). */
