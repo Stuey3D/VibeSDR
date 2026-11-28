@@ -71,11 +71,37 @@ export interface PassTrack {
 /** The default sample spacing (s of pass time): a 10-min pass is 300 samples — the animation interpolates between them. */
 export const PASS_SAMPLE_SEC = 2;
 
+/** The heights of `geo` replaced by a least-squares cubic in the sample index (nulls kept as-is: unused). */
+function smoothAlt(geo: GeoPt[]): number[] {
+  const xs: number[] = [], ys: number[] = [];
+  const n = geo.length, mid = (n - 1) / 2 || 1;
+  geo.forEach((g, i) => { if (g) { xs.push((i - mid) / mid); ys.push(g[2]); } });
+  const out = geo.map((g) => (g ? g[2] : 0));
+  if (xs.length < 8) return out;
+  // normal equations for a0 + a1 x + a2 x² + a3 x³ (x in −1…1, so they are well conditioned)
+  const A = Array.from({ length: 4 }, () => [0, 0, 0, 0, 0]);
+  for (let k = 0; k < xs.length; k++) {
+    const pw = [1, xs[k], xs[k] ** 2, xs[k] ** 3];
+    for (let r = 0; r < 4; r++) { for (let c = 0; c < 4; c++) A[r][c] += pw[r] * pw[c]; A[r][4] += pw[r] * ys[k]; }
+  }
+  for (let c = 0; c < 4; c++) {   // Gauss-Jordan with partial pivoting
+    let piv = c; for (let r = c + 1; r < 4; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    [A[c], A[piv]] = [A[piv], A[c]];
+    if (Math.abs(A[c][c]) < 1e-12) return out;
+    for (let r = 0; r < 4; r++) if (r !== c) { const f = A[r][c] / A[c][c]; for (let k = c; k < 5; k++) A[r][k] -= f * A[c][k]; }
+  }
+  const a = [0, 1, 2, 3].map((r) => A[r][4] / A[r][r]);
+  geo.forEach((g, i) => { if (g) { const x = (i - mid) / mid; const v = a[0] + a[1] * x + a[2] * x * x + a[3] * x * x * x; if (Math.abs(v - g[2]) < 5) out[i] = v; } });
+  return out;
+}
 /** A cubic through the server's points (Catmull-Rom in Earth-fixed km) — position and velocity at any time inside them. */
 function curve(track: SatTrack): ((t: number) => { p: V3; v: V3 } | null) | null {
   const geo = track.geo, t0 = track.geoT0, st = track.geoStep;
   if (!geo || t0 == null || !st || st <= 0) return null;
-  const P = geo.map((g) => (g ? geodeticToEcef(g[0], g[1], g[2]) : null));
+  // ★ the server rounds the height to whole km (fmtNum 0): differenced over a 15 s step that is ±30 m/s of false range rate
+  //   (68 Hz at 437 MHz). The height changes smoothly over a pass window, so a least-squares cubic in time replaces it.
+  const alt = smoothAlt(geo);
+  const P = geo.map((g, i) => (g ? geodeticToEcef(g[0], g[1], alt[i]) : null));
   return (t: number) => {
     const u = (t - t0) / st;
     const i = Math.floor(u);

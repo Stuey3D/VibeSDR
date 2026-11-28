@@ -148,8 +148,10 @@ try {
   const tView = await ev('window.__tView');
   ok(inView && tView <= 500, `the globe and the sky plot are wholly in view within 500 ms (${Math.round(tView)} ms)`);
   ok(await ev(`document.getElementById('satPanel').classList.contains('pv') && getComputedStyle(document.querySelector('#satPanel .sat-box')).display === 'none'`), 'the preview takes the live box\'s place');
+  await until('window.__p.pv.state()?.ready === true', 250);   // the server's track reply (30 ms in this harness)
   const armed = JSON.parse(await ev('JSON.stringify(window.__p.pv.state())'));
-  ok(armed && armed.ready && !armed.playing && Math.abs(armed.t - armed.t) < 1e-9 && armed.frac === 0, `held at AOS for the beat after the scroll (${JSON.stringify(armed)})`);
+  const tArmed = await ev('performance.now() - window.__t0');
+  ok(armed && armed.ready && !armed.playing && armed.frac === 0, `held at AOS for the beat after the scroll (${Math.round(tArmed)} ms: ${JSON.stringify(armed)})`);
   ok(await until(`window.__p.pv.state()?.playing === true`, 1500), 'then it plays');
   const tPlay = await ev('performance.now() - window.__t0');
   ok(tPlay >= 300, `it started after the scroll had settled (${Math.round(tPlay)} ms after the press)`);
