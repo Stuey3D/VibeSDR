@@ -1584,6 +1584,8 @@ public:
     size_t queuedForTest() { std::lock_guard<std::mutex> lk(qm_); return qSamples_; }
     int  decodersRunning() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     uint64_t droppedSamples() const { return dropped_.load(); }
+    /** ★ b98: IQ samples (at the radio's rate) bridged into picture VFOs since start (bridgePicture) — tests, the log. */
+    uint64_t bridgedPictureSamples() const { return bridgedPicture_.load(std::memory_order_relaxed); }
     /** ★ beta94: VFOs decoding as of the last publish (≤ 0.5 s old) — LOCK-FREE, for the health tick on another thread
      *  (decodersRunning() walks chans_, which stop() clears). 0 when stopped. */
     int decodingNow() const { return running_.load() ? decodingNow_.load() : 0; }
@@ -2068,6 +2070,7 @@ private:
             std::unique_ptr<vibedsp::RxPipeline> rx;
             std::shared_ptr<DecoderHost> host;
             bool inWindow = false, running = false;
+            double gapCarry = 0;                 // ★ b98: the fraction of a sample bridgePicture still owes
         };
         bool fax = false;
         std::vector<std::unique_ptr<FaxSub>> subs;
@@ -2522,6 +2525,12 @@ private:
             //   listener's tap does — DecoderHost::feedIq with no samples), so a slot with a hole in it still completes.
             if (gapN > 0) for (auto& c : chans_) if (c->band && c->decoding)
                 bridgeBand(*c, gapN, bufUtc - (double)(isBlock ? (size_t)blockHop : buf.size()) / p_.sampleRate);
+            // ★★ b98 …and in every PICTURE VFO (SSTV, WEFAX) — see bridgePicture: a hole left out shifts the rest of the picture.
+            if (gapN > 0) for (auto& c : chans_) {
+                if (!c->decoding) continue;
+                if (c->rx && isPictureDecoder(c->vfo.dec)) bridgePicture(*c->rx, c->rate, gapN, c->gapCarry);
+                for (auto& sb : c->subs) if (sb->running) bridgePicture(*sb->rx, sb->rate, gapN, sb->gapCarry);
+            }
             // ★ V12 beta 4: what this thread costs, on its OWN clock — the shared FFT, and each VFO's cut + demodulator.
             const uint64_t t0 = vibeThreadCpuNs();
             uint64_t perVfo = 0;
@@ -2609,6 +2618,33 @@ private:
         }
     }
     /** ★ `n` capture samples this queue dropped, ending at `endUtc`: each slice told how many of ITS samples are missing. */
+    /** ★★ b98 (2026-11-28) A PICTURE'S GEOMETRY IS ITS CLOCK. SSTV and WEFAX place every pixel by the time since the
+     *  picture began, so a hole this queue dropped, simply left out, moves the whole rest of the picture left by the hole's
+     *  length: on the Pi 500 V4 (0.1-1 s of IQ dropped a minute, 2026-11-28 14:40-15:19) every Scottie came out torn into
+     *  bands, each shifted, a 100 ms hole being a third of an S2 line, i.e. one colour channel, so the cat turned red and
+     *  cyan. Replayed on a clean recording (tools/sstv_harness --all, 100 ms holes every ~15 s): PSNR against the clean
+     *  decode 6-8 dB with the holes left out, two of nine pictures lost; 21-28 dB with them bridged. So the hole is filled
+     *  with SILENCE of exactly its length, fed through the VFO's own demodulator (behind the blocks already queued in it,
+     *  so the order holds): the picture loses those lines' worth of pixels and keeps its shape.
+     *  ★ Capped: a hole longer than kPictureBridgeMaxSec is not bridged — that picture is lost anyway, and feeding
+     *    seconds of zeros through a demodulator on a box that just fell behind would only deepen the hole.
+     *  ★ FM pictures ignore level, so the AGC rising on the silence costs nothing the decoder reads. */
+    static constexpr double kPictureBridgeMaxSec = 3.0;
+    static bool isPictureDecoder(const std::string& d) { return d == "sstv" || d == "wefax"; }
+    void bridgePicture(vibedsp::RxPipeline& rx, double rate, size_t n, double& carry) {
+        if (rate <= 0 || p_.sampleRate <= 0) return;
+        if ((double)n / p_.sampleRate > kPictureBridgeMaxSec) { carry = 0; return; }
+        const double want = (double)n * rate / p_.sampleRate + carry;
+        long long k = (long long)std::floor(want);
+        carry = want - (double)k;
+        static const std::vector<cf32> zeros(4096, cf32{0.0f, 0.0f});
+        while (k > 0) {
+            const int m = (int)std::min<long long>(k, (long long)zeros.size());
+            rx.feed(zeros.data(), m);
+            k -= m;
+        }
+        bridgedPicture_.fetch_add(n, std::memory_order_relaxed);
+    }
     void bridgeBand(Chan& c, size_t n, double endUtc) {
         if (!c.host) return;
         const double binHz = p_.sampleRate / (double)p_.fftSize, hwC = p_.centreHz + p_.hwOffsetHz;
@@ -2670,6 +2706,7 @@ private:
     std::mutex chanMtx_;   // ★ the worker's channel cut vs retarget()
     std::shared_ptr<std::atomic<bool>> listenerOnFlag_ = std::make_shared<std::atomic<bool>>(false);   // ★ the worker's slotTick and a test's slotTickForTest
     std::atomic<uint64_t> dropped_{0};
+    std::atomic<uint64_t> bridgedPicture_{0};   // ★ b98: see bridgePicture
     std::chrono::steady_clock::time_point lastDropLog_{};
     uint64_t lastIqDrop_ = 0;
     std::time_t startedAt_ = 0;

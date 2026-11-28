@@ -633,6 +633,44 @@ static void lenovoBusyQueue() {
        "★★★ the SAME message, header and all, through the busy queue (" + std::to_string(f1) + " file(s)):\n" + busy.substr(0, 400));
 }
 
+// ── 6c. ★★ b98 — A HOLE IN A PICTURE VFO IS BRIDGED WITH SILENCE OF ITS LENGTH (BgRunner::bridgePicture) ─────────────
+//     The Pi 500's V4 dropped 0.1-1 s of IQ a minute on 2026-11-28 and every SSTV picture came out in shifted bands with
+//     its colours swapped: left out, a hole moves the rest of the picture left by its length. Here the worker's queue is
+//     held long enough that the DSP thread's held chunks overflow (the oldest go = a hole) and the hole must come back,
+//     sample for sample, in the SSTV VFO (and only there: NAVTEX re-finds its own bit clock, a bridge would only delay it).
+static void pictureHoleBridged() {
+    std::printf("── ★★ b98: a hole in an SSTV VFO is bridged with silence of exactly its length ──\n");
+    gallery::Store s; s.setDir(tmpDir("picbridge"));
+    FileSlots slots("", [] { return 4; });
+    const double fs = 250000, centre = 14200000;
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.slots = &slots; p.store = &s;
+    p.profile.centreHz = centre;
+    p.profile.vfos = { bg::Vfo{14230000, "usb", "sstv"}, bg::Vfo{14250000, "usb", "navtex"} };
+    r.start(p);
+    ok(r.running() && r.decodersRunning() == 2, "an SSTV and a NAVTEX VFO, both decoding");
+    const size_t chunk = (size_t)(fs / 1000);
+    std::vector<vibedsp::cf32> iq(chunk, vibedsp::cf32(0.01f, 0.0f));
+    auto feedFor = [&](int ms) { for (int k = 0; k < ms; k++) r.feedIq(iq.data(), (int)iq.size()); };
+    feedFor(200);
+    while (r.queuedForTest() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    ok(r.droppedSamples() == 0 && r.bridgedPictureSamples() == 0, "a quiet queue: nothing dropped, nothing bridged");
+    {
+        auto lk = r.holdQueueForTest();   // ★ the worker cannot pop: the DSP thread holds its chunks, then sheds the oldest
+        feedFor(400);
+    }
+    feedFor(50);
+    while (r.queuedForTest() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const uint64_t d = r.droppedSamples(), b = r.bridgedPictureSamples();
+    ok(d > 0, "the held queue overflowed: " + std::to_string((unsigned long long)d) + " IQ samples dropped ("
+       + std::to_string(d / fs * 1000.0) + " ms)");
+    ok(b == d, "★★ the SSTV VFO was given ALL of it back as silence (" + std::to_string((unsigned long long)b) + " bridged of "
+       + std::to_string((unsigned long long)d) + ") — and only the SSTV VFO (one count per hole, not per VFO)");
+    r.stop();
+}
+
 // ── 7. phase 2: pictures, FT8 summaries, the decoders' demodulators ─────────────────────────────────────────────
 static std::vector<uint8_t> be32(uint32_t v) { return { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; }
 static std::string readFile(const std::string& p) {
@@ -1320,6 +1358,7 @@ int main() {
     navtexStations();
     runner();
     lenovoBusyQueue();
+    pictureHoleBridged();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
