@@ -31447,6 +31447,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (cfg.viewAdmin && !adminOkFor(reqLine, sock)) { reply("403 Forbidden", "{\"ok\":false,\"error\":\"the owner keeps this server's DX log private\"}"); return; }
             if (post && !vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ it already said 401
             const int64_t utc = (int64_t)time(nullptr);
+            /* ★★★ beta97 hotfix THE DATALINK MESSAGE LOG (vibe_avi_service.h msgsJson): every decoded ACARS / VDL2 / HFDL / ADS-C
+             *  message, server-wide — the map's MESSAGES list backfills from it on open (?window=s) and then follows it (?since=id).
+             *  Bounded: at most `max` (≤ 1500, default 300) a call; bodies on the report's own rule. */
+            if (!post && path == "/vibeserver/avmsgs.json") {
+                const double t = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+                const unsigned long long since = std::strtoull(qv("since").c_str(), nullptr, 10);
+                const double win = std::atof(qv("window").c_str());
+                const int mx = std::atoi(qv("max").c_str());
+                bool owner;
+                { std::string sec; { std::lock_guard<std::mutex> lk(g_vsAdminMtx); sec = g_vsAdminSecret; }
+                  owner = sec.empty() || isLoopback(sock->peerAddress()) || adminOkFor(reqLine, sock); }
+                reply("200 OK", vibeavi::sharedTracker().msgsJson(t, since, win > 0 ? win : 3600.0, mx > 0 ? (size_t)mx : 300,
+                                                                 vsModeBlocked("avdata+text") && owner));
+                return;
+            }
             if (!post && path == "/vibeserver/dxlog.json") {
                 vibe::dx::Log::Query q;
                 q.showLocal = qv("local") == "1"; q.showSuspect = qv("suspect") == "1";
