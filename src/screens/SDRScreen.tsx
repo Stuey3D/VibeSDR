@@ -293,7 +293,7 @@ import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMini
 import type { MapCardsIn } from '../components/MapChrome';
 import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers, layerOtherCounts } from '../utils/mapChrome';
 import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
-import { avBandFor, wfModelChannels, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
+import { avBandFor, wfModelChannels, wfModelIsm, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
 import CityPickerModal from '../components/CityPickerModal';
 import BrowserOverlay from '../components/BrowserOverlay';
@@ -16183,7 +16183,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         ?? (vmOn && vmReport ? wfModelVor(vmReport, mapWfSeen.current, !mapWfShown) : null)
         // ★★★ NDB: the band the radio holds, each beacon whose ident was decoded on air marked and stamped (never a listed one)
         ?? (ndbOn && ndbReport ? wfModelNdb(ndbReport, mapWfSeen.current, !mapWfShown) : null)
-        ?? wfModelVfo({ frequency: status.frequency, mode: String(status.mode), bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh });
+        // ★★★ beta97 hotfix (the web's rule, its order): ISM / LoRa — the decoder's channels (lora.chs), else the capture
+        ?? (ismOn && ismReport ? wfModelIsm(ismReport) : null)
+        // ★ ADS-B: its one channel and the 2 MHz either side the capture holds (never a 13 kHz slice of 1090)
+        ?? (adsbLiveHere ? { lo: 1089e6, hi: 1091e6, key: 'adsb', stamps: [], marks: [{ hz: 1090e6, label: 'ADS-B 1090.000', active: true, loHz: 1089e6, hiHz: 1091e6 }], info: 'ADS-B · 1090 MHz · 2 MHz shown' } : null)
+        // ★★ never narrower than 16 of the radio's bins (the drawer widens a frame's view to that too — mwfMinSpan)
+        ?? wfModelVfo({ frequency: status.frequency, mode: String(status.mode), bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh },
+                      status.binBandwidth > 0 ? status.binBandwidth * 16 : 0);
     }
     return {
       servers: { rows: serversRows({ radios: door?.radios ?? [], mine: chosenRadio?.id ?? null, viaDoor: !!door && doorBackRef.current.hasDoor, live: radioLive,

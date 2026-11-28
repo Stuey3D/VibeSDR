@@ -4,7 +4,8 @@
 // view opened, never a listed one.   npx tsx scripts/test_map_wf.ts
 import { readFileSync } from 'node:fs';
 import { mwfCrop, mwfMinSpan, MWF_MIN_BINS } from '../src/utils/mapChrome';
-import { avBandFor, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
+import { ismSanitise } from '../src/services/ism';
+import { avBandFor, wfModelIsm, wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, WF_SPAN_MIN, WF_SPAN_MAX, type WfSeen } from '../src/utils/mapWfModel';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -113,6 +114,30 @@ console.log('── ★★★ beta97 hotfix the minimum span: never fewer than 1
   const mw = readFileSync(new URL('../src/components/MapMiniWaterfall.tsx', import.meta.url), 'utf8');
   ok(/const v = mwfMinSpan\(m\.lo, m\.hi, f\.bins\.length \? f\.spanHz \/ f\.bins\.length : 0\);/.test(mw) && /mwfCrop\(f\.bins, f\.centreHz, f\.spanHz, v\.lo, v\.hi, z\.cols\)/.test(mw)
      && /\{ \.\.\.model, lo: s\.vlo, hi: s\.vhi \}/.test(mw), 'the drawer crops to the widened span, and its markers and stamps are placed on it');
+}
+
+console.log('── ★★★ beta97 hotfix ISM / LoRa: the decoder\'s channels (lora.chs), else the capture — the web\'s rule, its module ──');
+{
+  // a type:"ism" report as the hotfix server sends it (868 band, three running channels)
+  const raw = { type: 'ism', band: '868', bandName: '868 MHz', centre: 868.6e6, rate: 2.4e6, devices: [],
+    lora: { chans: 3, plan: 8, dets: 0, frames: 0, badCrc: 0, texts: 0, mapped: 0, dropped: 0, found: 3, foundKnown: 3,
+            chs: [{ hz: 869618000, bw: 62500, net: 'meshcore' }, { hz: 869525000, bw: 250000, net: 'meshtastic' }, { hz: 868100000, bw: 125000, net: 'lorawan' }, { hz: 'x' }, { hz: -5 }] } };
+  const rep = ismSanitise(raw)!;
+  ok(rep.lora?.chs?.length === 3 && rep.lora.chs[0].net === 'meshcore', `lora.chs read and checked (bad entries dropped: ${rep.lora?.chs?.length})`);
+  const m = wfModelIsm(rep)!;
+  ok(m.marks.length === 3 && m.marks.some((k) => k.label === 'MeshCore 869.618') && m.marks.some((k) => k.label === 'Meshtastic 869.525') && m.marks.some((k) => k.label === 'LoRaWAN 868.100'),
+     `one labelled marker per running channel (${m.marks.map((k) => k.label).join(' · ')})`);
+  ok(m.lo < 868.1e6 - 62.5e3 && m.hi > 869.525e6 + 125e3, `the span holds the whole channel set and a margin (${m.info})`);
+  const old = ismSanitise({ ...raw, lora: { ...raw.lora, chs: undefined } })!;
+  const mo = wfModelIsm(old)!;
+  ok(mo.marks.length === 0 && mo.lo === 868.6e6 - 1.2e6 && mo.hi === 868.6e6 + 1.2e6, 'an older server (no list): the whole capture, centre ± rate / 2');
+  const v = wfModelVfo({ frequency: 868.6e6, mode: 'usb', bandwidthLow: 0, bandwidthHigh: 2600 }, 16 * 2.4e6 / 2048);
+  ok(v.hi - v.lo >= 16 * 2.4e6 / 2048 - 1, 'the dial slice is never narrower than 16 of the radio\'s bins');
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  const i1 = sdr.indexOf('?? (ismOn && ismReport ? wfModelIsm(ismReport) : null)'), i2 = sdr.indexOf("?? (adsbLiveHere ? { lo: 1089e6, hi: 1091e6, key: 'adsb'"), i3 = sdr.indexOf('status.binBandwidth > 0 ? status.binBandwidth * 16 : 0');
+  ok(i1 > 0 && i2 > i1 && i3 > i2, 'the app picks in the web\'s order: VOR · NDB · datalink · ISM · ADS-B (1090 ± 1 MHz) · the dial slice (16-bin floor)');
+  const shared = readFileSync(new URL('../src/utils/mapWfModel.ts', import.meta.url), 'utf8');
+  ok(/export function wfModelIsm\(/.test(shared) && /export function wfModelVfo\(v: \{ frequency: number; mode: string; bandwidthLow: number; bandwidthHigh: number \}, minSpan = 0\)/.test(shared), 'one shared module (src/utils/mapWfModel.ts) for the app and the web');
 }
 
 console.log(`test_map_wf: ${pass} passed, ${fail} failed`);

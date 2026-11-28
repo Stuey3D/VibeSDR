@@ -44,7 +44,9 @@ export interface IsmMsg { ago: number; from: string; text: string; net?: string;
   snr?: number; sf?: number }
 export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number;
   /** ★ V12 2026-11-12: channels FOUND ON AIR running / known on this band (absent on an older server = 0) */
-  found: number; foundKnown: number }
+  found: number; foundKnown: number;
+  /** ★★★ beta97 hotfix the running channel set (meshcore, meshtastic, lorawan, loraaprs, fanet, meshcom), live; absent = older */
+  chs?: Array<{ hz: number; bw?: number; net?: string }> }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 /** ★ `region` (beta72): where the band is used — the BANDS list's second line; absent from an older server. */
 export interface IsmBand { id: string; name: string; hz: number; region?: string }
@@ -148,7 +150,13 @@ export function ismSanitise(msg: any): IsmReport | null {
     meters: num(msg.meters), damaged: num(msg.damaged), collector: num(msg.collector), wmGap: num(msg.wmGap),
     lora: lo ? { chans: num(lo.chans) ?? 0, plan: num(lo.plan) ?? 0, dets: num(lo.dets) ?? 0, frames: num(lo.frames) ?? 0, badCrc: num(lo.badCrc) ?? 0,
                  texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0,
-                 found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0 } : undefined,
+                 found: num(lo.found) ?? 0, foundKnown: num(lo.foundKnown) ?? 0,
+                 /* ★★★ beta97 hotfix the running LoRa channel set (each centre, width, network) — the drawer's markers */
+                 chs: Array.isArray(lo.chs) ? (lo.chs as unknown[]).slice(0, 64).flatMap((c) => {
+                   const o = (c && typeof c === 'object' ? c : {}) as Record<string, unknown>;
+                   const hz = num(o.hz), bw = num(o.bw);
+                   return hz && hz > 0 ? [{ hz, ...(bw && bw > 0 ? { bw } : {}), ...(typeof o.net === 'string' ? { net: o.net.slice(0, 16) } : {}) }] : [];
+                 }) : undefined } : undefined,
     msgs: lo ? msgsOf(msg.msgs) : undefined,
     peak: num(msg.peak), clipPct: num(msg.clipPct),
     unk: Array.isArray(msg.unk) ? ismUnkSanitise(msg.unk, num, str) : undefined,
