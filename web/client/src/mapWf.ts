@@ -68,7 +68,7 @@ export class MapWf {
   /** the slice's own levels (palette index space) and the trace's (normalised), followed smoothly; −1 = not yet */
   private lvFloor = -1; private lvTop = -1; private trLo = -1; private trHi = -1;
   /** for the drivers: rows drawn, history breaks, stamps written, the span shown */
-  stats = { lvLo: 0, lvSpan: 0, skipped: 0, gaps: 0, inside: true, idxMin: 0, idxMax: 0, lut0: '', binsIn: 0, cHz: 0, bwHz: 0, rows: 0, breaks: 0, stamps: 0, lo: 0, hi: 0, marks: 0, labels: [] as string[], stampLog: [] as Array<{ text: string; hz: number; row: number }> };
+  stats = { trace: true, lvLo: 0, lvSpan: 0, skipped: 0, gaps: 0, inside: true, idxMin: 0, idxMax: 0, lut0: '', binsIn: 0, cHz: 0, bwHz: 0, rows: 0, breaks: 0, stamps: 0, lo: 0, hi: 0, marks: 0, labels: [] as string[], stampLog: [] as Array<{ text: string; hz: number; row: number }> };
 
   constructor() {
     this.R = ringRowsFor();
@@ -104,6 +104,10 @@ export class MapWf {
     this.marksSig = '';   // positions follow the width
     this.stampsAt = [];
   }
+  /** ★★★ beta97 hotfix (Stuart 11-28): NO spectrum trace in the mini view — the waterfall only, the whole box (the trace code
+   *  below stays for a later change of mind, never reached while this is off) */
+  private readonly showSpec = false;
+  private specH() { return this.showSpec ? specHOf(this.h) : 0; }
   /** One ring row into an ImageData row of the box's width: each pixel the PEAK of the columns it covers. */
   private rowInto(slot: number, d: Uint8ClampedArray, off: number, w: number, lut: Uint8Array) {
     const k = this.kind[slot];
@@ -120,7 +124,7 @@ export class MapWf {
   /** The whole visible history from the ring (after a resize), and the idents stamped in it. */
   private renderAll() {
     if (!this.lut || !this.w || !this.h || !this.count) return;
-    const top = specHOf(this.h), n = Math.min(this.count, this.h - top);
+    const top = this.specH(), n = Math.min(this.count, this.h - top);
     if (n <= 0) return;
     const img = this.ctx.createImageData(this.w, n);
     for (let r = 0; r < n; r++) this.rowInto((this.head - r + this.R) % this.R, img.data, r * this.w * 4, this.w, this.lut);
@@ -141,7 +145,7 @@ export class MapWf {
   /** The newest ring row drawn at the top of the history, the rest scrolled down one. */
   private drawNewest(slot: number) {
     if (!this.row || !this.lut || slot < 0) return;
-    const top = specHOf(this.h), wfH = this.h - top;
+    const top = this.specH(), wfH = this.h - top;
     if (wfH > 1) this.ctx.drawImage(this.cv, 0, top, this.w, wfH - 1, 0, top + 1, this.w, wfH - 1);
     this.rowInto(slot, this.row.data, 0, this.w, this.lut);
     this.ctx.putImageData(this.row, 0, top);
@@ -154,7 +158,7 @@ export class MapWf {
   }
   /** A strip of the history, y rows down from its top (for the drivers: the same rows before and after a resize). */
   strip(y: number): number[] {
-    const top = specHOf(this.h);
+    const top = this.specH();
     const d = this.ctx.getImageData(0, top + y, this.w, 1).data, out: number[] = [];
     for (let i = 0; i < 64; i++) { const x = Math.floor((i + 0.5) * this.w / 64) * 4; out.push(d[x] + d[x + 1] + d[x + 2]); }
     return out;
@@ -170,10 +174,15 @@ export class MapWf {
     const tNow = performance.now();
     if (tNow - this.lastRowAt < MIN_ROW_MS) { this.stats.skipped++; return; }
     this.lastRowAt = tNow;
+    this.stats.trace = this.showSpec;
     const { w, h, ctx } = this;
     const { centerHz, bwHz } = f;
-    const specH = specHOf(h), wfTop = specH, wfH = h - specH;
-    const lo = m.lo, hi = m.hi > m.lo ? m.hi : m.lo + 1;
+    const specH = this.specH(), wfTop = specH, wfH = h - specH;
+    /* ★★★ beta97 hotfix (Stuart): the part of a span outside what the radio sends must not look like a gap — the span is
+     *  CLAMPED to the capture (a dial near the capture's edge, a wide pad), so every column is data */
+    const capLo = centerHz - bwHz / 2, capHi = centerHz + bwHz / 2;
+    let lo = m.lo, hi = m.hi > m.lo ? m.hi : m.lo + 1;
+    if (Math.min(hi, capHi) - Math.max(lo, capLo) > 0) { lo = Math.max(lo, capLo); hi = Math.min(hi, capHi); }
     // ★ a retune (the frame's own window) or the model's (a scan's next window) breaks the history
     const key = `${Math.round(centerHz)}|${Math.round(bwHz)}|${Math.round(lo)}|${Math.round(hi)}|${m.key}`;
     if (key !== this.lastKey) {
@@ -242,6 +251,7 @@ export class MapWf {
     if (m.stamps?.length) for (const st of m.stamps) this.stamp(st.hz, st.text, lo, hi, wfTop);
     this.stampsAt = this.stampsAt.filter((r) => this.rowN - r.row < 40);
     // the trace — the page's: filled with the palette gradient, outlined in the palette's top colour, its peak hold
+    if (specH > 0) {
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, specH);
     const H = specH - 1, S = this.cropS;
     // ★ the trace scaled to the slice the same way: its floor a little above the bottom, its peak near the top
@@ -260,6 +270,7 @@ export class MapWf {
       ctx.strokeStyle = look.peakLine; ctx.lineWidth = 1; ctx.stroke();
     }
     ctx.fillStyle = '#1b2733'; ctx.fillRect(0, specH - 1, w, 1);
+    }
     this.marks(m, lo, hi);
     this.stats.lo = lo; this.stats.hi = hi; this.stats.lut0 = `${lut[1020]},${lut[1021]},${lut[1022]}`;
     let mn = 255, mx = 0; for (let x = 0; x < COLS; x++) { const v = out[x]; if (v === v) { if (v < mn) mn = v; if (v > mx) mx = v; } }
@@ -324,7 +335,7 @@ export class MapWf {
         + (shown ? `<span class="mwLbl${k.active ? ' on' : ''}" style="left:${pct(k.hz).toFixed(2)}%;top:${2 + r * 13}px" title="${esc(k.label)}">${esc(text)}</span>` : ''));
       if (shown) labels.push(text);
     }
-    this.marksEl.style.setProperty('--mw-spec', `${specHOf(this.h) / this.dpr}px`);   // ★ the ticks span the trace only, never the history
+    this.marksEl.style.setProperty('--mw-spec', `${(this.specH() || 14) / this.dpr}px`);   // ★ the ticks span the trace only, never the history (no trace: a short tick)
     this.marksEl.innerHTML = html.join('');
     /* ★ Stuart 16:11: an edge label is shifted INWARD to stay whole (the page's signal labels do the same); its line stays
      *  at the true frequency. Measured once per rebuild of the markers — they change only with the span or the channels. */
