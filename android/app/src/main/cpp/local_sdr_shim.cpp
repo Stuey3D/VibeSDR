@@ -46111,7 +46111,7 @@ bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& e
     g_bgCfgGen.fetch_add(1);
     // ★★★ b97 (Stuart 11-28): a LOCKED radio never waits — say so, not "wait 300 s"
     if (c.on && g_vsLockedCentre.load() > 0.0)
-        LOGI("background decoding: ON, %zu profile(s) â this radio's range is locked: it runs all the time, at once and "
+        LOGI("background decoding: ON, %zu profile(s) — this radio's range is locked: it runs all the time, at once and "
              "alongside listeners (listeners come first for the CPU)", c.profiles.size());
     else LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
     return true;
