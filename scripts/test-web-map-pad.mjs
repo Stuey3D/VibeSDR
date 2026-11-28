@@ -138,6 +138,8 @@ async function radioDatalink(p, url) {
     //    highlight inside it → BACK closes the card, the highlight on the SAME row → DOWN row by row, always in view →
     //    BACK leaves the list, the highlight on the LIST stop
     const CARD = `[...document.querySelectorAll('.trkView:not([hidden]) .maplibregl-popup, .trkView:not([hidden]) .leaflet-popup, #ndbCard:not([hidden])')].filter((c) => c.getClientRects().length)`;
+    // ★ the AIRCRAFT tab — its rows are aircraft placed on the map (a MESSAGES row's aircraft may have no position, so no card)
+    await p.ev(`(() => { const t = ${V}.querySelector('.trkList .hd .tab[data-tab="aircraft"]'); if (t && t.getAttribute('aria-selected') !== 'true') t.click(); return 1; })()`); await sleep(900);
     const box = await walkTo((x) => x.box && x.card === 'list');
     if (box) {
       const pre = process.env.PAD_DIAG ? await p.ev(`JSON.stringify({ act: (document.activeElement?.className || document.activeElement?.tagName || '').slice(0, 50), hl: (document.querySelector('.gpFocus')?.className || '').slice(0, 50), scope: [...document.querySelectorAll('[data-navscope]')].map((e) => e.className.slice(0, 30)), grab: (document.querySelector('.gpGrab')?.className || '').slice(0, 30) })`) : '';
@@ -148,6 +150,7 @@ async function radioDatalink(p, url) {
       const rowKey = await p.ev(`document.querySelector('.gpFocus')?.dataset.key || ''`);
       ok(!!r && r.row, `${tag}: ① ENTER on the LIST puts the highlight on a row (${rowKey || await p.ev(`JSON.stringify({ hl: (document.querySelector('.gpFocus')?.className || '-').slice(0, 60), rows: ${V}.querySelectorAll('.trkRow').length, pos: ${V}.querySelectorAll('.trkRow:not(.nopos)').length, pane: ${V}.querySelector('.trkList')?.dataset.pane, tab: window.__vibeAirSea?.()?.tab })`)})`);
       if (r?.row) {
+        if (process.env.PAD_DIAG && 0) console.log('   SCOPES', await p.ev(`JSON.stringify([...document.querySelectorAll('.open:not([data-navbox]), [data-navscope]')].filter((e) => e.getClientRects().length).map((e) => (e.id || e.className).slice(0, 40) + ' z=' + getComputedStyle(e).zIndex + ' has=' + e.contains(document.querySelector('.gpFocus'))))`));
         await p.key('Enter'); await sleep(1300);
         const inCard = await p.ev(`(() => { const c = ${CARD}; const e = document.querySelector('.gpFocus'); return JSON.stringify({ cards: c.length, inCard: !!e && c.some((x) => x.contains(e)), sel: !!${V}.querySelector('.trkRow.sel') }); })()`);
         ok(/"cards":[1-9]/.test(inCard) && /"inCard":true/.test(inCard), `${tag}: ② ENTER on a row opens its card and the highlight moves INTO it (${inCard})`);
