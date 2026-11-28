@@ -15,7 +15,7 @@
  *
  * ★ KEEP IT STABLE: add, never rename or remove — a second map is built on it. The ids are mapCards.ts CARD_IDS.
  */
-import { TrackView, type TrackViewOpts, type LatLon, type LayerGlyph, type MapHost } from './mapChrome';
+import { TrackView, esc, type TrackViewOpts, type LatLon, type LayerGlyph, type MapHost } from './mapChrome';
 import type { CardId } from '../../../src/utils/mapCards';
 
 export type { CardId, LatLon, LayerGlyph, MapHost };
@@ -58,10 +58,56 @@ export interface MapChrome {
   onCard(f: ((id: CardId, open: boolean) => void) | null): void;
 }
 
-export function mountMapChrome(o: MapChromeOpts): MapChrome {
+/* ══ ★★★ b97-maps-port ADDITIONS (the amateur / spots map and the directory's community map). Additive only — nothing above
+ *  renamed or removed. ★ b97-integrate merge (the MERGE NOTE): the HOST MAP is TrackView's own (TrackViewOpts.hostMap,
+ *  bootHost; hide() destroys it) and ONE MapHost (mapChrome.ts) — these calls are TrackView's public methods, no private
+ *  member is reached into any more (test-web-digimap-cards / test-community-render). ══ */
+
+/** ★ hostMap is TrackViewOpts' own now (b96-mapcards: TrackView boots the host's map itself — bootHost); the name is kept. */
+export type MapChromeHostOpts = MapChromeOpts;
+/** A LIST row in the house look (main.ts trkRowHtml's shape, without the aircraft tags): a colour dot, the name, a small
+ *  `pill` (distance | band …), the subtitle; the age on the right. `key` is what onRow hands back. */
+export function mapRowHtml(x: { key: string; colour: string; name: string; second?: string; pill?: string[]; age?: string; dim?: boolean; extra?: string }): string {
+  const pill = (x.pill || []).filter(Boolean);
+  return `<div class="trkRow kvRow${x.dim ? ' nopos' : ''}" role="button" tabindex="0" data-nofocus="1" data-key="${esc(x.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${/^#[0-9a-fA-F]{3,8}$|^rgba?\([\d.,\s]+\)$/.test(x.colour) ? x.colour : '#9fb0c2'}"></i><span class="nmT">${esc(x.name)}</span>`
+    + (pill.length ? `<span class="kv">${pill.map((t) => `<span>${esc(t)}</span>`).join('<i></i>')}</span>` : '') + `</b><small>${esc(x.second || '')}</small></span>`
+    + `<span class="rg"></span><span class="ag"><span class="agL">${esc(x.age || '')}</span><span class="agS">${esc(String(x.age || '').replace(/^(\d+)\s*([a-z]).*$/i, '$1$2'))}</span></span>${x.extra || ''}</div>`;
+}
+export interface MapChromeMore extends MapChrome {
+  /** ★ The host's own section in MAP CONTROLS (shown once asked for): its filters (band, mode, NAVTEX type …). */
+  controls(): HTMLElement;
+  /** ★ The time filter in MAP CONTROLS (TIME): ranges, the current one; onRange from the opts or `f`. */
+  ranges(ranges: Array<{ id: string; label: string; words: string }>, current: string, f?: (id: string) => void, label?: string): void;
+  /** ★ The KEY fold in MAP CONTROLS ('' = none). */
+  legend(html: string): void;
+  /** ★ A card's title (and its chip's caption) — SERVERS as the community map's RECEIVERS. */
+  retitle(id: CardId, title: string): void;
+  /** ★ The shared auto fit on a host map: frame now / let it look again / hold it (a station chosen). */
+  fitNow(): void;
+  fitPoke(): void;
+  fitPause(): void;
+  /** ★ A card's body for the host's own rows (the community map's RECEIVERS, with LISTEN and ONLY THIS); `avail` offers
+   *  its chip. The host owns what is in it from then on. */
+  cardBody(id: CardId, avail?: boolean): HTMLElement;
+  /** ★ The view's root (cards, rows) — for a host that fills a row after drawing it (a NAVTEX message's text). */
+  readonly root: HTMLElement;
+}
+
+export function mountMapChrome(o: MapChromeHostOpts): MapChromeMore {
   let toggleCb: ((id: string, on: boolean) => void) | null = null;
-  const v = new TrackView({ ...o, onToggle: (id, on) => { toggleCb?.(id, on); o.onToggle?.(id, on); } });
+  let rangeCb: ((id: string) => void) | null = null;
+  const v = new TrackView({ ...o, onToggle: (id, on) => { toggleCb?.(id, on); o.onToggle?.(id, on); }, onRange: (id) => { rangeCb?.(id); o.onRange?.(id); } });
   return {
+    get root() { return v.root; },
+    cardBody: (id, avail = true) => v.cardBody(id, avail),
+    controls: () => v.controlsSlot(),
+    ranges: (r, cur, f, label) => { if (f) rangeCb = f; v.setRanges(r, cur, label); },
+    legend: (h) => v.setLegend(h),
+    retitle: (id, title) => v.retitle(id, title),
+    fitNow: () => v.fitNow(),
+    fitPoke: () => v.fitPoke(),
+    fitPause: () => v.fitPause(),
     view: v,
     show: (rx) => v.show(rx),
     hide: () => v.hide(),

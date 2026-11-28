@@ -24,3 +24,7 @@ export { AIS_COLOURS } from '../../src/services/tracks';
 //    layer's own class silhouettes and its ONE rule (iconClassOf — the emitter category, else the aircraft data, else the
 //    type's family, else the jet), lifted from web/mapkit/adsblayer.js's ACICONS block by build-community-kit.mjs.
 export { iconClassOf as aircraftIconClass, acIconSvg as aircraftIconSvg, AC_CLASS_NAME as AIRCRAFT_CLASS_NAMES, ICONS as AIRCRAFT_ICONS } from 'vibe:acicons';
+// ★★ V12 b97 MESH NODES WITH IMPLAUSIBLE SELF-REPORTED LOCATIONS (Stuart 11-27, src/utils/meshPlausible.ts): the ISM maps' own
+//    rule for the community map's MeshCore layer — a suspect stays drawn (a "?" and dimmed), says why on its card, and is never
+//    a furthest / framed by FIT or AUTO. It needs the node's route (relays), which a server's mesh row does not carry yet.
+export { meshSuspect, meshSuspectWords, MESH_SUSPECT_KM, MESH_SUSPECT_HOP_KM } from '../../src/utils/meshPlausible';

@@ -172,28 +172,27 @@ try {
     await Promise.race([new Promise((r) => { mws.onopen = r; }), sleep(5000)]);
     const msend = (method, params = {}) => Promise.race([new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); }), sleep(10000).then(() => ({}))]);
     const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
-    const mstate = () => mev(`JSON.stringify({ rads: document.getElementById('rads').hidden ? null : [...document.querySelectorAll('#rads button')].map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '*' : '')).join(' | '),
+    const mstate = () => mev(`JSON.stringify({ rads: !document.querySelector('.slot-ctl [data-radio]') ? null : [...document.querySelectorAll('.slot-ctl [data-radio]')].map(b => b.textContent + (b.getAttribute('aria-pressed') === 'true' ? '*' : '')).join(' | '),
       calls: (typeof spots === 'undefined' ? [] : spots.map(s => s.callsign)).sort().join(' ') })`).then((v) => JSON.parse(v || '{}'));
     let m = {};
     for (let i = 0; i < 40; i++) { m = await mstate(); if (m.rads) break; await sleep(250); }
     ok(m.rads === 'ALL RADIOS* | HF loop · 2 | VHF discone · 2', `the radio keys (${m.rads})`);
     ok(m.calls === 'G4AONE G4BOTH M0BONE OH2OLD', `ALL: every station (${m.calls})`);
     // ★★ beta92 (Stuart 11-23): the card says SPOTS (reports sent) FROM the transmitters (the points)
-    const card = await mev(`(document.getElementById('summary') || {}).textContent || ''`);
-    ok(/SPOTS\s*1,234\s*from 4 transmitters/.test(card), `the card: 1,234 spots from 4 transmitters (${card})`);
+    const card = await mev(`(() => { MC.card('stats', true); const b = document.querySelector('.trkCard2[data-card="stats"] .stTab[data-st="SUMMARY"]'); if (b) b.click(); return document.querySelector('.trkCard2[data-card="stats"] .stBody').textContent; })()`);
+    ok(/SENT\s*1,234/.test(card) && /ON THE MAP\s*4/.test(card), `STATS: 1,234 spots sent, 4 transmitters on the map (${card})`);
     // ★★ beta94 (Stuart 11-24: "still not showing total spots") — the TOTALS panel says the spots sent and the transmitters ON THE MAP
-    const totals = () => mev(`(() => { const t = (document.getElementById('stats') || {}).textContent || ''; const i = t.indexOf('TOTALS'); return i < 0 ? '' : t.slice(i); })()`);
+    const totals = () => mev(`(() => { const b = document.querySelector('.trkCard2[data-card="stats"] .stTab[data-st="SUMMARY"]'); if (b) b.click(); return (document.querySelector('.trkCard2[data-card="stats"] .stBody') || {}).textContent || ''; })()`);
     let tt = await totals();
-    ok(/Spots sent to PSK Reporter\s*1,234/.test(tt) && /every radio on this server/.test(tt) && !/not split by radio/.test(tt), `TOTALS: spots sent to PSK Reporter 1,234, every radio (${tt.slice(0, 160)})`);
-    ok(/Transmitters on the map\s*4/.test(tt) && !/Stations\s*\d/.test(tt), 'TOTALS: "Transmitters on the map 4", no bare "Stations" row');
-    await mev(`document.querySelector('#rads [data-radio="${A}"]').click()`);
+    ok(/SENT\s*1,234/.test(tt) && /spots to PSK Reporter/.test(tt) && !/every radio on this server/.test(tt), `TOTALS: spots sent to PSK Reporter 1,234, every radio (${tt.slice(0, 160)})`);
+    ok(/ON THE MAP\s*4/.test(tt), 'STATS: ON THE MAP 4 (transmitters with a locator)');
+    await mev(`document.querySelector('.slot-ctl [data-radio="${A}"]').click()`);
     for (let i = 0; i < 20; i++) { m = await mstate(); if (!/M0BONE/.test(m.calls)) break; await sleep(150); }
     ok(m.calls === 'G4AONE G4BOTH OH2OLD' && /HF loop · 2\*/.test(m.rads || ''), `HF loop: its two + the old one (${m.calls})`);
-    for (let i = 0; i < 20; i++) { tt = await totals(); if (/Transmitters on the map\s*3/.test(tt)) break; await sleep(150); }
-    const card1 = await mev(`(document.getElementById('summary') || {}).textContent || ''`);
-    ok(/Transmitters on the map\s*3/.test(tt) && /Spots sent to PSK Reporter\s*1,234/.test(tt) && /not split by radio/.test(tt) && /SPOTS · ALL RADIOS/.test(card1),
+    for (let i = 0; i < 20; i++) { tt = await totals(); if (/ON THE MAP\s*3/.test(tt)) break; await sleep(150); }
+    ok(/ON THE MAP\s*3/.test(tt) && /SENT\s*1,234/.test(tt) && /every radio on this server/.test(tt),
        'one radio picked: its 3 transmitters on the map, the spots still the whole server\'s and said so (one log per server)');
-    await mev(`document.querySelector('#rads [data-radio=""]').click()`);
+    await mev(`document.querySelector('.slot-ctl [data-radio=""]').click()`);
     for (let i = 0; i < 20; i++) { m = await mstate(); if (/M0BONE/.test(m.calls)) break; await sleep(150); }
     ok(m.calls === 'G4AONE G4BOTH M0BONE OH2OLD', 'ALL RADIOS again: every station');
     try { mws.close(); } catch {}

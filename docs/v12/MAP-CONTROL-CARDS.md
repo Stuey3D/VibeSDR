@@ -147,9 +147,11 @@ cherry-picked here.
 
 Covered (all are `TrackView`): the AIR & SEA map in every state (viewer, ADS-B, DATALINK, AIS, MARITIME, SONDES, VOR MAP,
 NDB, opened from NAVTEX / DSC / HFDL boxes and the gallery), the ISM mesh map, the ISM gallery map.
-Left as they are, on purpose: the AMATEUR / spots map (its own window, `digiMap.ts`, a different shape — a candidate for
-the same cards later), the satellite sky plot / ORBCOMM (satellites.ts, not a TrackView), the handheld page's map
-(handheldMap.ts, pad-only screen), the community map (directory, not the server page).
+★ b97 (branch b97-maps-port): the AMATEUR / spots map (its own window) and the directory's COMMUNITY MAP are on the cards
+too — through `mountMapChrome` with `hostMap` (each keeps its own MapLibre / Leaflet map and layers; the chrome keeps the
+scale chip, the credits' fold and the shared AUTO / FIT on it). See "The standalone pages" below.
+Left as they are, on purpose: the satellite sky plot / ORBCOMM (satellites.ts, not a TrackView), the handheld page's map
+(handheldMap.ts, pad-only screen).
 
 ## Skins and transparency
 
@@ -211,3 +213,18 @@ outside tap, or BACK; `useListNav` for the pad; `AccessibilityInfo` reduce-motio
    the sources (its aircraft.json poll already has `feeds` and `radios`), as main.ts `asCardsSync` does.
 6. Copy: the AboutOverlay note's "the app follows" line, the sdrTour if it mentions the map's strip, the watch tutorial
    untouched (no map there).
+
+## The standalone pages (b97, branch b97-maps-port)
+
+- `web/client/src/mapChromeStandalone.ts` → `scripts/gen-mapchrome-source.mjs` → `window.VibeMapChrome` (mountMapChrome,
+  mapRowHtml, esc, ago) in two GENERATED copies: `web/client/src/generated/mapChromeSource.ts` (MAP_CHROME_JS — the
+  amateur map's window inlines it; lazy, with the map) and `directory/public/map-chrome.js` (the community map page).
+  index.html's `.edgeDock` / `.gpFocus` / `.trkView` rules are lifted in; the radio page's gamepad, chunk cache, Leaflet
+  asset, GPU probe and layer sources are stubbed. `build-web.mjs` writes both first; `run-tests.sh` runs `--check`.
+- API additions (mapChromeApi.ts, additive): `hostMap` / `MapHost` (the host's own map in the chrome's holder; `points` =
+  the shared AUTO / FIT on it), `controls()` (the host's section of MAP CONTROLS), `ranges()`, `legend()`, `retitle()`,
+  `cardBody()`, `fitNow / fitPoke / fitPause`, `root`, `mapRowHtml()` (rows carry data-nofocus: the host focuses its map).
+  ★ hostMap reaches TrackView's private members by name (listed in the file) — rename them there and here together.
+- Layout check for any map on the cards: `scripts/lib/map-chrome-layout.mjs` (visible, inside the window / safe rectangle,
+  no overlaps) at 1440×900, 390×844, 412×915, 915×412, 956×376 (L62 R62 B20), 667×320 — used by
+  `scripts/test-web-digimap-cards.mjs` (the built page, no server) and `directory/scripts/test-community-render.mjs`.

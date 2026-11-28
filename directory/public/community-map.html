@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Community Map — VibeSDR</title>
+<meta name="description" content="Aircraft, shipping, NAVTEX, radiosondes, APRS and MeshCore heard by VibeServer receivers around the world, on one map.">
+<!-- ★★★ THE VibeSDR COMMUNITY MAP (Stuart, 2026-11-25). docs/v12/COMMUNITY-MAP.md (v12-experimental) has the design.
+     ★★★ THIS PAGE IS THE ONLY THING THE WORKER SERVES FOR IT, plus one small list (/api/community). Everything drawn comes
+         STRAIGHT FROM THE RECEIVER THAT HEARD IT, over that receiver's own tunnel (community-map.js dataUrl).
+     ★★ LAYERED: the map and the receivers draw at once; each receiver's sections arrive in parallel (≤ 6 at a time) and are
+        drawn as they come; a slow or dead one never holds up the rest. Numerous things are GPU layers (MapLibre GeoJSON),
+        clustered when zoomed out. The icons and cards are the server maps' own (community-kit.js). -->
+<link rel="stylesheet" href="/mapgl/vendor/maplibre-gl.css">
+<style>
+  /* ★★★ b97 THE MAP CARD SYSTEM (docs/v12/MAP-CONTROL-CARDS.md; map-chrome.js = web/client/src/mapChrome.ts, generated):
+   *  the map takes the screen; ✕ (back to the directory) top-left; LAYERS / STATS / RECEIVERS / MAP CONTROLS chips pop out
+   *  their cards; the LIST drawer (the NAVTEX messages and everything else on the map) bottom-left; HELP and the scale
+   *  bottom-right. The old header rows, bars, FIT / KEY buttons, status line and side panels are gone (not hidden). Only
+   *  what this page draws INSIDE the map and the cards is styled here: the cards (popups) and the receivers' rows. */
+  :root { --accent: #ffb833; --line: rgba(255,176,0,.22); --dim: rgba(255,160,0,.55); --text: #ffcc88; --panel: #0d0a02;
+          --free: #28A745; --busy: #e05050; --temp: #4fc3f7; --down: #6b7785; }
+  html, body { margin: 0; height: 100%; background: #0b1014; color: #dfe7ef; touch-action: manipulation; }
+  a { color: var(--accent); }
+  /* the popups (the servers' own cards) */
+  .maplibregl-popup { z-index: 6; }
+  .maplibregl-popup-content { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 60vh; overflow: auto; }
+  .maplibregl-popup-tip { border-top-color: var(--line) !important; border-bottom-color: var(--line) !important; }
+  .maplibregl-popup-close-button { color: var(--dim); font-size: 16px; }
+  .pc .t, .trkCard .t { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .pc .r, .trkCard .r { display: flex; gap: 8px; } .pc .k, .trkCard .k { color: var(--dim); min-width: 70px; }
+  .pc .src { font-size: 10px; color: var(--dim); margin: 1px 0 3px; line-height: 1.35; }
+  .pc .src a { color: var(--dim); }
+  .pc .off { text-decoration: line-through; opacity: .7; }
+  .pc .hb { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 5px; }
+  .pc .hb div { display: flex; justify-content: space-between; gap: 10px; }
+  .pc .sus { color: #ffcf7a; margin-top: 4px; }
+  .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(0,0,0,0.6); color: #9fb0c2; font-size: 9px; }
+  .maplibregl-ctrl-attrib a { color: #9fb0c2; }
+  /* the RECEIVERS card's rows (LISTEN, ONLY THIS) and the LIST's opened NAVTEX message */
+  .rxRow { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; padding: 9px 12px; border-bottom: 1px solid #151f29; cursor: pointer; }
+  .rxRow:hover, .rxRow:focus-visible { background: #1a2632; outline: none; }
+  .rxRow.sel { box-shadow: inset 3px 0 0 #ffd34d; background: #1a2632; }
+  .rxRow .nm { font-weight: 600; overflow-wrap: anywhere; }
+  .rxRow .where, .rxRow .now { font-size: 11px; color: #93a3b4; }
+  .rxRow .st { font-size: 11px; } .rxRow .st.free { color: var(--free); } .rxRow .st.busy { color: var(--busy); } .rxRow .st.temp { color: var(--temp); } .rxRow .st.down { color: var(--down); }
+  .rxRow .lays { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+  .rxRow .lay { font-size: 10px; border: 1px solid #33475a; border-radius: 999px; padding: 1px 7px; display: inline-flex; gap: 4px; align-items: center; }
+  .rxRow .lay i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .rxRow .acts { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .rxRow .listen { font: 700 11px/1 system-ui, sans-serif; letter-spacing: .08em; padding: 7px 10px; border-radius: 6px; background: #ffd34d; color: #111; text-decoration: none; white-space: nowrap; }
+  .rxRow.down .listen { background: transparent; color: #8596a7; border: 1px solid #33475a; }
+  .rxEmpty { padding: 12px; color: #93a3b4; font-size: 12px; }
+  .trkRow .nvTx { grid-column: 1 / -1; white-space: pre-wrap; margin: 6px 0 2px; font: 11px/1.4 ui-monospace, Menlo, monospace; color: #dfe7ef; max-height: 260px; overflow: auto; cursor: text; }
+  .cmSel { display: flex; flex-wrap: wrap; gap: 4px; }
+  .cmSel select { background: #1e2a36; color: #e8eef5; border: 1px solid #33475a; border-radius: 6px; padding: 5px 8px; font: 600 12px system-ui, sans-serif; }
+  .kr { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .kr > :first-child { flex: none; width: 24px; display: flex; justify-content: center; align-items: center; }
+  .kr > span:last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+  .kr svg { max-width: 24px; max-height: 24px; }
+  .kr svg[viewBox="0 0 40 40"] { max-width: 28px; max-height: 28px; margin: -2px; }
+  .ks { color: #ffd34d; font-weight: 700; letter-spacing: .1em; font-size: 10px; margin: 8px 0 3px; }
+  .ks:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+<!-- ★★★ b97: no header, bars or panels — map-chrome.js draws the chips and cards around the map (mountMapChrome, hostMap) -->
+<noscript>The community map needs JavaScript. <a href="/">Back to the directory</a>.</noscript>
+
+<script src="/mapgl/vendor/maplibre-gl.js"></script>
+<script src="/mapgl/vendor/pmtiles.js"></script>
+<script src="/mapgl/vendor/vibemapgl.js"></script>
+<script src="/mapgl/vibemap-style.js"></script>
+<script src="/mapgl/vibemap-water.js"></script>
+<script src="/community-kit.js"></script>
+<script src="/community-map.js"></script>
+<script src="/map-chrome.js"></script>
+<script>
+'use strict';
+const T0 = performance.now();
+const CM = window.CommunityMap, KIT = window.CommunityKit;
+const $ = (id) => document.getElementById(id);
+const esc = CM.esc;
+const perf = { listDraw: 0, firstData: 0, firstDraw: 0, full: 0, bytes: {} };   // ★ ms from the page starting: the receivers listed, the first receiver's data in, the GPU map's first draw, every receiver in
+
+/* ══ THE MAP — the directory's GPU map (VibeMapGL), drawn with MapLibre layers directly. ★★★ b97: made in the card system's
+ *  holder (map-chrome.js — mountMapChrome's hostMap), which keeps its scale chip, the credits' fold and the shared AUTO / FIT
+ *  (mapAutoFit.ts, as every server map) on it ══ */
+let gl = null, GLVM = null;
+function makeMap(holder) {
+  try {
+    const load = (p, kind) => fetch(p).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
+    GLVM = VibeMapGL.createNow(holder, { style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/', profile: 'aero', center: [0, 40], zoom: 1.4, scale: false });
+    gl = GLVM && GLVM.map;
+    // ★★ the wide rivers, canals and docks as WATER, so ships sit on it (Stuart 11-25) — mapgl/vibemap-water.js
+    if (GLVM && window.VibeWater) VibeWater.attach(GLVM, location.origin + '/mapgl/vibemap-water.pmtiles');
+    if (gl) gl.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+  } catch (e) { console.error('GPU map unavailable: ' + e); }
+  if (!gl) { MC.view.note('This map needs WebGL 2, which this browser does not offer.'); return null; }
+  gl.on('zoomend', metZoom);
+  gl.on('load', scheduleRender);
+  // ★ the scale chip reads a Leaflet-zoom map (MapLibre's zoom + 1 — 512 px tiles)
+  const scaleMap = { getCenter: () => gl.getCenter(), getZoom: () => gl.getZoom() + 1,
+    on: (evs, f) => { for (const e of String(evs).split(/\s+/)) if (e) gl.on(e === 'zoomend' ? 'zoom' : e === 'moveend' ? 'move' : e, f); } };
+  return { map: scaleMap, fitMap: gl, gl: GLVM, points: () => fitPoints().map(([lo, la]) => [la, lo]), receiver: () => null,
+           maxZoom: 10, what: 'item shown', destroy: () => {} };
+}
+
+/* ══ STATE (remembered per viewer, try/catch) ══ */
+const PREF_KEY = 'vibesdr.communityMap.v2';
+let prefs = {};
+try { prefs = JSON.parse(localStorage.getItem(PREF_KEY) || '{}') || {}; } catch { prefs = {}; }
+const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* private window */ } };
+const F = {
+  groups: new Set(Array.isArray(prefs.groups) ? prefs.groups.filter((g) => CM.GROUPS.some((x) => x.id === g)) : CM.GROUPS.map((g) => g.id)),
+  off: new Set(Array.isArray(prefs.off) ? prefs.off : []),   // ★ chips switched off — remembered even while their group is off
+  maxAge: CM.AGES.some((a) => a.s === prefs.maxAge) ? prefs.maxAge : 86400, server: '',
+  nav: { layers: new Set(Array.isArray(prefs.navLayers) ? prefs.navLayers : ['stations', 'warnings', 'weather', 'messages']), types: null, station: '' },
+};
+if (Array.isArray(prefs.navTypes)) F.nav.types = new Set(prefs.navTypes);
+let SERVERS = [];
+const DATA = new Map();   // server id → { sections: {key → value}, items }
+let listAt = 0, selected = '', ITEMS = [], SHOWN = [], PRESENT = [];
+
+/** The layers switched on now (group on, chip on, somebody shares it). */
+const layersOn = () => PRESENT.filter((m) => F.groups.has(CM.MODE[m].group) && !F.off.has(m));
+/** Every layer the viewer has on, shared yet or not — what a radio not yet heard from is asked for (CM.askFor). */
+const wantedLayers = () => CM.MODES.filter((m) => F.groups.has(m.group) && !F.off.has(m.id)).map((m) => m.id);
+
+/* ══ READING — /api/community once (then every LIST_SEC), each receiver directly, ≤ CONCURRENT at a time ══ */
+async function loadList() {
+  try {
+    const r = await fetch('/api/community', { cache: 'no-cache' });
+    const j = await r.json();
+    const keep = new Map(SERVERS.map((s) => [s.id, s]));
+    SERVERS = (Array.isArray(j.servers) ? j.servers : []).filter((s) => s && typeof s.id === 'string').map((s) => Object.assign(keep.get(s.id) || {}, s));
+    for (const id of [...DATA.keys()]) if (!SERVERS.some((s) => s.id === id)) DATA.delete(id);
+    listAt = Date.now();
+  } catch { if (!SERVERS.length) MC.view.note('The directory could not be reached. Trying again shortly.'); }
+}
+let inFlight = 0; const queue = [];
+function pump() {
+  while (inFlight < CM.CONCURRENT && queue.length) { const job = queue.shift(); inFlight++; job().finally(() => { inFlight--; pump(); }); }
+}
+/** ★ One request: server `s`, target `t` (the server itself, or one of its radios — CM.targets). Each target keeps its own
+ *  sections; the server's items are its radios' merged (CM.mergeRadios), so it is ONE receiver however many radios answer. */
+function fetchOne(s, layers, t) {
+  t = t || s;
+  return new Promise((done) => {
+    queue.push(async () => {
+      const rid = t === s ? '' : t.rid;
+      const u = CM.dataUrl(s, location.protocol, layers, rid);
+      if (!u) { s.unreachable = true; s.why = 'no https address'; s._retryAt = Infinity; done(); return; }
+      const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), CM.FETCH_TIMEOUT_MS);
+      // ★★ the server's entry is looked up AFTER each answer, never held across the await: its radios answer in parallel, and
+      //    a copy taken before would let the last one to land overwrite the others' (the Pi 500's aircraft vanished so, live)
+      const entry = () => DATA.get(s.id) || { radios: new Map() };
+      try {
+        // ★ no-cache = revalidate: an unchanged answer is a 304 (its ETag) — a quiet minute costs bytes, not a body
+        const r = await fetch(u, { signal: ctrl.signal, cache: 'no-cache', credentials: 'omit' });
+        const text = r.ok ? await r.text() : '';
+        const j = text ? JSON.parse(text) : null;
+        if (j && j.on === true) {
+          const d = entry();
+          const one = d.radios.get(rid) || { sections: {} };
+          for (const k of CM.sectionsOf(layers)) delete one.sections[k];   // ★ what was asked and is absent is now empty
+          for (const k of Object.keys(j)) if (!['v', 'on', 'now', 'layers', 'dropped'].includes(k)) one.sections[k] = j[k];
+          one.items = CM.itemsOf(Object.assign({ on: true, now: j.now }, one.sections), { id: s.id, name: s.name, rid });
+          d.radios.set(rid, one); DATA.set(s.id, d);
+          if (t !== s && Array.isArray(j.layers)) t.layers = j.layers.filter((l) => CM.MODE[l]);   // ★ what this radio shares
+          d.now = j.now;
+          perf.bytes[s.id] = (perf.bytes[s.id] || 0) + text.length;
+          CM.noteResult(t, true, Date.now(), layers);
+        } else { CM.noteResult(t, false, Date.now(), layers); t.why = j && j.why === 'off' ? 'stopped sharing' : 'not responding'; entry().radios.delete(rid); }
+      } catch { CM.noteResult(t, false, Date.now(), layers); t.why = 'not responding'; }
+      finally {
+        clearTimeout(timer);
+        // ★ the server is up while any of its radios answers; "not responding" only when none does
+        if (t !== s) { const rx = s._rx || []; s.unreachable = rx.length > 0 && rx.every((x) => x.unreachable); s.why = s.unreachable ? (rx[0].why || 'not responding') : ''; }
+        else if (!s.unreachable) s.why = '';
+        const d = entry();
+        if (d.radios.size) { d.items = CM.mergeRadios([...d.radios.values()].map((x) => x.items || [])); DATA.set(s.id, d); } else DATA.delete(s.id);
+        scheduleRender(); done();
+      }
+    });
+    pump();
+  });
+}
+let busy = false;
+async function tick(force, only) {
+  if (document.hidden && !force) return;   // ★★★ nothing while nobody is looking
+  if (busy && !only) return;
+  busy = true;
+  try {
+    if (!listAt || Date.now() - listAt >= CM.LIST_SEC * 1000) { await loadList(); PRESENT = CM.modesPresent(SERVERS, ITEMS); render(); }
+    const all = wantedLayers(), nowMs = Date.now();
+    const jobs = [];
+    for (const s of SERVERS) for (const t of CM.targets(s)) {
+      // ★ a chip switched on (only): that layer now, from each target that may share it, unless it is backing off
+      const can = t === s ? (s.layers || []) : t.layers || all;
+      const want = only ? (t._retryAt > nowMs ? [] : only.filter((l) => can.includes(l))) : CM.askFor(t, s, all, nowMs);
+      if (want.length) jobs.push(fetchOne(s, want, t));
+    }
+    await Promise.all(jobs);
+    if (!perf.full && SERVERS.length && SERVERS.every((s) => DATA.has(s.id) || s.unreachable)) perf.full = Math.round(performance.now() - T0);
+  } finally { if (!only) busy = false; }
+}
+
+/* ══ ICONS → GPU images (the server maps' own SVGs, rasterised once each) ══ */
+const iconNames = new Map(); const iconWaits = [];
+function icon(html) {
+  // ★ a rotation or opacity in the SVG's style becomes the layer's icon-rotate / icon-opacity, so one image serves every angle
+  const plain = String(html).replace(/\sstyle="[^"]*"/, '');
+  let name = iconNames.get(plain);
+  if (name) return name;
+  name = 'ic' + iconNames.size;
+  iconNames.set(plain, name);
+  const svg = plain.includes('xmlns=') ? plain : plain.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+  const w = Number((/width="(\d+(?:\.\d+)?)"/.exec(svg) || [])[1]) || 24, h = Number((/height="(\d+(?:\.\d+)?)"/.exec(svg) || [])[1]) || 24;
+  iconWaits.push(new Promise((res) => {
+    const img = new Image(w * 2, h * 2);
+    img.onload = () => {
+      try { const c = document.createElement('canvas'); c.width = w * 2; c.height = h * 2; const x = c.getContext('2d'); x.drawImage(img, 0, 0, w * 2, h * 2);
+            if (gl && !gl.hasImage(name)) gl.addImage(name, x.getImageData(0, 0, w * 2, h * 2), { pixelRatio: 2 }); } catch (e) { console.warn('icon', e); }
+      res();
+    };
+    img.onerror = () => res();
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }));
+  return name;
+}
+const rotOf = (html) => Number((/rotate\((-?[\d.]+)deg\)/.exec(html) || [])[1]) || 0;
+const AC_SVG = (c) => `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path d="M12 2 L13.4 9 L21 13.5 L21 15.2 L13.4 12.8 L13 18.5 L15.5 20.3 L15.5 21.6 L12 20.7 L8.5 21.6 L8.5 20.3 L11 18.5 L10.6 12.8 L3 15.2 L3 13.5 L10.6 9 Z" fill="${c}" stroke="#0b1014" stroke-width="1.1"/></svg>`;
+/* ★★ THE RECEIVER IS THE DIRECTORY MAP'S LITTLE VibeSDR RADIO (Stuart 11-25: "make that dot the little radio glyph that is
+ *  on the directory map please, for continuity") — index.html radioGlyph / padlockGlyph, the same strokes at the same 24 px,
+ *  in the same state colours (green free slot, red full, blue temporary share, grey not responding; the yellow padlock for a
+ *  PIN). Its drop shadow is drawn as a dark under-stroke (a GPU icon is an image: a CSS filter does not survive). SELECTED:
+ *  an amber plate behind it, as the RECEIVERS list's selected row. */
+const STATE_COL = { free: '#28A745', busy: '#e05050', temp: '#4fc3f7', down: '#6b7785', unknown: '#ffb000' };   // index.html's own
+const RADIO_PATHS = (col) => `<rect x="3" y="8.5" width="18" height="12.5" rx="1.5"/><circle cx="8.6" cy="14.8" r="2.9"/>`
+  + `<path d="M14.2 11.6v6.4M16.8 11.6v6.4M19.2 11.6v6.4"/><path d="M14.6 8.5 19.3 3.2"/>` + (col ? `<circle cx="8.6" cy="14.8" r="1" fill="${col}" stroke="none"/>` : '');
+const LOCK_PATHS = (col) => `<rect x="5" y="10.5" width="14" height="10.5" rx="2"${col ? ` fill="${col}" fill-opacity=".22"` : ''}/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/>`
+  + (col ? `<circle cx="12" cy="15.8" r="1.2" fill="${col}" stroke="none"/>` : '');
+function RX_SVG(s, sel) {
+  const st = CM.stateOf(s), pin = !!s.pin && !s.unreachable;
+  const col = pin ? '#ffd23f' : STATE_COL[st.cls] || STATE_COL.unknown, P = pin ? LOCK_PATHS : RADIO_PATHS;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="-1 -1 26 26">`
+    + (sel ? `<rect x="-0.5" y="-0.5" width="25" height="25" rx="5" fill="rgba(255,184,51,0.30)" stroke="#ffb833" stroke-width="1.5"/>` : '')
+    + `<g fill="none" stroke="rgba(0,0,0,0.85)" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round">${P('')}</g>`
+    + `<g fill="none" stroke="${col}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${P(col)}</g></svg>`;
+}
+/* ★★ beta96 THE AIRCRAFT's OWN GLYPH (Stuart 11-26: "can they be the correct icon for the aircraft type like the ADS-B map"):
+ *  the ADS-B map's class silhouettes — jet, heavy, 757, regional / turboprop, light, helicopter, fast jet, glider, balloon … —
+ *  chosen by its own rule (KIT.aircraftIconClass = adsblayer.js iconClassOf: the aircraft data a beta96 server sends, else
+ *  the type alone, else the jet), the same shapes (KIT.aircraftIconSvg), in the mode's colour, pointing along its track.
+ *  AC_SIZE: the 40-unit box at 34 px puts the airliner at the old silhouette's 22 px; a heavy reads bigger, a Cessna smaller. */
+const AC_SIZE = 34, AC_NO_ROT = new Set(['balloon', 'parachute', 'obstacle']);
+const acClass = (d) => (KIT && KIT.aircraftIconClass ? KIT.aircraftIconClass(d || {}) : 'jet');
+const acGlyph = (cls, colour, size) => (KIT && KIT.aircraftIconSvg ? KIT.aircraftIconSvg(cls, colour, size || AC_SIZE, 0) : AC_SVG(colour));
+/** The icon an item draws, and its rotation — the servers' own (kit), aircraft its class's glyph in its mode's colour. */
+function iconOf(it) {
+  const m = CM.MODE[CM.primaryMode(it, F.off)];   // ★ the same rule as the pills' totals
+  if (it.kind === 'aircraft') { const c = acClass(it.d); return { ic: icon(acGlyph(c, m.colour)), rot: AC_NO_ROT.has(c) ? 0 : (it.d.trk || 0) }; }
+  if (!KIT) return { ic: icon(`<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="${m.colour}" stroke="#000"/></svg>`), rot: 0 };
+  let h;
+  if (it.kind === 'ship') h = KIT.aisIcon({ kind: it.d.vkind, family: it.d.family, sog: it.d.sog, cog: it.d.cog, mmsi: it.d.mmsi }).html;
+  else if (it.kind === 'aprs') h = KIT.aprsIcon({ kind: it.d.akind, sym: it.d.sym }).html;
+  else if (it.kind === 'mesh') h = KIT.ismMapIcon({ kind: 'meshcore', ntype: it.d.ntype, approx: it.d.approx ? 1 : undefined, seen: 0 }).html;
+  else if (it.kind === 'sonde') h = KIT.sondeIcon({ climb: it.d.climb }).html;
+  else if (it.kind === 'dsc') h = KIT.dscIcon(it.d.level).html;
+  else if (it.kind === 'navst') { const site = KIT.navSites({ stations: [Object.assign({}, it.d, { seen: 0 })] })[0]; h = KIT.navIcon(site).html; }
+  else h = `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L13 7 L7 13 L1 7 Z" fill="${m.colour}" stroke="#0b1014" stroke-width="1.2"/></svg>`;   // NDB / VOR
+  return { ic: icon(h), rot: rotOf(h) };
+}
+
+/* ══ DRAWING (GPU) ══ */
+/* ★★★ b97 ZOOMED OUT STAYS RICH (Stuart's recording 11-27: "the map starts looking barren as you zoom out" — one step out and
+ *  ~150 MeshCore squares round London became a few plain yellow discs, aircraft and mesh merged into one):
+ *   1. EACH DENSE LAYER CLUSTERS ON ITS OWN (a source per kind: mesh with mesh, aircraft with aircraft) — the same rule as
+ *      before (clusterMaxZoom 5, radius 22), so one busy layer never swallows the others;
+ *   2. A CLUSTER IS DRAWN AS ITS CONTENTS: the glyph of its commonest sub-kind (the MeshCore repeater square, the aircraft in
+ *      its mode's colour, the ship …) with a small count badge — never a blank disc;
+ *   3. ABOVE THE CLUSTERS, COLLISION THINS: individual icons use MapLibre's own placement (no overlap, the newest / the
+ *      repeaters first — symbol-sort-key) up to zoom 9, everything drawn from zoom 9 — the map thins, it never collapses;
+ *   4. LABELS FADE FIRST: names from zoom 7 (fading in to 8), always optional — a label never hides an icon. */
+const DENSE = new Set(['aircraft', 'ship', 'aprs', 'mesh']);
+const DENSE_KINDS = ['mesh', 'aprs', 'ship', 'aircraft'];   // ★ drawn bottom → top (aircraft placed first in a collision)
+const ALL_ZOOM = 9;                                         // ★ from here every icon is drawn, overlaps and all
+const MESH_TYPES = ['repeater', 'room server', 'companion', 'sensor'];
+/** Each dense kind's cluster glyphs: sub-kind id → the glyph (its own image), the commonest one draws the cluster. */
+function clusterGlyphs(kind) {
+  if (kind === 'aircraft') return ['adsb', 'acars', 'vdl2', 'hfdl'].map((m) => [m, acGlyph('jet', CM.MODE[m].colour, 30)]);
+  if (kind === 'mesh') return MESH_TYPES.map((t) => [t, KIT ? KIT.ismMapIcon({ kind: 'meshcore', ntype: t, seen: 0 }).html : `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2" fill="${CM.MODE.mesh.colour}" stroke="#000"/></svg>`]);
+  if (kind === 'ship') return [['ship', KIT ? KIT.aisIcon({ kind: 'vessel', family: 'cargo', sog: 10, cog: 0, mmsi: '0' }).html : `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1 L13 14 L3 14 Z" fill="${CM.MODE.ais.colour}" stroke="#000"/></svg>`]];
+  return [['aprs', `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.5" fill="${CM.MODE.aprs.colour}" stroke="#0b1014" stroke-width="1.4"/><text x="10" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="800" fill="#111">A</text></svg>`]];
+}
+/** A dense item's sub-kind (its cluster vote) — the mode an aircraft is drawn in, a mesh node's type. */
+function subKind(it) {
+  if (it.kind === 'aircraft') return CM.primaryMode(it, F.off);
+  if (it.kind === 'mesh') { const t = String(it.d.ntype || '').toLowerCase(); return MESH_TYPES.find((x) => t.includes(x.split(' ')[0])) || 'repeater'; }
+  return it.kind === 'ship' ? 'ship' : 'aprs';
+}
+/** Placement priority (symbol-sort-key: lower is placed first): repeaters / room servers over companions; then the newest. */
+function sortKey(it, now) {
+  const rank = it.kind === 'mesh' ? Math.max(0, MESH_TYPES.indexOf(subKind(it))) : 0;
+  return rank * 1e6 + Math.max(0, Math.min(999999, now - it.t));
+}
+/** A dense item's label (fades in from zoom 7): the flight / reg, the ship's name, the call, the node's name. */
+function labelOf(it) {
+  const d = it.d || {};
+  return String(it.kind === 'aircraft' ? d.flight || d.reg || '' : it.kind === 'ship' ? d.name || d.call || '' : it.kind === 'aprs' ? d.from || it.title || '' : it.title || '').trim().slice(0, 16);
+}
+const clusterLayers = () => DENSE_KINDS.map((k) => 'cm-cl-' + k);
+const densePtLayers = () => DENSE_KINDS.flatMap((k) => ['cm-dp-' + k, 'cm-dpa-' + k]);
+let layersReady = false;
+function ensureLayers() {
+  if (!gl || layersReady || !gl.isStyleLoaded()) return layersReady;
+  const empty = { type: 'FeatureCollection', features: [] };
+  gl.addSource('cm-shapes', { type: 'geojson', data: empty });
+  for (const k of DENSE_KINDS) {
+    // ★ the cluster's votes: how many of each sub-kind it holds (the commonest draws it)
+    const props = Object.fromEntries(clusterGlyphs(k).map(([id], i) => ['v' + i, ['+', ['case', ['==', ['get', 'g'], id], 1, 0]]]));
+    gl.addSource('cm-d-' + k, { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 5, clusterRadius: 22, clusterProperties: props });
+  }
+  gl.addSource('cm-pts', { type: 'geojson', data: empty });
+  gl.addSource('cm-rx', { type: 'geojson', data: empty });
+  gl.addLayer({ id: 'cm-area', type: 'fill', source: 'cm-shapes', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.16 } });
+  gl.addLayer({ id: 'cm-line', type: 'line', source: 'cm-shapes', paint: { 'line-color': ['get', 'c'], 'line-width': ['coalesce', ['get', 'w'], 1.6], 'line-opacity': ['coalesce', ['get', 'op'], 0.85], 'line-dasharray': [3, 2] } });
+  // ★★ THE CLICKED AIRCRAFT's TRACK (Stuart 11-26): flown runs solid, a gap over 5 min dashed — under every marker, and
+  //    in no click list (a tap on it reaches whatever is under it, or closes the card)
+  gl.addSource('cm-trail', { type: 'geojson', data: empty });
+  gl.addLayer({ id: 'cm-trail-halo', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 0], layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#0b1014', 'line-width': 5, 'line-opacity': 0.55 } });
+  gl.addLayer({ id: 'cm-trail-line', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 0], layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'c'], 'line-width': 2.6, 'line-opacity': 0.95 } });
+  gl.addLayer({ id: 'cm-trail-gap', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 1],
+    paint: { 'line-color': ['get', 'c'], 'line-width': 2, 'line-opacity': 0.8, 'line-dasharray': [2, 2.5] } });
+  const sym = (id, src, extra) => gl.addLayer(Object.assign({ id, type: 'symbol', source: src,
+    layout: { 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+    paint: { 'icon-opacity': ['get', 'op'] } }, extra || {}));
+  const LABEL = { 'text-field': ['step', ['zoom'], '', 7, ['get', 'lb']], 'text-font': ['JetBrains Mono Bold'], 'text-size': 10, 'text-offset': [0, 1.25], 'text-anchor': 'top',
+                  'text-optional': true, 'text-max-width': 12 };
+  const LABEL_PAINT = { 'text-color': '#e8eef5', 'text-halo-color': 'rgba(8,10,12,0.85)', 'text-halo-width': 1.4, 'text-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 8, 1] };
+  for (const k of DENSE_KINDS) {
+    const src = 'cm-d-' + k, single = ['!', ['has', 'point_count']];
+    // the individuals: collision-thinned below ALL_ZOOM (the newest / repeaters first), all of them from there
+    gl.addLayer({ id: 'cm-dp-' + k, type: 'symbol', source: src, filter: single, maxzoom: ALL_ZOOM,
+      layout: Object.assign({ 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 0, 'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 0.72, 8, 1],   // ★ a touch smaller zoomed out: more of them fit
+                              'symbol-sort-key': ['get', 'sk'] }, LABEL), paint: Object.assign({ 'icon-opacity': ['get', 'op'] }, LABEL_PAINT) });
+    gl.addLayer({ id: 'cm-dpa-' + k, type: 'symbol', source: src, filter: single, minzoom: ALL_ZOOM,
+      layout: Object.assign({ 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
+                              'symbol-sort-key': ['get', 'sk'] }, LABEL), paint: Object.assign({ 'icon-opacity': ['get', 'op'] }, LABEL_PAINT) });
+  }
+  for (const k of DENSE_KINDS) {
+    // ★ the cluster drawn as its contents: the commonest sub-kind's glyph, a count badge at its top right
+    const gs = clusterGlyphs(k), names = gs.map(([, h]) => icon(h));
+    const v = (i) => ['get', 'v' + i];
+    const pick = gs.length === 1 ? names[0] : ['case'].concat(...gs.map((_, i) => [['all'].concat(gs.map((__, j) => (j === i ? true : [i < j ? '>=' : '>', v(i), v(j)]))), names[i]]), [names[0]]);
+    const src = 'cm-d-' + k, many = ['has', 'point_count'];
+    gl.addLayer({ id: 'cm-cl-' + k, type: 'symbol', source: src, filter: many,
+      layout: { 'icon-image': pick, 'icon-size': ['step', ['get', 'point_count'], 1.05, 10, 1.2, 50, 1.35], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
+    gl.addLayer({ id: 'cm-clb-' + k, type: 'circle', source: src, filter: many,
+      paint: { 'circle-color': CM.MODE[k === 'aircraft' ? 'adsb' : k === 'ship' ? 'ais' : k].colour, 'circle-stroke-color': '#0b1014', 'circle-stroke-width': 1.2,
+               'circle-radius': ['step', ['get', 'point_count'], 7, 10, 8, 100, 9.5], 'circle-translate': [11, -10] } });
+    gl.addLayer({ id: 'cm-cln-' + k, type: 'symbol', source: src, filter: many,
+      layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 9.5, 'text-allow-overlap': true, 'text-ignore-placement': true },
+      paint: { 'text-color': '#111', 'text-translate': [11, -10] } });
+  }
+  sym('cm-pts', 'cm-pts');
+  sym('cm-rx', 'cm-rx');
+  // ★★ ONE click handler, in PRIORITY order (Stuart 11-26: an aircraft over a NAVTEX area opened the area's card — each layer's
+  //    own handler fired and the area's, registered last, replaced the aircraft's). Receivers, then points (aircraft, ships,
+  //    stations…) with a few px of slack so a small glyph is easy to hit, then lines, and areas only when nothing else is there.
+  const PICK_ORDER = [['cm-rx', 6], ['cm-pts', 6]].concat(densePtLayers().map((l) => [l, 6]), [['cm-line', 3], ['cm-area', 0]]);
+  const pickAt = (pt) => {
+    for (const [id, pad] of PICK_ORDER) {
+      if (!gl.getLayer(id)) continue;
+      const box = pad ? [[pt.x - pad, pt.y - pad], [pt.x + pad, pt.y + pad]] : pt;
+      const fs = gl.queryRenderedFeatures(box, { layers: [id] });
+      if (fs.length) return fs[0];
+    }
+    return null;
+  };
+  gl.on('click', (e) => {
+    if (gl.queryRenderedFeatures([[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]], { layers: clusterLayers().filter((l) => gl.getLayer(l)) }).length) return;   // the cluster's own handler
+    const f = pickAt(e.point);
+    if (f) openCard({ features: [f], lngLat: e.lngLat });
+  });
+  gl.on('mousemove', (e) => { gl.getCanvas().style.cursor = pickAt(e.point) ? 'pointer' : ''; });
+  for (const k of DENSE_KINDS) gl.on('click', 'cm-cl-' + k, (e) => {
+    const f = e.features[0];
+    gl.getSource('cm-d-' + k).getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
+  });
+  layersReady = true;
+  return true;
+}
+/* ══ THE SEA AREAS — the server's NAVTEX / shipping map's own layer (CM.SEA): ONE static file, fetched once, only while drawn;
+ *  its layers go UNDER everything else of ours (the warnings' areas, the markers, the forecasts' arrows) ══ */
+let SEA_DATA = null, seaLoading = false, seaBytes = 0;
+const SEA_POINT = new Map();   // area id → its label point [lon, lat] (inside its outline): a forecast's arrow sits there
+const SEA_LAYERS = ['cm-sea-red', 'cm-sea-amber', 'cm-sea-line-s', 'cm-sea-line-o', 'cm-sea-line-c', 'cm-sea-name-s', 'cm-sea-name-o', 'cm-sea-name-c'];
+const seaOn = () => CM.seaShown(F.groups, PRESENT, prefs.seaAreas);
+async function seaLoad() {
+  if (SEA_DATA || seaLoading) return;
+  seaLoading = true;
+  try {
+    const r = await fetch(CM.SEA.url, { credentials: 'omit' });   // ★ the browser's own cache (ETag) — a static file
+    const text = r.ok ? await r.text() : '';
+    const j = text ? JSON.parse(text) : null;
+    if (j && Array.isArray(j.features)) {
+      seaBytes = text.length;
+      for (const f of j.features) if (f.geometry && f.geometry.type === 'Point' && f.properties) SEA_POINT.set(f.properties.id, f.geometry.coordinates);
+      SEA_DATA = j;
+    }
+  } catch (e) { console.warn('sea areas', e); }
+  finally { seaLoading = false; scheduleRender(); }
+}
+function seaLayers() {
+  if (!gl || !SEA_DATA || gl.getSource('cm-sea')) return !!(gl && gl.getSource('cm-sea'));
+  const C = CM.SEA.colours, before = 'cm-area';
+  gl.addSource('cm-sea', { type: 'geojson', data: SEA_DATA, attribution: CM.seaAttribution(SEA_DATA) });
+  // ★ every source credited (the licences' own words, as the server map), behind the (i) — open, the long line covered the
+  //   bottom of the map; one tap shows it
+  setTimeout(() => { for (const el of document.querySelectorAll('.maplibregl-ctrl-attrib.maplibregl-compact-show')) el.classList.remove('maplibregl-compact-show'); }, 0);
+  const poly = ['==', ['geometry-type'], 'Polygon'];   // ★ a MultiPolygon is 'Polygon' to a filter
+  const none = ['literal', ['']];
+  // the tint: a current forecast's force 7 (amber) or gale (red) — from every zoom, over the plain outline
+  for (const [id, col, fo] of [['cm-sea-red', C.red, 0.2], ['cm-sea-amber', C.amber, 0.15]]) {
+    gl.addLayer({ id: id + '-fill', type: 'fill', source: 'cm-sea', filter: ['all', poly, ['in', ['get', 'id'], none]], paint: { 'fill-color': col, 'fill-opacity': fo } }, before);
+    gl.addLayer({ id, type: 'line', source: 'cm-sea', filter: ['all', poly, ['in', ['get', 'id'], none]], paint: { 'line-color': col, 'line-width': 1.6, 'line-opacity': 0.9 } }, before);
+  }
+  for (const k of ['s', 'o', 'c']) {
+    gl.addLayer({ id: 'cm-sea-line-' + k, type: 'line', source: 'cm-sea', minzoom: CM.SEA.lineZoom[k], filter: ['all', poly, ['==', ['get', 'k'], k]],
+      paint: { 'line-color': C.line, 'line-width': 0.8, 'line-opacity': 0.5 } }, before);
+  }
+  // ★ the names: small capitals, under every other label (a name yields — MapLibre places the higher layers' first)
+  for (const k of ['s', 'o', 'c']) {
+    gl.addLayer({ id: 'cm-sea-name-' + k, type: 'symbol', source: 'cm-sea', minzoom: CM.SEA.nameZoom[k], filter: ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'k'], k]],
+      layout: { 'text-field': ['get', 'n'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 9, 'text-letter-spacing': 0.09, 'text-max-width': 40, 'text-padding': 4 },
+      paint: { 'text-color': C.name, 'text-halo-color': C.halo, 'text-halo-width': 1.4, 'text-opacity': 0.9 } }, before);
+  }
+  return true;
+}
+/** Draw (or hide) the sea areas for what is SHOWN: the forecasts drawn tint their areas and take their names. */
+function drawSea() {
+  const on = seaOn();
+  if (on && !SEA_DATA) seaLoad();
+  const made = on ? seaLayers() : !!(gl && gl.getSource('cm-sea'));
+  const fc = CM.seaForecasts(SHOWN);
+  const ids = (sev) => ['literal', [...fc].filter(([, v]) => v === sev).map(([k]) => k).concat([''])];
+  if (made) {
+    for (const id of SEA_LAYERS.concat(['cm-sea-red-fill', 'cm-sea-amber-fill'])) gl.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
+    const poly = ['==', ['geometry-type'], 'Polygon'];
+    for (const [id, sev] of [['cm-sea-red', 2], ['cm-sea-amber', 1]]) { gl.setFilter(id, ['all', poly, ['in', ['get', 'id'], ids(sev)]]); gl.setFilter(id + '-fill', ['all', poly, ['in', ['get', 'id'], ids(sev)]]); }
+    const named = ['literal', [...fc.keys()].concat([''])];
+    for (const k of ['s', 'o', 'c']) gl.setFilter('cm-sea-name-' + k, ['all', ['==', ['geometry-type'], 'Point'], ['==', ['get', 'k'], k], ['!', ['in', ['get', 'id'], named]]]);
+  }
+  return { on, loaded: !!SEA_DATA, drawn: made && on, areas: SEA_DATA ? SEA_DATA.features.filter((f) => f.geometry.type !== 'Point').length : 0, bytes: seaBytes,
+           amber: [...fc].filter(([, v]) => v === 1).map(([k]) => k), red: [...fc].filter(([, v]) => v === 2).map(([k]) => k), unnamed: [...fc.keys()] };
+}
+let renderQueued = false;
+function scheduleRender() { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); } }
+const metMarkers = new Map();
+let fitted = false;
+async function render() {
+  const now = Math.floor(Date.now() / 1000);
+  ITEMS = CM.merge([...DATA.values()].map((d) => d.items || []));
+  CM.trackNote(TRACKS, ITEMS, now);   // ★ every aircraft's fixes since the page opened (bounded) — the track when no server has one
+  PRESENT = CM.modesPresent(SERVERS, ITEMS);
+  SHOWN = CM.filter(ITEMS, { groups: F.groups, modes: new Set(layersOn()), maxAge: F.maxAge, server: F.server, nav: F.nav }, now);
+  susNote(SHOWN);
+  chromeSync(now);
+  if (!perf.listDraw && SERVERS.length) perf.listDraw = Math.round(performance.now() - T0);
+  if (!perf.firstData && DATA.size) perf.firstData = Math.round(performance.now() - T0);
+  if (!ensureLayers()) { if (gl) gl.once('idle', scheduleRender); return; }
+  const dense = [], pts = [], shapes = [], rx = [];
+  const byKey = new Map();
+  for (const it of SHOWN) {
+    if (it.lat === null || it.kind === 'navmet') continue;
+    byKey.set(it.key, it);
+    const op = CM.fade(it, now);
+    if (it.kind === 'navwarn' && KIT) {
+      // ★ the NAVTEX map's own markers: one an item for a named list, its shape (area / route / points) in its hazard's colour
+      for (const m of KIT.navWarnItems([it.d], now)) {
+        pts.push({ type: 'Feature', properties: { id: it.key, ic: icon(m._ic.html), rot: 0, op }, geometry: { type: 'Point', coordinates: [m.lon, m.lat] } });
+        if (m._sh) {
+          const ring = m._sh.pts.map((p) => [p[1], p[0]]);
+          if (m._sh.kind === 'area') shapes.push({ type: 'Feature', properties: { id: it.key, c: m._sh.colour, op }, geometry: { type: 'Polygon', coordinates: [ring.concat([ring[0]])] } });
+          else if (m._sh.kind === 'route') shapes.push({ type: 'Feature', properties: { id: it.key, c: m._sh.colour, op }, geometry: { type: 'LineString', coordinates: ring } });
+          else for (const p of ring.slice(1)) pts.push({ type: 'Feature', properties: { id: it.key, ic: icon(m._ic.html), rot: 0, op }, geometry: { type: 'Point', coordinates: p } });
+        }
+      }
+      continue;
+    }
+    const { ic, rot } = iconOf(it);
+    const sus = it.kind === 'mesh' && SUSPECT.has(it.key);   // ★★ b97 an implausible self-reported position: "?" and dimmed
+    const f = { type: 'Feature', properties: { id: it.key, ic: sus ? icon(susSvg(it)) : ic, rot, op: sus ? op * 0.5 : op }, geometry: { type: 'Point', coordinates: [it.lon, it.lat] } };
+    if (DENSE.has(it.kind)) { Object.assign(f.properties, { k: it.kind, g: subKind(it), sk: sortKey(it, now), lb: labelOf(it) }); dense.push(f); }
+    else pts.push(f);
+    if (it.kind === 'sonde' && it.d.track.length > 1) shapes.push({ type: 'Feature', properties: { id: it.key, c: it.d.climb < -2 ? '#ff8a4d' : '#7fd4ff', w: 2, op }, geometry: { type: 'LineString', coordinates: it.d.track.map((p) => [p[1], p[0]]) } });
+  }
+  for (const s of SERVERS) if (typeof s.lat === 'number') rx.push({ type: 'Feature', properties: { id: 'rx:' + s.id, ic: icon(RX_SVG(s, s.id === selected)), rot: 0, op: 1 }, geometry: { type: 'Point', coordinates: [s.lon, s.lat] } });
+  ITEM_BY_KEY = byKey;
+  await Promise.all(iconWaits.splice(0));
+  for (const k of DENSE_KINDS) gl.getSource('cm-d-' + k).setData({ type: 'FeatureCollection', features: dense.filter((f) => f.properties.k === k) });   // ★ b97 a source per kind
+  gl.getSource('cm-pts').setData({ type: 'FeatureCollection', features: pts });
+  gl.getSource('cm-shapes').setData({ type: 'FeatureCollection', features: shapes });
+  window.__cmShapes = shapes.map((f) => ({ id: f.properties.id, type: f.geometry.type }));
+  gl.getSource('cm-rx').setData({ type: 'FeatureCollection', features: rx });
+  const sea = drawSea();
+  // ★ the NAVTEX forecasts: the NAVTEX map's own pills / wind arrows, a DOM marker each (a few dozen at most)
+  const keep = new Set();
+  for (const it of SHOWN) if (it.kind === 'navmet' && KIT) {
+    keep.add(it.key);
+    const ic = KIT.navMetIcon(it.d);
+    // ★ the server map's seaPlaceMet: with the sea areas drawn, the arrow sits at its area's label point, inside the outline
+    const ll = (sea.drawn && SEA_POINT.get(it.d.id)) || [it.lon, it.lat];
+    let mk = metMarkers.get(it.key);
+    if (!mk) { const el = document.createElement('div'); el.style.cursor = 'pointer'; el.addEventListener('click', (e) => { e.stopPropagation(); showCard(it.key, metMarkers.get(it.key).getLngLat().toArray()); });
+               mk = new maplibregl.Marker({ element: el }).setLngLat(ll).addTo(gl); metMarkers.set(it.key, mk); }
+    mk.setLngLat(ll);
+    mk.getElement().innerHTML = ic.html; mk.getElement().style.opacity = CM.fade(it, now);
+    ITEM_BY_KEY.set(it.key, it);
+  }
+  for (const [k, mk] of metMarkers) if (!keep.has(k)) { mk.remove(); metMarkers.delete(k); }
+  metZoom();
+  if (!perf.firstDraw && rx.length) perf.firstDraw = Math.round(performance.now() - T0);
+  if (!fitted && (SHOWN.length || rx.length)) { fitted = true; MC.fitPoke(); }   // ★ the auto fit's first framing
+  if (OPEN) trailRefresh();
+  window.__cm = { servers: SERVERS.length, up: SERVERS.filter((s) => DATA.has(s.id)).length, items: ITEMS.length, shown: SHOWN.length,
+    byKind: SHOWN.reduce((a, i) => (a[i.kind] = (a[i.kind] || 0) + 1, a), {}), modes: PRESENT, on: layersOn(),
+    heardBy: Object.fromEntries(ITEMS.map((i) => [i.key, i.heard.length])), selected, server: F.server, groups: [...F.groups],
+    gpu: { dense: dense.length, pts: pts.length, shapes: shapes.length, rx: rx.length, met: metMarkers.size }, perf, sea };
+}
+let ITEM_BY_KEY = new Map();
+/* ★ The forecast pills give way when zoomed out (the NAVTEX map's rule: the weather labels yield first) — from zoom 4. */
+const MET_MIN_ZOOM = 4;
+function metZoom() { if (!gl) return; const on = gl.getZoom() >= MET_MIN_ZOOM; for (const mk of metMarkers.values()) mk.getElement().style.display = on ? '' : 'none'; }
+/** ★ FIT: every item drawn now — the groups, chips and NAVTEX layers switched on, the HEARD IN window, ONLY THIS — where it is
+ *  drawn (a forecast's arrow at its area's label point); a warning's area or route by all its points. The sea areas are the
+ *  chart, never fitted (the server map's _nofit). Nothing drawn: the receivers (just the one under ONLY THIS). */
+function fitPoints() {
+  const pts = [];
+  for (const it of SHOWN) {
+    if (it.lat === null || it.lon === null) continue;
+    if (it.kind === 'mesh' && SUSPECT.has(it.key)) continue;   // ★★ b97 never framed: an implausible self-reported position
+    if (it.kind === 'navmet') { const mk = metMarkers.get(it.key); pts.push(mk ? mk.getLngLat().toArray() : [it.lon, it.lat]); continue; }
+    pts.push([it.lon, it.lat]);
+    if (it.kind === 'navwarn' && Array.isArray(it.d.pts)) for (const p of it.d.pts) if (Array.isArray(p)) pts.push([p[1], p[0]]);
+  }
+  if (!pts.length) for (const x of SERVERS) if (typeof x.lat === 'number' && (!F.server || x.id === F.server)) pts.push([x.lon, x.lat]);
+  return pts.filter(([lo, la]) => isFinite(lo) && isFinite(la));
+}
+/* ══ CARDS — the servers' own where they have one, then who heard it ══ */
+function heardBlock(it, now) {
+  const n = it.heard.length;
+  return `<div class="pc"><div class="hb"><div class="k">Heard by ${n} receiver${n === 1 ? '' : 's'}</div>` + it.heard.slice(0, 8).map((h) => {
+    const s = SERVERS.find((x) => x.id === h.sid); const u = s ? CM.listenUrl(s) : '';
+    return `<div><span>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(h.name)}</a>` : esc(h.name)}</span><span>${esc(CM.ago(now - h.t))} ago</span></div>`;
+  }).join('') + '</div></div>';
+}
+function cardOf(it, now) {
+  if (it.kind === 'navwarn' && KIT) return KIT.navWarnCard(it.d, now, 'web');
+  if (it.kind === 'navmet' && KIT) return KIT.navMetCard(it.d, now, 'web');
+  if (it.kind === 'navst' && KIT) { const site = KIT.navSites({ stations: [Object.assign({}, it.d, { seen: now - it.d.last })] })[0]; return KIT.navCard(site, 'web'); }
+  const rows = [], d = it.d;
+  const add = (k, v) => { if (v !== '' && v !== null && v !== undefined) rows.push(`<div class="r"><span class="k">${esc(k)}</span><span>${esc(v)}</span></div>`); };
+  if (it.kind === 'aircraft') { add('ICAO', d.icao); add('Flight', d.flight);
+    // ★ filled when the card opens (lookRoute / openAircraft): where it is flying from and to, and the track drawn
+    rows.push(`<div class="r"><span class="k">Route</span><span data-rt>looking up…</span></div><div class="src" data-rts></div>`);
+    add('Reg', d.reg); add('Type', d.type);
+    if (d.alt !== null) add('Altitude', d.alt.toLocaleString('en-GB') + ' ft'); if (d.gs !== null) add('Speed', `${d.gs} kt${d.trk !== null ? ' · ' + d.trk + '°' : ''}`);
+    add('Position', `${it.modes.map((m) => CM.MODE[m].label).join(', ')}${d.adsc ? ' (ADS-C)' : ''}, ${CM.ago(now - it.t)} ago`);
+    rows.push(`<div class="r"><span class="k">Track</span><span data-trk>looking…</span></div>`); }
+  else if (it.kind === 'ship') { add('MMSI', d.mmsi); add('Call', d.call); add('Type', d.family); if (d.sog !== null) add('Speed', `${d.sog} kn${d.cog !== null ? ' · ' + Math.round(d.cog) + '°' : ''}`); add('Heard', CM.ago(now - it.t) + ' ago'); }
+  else if (it.kind === 'dsc') { add('MMSI', d.mmsi); add('Heard', new Date(it.t * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC'); rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`); }
+  else if (it.kind === 'ndb' || it.kind === 'vor') { add('Ident', d.ident); add('Station', d.name); add('Country', d.cc); add('Last', CM.ago(now - it.t) + ' ago'); }
+  else if (it.kind === 'sonde') { add('Type', d.type); if (d.alt !== null) add('Altitude', Math.round(d.alt).toLocaleString('en-GB') + ' m');
+    if (d.climb !== null) add('Climb', `${d.climb > 0 ? '+' : ''}${d.climb} m/s`); if (d.climb !== null && d.climb < -2 && d.maxAlt) add('Burst', `near ${Math.round(d.maxAlt).toLocaleString('en-GB')} m — descending`);
+    if (d.temp !== null) add('Temp', d.temp + ' °C'); add('Last', CM.ago(now - it.t) + ' ago'); }
+  else if (it.kind === 'aprs') { add('From', d.from); add('Kind', d.akind); add('Last', CM.ago(now - it.t) + ' ago'); if (d.line) rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`); }
+  else if (it.kind === 'mesh') { add('Node', d.node ? d.node + '…' : ''); add('Type', d.ntype); add('Heard', `${d.count} times · last ${CM.ago(now - it.t)} ago`); if (d.approx) add('Position', 'approximate (~1 km): a companion node is a person');
+    const sus = SUSPECT.get(it.key); if (sus) rows.push(`<div class="sus">${esc(sus)}</div>`); }
+  return `<div class="pc"><div class="t">${esc(it.title)}</div>${rows.join('')}</div>`;
+}
+let popup = null;
+/** ★ A phone: a card near the edge hung off the screen (MapLibre centres it on the point, and an aircraft's grows when its
+ *  route arrives) — the map slides sideways so the whole card is on screen. Called when it opens and when it grows. */
+function cardFit(p) {
+  requestAnimationFrame(() => {
+    const el = p && p.isOpen() && p.getElement();
+    if (!el || !gl) return;
+    const r = el.getBoundingClientRect(), m = gl.getContainer().getBoundingClientRect();
+    const dx = r.left < m.left + 8 ? r.left - m.left - 8 : r.right > m.right - 8 ? r.right - m.right + 8 : 0;
+    if (dx) gl.panBy([dx, 0], { duration: 0 });
+  });
+}
+function showCard(key, ll) {
+  const it = ITEM_BY_KEY.get(key);
+  if (!it || !gl) return;
+  const now = Math.floor(Date.now() / 1000);
+  if (popup) popup.remove();
+  popup = new maplibregl.Popup({ maxWidth: `${Math.min(340, window.innerWidth - 24)}px` }).setLngLat(ll).setHTML(cardOf(it, now) + heardBlock(it, now)).addTo(gl);
+  cardFit(popup);  if (it.kind === 'aircraft') openAircraft(it, popup);
+  // ★ a NAVTEX card's message: fetched now, from the receiver that holds its cleanest copy (never in the poll)
+  const pre = popup.getElement().querySelector('.nvTx');
+  if (pre) fillText(pre, CM.textSource(it));
+}
+/* ══ AN AIRCRAFT's ROUTE AND TRACK — looked up only when its card opens (community-map.js ROUTE: why, where from, the limits).
+ *  ★★★ Never through the directory's Worker: the server's own tunnel, and adsbdb.com, straight from this browser. ══ */
+const TRACKS = new Map();   // item key → [[lat, lon, t]] — the fixes this page has seen (CM.trackNote)
+let OPEN = null;            // the aircraft card open: { key, popup, pts, src, who, colour, gs, serverPts }
+/** A GET with a timeout: { status, j } (status 0 = no answer). */
+async function getJson(url, ms) {
+  const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), ms || CM.ROUTE.timeoutMs);
+  try { const r = await fetch(url, { signal: ctrl.signal, credentials: 'omit' }); const j = await r.json().catch(() => null); return { status: r.status, j }; }
+  catch { return { status: 0, j: null }; }
+  finally { clearTimeout(timer); }
+}
+// ── the route ──
+const AC_TABLE = new Map();   // server id → { at, p }: its aircraft table, asked at most once a minute (CM.SERVER_AC_SEC)
+function serverTable(s) {
+  const now = Date.now(), have = AC_TABLE.get(s.id);
+  if (have && now - have.at < CM.SERVER_AC_SEC * 1000) return have.p;
+  const u = CM.aircraftTableUrl(s, location.protocol);
+  const p = u ? getJson(u).then((r) => (r.status === 200 ? r.j : null)) : Promise.resolve(null);
+  AC_TABLE.set(s.id, { at: now, p });
+  return p;
+}
+const ROUTES = new Map();   // callsign → { r: route|null, at (s), err }
+try { for (const [k, v] of Object.entries(JSON.parse(sessionStorage.getItem(CM.ROUTE.cacheKey) || '{}') || {})) if (v && typeof v.at === 'number') ROUTES.set(k, v); } catch { /* private window */ }
+function routesSave() {
+  try {
+    const keep = [...ROUTES].filter(([, v]) => !v.err).sort((a, b) => b[1].at - a[1].at).slice(0, CM.ROUTE.cacheMax);
+    sessionStorage.setItem(CM.ROUTE.cacheKey, JSON.stringify(Object.fromEntries(keep)));
+  } catch { /* private window, or full */ }
+}
+let routeChain = Promise.resolve();   // ★ ONE adsbdb request in flight at a time
+let routeAsked = 0;                   // (for the test: how many went out)
+function adsbdbRoute(cs) {
+  const fresh = (v) => v && Math.floor(Date.now() / 1000) - v.at < (v.err ? 60 : v.r ? CM.ROUTE.cacheSec : CM.ROUTE.unknownSec);
+  if (fresh(ROUTES.get(cs))) return Promise.resolve(ROUTES.get(cs));
+  const run = routeChain.then(async () => {
+    if (fresh(ROUTES.get(cs))) return ROUTES.get(cs);   // ★ asked again while it waited its turn: the answer is in now
+    routeAsked++;
+    const r = await getJson(CM.ROUTE.api + encodeURIComponent(cs));
+    const at = Math.floor(Date.now() / 1000);
+    const v = r.status === 200 && CM.parseAdsbdb(r.j) ? { r: CM.parseAdsbdb(r.j), at }
+      : r.status === 404 || r.status === 200 ? { r: null, at }
+      : { r: null, at, err: r.status === 429 ? 'busy' : 'no answer' };
+    ROUTES.set(cs, v); routesSave();
+    return v;
+  });
+  routeChain = run.catch(() => {});
+  return run;
+}
+/** ★ The route for item `it`: the server's own data first (the receivers that heard it, newest first, at most two), then
+ *  adsbdb.com by its callsign. { r, who } — who: the server whose data it is. */
+async function lookRoute(it) {
+  for (const h of it.heard.slice(0, 2)) {
+    const s = SERVERS.find((x) => x.id === h.sid);
+    if (!s) continue;
+    const r = CM.serverRoute(CM.tableRow(await serverTable(s), it.key));
+    if (r) return { r, who: s.name };
+  }
+  const cs = CM.callsignOf(it.d.flight);
+  if (!cs) return { r: null, why: it.d.flight ? `${it.d.flight} is not an airline callsign` : 'no callsign heard' };
+  const v = await adsbdbRoute(cs);
+  return v.err ? { r: null, err: v.err, cs } : { r: v.r, cs };
+}
+const extLink = (u, w) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(w)}</a>`;
+/** The card's route line, and the small words under it: where it came from, and whether to believe it. */
+function routeHtml(res, it) {
+  const r = res.r;
+  if (!r) {
+    if (res.err) return ['<span class="d">not looked up</span>', `${extLink(CM.ROUTE.creditUrl, CM.ROUTE.credit)} ${res.err === 'busy' ? 'is busy' : 'did not answer'} — open the card again shortly`];
+    if (res.why) return ['unknown', `${esc(res.why)}, so there is no route to look up`];
+    return ['unknown', `nothing for ${esc(res.cs)} in the receiver’s data or at ${extLink(CM.ROUTE.creditUrl, CM.ROUTE.credit)}`];
+  }
+  const line = esc(CM.routeLine(r)) + (r.stops && r.stops.length > 2 ? ` <span class="d">(${r.stops.map(esc).join(' – ')})</span>` : '');
+  if (r.src === 'datalink') return [`✈ ${line}`, `from the aircraft’s own datalink messages, heard by ${esc(res.who)}`];
+  const ok = r.src === 'filed' ? r.plausible : CM.routeJudge(r, it.lat, it.lon);
+  const who = r.src === 'filed' ? `the filed route in ${esc(res.who)}’s aircraft data (Virtual Radar Server)`
+    : `${extLink(CM.ROUTE.creditUrl, 'adsbdb.com')} for ${esc(res.cs)} (flight route data by David Taylor &amp; Jim Mason)`;
+  if (ok === false) return [`<span class="off" title="The aircraft is far from this route">${line}</span>`, `${who} — but the aircraft is far from it: probably not today’s route (a reused callsign or a diversion)`];
+  return [`✈ ${line}`, `${who}${ok === true ? ' — the aircraft is on it' : ' — a published route, not confirmed by the aircraft'}`];
+}
+// ── the track ──
+const TRAILS = new Map();   // item key → { at, pts, who } — a server trail, kept TRAIL_CACHE_SEC
+async function serverTrail(it) {
+  const have = TRAILS.get(it.key);
+  if (have && Date.now() - have.at < CM.TRAIL_CACHE_SEC * 1000) return have;
+  let out = { at: Date.now(), pts: [], who: '' };
+  for (const u of CM.trailUrls(it, SERVERS, location.protocol)) {   // ★ one after another, at most TRAIL_FETCH_MAX
+    if (!OPEN || OPEN.key !== it.key) return null;                   // the card closed: stop asking
+    const r = await getJson(u);
+    const pts = r.status === 200 ? CM.parseTrail(r.j) : [];
+    if (pts.length >= 2) { const s = SERVERS.find((x) => u.startsWith(CM.dataBase(x, location.protocol) + '/')); out = { at: Date.now(), pts, who: s ? s.name : '' }; break; }
+  }
+  TRAILS.set(it.key, out);
+  return out;
+}
+function trailDraw() {
+  const src = gl && gl.getSource('cm-trail');
+  const lines = OPEN && OPEN.pts && OPEN.pts.length > 1 ? CM.trackLines(OPEN.pts, OPEN.colour, OPEN.gs) : [];
+  if (src) src.setData({ type: 'FeatureCollection', features: lines });
+  window.__cmTrail = OPEN ? { key: OPEN.key, src: OPEN.src, n: OPEN.pts ? OPEN.pts.length : 0, solid: lines.filter((f) => !f.properties.gap).length,
+                              gaps: lines.filter((f) => f.properties.gap).length, colour: OPEN.colour } : null;
+}
+function trailWords() {
+  const el = OPEN && OPEN.popup.getElement() && OPEN.popup.getElement().querySelector('[data-trk]');
+  if (!el) return;
+  const n = OPEN.pts ? OPEN.pts.length : 0, was = el.textContent;
+  el.textContent = OPEN.src === 'server' ? `drawn: ${OPEN.who}’s ADS-B trail (${n} points)`
+    : n > 1 ? `drawn: the track since you opened the map (${n} fixes)` : 'none yet: drawn from the positions that arrive while the map is open';
+  if (el.textContent !== was) cardFit(OPEN.popup);
+}
+/** The open card's track follows the data: the fixes this page sees, or the server's trail with the newest position on its end. */
+function trailRefresh() {
+  const it = ITEMS.find((i) => i.key === OPEN.key);
+  if (it) { OPEN.colour = CM.MODE[CM.primaryMode(it, F.off)].colour; OPEN.gs = it.d.gs; }
+  if (OPEN.src === 'server') {
+    const p = OPEN.serverPts.slice(), l = p[p.length - 1];
+    if (it && it.lat !== null && (!l || CM.gcNm(l[0], l[1], it.lat, it.lon) > 0.3)) p.push([it.lat, it.lon, null]);
+    OPEN.pts = p;
+  } else OPEN.pts = (TRACKS.get(OPEN.key) || []).slice();
+  trailDraw(); trailWords();
+}
+function trailClear() { OPEN = null; trailDraw(); }
+/** ★ An aircraft's card opened: its route (the server's data, else adsbdb.com) and its track (the server's trail, else this
+ *  page's own fixes) — both cleared away with the card. */
+function openAircraft(it, p) {
+  OPEN = { key: it.key, popup: p, pts: [], src: 'client', who: '', colour: CM.MODE[CM.primaryMode(it, F.off)].colour, gs: it.d.gs, serverPts: [] };
+  p.on('close', () => { if (OPEN && OPEN.popup === p) trailClear(); });
+  trailRefresh();
+  lookRoute(it).then((res) => {
+    const el = p.getElement();
+    if (!el || !p.isOpen()) return;
+    const [line, src] = routeHtml(res, it);
+    const a = el.querySelector('[data-rt]'), b = el.querySelector('[data-rts]');
+    if (a) a.innerHTML = line;
+    if (b) b.innerHTML = src;
+    cardFit(p);
+    window.__cmRoute = { key: it.key, src: res.r ? res.r.src : '', line: a ? a.textContent : '', words: b ? b.textContent : '', struck: !!(a && a.querySelector('.off')) };
+  });
+  if (CM.trailUrls(it, SERVERS, location.protocol).length) serverTrail(it).then((t) => {
+    if (!t || !OPEN || OPEN.popup !== p || t.pts.length < 2) return;
+    OPEN.src = 'server'; OPEN.serverPts = t.pts; OPEN.who = t.who;
+    trailRefresh();
+  });
+}
+async function fillText(pre, src) {
+  const s = src && SERVERS.find((x) => x.id === src.sid);
+  const u = s ? CM.textUrl(s, location.protocol, src.f, src.rid) : '';
+  if (!u) { pre.textContent = 'The message is not available.'; return; }
+  try { const j = await (await fetch(u, { credentials: 'omit' })).json(); pre.textContent = typeof j.txt === 'string' ? j.txt : 'The message is not available.'; }
+  catch { pre.textContent = 'The receiver did not answer.'; }
+}
+function openCard(e) {
+  const f = e.features && e.features[0];
+  if (!f) return;
+  const id = f.properties.id;
+  if (id.startsWith('rx:')) { pick(id.slice(3), true); return; }
+  showCard(id, e.lngLat);
+}
+
+/* ══ THE RECEIVERS CARD (Stuart: "a button to show the contributing servers as a list then a user can select it to listen to") —
+ *  ★★★ b97 the card system's SERVERS card, called RECEIVERS here (map-chrome.js retitle / cardBody): a row per receiver, its
+ *  LISTEN link and ONLY THIS; a row chosen flies the map to it ══ */
+let rxSig = '';
+function drawReceivers() {
+  const n = CM.perServer(SHOWN);
+  const rows = SERVERS.slice().sort((a, b) => (n.get(b.id) || 0) - (n.get(a.id) || 0) || String(a.name).localeCompare(b.name));
+  const html = rows.map((s) => {
+    const st = CM.stateOf(s), u = CM.listenUrl(s), c = n.get(s.id) || 0;
+    const bz = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` : '';
+    const lays = CM.serverLayers(s).map((l) => `<span class="lay"><i style="background:${CM.MODE[l].colour}"></i>${esc(CM.MODE[l].label)}</span>`).join('');
+    // ★ a server sharing no layer right now is never asked (nothing to fetch), so it is not "loading…" (Stuart 11-26, the Sony)
+    const loading = !DATA.has(s.id) && !s.unreachable && CM.serverLayers(s).length > 0;
+    return `<div class="rxRow${s.id === selected ? ' sel' : ''}${s.unreachable ? ' down' : ''}" role="button" tabindex="0" data-navrow data-id="${esc(s.id)}">`
+      + `<div><div class="nm">${s.pin ? '🔒 ' : ''}${esc(s.name)}</div><div class="where">${esc(s.country || '')}${s.grid ? ' · ' + esc(s.grid) : ''}</div></div>`
+      + `<div class="acts">${u ? `<a class="listen" href="${esc(u)}" target="_blank" rel="noopener noreferrer">LISTEN</a>` : ''}`
+      + `<button type="button" class="btn chip" data-only="${esc(s.id)}" aria-pressed="${F.server === s.id}" title="Show only what this receiver heard">ONLY THIS</button></div>`
+      + `<div class="now">${s.unreachable ? esc(s.why || 'not responding') : loading ? 'loading…' : c ? `${c} on the map now` : 'nothing on the map right now'}</div>`
+      + `<div class="st ${st.cls}">${esc(st.label)}${bz ? ' · ' + esc(bz) : ''}</div><div class="lays">${lays}</div></div>`;
+  }).join('') || '<div class="rxEmpty">No receiver shares yet. A VibeServer owner turns on <b>Share to the VibeSDR community map</b> in Setup (or in the app’s Server mode) to add theirs.</div>';
+  const body = MC.cardBody('servers', true);
+  if (html === rxSig && body.firstChild) return;
+  rxSig = html;
+  // ★ written in place: the row with the focus (keyboard / controller) found again by its id
+  const fid = document.activeElement && body.contains(document.activeElement) ? (document.activeElement.closest('[data-id]') || {}).dataset?.id : '';
+  body.innerHTML = `<div class="rxList" role="list" aria-label="Receivers sharing">${html}</div>`;
+  if (fid) { const r = body.querySelector(`.rxRow[data-id="${CSS.escape(fid)}"]`); if (r) r.focus({ preventScroll: true }); }
+  MC.retitle('servers', `RECEIVERS · ${SERVERS.length}`);
+}
+function rxWire() {
+  const body = MC.cardBody('servers', true);
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('a')) return;
+    const only = e.target.closest('[data-only]');
+    if (only) { e.stopPropagation(); onlyThis(only.dataset.only); return; }
+    const row = e.target.closest('.rxRow[data-id]'); if (row) pick(row.dataset.id);
+  });
+  body.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.rxRow[data-id]')) { e.preventDefault(); pick(e.target.dataset.id); } });
+}
+/** ONLY THIS: what one receiver heard (again: everyone's) — the map frames it. */
+function onlyThis(id) {
+  F.server = F.server === id ? '' : id; selected = F.server || selected;
+  render().then(() => MC.fitNow());
+}
+function pick(id, open) {
+  selected = selected === id && !open ? '' : id;
+  const s = SERVERS.find((x) => x.id === id);
+  if (selected && s && typeof s.lat === 'number' && gl) gl.flyTo({ center: [s.lon, s.lat], zoom: Math.max(gl.getZoom(), 5), duration: 800 });
+  if (open) MC.card('servers', true);
+  render();
+}
+
+/* ══ ★★★ b97 THE CHROME — the card system (map-chrome.js, docs/v12/MAP-CONTROL-CARDS.md) in place of the old header rows:
+ *   LAYERS        the groups and their modes, each with its count, and SEA AREAS (the header's AVIATION / MARITIME / MISC
+ *                 buttons and the modes bar)
+ *   MAP CONTROLS  HEARD IN (the time filter), NAVTEX's own filters (its layers, message TYPE, STATION), ONLY THIS, AUTO / FIT,
+ *                 the KEY
+ *   RECEIVERS     the receivers sharing (the SERVERS card, retitled)
+ *   LIST          the NAVTEX MESSAGES (opened in place: the text from the receiver with the cleanest copy) and, in tabs,
+ *                 everything else on the map, newest first
+ *   STATS         the status line's totals, and per mode the NEWEST and the FURTHEST from the receiver that heard it
+ *   RATE          none: this page polls stored rows a minute apart — there is no live message rate to read (so no chip)
+ *  ══ */
+const KIND_WORDS = [['aircraft', 'aircraft'], ['ship', 'ships'], ['dsc', 'DSC'], ['navst', 'NAVTEX stations'], ['navwarn', 'warnings'], ['navmet', 'forecasts'],
+  ['navmsg', 'messages'], ['ndb', 'NDB'], ['vor', 'VOR'], ['sonde', 'sondes'], ['aprs', 'APRS'], ['mesh', 'MeshCore']];
+const GLYPH = { adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', ais: 'ship', dsc: 'ship', navtex: 'navtex', sondes: 'balloon', ndb: 'beacon', vor: 'navaid' };
+/** The status line (the old #status): receivers sharing, then the COMBINED totals (aircraft one per ICAO address; ships AIS +
+ *  DSC by MMSI — CM.shipsCombined) — the LIST's facts and STATS' NOW. */
+function statusParts() {
+  const by = {}; for (const it of SHOWN) by[it.kind] = (by[it.kind] || 0) + 1;
+  const up = SERVERS.filter((s) => DATA.has(s.id)).length;
+  const sc = CM.shipsCombined(SHOWN, true);
+  if (sc.ships) { by.ship = sc.ships; delete by.dsc; }
+  const shipWords = by.dsc === undefined && SHOWN.some((i) => i.kind === 'dsc') && SHOWN.some((i) => i.kind === 'ship') ? 'ships (AIS + DSC combined)'
+    : SHOWN.some((i) => i.kind === 'dsc') && !SHOWN.some((i) => i.kind === 'ship') ? 'ships (DSC)' : 'ships';
+  const air = new Set(SHOWN.filter((i) => i.kind === 'aircraft').flatMap((i) => i.modes)).size > 1 ? 'aircraft (all sources combined)' : 'aircraft';
+  const rows = KIND_WORDS.filter(([k]) => by[k]).map(([k, w]) => [k, by[k], k === 'aircraft' ? air : k === 'ship' ? shipWords : w]);
+  const only = F.server ? (SERVERS.find((s) => s.id === F.server) || {}).name || '' : '';
+  const text = `${up} of ${SERVERS.length} receiver${SERVERS.length === 1 ? '' : 's'} sharing · ${rows.map(([, n, w]) => `${n} ${w}`).join(' · ') || (up ? 'nothing in this filter' : 'loading…')}`
+    + (only ? ` · only ${only}` : '');
+  return { up, rows, text };
+}
+/* ── LAYERS ── */
+function drawLayers(now) {
+  const c = CM.modeCounts(ITEMS, { maxAge: F.maxAge, server: F.server, nav: F.nav, off: F.off }, now);
+  window.__cmCounts = c;
+  const layers = [], shown = {};
+  for (const g of CM.GROUPS) {
+    const ms = PRESENT.filter((id) => CM.MODE[id].group === g.id);
+    if (!ms.length) continue;
+    layers.push({ id: 'g:' + g.id, label: g.label, words: `${g.label}: show or hide the whole group (its modes keep their own switches)` });
+    shown['g:' + g.id] = F.groups.has(g.id);
+    for (const id of ms) {
+      const m = CM.MODE[id];
+      layers.push({ id, label: m.label, words: CM.modeTip(m), n: c.by[id] || 0, colour: m.colour, glyph: GLYPH[id] || 'dot' });
+      shown[id] = !F.off.has(id) && F.groups.has(g.id);
+    }
+    // ★ SEA AREAS: the chart, not something heard — its own switch in MARITIME (on by default), as on the server's map
+    if (g.id === 'maritime') {
+      layers.push({ id: 'sea', label: 'SEA AREAS', words: 'Sea areas: the shipping and marine forecast areas, outlined and named (tinted amber at force 7, red at a gale, while a NAVTEX forecast for them is on the map)', colour: CM.SEA.colours.line });
+      shown.sea = prefs.seaAreas !== false;
+    }
+  }
+  MC.layers(layers, shown, layerToggle);
+}
+function layerToggle(id, on) {
+  if (id.startsWith('g:')) {
+    const g = id.slice(2);
+    if (on) F.groups.add(g); else F.groups.delete(g);
+    prefs.groups = [...F.groups]; savePrefs(); render();
+    tick(true, layersOn().filter((l) => CM.MODE[l].group === g && !anyData(l)));
+    return;
+  }
+  if (id === 'sea') { prefs.seaAreas = on; savePrefs(); render(); return; }
+  if (!CM.MODE[id]) return;
+  if (on) { F.off.delete(id); F.groups.add(CM.MODE[id].group); prefs.groups = [...F.groups]; } else F.off.add(id);
+  prefs.off = [...F.off]; savePrefs(); render();
+  if (on && !anyData(id)) tick(true, [id]);   // ★ switched on: fetch it then
+}
+const anyData = (layer) => [...DATA.values()].some((d) => [...d.radios.values()].some((x) => CM.sectionsOf([layer]).some((k) => k in (x.sections || {}))));
+/* ── MAP CONTROLS: HEARD IN, then NAVTEX's own filters and ONLY THIS (one section of ours) ── */
+let ctlSig = '';
+function drawControls() {
+  MC.ranges(CM.AGES.map((a) => ({ id: String(a.s), label: a.label, words: `Heard in the last ${a.label.toLowerCase()}` })), String(F.maxAge),
+    (id) => { F.maxAge = Number(id); prefs.maxAge = F.maxAge; savePrefs(); render(); }, 'Heard in the last…');
+  const navOn = layersOn().includes('navtex');
+  const facets = CM.navtexFacets(ITEMS);
+  const sig = JSON.stringify([navOn, facets, F.nav.types && [...F.nav.types], F.nav.station, [...F.nav.layers], F.server]);
+  const host = MC.controls();
+  const sect = MC.root.querySelector('.ctlSect');
+  if (sig !== ctlSig) {
+    ctlSig = sig;
+    const NL = [['stations', 'STATIONS'], ['warnings', 'WARNINGS'], ['weather', 'WEATHER'], ['messages', 'MESSAGES']];
+    const only = F.server ? (SERVERS.find((s) => s.id === F.server) || {}).name || '' : '';
+    host.innerHTML = (only ? `<div class="sh">RECEIVER</div><div class="cmSel" data-navrow><button type="button" class="btn chip" id="onlyChip" aria-pressed="true" title="Show every receiver again">ONLY ${esc(only)} ✕</button></div>` : '')
+      + (navOn ? `<div class="sh" style="margin-top:8px">NAVTEX</div><div class="cmSel" data-navrow role="group" aria-label="NAVTEX layers">`
+        + NL.map(([id, w]) => `<button type="button" class="btn chip" data-navl="${id}" aria-pressed="${F.nav.layers.has(id)}">${w}<span class="n" data-nn="${id}"></span></button>`).join('') + '</div>'
+        + (facets.types.length ? `<div class="sh" style="margin-top:8px">TYPE</div><div class="cmSel" data-navrow role="group" aria-label="NAVTEX message types">` + facets.types.map((b) => `<button type="button" class="btn chip" data-navt="${b}" aria-pressed="${!F.nav.types || F.nav.types.has(b)}" title="${esc(KIT ? KIT.navtexSubject(b) : b)}">${b}</button>`).join('') + '</div>' : '')
+        + (facets.stations.length ? `<div class="sh" style="margin-top:8px">STATION</div><div class="cmSel"><select id="navSt" aria-label="NAVTEX station"><option value="">all ${facets.stations.length}</option>${facets.stations.map((s) => `<option${s === F.nav.station ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>` : '')
+      : '');
+  }
+  if (sect) sect.hidden = !host.innerHTML;
+  const c = window.__cmCounts || { nav: {} };
+  for (const el of host.querySelectorAll('[data-nn]')) { const n = String(c.nav[el.dataset.nn] || 0); if (el.textContent !== n) el.textContent = n; }
+}
+function ctlWire() {
+  const host = MC.controls();
+  host.addEventListener('click', (e) => {
+    const l = e.target.closest('[data-navl]'), t = e.target.closest('[data-navt]');
+    if (e.target.closest('#onlyChip')) { F.server = ''; render(); return; }
+    if (l) { const id = l.dataset.navl; if (F.nav.layers.has(id)) F.nav.layers.delete(id); else F.nav.layers.add(id); prefs.navLayers = [...F.nav.layers]; }
+    else if (t) { const all = CM.navtexFacets(ITEMS).types; if (!F.nav.types) F.nav.types = new Set(all); const b = t.dataset.navt;
+                  if (F.nav.types.has(b)) F.nav.types.delete(b); else F.nav.types.add(b); if (all.every((x) => F.nav.types.has(x))) F.nav.types = null; prefs.navTypes = F.nav.types ? [...F.nav.types] : null; }
+    else return;
+    savePrefs(); render();
+  });
+  host.addEventListener('change', (e) => { if (e.target.id === 'navSt') { F.nav.station = e.target.value; render(); } });
+}
+/* ── THE LIST: NAVTEX MESSAGES first (Stuart's MESSAGES button), then a tab per kind on the map ── */
+const LIST_TABS = [
+  { id: 'msgs', label: 'MESSAGES', kinds: ['navmsg'] },
+  { id: 'air', label: 'AIRCRAFT', kinds: ['aircraft'] },
+  { id: 'sea', label: 'SHIPS', kinds: ['ship', 'dsc'] },
+  { id: 'navtex', label: 'NAVTEX', kinds: ['navst', 'navwarn', 'navmet'] },
+  { id: 'other', label: 'OTHER', kinds: ['ndb', 'vor', 'sonde', 'aprs', 'mesh'] },
+];
+let listTab = '';
+const MSG_OPEN = new Set(), MSG_TEXT = new Map();
+function drawListCard(now) {
+  const of = (t) => SHOWN.filter((i) => t.kinds.includes(i.kind));
+  const tabs = LIST_TABS.map((t) => ({ t, items: of(t) })).filter((x) => x.items.length);
+  const cur = tabs.find((x) => x.t.id === listTab) || tabs[0];
+  MC.listTabs(tabs.length > 1 ? tabs.map((x) => ({ id: x.t.id, label: x.t.label, n: x.items.length })) : [], cur ? cur.t.id : '', (id) => { listTab = id; render(); });
+  const items = cur ? cur.items.slice().sort((a, b) => b.t - a.t).slice(0, 300) : [];
+  const rows = items.map((it) => {
+    if (it.kind === 'navmsg') {
+      const subj = it.b2 && KIT ? KIT.navtexSubject(it.b2) : '';
+      const st = it.d.st ? (KIT ? KIT.navName(it.d.st, it.d.sc) : it.d.st) : 'station not placed';
+      const open = MSG_OPEN.has(it.key);
+      return VibeMapChrome.mapRowHtml({ key: it.key, colour: CM.MODE.navtex.colour, name: `${it.d.id || '—'} · ${subj || 'message'}`,
+        second: `${it.title} — ${st} · ${it.d.khz} kHz · heard ${it.d.n}× by ${it.heard.length} receiver${it.heard.length === 1 ? '' : 's'}${it.d.lost ? ` · best copy ${it.d.lost} lost` : ''}`,
+        age: CM.ago(now - it.t), extra: open ? `<pre class="nvTx">${esc(MSG_TEXT.has(it.key) ? MSG_TEXT.get(it.key) : 'Loading the message…')}</pre>` : '' });
+    }
+    const m = CM.MODE[CM.primaryMode(it, F.off)] || { colour: '#9fb0c2', label: '' };
+    const sus = SUSPECT.has(it.key);
+    return VibeMapChrome.mapRowHtml({ key: it.key, colour: m.colour, name: it.title + (sus ? ' ?' : ''), dim: sus,
+      second: [it.modes.map((x) => CM.MODE[x].label).join(', '), it.heard[0] ? `heard by ${it.heard[0].name}${it.heard.length > 1 ? ` +${it.heard.length - 1}` : ''}` : ''].filter(Boolean).join(' · '),
+      age: CM.ago(now - it.t) });
+  }).join('') || `<div class="rxEmpty">${esc(SERVERS.length ? 'Nothing on the map in this filter.' : 'Finding the receivers that share…')}</div>`;
+  const st = statusParts();
+  MC.list({ items: [], rowsHtml: rows, status: st.text, count: items.length });
+  for (const k of MSG_OPEN) if (!MSG_TEXT.has(k)) msgText(k);
+}
+async function msgText(key) {
+  if (MSG_TEXT.has(key)) return;
+  MSG_TEXT.set(key, 'Loading the message…');
+  const it = SHOWN.find((i) => i.key === key) || ITEMS.find((i) => i.key === key);
+  const src = it && CM.textSource(it);
+  const s = src && SERVERS.find((x) => x.id === src.sid);
+  const u = s ? CM.textUrl(s, location.protocol, src.f, src.rid) : '';
+  let t = 'The message is not available.';
+  if (u) { try { const j = await (await fetch(u, { credentials: 'omit' })).json(); if (typeof j.txt === 'string') t = j.txt; } catch { t = 'The receiver did not answer.'; } }
+  MSG_TEXT.set(key, t);
+  if (MSG_TEXT.size > 60) MSG_TEXT.delete(MSG_TEXT.keys().next().value);
+  scheduleRender();
+}
+/** A LIST row pressed: a message opens / folds its text; anything else is shown on the map with its card. */
+function listRow(key) {
+  const it = ITEM_BY_KEY.get(key) || SHOWN.find((i) => i.key === key);
+  if (it && it.kind === 'navmsg') { if (MSG_OPEN.has(key)) MSG_OPEN.delete(key); else { MSG_OPEN.add(key); MSG_TEXT.delete(key); } render(); return; }
+  focusItem(key);
+}
+function focusItem(key) {
+  const it = ITEM_BY_KEY.get(key);
+  if (!it || it.lat === null || !gl) { MC.view.note('Not on the map — no position heard yet.', 2500); return; }
+  MC.fitPause();   // ★ a chosen item is where the person wants the map (mapAutoFit's rule) — FIT brings AUTO back
+  const ll = it.kind === 'navmet' && metMarkers.get(key) ? metMarkers.get(key).getLngLat().toArray() : [it.lon, it.lat];
+  gl.easeTo({ center: ll, zoom: Math.max(gl.getZoom(), 7), duration: 700 });
+  gl.once('moveend', () => showCard(key, ll));
+}
+/* ── STATS: the totals, and per mode its newest and its furthest (from the nearest receiver that heard it) ── */
+function rxKm(it) {
+  let best = null;
+  for (const h of it.heard) { const s = SERVERS.find((x) => x.id === h.sid); if (!s || typeof s.lat !== 'number') continue;
+    const km = CM.gcNm(s.lat, s.lon, it.lat, it.lon) * 1.852; if (best === null || km < best.km) best = { km, s }; }
+  return best;
+}
+function drawStats(now) {
+  const st = statusParts();
+  const secs = [{ mode: 'NOW', rows: [{ key: '', label: 'RECEIVERS', value: `${st.up}/${SERVERS.length}`, name: 'sharing now' }]
+    .concat(st.rows.map(([k, n, w]) => ({ key: '', label: w.toUpperCase(), value: String(n), name: '' }))) }];
+  for (const id of layersOn()) {
+    const its = SHOWN.filter((i) => i.lat !== null && i.kind !== 'navmsg' && CM.primaryMode(i, F.off) === id);
+    if (!its.length) continue;
+    const newest = its.reduce((a, b) => (b.t > a.t ? b : a));
+    const rows = [{ key: newest.key, label: 'NEWEST', value: CM.ago(now - newest.t), name: newest.title, lat: newest.lat, lon: newest.lon }];
+    let far = null;
+    for (const it of its) { if (SUSPECT.has(it.key)) continue; const r = rxKm(it); if (r && (!far || r.km > far.km)) far = { km: r.km, it, s: r.s }; }   // ★★ b97 never a suspect
+    if (far && far.km >= 1) rows.push({ key: far.it.key, label: 'FURTHEST', value: `${Math.round(far.km).toLocaleString('en-GB')} km`, name: `${far.it.title} · from ${far.s.name}`, lat: far.it.lat, lon: far.it.lon });
+    secs.push({ mode: CM.MODE[id].label, rows });
+  }
+  MC.stats(secs, (key) => { if (key) focusItem(key); });
+}
+/* ── MESH: implausible self-reported positions (src/utils/meshPlausible.ts via the kit — the ISM maps' own rule) ── */
+const SUSPECT = new Map();   // item key → the card's words
+/** ★★ b97 judged on every render from what is shown: a node's claim against the first placed repeater on its route (or the
+ *  receiver, heard first-hand). ★ HOOK: a server's community mesh row carries no route yet (vibe_community.h `m`: id, name,
+ *  type, lat, lon, last, count, approx) — until it does (relays / hops on the row → it.d.relays / it.d.hops), meshSuspect has
+ *  no evidence and nothing is suspect. */
+function susNote(shown) {
+  SUSPECT.clear();
+  if (!KIT || !KIT.meshSuspect) return;
+  const mesh = shown.filter((i) => i.kind === 'mesh' && i.lat !== null);
+  if (!mesh.some((i) => Array.isArray(i.d.relays) || i.d.hops === 0)) return;
+  const known = mesh.filter((i) => /repeater|room/i.test(i.d.ntype || '') && i.d.node).map((i) => ({ id: String(i.d.node).toLowerCase(), name: i.title, lat: i.lat, lon: i.lon }));
+  for (const it of mesh) {
+    const r = rxKm(it), rx = r ? { lat: r.s.lat, lon: r.s.lon } : null;
+    const v = KIT.meshSuspect({ lat: it.lat, lon: it.lon, relays: it.d.relays, node: it.d.node, hops: it.d.hops }, known, rx);
+    if (v) SUSPECT.set(it.key, KIT.meshSuspectWords(v, r ? r.km : null, false));
+  }
+}
+/** The node's own icon with a "?" badge (drawn dimmed — the ISM maps' look). */
+function susSvg(it) {
+  const h = KIT.ismMapIcon({ kind: 'meshcore', ntype: it.d.ntype, approx: it.d.approx ? 1 : undefined, seen: 0 }).html.replace(/\sstyle="[^"]*"/, '');
+  const w = Number((/width="(\d+(?:\.\d+)?)"/.exec(h) || [])[1]) || 24, ht = Number((/height="(\d+(?:\.\d+)?)"/.exec(h) || [])[1]) || 24;
+  const inner = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(h.includes('xmlns=') ? h : h.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '));
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w + 8}" height="${ht + 8}" viewBox="0 0 ${w + 8} ${ht + 8}"><image href="${inner}" x="0" y="8" width="${w}" height="${ht}"/>`
+    + `<circle cx="${w + 1}" cy="7" r="6.5" fill="#ffcf7a" stroke="#0b1014" stroke-width="1.2"/><text x="${w + 1}" y="10.5" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" font-weight="800" fill="#111">?</text></svg>`;
+}
+/** Everything the cards show, from what is shown now (render calls it). */
+function chromeSync(now) {
+  drawLayers(now); drawControls(); drawReceivers(); drawListCard(now); drawStats(now);
+  MC.legend(keyHtml());
+  const empty = gl && !SERVERS.length && listAt;
+  if (empty !== chromeSync.empty) { chromeSync.empty = empty; MC.view.note(empty ? 'No receiver shares to the community map yet — a VibeServer owner turns on “Share to the VibeSDR community map” in Setup (or the app’s Server mode) to add theirs.' : ''); }
+}
+/* ══ THE KEY — the server maps' own rows and glyphs (KIT: shipLegendRows, the hazards and marks, windLegendRows,
+ *  seaLegendRows, the aircraft glyphs and their names), plus what this page draws itself (the receivers' radio, the NDB / VOR diamond);
+ *  a section only for a layer switched on ══ */
+const kr = (g, w) => `<div class="kr"><span>${g}</span><span>${esc(w)}</span></div>`;
+const krh = (rows) => rows.map(([g, w]) => kr(g, w)).join('');
+function keyHtml() {
+  const on = new Set(layersOn()), nav = on.has('navtex') ? F.nav.layers : new Set();
+  const sec = (t) => `<div class="ks">${esc(t)}</div>`;
+  let h = sec('RECEIVERS') + kr(RX_SVG({ listeners: 0, maxListeners: 4 }, false), 'A receiver sharing to this map, at the centre of its grid square — green: a free slot')
+    + kr(RX_SVG({ listeners: 4, maxListeners: 4 }, false), 'Red: full (no free slot)') + kr(RX_SVG({ temporary: true }, false), 'Blue: a temporary share')
+    + kr(RX_SVG({ unreachable: true }, false), 'Grey: not responding') + kr(RX_SVG({ pin: true }, false), 'The padlock: a PIN is needed to listen')
+    + kr(RX_SVG({ listeners: 0, maxListeners: 4 }, true), 'Chosen (in the RECEIVERS list)');
+  const air = ['adsb', 'acars', 'vdl2', 'hfdl'].filter((m) => on.has(m));
+  if (air.length) {
+    // ★ beta96 the colour says the SOURCE, the shape says WHAT the aircraft is — the ADS-B map's own classes (KIT)
+    const kc = CM.MODE[air[0]].colour, shapes = ['jet', 'heavy', 'b757', 'regional', 'light', 'heli', 'fighter', 'glider', 'balloon', 'ultralight', 'uav'];
+    h += sec('AIRCRAFT') + air.map((m) => kr(acGlyph('jet', CM.MODE[m].colour, 28), `Aircraft whose position came from ${CM.MODE[m].label}, pointing along its track`)).join('')
+      + (KIT && KIT.AIRCRAFT_CLASS_NAMES ? shapes.map((c) => kr(acGlyph(c, kc, 28), `${KIT.AIRCRAFT_CLASS_NAMES[c]}${c === 'jet' ? ' (also: type not known)' : ''}`)).join('') : '')
+      + kr(`<svg width="24" height="12" viewBox="0 0 24 12"><path d="M1 9 L9 4 L14 6" fill="none" stroke="${kc}" stroke-width="2.4" stroke-linecap="round"/><path d="M15 6 L23 2" fill="none" stroke="${kc}" stroke-width="2" stroke-dasharray="2 2.5"/></svg>`,
+           'A clicked aircraft’s track: solid where flown, dashed across a gap of over five minutes with no position')
+      + kr(`<span style="opacity:.45;display:flex">${acGlyph('jet', CM.MODE.adsb.colour, 28)}</span>`, 'Faded: a datalink position (ACARS, VDL2, HFDL) over five minutes old, fading until it is dropped at 30 minutes — ADS-B positions are dropped at five')
+      + kr(`<span style="position:relative;display:inline-flex">${acGlyph('jet', kc, 24)}<b style="position:absolute;right:-5px;top:-5px;min-width:13px;height:13px;border-radius:7px;background:${kc};color:#111;font:800 8px/13px system-ui,sans-serif;text-align:center">12</b></span>`, 'Zoomed out, where icons would sit on top of each other: one icon of what is there (aircraft with aircraft, MeshCore with MeshCore) and how many — click to zoom in');
+  }
+  const dia = (c) => `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L13 7 L7 13 L1 7 Z" fill="${c}" stroke="#0b1014" stroke-width="1.2"/></svg>`;
+  if (on.has('ndb')) h += sec('NDB') + kr(dia(CM.MODE.ndb.colour), 'A non-directional beacon heard, placed from the published list');
+  if (on.has('vor')) h += sec('VOR / ILS') + kr(dia(CM.MODE.vor.colour), 'A VOR or ILS identified on the VOR map, placed from the published list');
+  if (KIT) {
+    if (on.has('ais')) h += sec('SHIPS (AIS)') + krh(KIT.shipLegendRows(['ships']))
+      + Object.entries(KIT.AIS_COLOURS).map(([f, c]) => kr(`<span style="width:10px;height:10px;border-radius:50%;background:${c};display:inline-block"></span>`, f === 'hsc' ? 'high-speed craft' : f)).join('');
+    if (on.has('dsc')) h += sec('DSC POSITIONS') + krh(KIT.shipLegendRows(['dsc']));
+    if (nav.has('stations')) {
+      const site = (khz, conf) => KIT.navIcon({ key: 'k', name: '', iso: '', country: '', lat: 0, lon: 0, letters: [], khz, first: 0, last: 0, n: 1, uniq: 1, seen: 0, conf }).html;
+      h += sec('NAVTEX STATIONS') + kr(site([518], 'confident'), '518 kHz (international)') + kr(site([490], 'confident'), '490 kHz (national)')
+        + kr(site([4209.5], 'confident'), '4209.5 kHz (HF)') + kr(site([518, 490], 'confident'), 'A site sending on two bands')
+        + kr(site([518], 'likely'), 'Dashed rim: suspected (the evidence points here)') + kr(site([518], 'ambiguous'), '"?": not certain which station');
+    }
+    if (nav.has('warnings')) h += sec('NAVTEX WARNINGS') + KIT.NAV_HAZARDS.map((x) => kr(KIT.navGlyphSvg(x.id, 16, KIT.NAV_HAZARD_COLOURS[x.id]), x.words)).join('')
+      + KIT.NAV_MARK_ROWS.map((x) => kr(KIT.navMarkRowSvg(x, 16), x.words)).join('')
+      + kr('<svg width="24" height="16" viewBox="0 0 24 16"><path d="M2 3 L21 2 L22 13 L3 14 Z" fill="rgba(255,138,77,.16)" stroke="#ff8a4d" stroke-width="1.6" stroke-dasharray="3 2"/></svg>', 'A warning’s area or route, in its hazard’s colour');
+    if (nav.has('weather')) h += sec('NAVTEX WEATHER') + krh(KIT.windLegendRows())
+      + kr('<span style="color:#cfe6ff">▭</span>', 'The latest forecast per sea area: wind force, sea state, poor visibility (shown from zoom 4)');
+  }
+  const sea = CM.seaShown(F.groups, PRESENT, prefs.seaAreas);
+  if (sea && KIT) h += sec('SEA AREAS') + krh(KIT.seaLegendRows(nav.has('weather')))
+    + (SEA_DATA ? `<div class="kr" style="opacity:.7;font-size:10px"><span></span><span>${esc(CM.seaAttribution(SEA_DATA))}</span></div>` : '');
+  if (KIT && on.has('sondes')) h += sec('RADIOSONDES') + kr(KIT.sondeIcon({ climb: 5 }).html, 'A sonde rising (its track in blue)') + kr(KIT.sondeIcon({ climb: -8 }).html, 'Falling, after the balloon burst (its track in orange)');
+  if (KIT && on.has('aprs')) h += sec('APRS') + kr(KIT.aprsIcon({ kind: 'position', sym: '/>' }).html, 'An APRS station or object: its own APRS symbol (a car here)')
+    + kr(KIT.aprsIcon({ kind: 'weather', sym: '/_' }).html, 'A weather station');
+  if (KIT && on.has('mesh')) h += sec('MESHCORE') + ['repeater', 'companion', 'room server', 'sensor'].map((t) => kr(KIT.ismMapIcon({ kind: 'meshcore', ntype: t, seen: 0 }).html, `A MeshCore ${t}`)).join('')
+    + kr(KIT.ismMapIcon({ kind: 'meshcore', ntype: 'companion', approx: 1, seen: 0 }).html, 'Approximate (~1 km): a companion node is a person');
+  h += `<div class="kr" style="opacity:.75"><span>◐</span><span>Anything faded was heard longer ago, within its mode’s window (HEARD IN)</span></div>`;
+  return h;
+}
+/* ══ ★★★ b97 THE CARD SYSTEM — mounted once; the map is made in its holder (makeMap) when it shows ══ */
+const MC = VibeMapChrome.mountMapChrome({
+  title: 'COMMUNITY MAP', exitLabel: 'Back to the directory', listTitle: 'MESSAGES', profile: 'aero',
+  onExit: () => { location.href = '/'; },
+  // the item drawing is this page's own (MapLibre layers, the servers' cards) — the chrome draws none
+  icon: () => ({ html: '', w: 0, h: 0 }), label: () => '', card: () => '',
+  hostMap: makeMap,
+});
+MC.chips({ layers: true, stats: true });
+MC.retitle('servers', 'RECEIVERS');
+// ★ the old footer's words (privacy: where a receiver is drawn) — HELP's credit line now
+MC.credit('Shared by VibeServer owners who switched on “Share to the VibeSDR community map”. What the stations themselves broadcast, read straight from each receiver; a receiver is drawn at the centre of its four-character grid square, never its address.');
+MC.onRow(listRow);
+rxWire(); ctlWire();
+MC.show(null);
+
+/* ══ THE CLOCK — a floor on every fetch, nothing while hidden ══ */
+tick(true);
+setInterval(() => tick(false), 15000);   // ★ wakes every 15 s; each receiver is asked only when its layers are due (60 s / 5 min)
+setInterval(() => { if (!document.hidden) scheduleRender(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(false); });
+if (new URLSearchParams(location.search).get('receivers') === '1') MC.card('servers', true);
+</script>
+</body>
+</html>

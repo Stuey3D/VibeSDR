@@ -56,6 +56,9 @@ function typeCheck() {
   }
 }
 typeCheck();
+// ★★★ b97 the map card system's standalone copies (the amateur map's window inlines one; the directory serves the other) are
+//     written from mapChrome.ts / mapChromeApi.ts before the bundle — a page built here never carries a stale copy
+execFileSync(process.execPath, [new URL('./gen-mapchrome-source.mjs', import.meta.url).pathname], { stdio: 'inherit' });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_HTML = path.join(root, 'web/client/index.html');

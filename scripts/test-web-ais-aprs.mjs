@@ -160,16 +160,16 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
     const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
     for (let i = 0; i < 40; i++) { if (await mev(`typeof aprs !== 'undefined' && aprs.length >= 3`)) break; await sleep(250); }
     // ★★★ beta96 stage 7 THE AMATEUR MAP: every layer in the window shown, APRS (live: the box's decoder) emphasised and first
-    ok(/Amateur Map/.test(await mev(`document.title`) || '') && /AMATEUR MAP/.test(await mev(`document.getElementById('amTitle').textContent`) || ''), `…titled the Amateur Map (${await mev(`document.title`)})`);
+    ok(/Amateur Map/.test(await mev(`document.title`) || '') && /AMATEUR MAP/.test(await mev(`document.querySelector('.trkTop .ttl').textContent`) || ''), `…titled the Amateur Map (${await mev(`document.title`)})`);
     ok(await mev(`show.aprs === true && show.spots === true && openedOn === 'aprs' && liveLayer === 'aprs'`), `opened on APRS (live), the spots shown too: ${await mev(`JSON.stringify({ show, openedOn, liveLayer })`)}`);
     ok((await mev(`aprs.length`)) >= 3, `stations on the map: ${await mev(`aprs.map(a => a.call).join(' ')`)}`);
     ok(await mev(`aprs.filter(a => a.svg).length >= 3`), 'each drawn with its APRS symbol (our SVG)');
     ok(/1012/.test(await mev(`(aprs.find(a => /MB7UH/.test(a.call)) || {}).wx || ''`) || ''), `the weather station's report: ${await mev(`(aprs.find(a => /MB7UH/.test(a.call)) || {}).wx`)}`);
     ok(/Weather: .*1012/.test(await mev(`aprsCard(aprs.find(a => /MB7UH/.test(a.call)))`) || ''), 'its card says it');
-    ok(await mev(`(() => { const l = document.getElementById('layers'); const k = [...l.querySelectorAll('button')]; return !l.hidden && /^APRS[0-9]+$/.test(k[0].textContent) && k[0].querySelector('.dot') && l.querySelector('.lbl')?.textContent === 'SHOW' && k[0].classList.contains('live') && k.every(b => b.getAttribute('aria-pressed') === 'true'); })()`),
-       `the layer keys (SHOW: a colour dot, the name, its count — beta96), the live one first: ${await mev(`[...document.getElementById('layers').querySelectorAll('button')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed') + (b.classList.contains('live') ? '(live)' : '') + (b.querySelector('.dot') ? '(dot)' : '')).join(',') + ' lbl=' + (document.querySelector('#layers .lbl') || {}).textContent`)}`);
-    ok(/APRS \d/.test(await mev(`document.getElementById('amTabs').textContent`) || '') && /G4ABC|MB7UH/.test(await mev(`document.getElementById('amRows').textContent`) || ''),
-       `the list's APRS tab: ${await mev(`document.getElementById('amTabs').textContent + ' | ' + document.getElementById('amRows').textContent.slice(0, 120)`)}`);
+    ok(await mev(`(() => { const l = document.querySelector('.trkCard2 .tgl'); const k = [...l.querySelectorAll('[data-tgl]')]; return !l.hidden && /^APRS(LIVE)?[0-9]+$/.test(k[0].textContent) && k[0].querySelector('.dot') && l.querySelector('.lbl')?.textContent === 'SHOW' && k[0].classList.contains('live') && k.every(b => b.getAttribute('aria-pressed') === 'true'); })()`),
+       `the layer keys (SHOW: a colour dot, the name, its count — beta96), the live one first: ${await mev(`[...document.querySelectorAll('.trkCard2 .tgl [data-tgl]')].map(b => b.textContent + '=' + b.getAttribute('aria-pressed') + (b.classList.contains('live') ? '(live)' : '') + (b.querySelector('.dot') ? '(dot)' : '')).join(',')`)}`);
+    ok(/APRS\s*\d/.test(await mev(`document.querySelector('.trkCard2[data-card="list"] .hd .tabs').textContent`) || '') && /G4ABC|MB7UH/.test(await mev(`document.querySelector('.trkCard2[data-card="list"] .rows').textContent`) || ''),
+       `the LIST's APRS tab: ${await mev(`document.querySelector('.trkCard2[data-card="list"] .rows').textContent.slice(0, 120)`)}`);
     /* ★★★ STUART'S RULE: ANY station in the HEARD IN window — a background-decoded and a listener-decoded spot (the store's
      *  src 1 and 2) both shown inside the window and gone outside it; APRS follows the SAME window */
     const W = await mev(`(() => {
@@ -180,7 +180,7 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
       live = []; srvOk = true;
       aprs.forEach((a, i) => { a.age = 600 + i * 300; });
       win = '1h'; srvNow = Math.round(t / 1000); mergeSpots(); render();
-      out.in = spots.map(s => s.callsign + ':' + s.src).sort().join(',') + ' | aprs ' + aprsIn().length + '/' + aprs.length + ' | rows ' + document.querySelectorAll('#amRows .amRow').length;
+      out.in = spots.map(s => s.callsign + ':' + s.src).sort().join(',') + ' | aprs ' + aprsIn().length + '/' + aprs.length + ' | rows ' + document.querySelectorAll('.trkCard2[data-card="list"] .rows .trkRow[data-key]').length;
       srvNow = Math.round(t / 1000) + 7200; aprs.forEach((a) => { a.age += 7200; }); mergeSpots(); render();
       out.out = spots.length + ' | aprs ' + aprsIn().length;
       win = '24h'; mergeSpots(); render();
@@ -191,7 +191,7 @@ await session('aprs', APRS, 144800000, 144800000, 'nfm', async ({ ev, send, shot
     ok(/^DL1LIS:2,G4BGD:1 \| aprs (\d+)\/\1/.test(Wj.in || ''), `1 H: the background (src 1) and the listener (src 2) spot both shown, every APRS station too: ${Wj.in}`);
     ok(Wj.out === '0 | aprs 0', `two hours later in 1 H: both spots gone, and APRS with them: ${Wj.out}`);
     ok(/^DL1LIS,G4BGD \| aprs [1-9]/.test(Wj.day || ''), `24 H: all back: ${Wj.day}`);
-    ok(/APRS/.test(await mev(`document.getElementById('legend').textContent`) || ''), 'the legend has APRS');
+    ok(/APRS/.test(await mev(`document.querySelector('.trkKey .kb').textContent`) || ''), 'the KEY has APRS');
     // ★★★ maps2: MESH holds every band's remembered nodes (the page read both cards one at a time and pushed them)
     let meshNames = '';
     for (let i = 0; i < 40; i++) { meshNames = await mev(`mesh.map(m => m.name).sort().join(',')`) || ''; if (/Hill 433/.test(meshNames) && /Tower 868/.test(meshNames)) break; await sleep(250); }
