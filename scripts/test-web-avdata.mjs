@@ -108,6 +108,24 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   ok(/EGLL → LEMD · OUT 10:15 UTC/.test(rows2), 'the OOOI row: the route and OUT');
   ok(!/EGLLXYA|#M1BPOS/.test(await ev(`document.body.innerHTML`) || ''), '★ the messages themselves never on the page without the opt-in');
   ok(/position messages/.test(await ev(`document.querySelector('.trkView:not([hidden])')?.textContent`) || ''), 'the status counts the position messages');
+  /* ★★★ beta97 hotfix THE MESSAGES LIST FROM THE SERVER'S LOG (src/services/avMsgs.ts): backfilled from
+   *  /vibeserver/avmsgs.json, the tab saying what it shows, polled no faster than every 5 s while the map is open */
+  ok(await until(`(() => { const l = window.__vibeAvLog && window.__vibeAvLog(); return !!l && l.ok === true && l.n >= 3 && l.polling; })()`, 15000), `MESSAGES from the server's log (${await ev(`JSON.stringify(window.__vibeAvLog && window.__vibeAvLog())`)})`);
+  const tabTxt = await ev(`document.querySelector('.trkView:not([hidden]) .trkList .hd .tab[data-tab="messages"]')?.textContent || ''`) || '';
+  ok(/MESSAGES\s*·\s*(last \d+ (h|min)|last 24 h|latest \d+|this session)/i.test(tabTxt), `the tab says what it shows: "${tabTxt.trim()}"`);
+  { const n0 = await ev(`performance.getEntriesByType('resource').filter((e) => /avmsgs\.json/.test(e.name)).length`);
+    await sleep(11000);
+    const n1 = await ev(`performance.getEntriesByType('resource').filter((e) => /avmsgs\.json/.test(e.name)).length`);
+    const direct = await ev(`performance.getEntriesByType('resource').filter((e) => /avmsgs\.json/.test(e.name)).every((e) => new URL(e.name).host === location.host)`);
+    ok(n1 - n0 >= 1 && n1 - n0 <= 3 && direct, `polled at the floor: ${n1 - n0} calls in 11 s (5 s floor), this server's own host`); }
+  /* ★★★ beta97 hotfix ON THE MAP / HEARD (Stuart: ✈ 28 with nothing drawn): fewer aircraft placed than heard → the LAYERS chip
+   *  and the VDL2 row say "n/m", the LIST's line "m aircraft · n with position" */
+  { const st = JSON.parse(await ev(`JSON.stringify((() => { const v = document.querySelector('.trkView:not([hidden])');
+      return { sum: [...v.querySelectorAll('.mDock[data-dock="layers"] .lsum .ln')].map((e) => e.textContent), row: v.querySelector('.tgl [data-tgl="vdl2"] .n')?.textContent || '', text: v.textContent }; })())`));
+    const ac = await ev(`window.__vibeAcLayer ? window.__vibeAcLayer.shown().length : -1`);
+    const m = /(\d+) aircraft · (\d+) with position/.exec(st.text);
+    ok(st.sum.some((t) => /^\d+\/\d+$/.test(t)) && /^\d+\/\d+$/.test(st.row) && !!m && Number(m[2]) < Number(m[1]),
+       `on the map / heard: LAYERS ${JSON.stringify(st.sum)}, the VDL2 row "${st.row}", the LIST "${m ? m[0] : '(none)'}" (${ac} drawn)`); }
   console.log('   screenshot', await shot('desktop'));
   await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1200);
@@ -122,6 +140,7 @@ await session('avd', CLIP, 136850000, 96100000, 'wfm', async ({ ev, send, shot, 
   await sleep(600);
   await ev(`document.querySelector('.trkView:not([hidden]) .exit').click()`);
   ok(await until(`![...document.querySelectorAll('.trkView')].some(v => !v.hidden)`, 6000), 'EXIT DATALINK closes the view');
+  ok(await until(`!(window.__vibeAvLog && window.__vibeAvLog().polling)`, 8000), 'the map shut: the message log is no longer polled');
   await sleep(1500);
   const after = await ev(`document.getElementById('mFreq')?.textContent`);
   ok(/96\.100/.test(after || ''), `the dial is back: ${after}`);

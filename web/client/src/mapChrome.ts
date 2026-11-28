@@ -23,6 +23,7 @@ import { MAP_AUTOFIT_JS } from '../../../src/utils/mapAutoFit';
 import { MESH_ROUTE_JS } from '../../../src/utils/meshRoute';   // ★★ beta96 a mesh node's route, drawn hop by hop   // ★ beta92 ONE auto fit for every map (the ADS-B map's)
 import { CARD_IDS, CARD_NARROW_W, CARD_W, CARD_W_SNUG, CARD_ROOMY_W, cardPlace, oneSide, MAP_HELP, MAP_HELP_NOTES, cardOpenRule, STICKY_CARDS, CARD_IDLE_MS, cardDefaults, cardLimit as cardLimitFor, cardToggle, trimOutliers, type CardId, shortMap } from '../../../src/utils/mapCards';
 import { modeIconSvg } from '../../../src/utils/modeIcons';
+import { layerCountText } from '../../../src/utils/mapChrome';   // ★★★ beta97 hotfix ON THE MAP / HEARD
 import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT, edgeTabsLive } from './healthTuck';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
@@ -2015,16 +2016,16 @@ export class TrackView {
    *  on a phone-width window (each glyph over its count). Entries: the host's (setLayerSummary), else the SHOW toggles'. */
   private lsumSig = '';
   private lsumHost = false;
-  setLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; colour: string; words: string }>) {
+  setLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; pos?: number; colour: string; words: string }>) {
     this.lsumHost = true;
     this.drawLayerSummary(entries);
   }
-  private drawLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; colour: string; words: string }>) {
+  private drawLayerSummary(entries: Array<{ glyph: LayerGlyph; n: number; pos?: number; colour: string; words: string }>) {
     const sig = JSON.stringify(entries);
     if (sig === this.lsumSig) return;
     this.lsumSig = sig;
     const el = this.root.querySelector('.mDock[data-dock="layers"] .lsum') as HTMLElement;
-    el.innerHTML = entries.map((e) => `<span class="le" title="${esc(e.words)}"><span class="lg" style="color:${esc(e.colour)}">${LAYER_GLYPH[e.glyph] ?? LAYER_GLYPH.dot}</span><span class="ln">${esc(e.n)}</span></span>`).join('');
+    el.innerHTML = entries.map((e) => `<span class="le" title="${esc(e.words)}"><span class="lg" style="color:${esc(e.colour)}">${LAYER_GLYPH[e.glyph] ?? LAYER_GLYPH.dot}</span><span class="ln">${esc(layerCountText(e.n, e.pos))}</span></span>`).join('');
     const b = this.root.querySelector('[data-cbtn="layers"]') as HTMLElement;
     b.setAttribute('aria-label', `Layers — ${entries.map((e) => e.words).join(', ') || 'what the map shows'}`);
     // ★ its tucked tab: the main family's glyph in its colour (the aircraft where there are aircraft)
@@ -2332,7 +2333,7 @@ export class TrackView {
   }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; colour?: string; others?: string[]; nMine?: number }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; nPos?: number; colour?: string; others?: string[]; nMine?: number }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
     // ★★★ beta96 SHOW (Stuart 11-26): the counts change every second — written in place (below), never a redraw, so a poll
     //   cannot steal a focused chip
@@ -2346,13 +2347,16 @@ export class TrackView {
         const x = by.get(b.dataset.tgl || ''); if (!x) continue;
         const n = b.querySelector('.n') as HTMLElement | null, nm = b.querySelector('.nm') as HTMLElement | null;
         const sp = split(x);
-        const t = x.n != null ? String(sp ? Math.max(0, x.n - (x.nMine ?? 0)) : x.n) : '';
+        /* ★★★ beta97 hotfix ON THE MAP / HEARD (Stuart: ✈ 28 with no aircraft drawn): "0/25" where fewer can be drawn than were
+         *  heard (layerCountText, the app's rule); its title says it in words */
+        const t = x.n != null ? (sp ? String(Math.max(0, x.n - (x.nMine ?? 0))) : layerCountText(x.n, x.nPos)) : '';
         if (n && n.textContent !== t) n.textContent = t;
+        if (n && x.n != null && x.nPos != null && x.nPos !== x.n) n.title = `${x.nPos} of ${x.n} with a position — on the map`; else if (n) n.removeAttribute('title');
         if (nm) { const tm = sp ? String(x.nMine) : ''; if (nm.textContent !== tm) nm.textContent = tm; }
       }
     };
     const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|'), split(x)]), toggles.map((x) => toggled[x.id] !== false)]);
-    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` }))); return; }
+    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` }))); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
     this.viewSync();
@@ -2380,7 +2384,7 @@ export class TrackView {
       + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
       + `${esc(x.label)}${badge(x)}<span class="n"></span></button>`).join('');
     counts();
-    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, colour: x.colour || '#9fb0c2', words: `${x.label} ${x.n}` })));
+    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` })));
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';
