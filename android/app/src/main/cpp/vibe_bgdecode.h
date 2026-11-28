@@ -1714,7 +1714,7 @@ public:
      *  Called every health tick (~2 s) whether or not a listener is on. Pure on its inputs: a test drives it with its own
      *  clock through easeTick. */
     static constexpr double kFrontBehindSecPerMin = 1.5;   ///< BG-EASE's allowance (2.5 % of the capture): slots start going
-    void frontEndWatch(int64_t nowMs, double utc) {
+    void frontEndWatch(int64_t nowMs, double utc, double busyPct = -1) {
         if (p_.sampleRate <= 0) return;
         const uint64_t d = dropped_.load(std::memory_order_relaxed);
         frontHist_.push_back({ nowMs, d });
@@ -1722,10 +1722,12 @@ public:
         while (frontHist_.size() > 64) frontHist_.pop_front();
         const auto& a = frontHist_.front();
         const double w = (double)(nowMs - a.first) / 1000.0;
-        if (w < 10.0) return;                                            // ★ judge over at least 10 s
+        if (w < 25.0) return;                                            // ★ judge over the whole window: one hiccup is not a trend
         const double perMin = (double)(d >= a.second ? d - a.second : 0) / p_.sampleRate * 60.0 / w;
         frontDropPerMin_.store(perMin, std::memory_order_relaxed);
         if (perMin <= kFrontBehindSecPerMin) return;
+        // ★★ live 11-28: drops with CPU to spare are not cured by less depth (budget::kDropsNeedBusy, the same rule)
+        if (busyPct >= 0 && busyPct < budget::kDropsNeedBusy) return;
         char why[120];
         std::snprintf(why, sizeof why, "the channels fell behind the radio: %.1f s of IQ a minute dropped", perMin);
         ladder_->behind(utc, why);   // ★ the ladder's own clock is UTC — the spotters' capture stamps
@@ -1774,7 +1776,7 @@ public:
                     cands.push_back(k);
                     break;
                 }
-        frontEndWatch(in.nowMs, std::isfinite(in.utc) ? in.utc : vibeUtcNow());   // ★★★ b97: IQ the channeliser could not take is "behind" for the load ladder, listener or not
+        frontEndWatch(in.nowMs, std::isfinite(in.utc) ? in.utc : vibeUtcNow(), in.machineBusyPct);   // ★★★ b97: IQ the channeliser could not take is "behind" for the load ladder, listener or not
         bool canShed = false, canSafety = false;
         for (auto& k : cands) { if (k.tier == ease::kTierSafety) canSafety = true; else canShed = true; }
         ease::Signals sg;

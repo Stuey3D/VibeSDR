@@ -285,6 +285,19 @@ static void orderFiles() {
     ok(powerWords(pw) == "this machine is power-limited or hot: running at 1.5 GHz of 2.4", "power-limited, in words: " + powerWords(pw));
     Box full; full.curGHz = 2.2; full.maxGHz = 2.2;
     ok(powerWords(full).empty(), "at full speed: nothing said");
+    // ★★ live 11-28: drops with the CPU to spare do not shed anything
+    {
+        Policy pol; Entry e; e.id = "r"; e.name = "RSP1B"; e.frontDropPerMin = 9.3;
+        e.cat[kPictures] = { 1, 0, 1, 6.0, 2 }; e.cat[kText] = { 1, 0, 1, 4.0, 2 };
+        Box bx; bx.nowMs = 1000000; bx.cores = 4; bx.busyPct = 35.0;
+        const Decision d = pol.tick(bx, { e }, defaultOrder());
+        ok(d.act == Act::None, "★★ 9.3 s/min of front-end drops with the box 35 % busy: nothing shed (shedding cannot cure it)");
+        bx.busyPct = 92.0; bx.nowMs += 2000;
+        ok(pol.tick(bx, { e }, defaultOrder()).act == Act::Shed, "...the same drops with the box 92 % busy: shed");
+        Entry p = e; p.id = "s"; p.cls = kPass; p.passName = "Meteor-M2-4 LRPT"; p.urgentDrop = true; p.frontDropPerMin = 0;
+        Policy pol2; Box lo = bx; lo.busyPct = 30.0;
+        ok(pol2.tick(lo, { e, p }, defaultOrder()).act == Act::Shed, "a pass's decoder dropping is urgent at any load");
+    }
 }
 
 int main() {

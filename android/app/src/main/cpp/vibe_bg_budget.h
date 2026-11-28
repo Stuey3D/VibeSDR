@@ -177,6 +177,11 @@ constexpr double kFrontDropSecPerMin = 1.5;  ///< BG-EASE's allowance (2.5 % of 
 constexpr double kBusyHigh = 95.0;           ///< nothing dropping but the box this busy: no headroom left for anyone
 constexpr double kBusyHighPass = 85.0;       ///< …while a pass is on anywhere: keep a core's worth free for it
 constexpr double kBusyLow = 80.0;            ///< a step comes back only below this (the gap is the hysteresis)
+/** ★★ (live on the Pi 500, 16:12 11-28) DROPS ARE A CPU PROBLEM ONLY WHEN THE CPU IS SHORT. The first test build shed the
+ *  WEFAX and RTTY VFOs for 1.5-9 s/min of front-end drops with the box 35 % busy — drops shedding could not cure (a
+ *  hiccup, then the pauses' own chart saves). A front end's drops count only with the machine at least this busy (or
+ *  its load unknown). A pass's decoder dropping stays urgent at any load. */
+constexpr double kDropsNeedBusy = 85.0;
 constexpr int64_t kShedStepMs = 15000;       ///< one step box-wide per FT8 slot — its effect shows before the next
 constexpr int64_t kRestoreStepMs = 30000;    ///< and back half as fast
 constexpr int64_t kUrgentStepMs = 4000;      ///< a pass's (or a listener's) decoder dropping: a step every other tick — its harm is now
@@ -190,7 +195,10 @@ struct Decision {
     std::string why;    ///< in plain words, for its log line ("to keep the Meteor-M2-4 LRPT pass whole")
 };
 
-/** ★ The box's capacity in words, "" at full speed: "this machine is power-limited or hot: running at 1.5 GHz of 2.4". */
+/** ★ The box's capacity in words, "" at full speed: "this machine is power-limited or hot: running at 1.5 GHz of 2.4".
+ *  ★★ Only when it IS limited: throttled now, or its clock CAPPED below the chip's maximum (scaling_max_freq). The current
+ *     clock alone means nothing — an ondemand / schedutil governor idles it down (the Pi 500 read 1.7 of 2.2 at 35 % busy,
+ *     and the first test build said "power-limited" in every line). */
 inline std::string powerWords(const Box& b) {
     if (!(b.clockFrac < 0.95) && !b.throttled) return std::string();
     char t[160];
@@ -219,7 +227,9 @@ public:
         }
         if (why.empty()) {
             const Entry* worst = nullptr;
-            for (auto& e : entries) if (e.frontDropPerMin > kFrontDropSecPerMin && (!worst || e.frontDropPerMin > worst->frontDropPerMin)) worst = &e;
+            const bool short_ = b.busyPct < 0 || b.busyPct >= kDropsNeedBusy;
+            if (short_)
+                for (auto& e : entries) if (e.frontDropPerMin > kFrontDropSecPerMin && (!worst || e.frontDropPerMin > worst->frontDropPerMin)) worst = &e;
             if (worst) {
                 char t[200];
                 std::snprintf(t, sizeof t, "to keep %s's background channels fed (it dropped %.1f s of IQ a minute)", worst->name.c_str(), worst->frontDropPerMin);
@@ -411,6 +421,8 @@ private:
 };
 
 /** ★ The CPU's clock now and at most (Linux cpufreq; 0 = unknown), for powerWords. */
+/** ★ curGHz = the clock the CPU is ALLOWED now (scaling_max_freq — lowered by a thermal / power cap), maxGHz = the chip's
+ *  maximum (cpuinfo_max_freq). Never scaling_cur_freq: that is the governor's idea of the moment, not a limit. */
 inline void readClock(double& curGHz, double& maxGHz) {
     curGHz = maxGHz = 0;
     auto rd = [](const char* p) -> double {
@@ -421,7 +433,7 @@ inline void readClock(double& curGHz, double& maxGHz) {
         std::fclose(f);
         return k == 1 ? (double)v / 1e6 : 0;   // kHz → GHz
     };
-    curGHz = rd("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq");
+    curGHz = rd("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq");
     maxGHz = rd("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
 }
 
