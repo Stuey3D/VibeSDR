@@ -18,6 +18,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "vibe_bgdecode.h"
+#include "vibe_avi_tx.h"   // ★ beta98 the HFDL bursts for the background HFDL VFO (test-hfdl's transmitter)
 
 #include <cmath>
 #include <cstdio>
@@ -632,6 +633,44 @@ static void lenovoBusyQueue() {
        "★★★ the SAME message, header and all, through the busy queue (" + std::to_string(f1) + " file(s)):\n" + busy.substr(0, 400));
 }
 
+// ── 6c. ★★ b98 — A HOLE IN A PICTURE VFO IS BRIDGED WITH SILENCE OF ITS LENGTH (BgRunner::bridgePicture) ─────────────
+//     The Pi 500's V4 dropped 0.1-1 s of IQ a minute on 2026-11-28 and every SSTV picture came out in shifted bands with
+//     its colours swapped: left out, a hole moves the rest of the picture left by its length. Here the worker's queue is
+//     held long enough that the DSP thread's held chunks overflow (the oldest go = a hole) and the hole must come back,
+//     sample for sample, in the SSTV VFO (and only there: NAVTEX re-finds its own bit clock, a bridge would only delay it).
+static void pictureHoleBridged() {
+    std::printf("── ★★ b98: a hole in an SSTV VFO is bridged with silence of exactly its length ──\n");
+    gallery::Store s; s.setDir(tmpDir("picbridge"));
+    FileSlots slots("", [] { return 4; });
+    const double fs = 250000, centre = 14200000;
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.slots = &slots; p.store = &s;
+    p.profile.centreHz = centre;
+    p.profile.vfos = { bg::Vfo{14230000, "usb", "sstv"}, bg::Vfo{14250000, "usb", "navtex"} };
+    r.start(p);
+    ok(r.running() && r.decodersRunning() == 2, "an SSTV and a NAVTEX VFO, both decoding");
+    const size_t chunk = (size_t)(fs / 1000);
+    std::vector<vibedsp::cf32> iq(chunk, vibedsp::cf32(0.01f, 0.0f));
+    auto feedFor = [&](int ms) { for (int k = 0; k < ms; k++) r.feedIq(iq.data(), (int)iq.size()); };
+    feedFor(200);
+    while (r.queuedForTest() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    ok(r.droppedSamples() == 0 && r.bridgedPictureSamples() == 0, "a quiet queue: nothing dropped, nothing bridged");
+    {
+        auto lk = r.holdQueueForTest();   // ★ the worker cannot pop: the DSP thread holds its chunks, then sheds the oldest
+        feedFor(400);
+    }
+    feedFor(50);
+    while (r.queuedForTest() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const uint64_t d = r.droppedSamples(), b = r.bridgedPictureSamples();
+    ok(d > 0, "the held queue overflowed: " + std::to_string((unsigned long long)d) + " IQ samples dropped ("
+       + std::to_string(d / fs * 1000.0) + " ms)");
+    ok(b == d, "★★ the SSTV VFO was given ALL of it back as silence (" + std::to_string((unsigned long long)b) + " bridged of "
+       + std::to_string((unsigned long long)d) + ") — and only the SSTV VFO (one count per hole, not per VFO)");
+    r.stop();
+}
+
 // ── 7. phase 2: pictures, FT8 summaries, the decoders' demodulators ─────────────────────────────────────────────
 static std::vector<uint8_t> be32(uint32_t v) { return { (uint8_t)(v >> 24), (uint8_t)(v >> 16), (uint8_t)(v >> 8), (uint8_t)v }; }
 static std::string readFile(const std::string& p) {
@@ -655,6 +694,13 @@ static void phase2() {
     ok(bg::validate(c, 2048000, err) && std::fabs(bg::signalHz(iss.vfos[0]) - 145800000) < 1, "SSTV on NFM (the ISS, 145.800) validates");
     c.profiles[0].vfos[0].dec = "navtex";
     ok(!bg::validate(c, 2048000, err), "NAVTEX on NFM is refused: " + err);
+    // ★★ beta98 (Stuart 11-28): 7171 kHz LSB is 40 m's SSTV calling frequency — SSTV's tones decode the same from an LSB
+    //    demodulation of an LSB station (the runner's LSB audio path is proven end to end by the NAVTEX LSB VFO above)
+    bg::Profile sstv40; sstv40.centreHz = 7100000; sstv40.vfos = { bg::Vfo{7171000, "lsb", "sstv"} };
+    c.profiles = { sstv40 };
+    ok(bg::validate(c, 2048000, err) && bg::decoderFitsDemod("sstv", "lsb") && std::fabs(bg::signalHz(sstv40.vfos[0]) - 7171000) < 1,
+       "★ SSTV on LSB (7171 kHz) validates, its dial is the frequency: " + err);
+    ok(!bg::decoderFitsDemod("ft8", "lsb") && !bg::decoderFitsDemod("wefax", "lsb"), "FT8 and WEFAX stay USB only");
 
     std::printf("── WEFAX and SSTV pictures: complete, PARTIAL, and noise not kept ──\n");
     gallery::Store s; s.setDir(tmpDir("pics"));
@@ -1223,7 +1269,79 @@ static void wefaxStations() {
     ok(sl.inUse() == 0, "stopped: the slot back");
 }
 
+// ── ★★ beta98 HFDL AS A BACKGROUND VFO (Stuart 11-28): synthetic bursts on 8977 kHz (Shannon) → IQ → the runner's USB
+//    channel → the "hfdl" decoder (vibe_hfdl_run.h, as a listener's) → the radio's aircraft table (/addon/hfdl/*, the message
+//    log, the community map's HFDL layer). The bursts are vibe_avi_tx.h's, as test-hfdl's §5 uses for a listener's audio.
+static void hfdlRunner() {
+    std::printf("── BgRunner: HFDL on 8977 kHz USB (Shannon), centre 8950 kHz ──\n");
+    std::string err;
+    bg::Config c; c.on = true;
+    bg::Profile hp; hp.centreHz = 8950000; hp.vfos = { bg::Vfo{8977000, "usb", "hfdl"} };
+    c.profiles = { hp };
+    ok(bg::validate(c, 2048000, err) && bg::decoderFitsDemod("hfdl", "usb") && !bg::decoderFitsDemod("hfdl", "lsb"),
+       "HFDL on USB validates; LSB is refused (an 8-PSK burst mirrored): " + err);
+    ok(bg::attachMsg(hp.vfos[0]) == "{}" && std::fabs(bg::signalHz(hp.vfos[0]) - 8977000) < 1 && bg::passbandHz(hp.vfos[0]) == 3000.0,
+       "its dial is the published frequency (tone 0), attach {}, a 3 kHz passband (carrier 1440 ± 1200 Hz)");
+    ok(bg::galleryKindFor("hfdl", "{}").empty(), "nothing in the gallery (a listener's HFDL keeps none either) — the aircraft table is its record");
+
+    gallery::Store s; s.setDir(tmpDir("hfdl"));
+    FileSlots slots("", [] { return 4; });
+    const double fs = 96000, centre = 8950000, dial = 8977000;
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.profileIdx = 0; p.sampleRate = fs; p.centreHz = centre; p.fftSize = 4096; p.slots = &slots; p.store = &s;
+    p.profile = hp;
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    r.start(p);
+    ok(r.running() && r.decodersRunning() == 1 && slots.inUse() == 1, "1 HFDL VFO, 1 decoder, 1 slot (a normal background decoder: the slots and the CPU rules are the same)");
+    std::vector<vibedsp::cf32> iq; iq.reserve(16384);
+    std::mt19937 g(11); std::normal_distribution<float> n(0.0f, 0.002f);
+    size_t k = 0;
+    auto push = [&](vibedsp::cf32 v) {
+        iq.push_back(v + vibedsp::cf32(n(g), n(g)));
+        if (iq.size() == 16384) { r.feedIq(iq.data(), (int)iq.size()); iq.clear(); std::this_thread::sleep_for(std::chrono::milliseconds(3)); }
+    };
+    const double fOff = dial + vibehfdl::kCarrierOffsetHz - centre;   // ★ the carrier, 1440 Hz above the USB dial
+    const int N = 3;
+    for (int i = 0; i < N; ++i) {
+        std::mt19937 r2(400 + i);
+        char flt[7]; std::snprintf(flt, sizeof flt, "BGH%03d", i);
+        auto mp = vibeavitx::hfdlPerfMpdu(20 + i, 7, flt, 53.0 + i * 0.1, -9.0);
+        std::vector<vibehfdl::cf32> sym, x;
+        vibeavitx::hfdlSymbols(i % 2, mp, sym);
+        vibeavitx::hfdlModulate(sym, x, 2.0, 18.0, -99, 0, r2);
+        // the 7200 S/s baseband, cubic-interpolated to fs (as hfdlUsbAudio does to 48 k) and put on the carrier, complex
+        const double up = fs / vibehfdl::kWorkRate;
+        const size_t m = size_t(double(x.size()) * up);
+        auto at = [&](long q) { return q < 0 || q >= long(x.size()) ? vibehfdl::cf32(0, 0) : x[size_t(q)]; };
+        for (size_t j = 0; j < m; ++j, ++k) {
+            const double t = double(j) / up; const size_t q = size_t(t); const float f = float(t - double(q));
+            const vibehfdl::cf32 p0 = at(long(q) - 1), p1 = at(long(q)), p2 = at(long(q) + 1), p3 = at(long(q) + 2);
+            const vibehfdl::cf32 bb = (((-0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3) * f + (p0 - 2.5f * p1 + 2.0f * p2 - 0.5f * p3)) * f + (-0.5f * p0 + 0.5f * p2)) * f + p1;
+            const vibehfdl::cf32 v = bb * std::polar(0.1f, float(std::fmod(2 * M_PI * fOff * double(k) / fs, 2 * M_PI)));
+            push(vibedsp::cf32(v.real(), v.imag()));
+        }
+        for (size_t j = 0; j < size_t(6 * fs); ++j, ++k) push(vibedsp::cf32(0, 0));   // ★ the decoder holds a burst to its longest end
+    }
+    if (!iq.empty()) r.feedIq(iq.data(), (int)iq.size());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    r.stop();
+    ok(slots.inUse() == 0, "stopped: the slot back");
+    const double nowU = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string ac = vibeavi::sharedTracker().hfdlAircraftJson(nowU, nowU), gs = vibeavi::sharedTracker().hfdlGroundStationsJson(nowU, nowU);
+    int got = 0;
+    for (int i = 0; i < N; ++i) { char flt[7]; std::snprintf(flt, sizeof flt, "BGH%03d", i); if (ac.find(std::string("\"flight\":\"") + flt + "\"") != std::string::npos) ++got; }
+    ok(got >= N - 1, "★ the aircraft table filled from the background VFO: " + std::to_string(got) + " of " + std::to_string(N) + " flights — " + ac.substr(0, 220));
+    ok(gs.find("\"gs_id\":7") != std::string::npos && gs.find("{\"freq_khz\":8977,\"enabled\":true}") != std::string::npos,
+       "…and Shannon heard on 8977 kHz (the VFO's dial): " + gs.substr(0, 200));
+    // ★ (the message log, /vibeserver/avmsgs.json, takes an HFDL message that CARRIES ACARS — vibe_avi_service.h addHfdl,
+    //   the same for a listener's; these synthetic performance reports carry none, so the log is not asserted here)
+    ok(s.listJson("hfdl", 10).find("\"f\":") == std::string::npos, "nothing filed in the gallery");
+}
+
 int main() {
+    hfdlRunner();
     config();
     phase2();
     ft8Periodic();
@@ -1240,6 +1358,7 @@ int main() {
     navtexStations();
     runner();
     lenovoBusyQueue();
+    pictureHoleBridged();
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }

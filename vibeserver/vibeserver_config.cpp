@@ -976,6 +976,7 @@ std::string toJson(const ServerConfig& c) {
     N("maxRadiosPerIp", c.maxRadiosPerIp);
     N("decoderMax", c.decoderMax);
     N("rttySkimWorkers", c.rttySkimWorkers);
+    if (!c.bgPriority.empty()) S("bgPriority", c.bgPriority);   // ★★★ b97 the background priority list (absent = default)
     // ★★ V12 the gallery — machine-level, read below too.
     N("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     B("communityMap", c.communityMap);   // ★★ V12 beta94 the community map — off unless the owner says
@@ -1138,6 +1139,8 @@ bool fromJson(const std::string& j, ServerConfig& c, std::string& err) {
     if (c.decoderMax < 0) c.decoderMax = 0;
     I("rttySkimWorkers", c.rttySkimWorkers);
     c.rttySkimWorkers = std::max(0, std::min(8, c.rttySkimWorkers));
+    S("bgPriority", c.bgPriority);   // ★★★ b97
+    if (c.bgPriority.size() > 200) c.bgPriority.clear();
     I("galleryMb", c.galleryMb); B("galleryPublic", c.galleryPublic); B("gallerySaveLive", c.gallerySaveLive);
     B("communityMap", c.communityMap); S("communityOff", c.communityOff);
     S("aircraftFeeds", c.aircraftFeeds); S("adsbShare", c.adsbShare);

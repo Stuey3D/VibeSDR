@@ -49,14 +49,55 @@ ok(api.bgCollect() === JSON.stringify(NICK), `saved back unchanged: ${api.bgColl
 // the decoders offered follow the demodulator
 const row2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
 const [md, dc] = row2.children.filter((e) => e.tag === 'select');
-ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,psk-skim-6,psk-skim-12,rtty-skim-24,rtty-skim-48,rtty-skim-96,aprs-hf,dsc,sitora,spots-band,ndb-skim',
-   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz), the PSK skimmers (6/12 kHz), the RTTY skimmers (24/48/96 kHz, beta90), HF APRS, DSC, SITOR-A, Band digital spots and — the HF+ reaches LF — the NDB skimmer (V12 2026-10-27; SITOR-A 2026-10-29)');
+ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,psk-skim-6,psk-skim-12,rtty-skim-24,rtty-skim-48,rtty-skim-96,aprs-hf,dsc,sitora,hfdl,spots-band,ndb-skim',
+   'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz), the PSK skimmers (6/12 kHz), the RTTY skimmers (24/48/96 kHz, beta90), HF APRS, DSC, SITOR-A, HFDL (beta98), Band digital spots and — the HF+ reaches LF — the NDB skimmer (V12 2026-10-27; SITOR-A 2026-10-29)');
 md.value = 'lsb'; md.onchange();
-ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim') || o.value.startsWith('psk-skim')) && dc.value === 'navtex',
-   'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
+// ★★ beta98 (Stuart 11-28: 7171 kHz LSB is 40 m's SSTV calling frequency) — SSTV on LSB; the USB-only ones greyed, said
+{
+  const live = dc.children.filter((o) => !('disabled' in o.attrs)), grey = dc.children.filter((o) => 'disabled' in o.attrs);
+  ok(live.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,sstv,aprs-hf,dsc,sitora' && dc.value === 'navtex',
+     `LSB offers NAVTEX, RTTY, SSTV, HF APRS, DSC, SITOR-A — and keeps NAVTEX (${live.map((o) => o.value).join()})`);
+  ok(grey.some((o) => o.value === 'wefax') && grey.some((o) => o.value === 'ft8') && grey.every((o) => / \u2014 USB only$/.test(o.textContent)),
+     `…WEFAX, FT8/FT4 and the skimmers listed greyed, "USB only" — never silently missing (${grey.map((o) => o.textContent).join(' | ')})`);
+  ok(!grey.some((o) => o.value === 'sstv' || o.value === 'navtex'), '…and nothing that runs on LSB is greyed');
+}
 ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
-md.value = 'nfm'; md.onchange();
-ok(dc.children.map((o) => o.value).join() === 'sstv,aprs,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV, APRS and DSC (VHF channel 70), and the VFO becomes SSTV');
+// the LSB SSTV VFO saves and loads back as it was (7171 kHz LSB)
+{
+  dc.value = 'sstv'; dc.onchange && dc.onchange();
+  const v = api.model().profiles[0].vfos[1]; v.hz = 7171000;
+  const saved = api.bgCollect();
+  ok(/"hz":7171000,"mode":"lsb","dec":"sstv"/.test(saved), `an LSB SSTV VFO is saved (${saved})`);
+  api.bgLoad({ driver: 'airspyhf', bgDecode: saved });
+  ok(api.bgCollect() === saved && api.model().profiles[0].vfos[1].dec === 'sstv' && api.model().profiles[0].vfos[1].mode === 'lsb', '…and loads back unchanged');
+  api.bgLoad({ driver: 'airspyhf', bgDecode: JSON.stringify(NICK) });
+}
+{
+  const row = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
+  const [md2] = row.children.filter((e) => e.tag === 'select');
+  md2.value = 'lsb'; md2.onchange();
+}
+const row2b = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
+const [mdN, dcN] = row2b.children.filter((e) => e.tag === 'select');
+mdN.value = 'nfm'; mdN.onchange();
+ok(dcN.children.map((o) => o.value).join() === 'sstv,aprs,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV, APRS and DSC (VHF channel 70), and the VFO becomes SSTV');
+
+// ★★ beta98 HFDL (Stuart 11-28): offered on USB, greyed "USB only" on LSB; its row says what the dial is; the profile round-trips
+{
+  const HF = { on: true, waitMin: 5, profiles: [{ centre: 8900000, from: '00:00', to: '00:00', vfos: [{ hz: 8977000, mode: 'usb', dec: 'hfdl' }, { hz: 8942000, mode: 'usb', dec: 'hfdl' }] }] };
+  api.bgLoad({ driver: 'rtlsdr', rate: 2400000, bgDecode: JSON.stringify(HF) });
+  ok(api.bgCollect() === JSON.stringify(HF), `two HFDL VFOs (8977 + 8942 kHz USB) save back unchanged: ${api.bgCollect()}`);
+  const rows = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo');
+  const [, dcH] = rows[0].children.filter((e) => e.tag === 'select');
+  ok(dcH.value === 'hfdl' && dcH.children.some((o) => o.value === 'hfdl' && o.textContent === 'HFDL'), 'the row shows HFDL');
+  ok(/published HFDL frequency/.test(box.text()) && /1440 Hz above it/.test(box.text()) && /aircraft table/.test(box.text()), 'its line: the dial is the published frequency, the carrier 1440 Hz above, messages to the aircraft table');
+  const [mdH] = rows[1].children.filter((e) => e.tag === 'select');
+  mdH.value = 'lsb'; mdH.onchange();
+  const rows2 = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo');
+  const [, dcL] = rows2[1].children.filter((e) => e.tag === 'select');
+  ok(dcL.children.some((o) => o.value === 'hfdl' && 'disabled' in o.attrs && /USB only/.test(o.textContent)), 'on LSB: HFDL greyed, "USB only"');
+  api.bgLoad({ driver: 'airspyhf', bgDecode: JSON.stringify(NICK) });
+}
 
 // ★ V12 CW: the page's decoder list mirrors the server's (vibe_bgdecode_config.h decoders()) — id, label, demodulators
 {

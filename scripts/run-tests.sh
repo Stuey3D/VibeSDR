@@ -2945,6 +2945,9 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── beta96: Setup order (test-setup-order, SETUP-UX.md) ──\033[0m\n'
 node scripts/test-setup-order.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+printf '\n\033[1m── beta98: the Setup page admin login is an IDLE timeout (test-setup-admin-idle) ──\033[0m\n'
+node scripts/test-setup-admin-idle.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 printf '\n\033[1m── beta96: map packs read straight out of the APK (test-apk-pack, VibeApkPack.kt) ──\033[0m\n'
 bash scripts/test-apk-pack.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

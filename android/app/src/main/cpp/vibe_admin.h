@@ -1488,7 +1488,7 @@ public:
             }
             if (tok.size() < 39) continue;
             const long nice = std::strtol(tok[16], nullptr, 10), policy = std::strtol(tok[38], nullptr, 10);
-            if (nice != 19 || policy == 5 /* SCHED_IDLE */) continue;
+            if ((nice != 19 && nice != 16) || policy == 5 /* SCHED_IDLE */) continue;   // ★ b97: 16 = the front end (vibe-bgdsp)
             cur[tid] = std::strtoull(tok[11], nullptr, 10) + std::strtoull(tok[12], nullptr, 10);
             names[tid] = std::string(lp + 1, (size_t)(rp - lp - 1));
         }

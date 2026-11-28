@@ -39,6 +39,7 @@
 #include "vibe_bgdecode_band.h"     // ★ V12: a Band digital-spots VFO's span (installBandSpan)
 #include "vibe_bg_ease.h"           // ★ V12 2026-11-24: easing off for listeners, on purpose, before it hurts
 #include "vibe_bg_fullcpu.h"        // ★★★ beta94: nobody listening — background may use the whole machine
+#include "vibe_bg_budget.h"         // ★★★ b97: ONE budget for the whole box, shed in the owner's order
 #include "vibe_band_slice.h"        // ★ …and its slices: sized, tapered and placed as a listener's Band (one rule)
 #include "vibe_clock.h"             // ★ the capture time a Band slice's slots are cut by
 #include "vibe_decoder_host.h"
@@ -53,6 +54,7 @@
 #include "vibedsp/vibedsp.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -1227,7 +1229,12 @@ struct NdbStart { int profileIdx = 0; double rate = 0, hwCentreHz = 0, loHz = 0,
 class BgSlots : public DecoderSlots {
 public:
     BgSlots(DecoderSlots* inner, std::shared_ptr<const fullcpu::Live> live) : in_(inner), live_(std::move(live)) {}
-    int extra() const { return live_ && live_->full.load(std::memory_order_relaxed) ? std::max(0, live_->extraSlots.load(std::memory_order_relaxed)) : 0; }
+    /** ★★★ b97: with the box-wide budget on, as many as background asks for (kBoxBudgetExtra) — at once, not ramped. */
+    static constexpr int kBoxBudgetExtra = 64;
+    int extra() const {
+        if (live_ && live_->boxBudget.load(std::memory_order_relaxed)) return kBoxBudgetExtra;
+        return live_ && live_->full.load(std::memory_order_relaxed) ? std::max(0, live_->extraSlots.load(std::memory_order_relaxed)) : 0;
+    }
     int claim() override {
         const int t = in_->claim();
         if (t >= 0) return t;
@@ -1268,6 +1275,12 @@ public:
         double      centreHz = 0;      ///< where the capture really is (logical), read once at start
         double      hwOffsetHz = 0;    ///< the dongle's offset tuning — the shim's hwOffsetHz()
         int         fftSize = 16384;
+        /** ★★★ b97-cpu-budget ONE FRONT END PER RADIO: true = the radio's own shared channeliser (a SHARED / locked radio's
+         *  fast-convolution bank, the one forward FFT that already serves its listeners, the waterfall and the
+         *  spectrogram) hands this runner its BLOCKS (feedBlock, fftSize = that bank's) and the runner never transforms
+         *  the full-rate stream itself — each VFO costs only its own slice (one small inverse FFT a block): O(channel
+         *  rate), not O(radio rate). false = feedIq, the runner's own channeliser (a radio with no shared bank). */
+        bool        sharedFront = false;
         DecoderSlots* slots = nullptr;
         gallery::Store* store = nullptr;
         /** ★ V12 beta90: the station store every spot goes to (the DIGI MODES MAP, PSK Reporter); null = none (tests). */
@@ -1562,7 +1575,8 @@ public:
         chans_.clear();
         decodingNow_.store(0); degrading_.store(false);
         easeTaken_.clear(); easePaused_.store(0); easeChips_.store(0); easeDepth_.store(false);
-        if (ladder_) ladder_->forceMin(false);
+        if (ladder_) { ladder_->forceMin(false); ladder_->setFloor(0); }
+        for (auto& v : budgetTaken_) v.clear();
         if (was && p_.registry) p_.registry->publish({});   // ★ beta94 only a stop that stopped something (see ~BgRunner)
         if (was && sayIt) say("background decoding stopped");
     }
@@ -1575,6 +1589,8 @@ public:
     size_t queuedForTest() { std::lock_guard<std::mutex> lk(qm_); return qSamples_; }
     int  decodersRunning() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     uint64_t droppedSamples() const { return dropped_.load(); }
+    /** ★ b98: IQ samples (at the radio's rate) bridged into picture VFOs since start (bridgePicture) — tests, the log. */
+    uint64_t bridgedPictureSamples() const { return bridgedPicture_.load(std::memory_order_relaxed); }
     /** ★ beta94: VFOs decoding as of the last publish (≤ 0.5 s old) — LOCK-FREE, for the health tick on another thread
      *  (decodersRunning() walks chans_, which stop() clears). 0 when stopped. */
     int decodingNow() const { return running_.load() ? decodingNow_.load() : 0; }
@@ -1601,20 +1617,41 @@ public:
      *  the worker. Bounded: past kHeldSec the oldest held chunk goes (counted in busyDrops_ and dropped_, bridged as
      *  before) — a worker preempted for that long is falling behind anyway, and the queue's own cap then decides. */
     static constexpr double kHeldSec = 0.25;
+private:
+    struct QItem;   // ★ b97 (enqueue below): defined with the queue
+public:
     void feedIq(const cf32* iq, int n, double captureUtc = NAN) {
-        if (!running_.load(std::memory_order_relaxed) || n <= 0) return;
+        if (!running_.load(std::memory_order_relaxed) || n <= 0 || p_.sharedFront) return;
         QItem it; it.v.assign(iq, iq + n);
         it.utc = std::isfinite(captureUtc) ? captureUtc : vibeUtcNow();
+        enqueue(std::move(it));
+    }
+    /** ★★★ b97-cpu-budget: ONE BLOCK from the radio's shared channeliser (sharedFront) — the bins the DSP thread's own
+     *  forward FFT just made, copied (they are valid only inside its callback) with their block index, the capture time of
+     *  the block's last sample, and whether a hole preceded it. Same hand-over as feedIq: never waits, held when the queue
+     *  is busy, the oldest out past half a second. A block of another size (the bank was rebuilt) is refused, counted. */
+    void feedBlock(const cf32* bins, int nbins, long long blockIndex, double blockUtc, bool upstreamGap) {
+        if (!running_.load(std::memory_order_relaxed) || !p_.sharedFront || nbins <= 0) return;
+        if (nbins != p_.fftSize) { wrongBlocks_.fetch_add(1, std::memory_order_relaxed); return; }
+        QItem it; it.v.assign(bins, bins + nbins);
+        it.block = true; it.bi = blockIndex; it.upGap = upstreamGap;
+        it.hopN = nbins - nbins / vibedsp::Channelizer::OVERLAP_DIV;
+        it.utc = std::isfinite(blockUtc) ? blockUtc : vibeUtcNow();
+        enqueue(std::move(it));
+    }
+    bool sharedFront() const { return running_.load(std::memory_order_relaxed) && p_.sharedFront; }
+    uint64_t wrongBlocks() const { return wrongBlocks_.load(std::memory_order_relaxed); }
+    void enqueue(QItem&& it) {
         std::lock_guard<std::mutex> hl(heldM_);   // ★ the DSP thread's own (uncontended but for start/stop)
         {
             std::unique_lock<std::mutex> lk(qm_, std::try_to_lock);
             if (!lk.owns_lock()) {
                 busyHeld_.fetch_add(1, std::memory_order_relaxed);
-                heldSamples_ += (size_t)n;
+                heldSamples_ += it.worth();
                 held_.push_back(std::move(it));
                 const size_t hcap = (size_t)std::max(16384.0, p_.sampleRate * kHeldSec);
                 while (heldSamples_ > hcap && held_.size() > 1) {   // ★ the oldest held goes: a hole, bridged
-                    const size_t k = held_.front().v.size();
+                    const size_t k = held_.front().worth();
                     heldSamples_ -= k;
                     missed_.fetch_add(k + held_.front().missBefore, std::memory_order_relaxed);
                     dropped_.fetch_add((uint64_t)k, std::memory_order_relaxed);
@@ -1626,15 +1663,16 @@ public:
             held_.push_back(std::move(it));
             for (QItem& h : held_) {
                 h.missBefore += missed_.exchange(0, std::memory_order_relaxed);   // ★ the hole sits just before THIS chunk
-                qSamples_ += h.v.size();
+                qSamples_ += h.worth();
                 q_.push_back(std::move(h));
             }
             held_.clear(); heldSamples_ = 0;
             const size_t cap = (size_t)std::max(65536.0, p_.sampleRate * 0.5);
             while (qSamples_ > cap && q_.size() > 1) {
-                qSamples_ -= q_.front().v.size();
-                dropped_.fetch_add(q_.front().v.size(), std::memory_order_relaxed);
-                gapSamples_ += q_.front().v.size() + q_.front().missBefore;   // ★ the oldest go — so the hole is just before the new front
+                const size_t k = q_.front().worth();
+                qSamples_ -= k;
+                dropped_.fetch_add(k, std::memory_order_relaxed);
+                gapSamples_ += k + q_.front().missBefore;   // ★ the oldest go — so the hole is just before the new front
                 q_.pop_front();
                 gap_ = true;
             }
@@ -1661,7 +1699,48 @@ public:
         double   machineBusyPct = -1;    ///< the whole machine 0..100 (-1 unknown — Android)
         int      cores = 0;
         double   listenerHz = NAN;       ///< the listener's dial — chips and skimmers furthest from it go first (NaN = centre)
+        double   utc = NAN;              ///< ★ b97: the load ladder's clock (UTC s, what the spotters stamp) — NaN = now; a test passes its own
     };
+    /** ★ What VFO `i` costs now, % of one core, over the easing's window (easeCpu_, filled by easeTick); -1 unknown. */
+    double costOfLocked(int i) const {
+        if (easeCpu_.size() < 2) return -1;
+        const auto& a = easeCpu_.front(); const auto& b = easeCpu_.back();
+        if (a.ns.size() != b.ns.size() || i < 0 || (size_t)i >= b.ns.size()) return -1;
+        const double w = std::chrono::duration<double>(b.t - a.t).count();
+        if (w < 1.0) return -1;
+        return 100.0 * (double)(b.ns[(size_t)i] >= a.ns[(size_t)i] ? b.ns[(size_t)i] - a.ns[(size_t)i] : 0) / (w * 1e9);
+    }
+    /** ★★★ b97-cpu-budget (2026-11-28, the Pi 500): THE FRONT END'S DROPS ARE "BEHIND" TOO. The load ladder heard only its
+     *  decoders (a skipped slot, a backlog, the governor's shed) — but when the CHANNELISER falls behind the radio the
+     *  decoders downstream are starved, not late: they read "light", the ladder saw calm and put depth back to FULL while
+     *  the RSP1B lost 30-43 s of IQ a minute (every band losing ~70 % of every slot — bands lost by accident, the very thing
+     *  Stuart's order exists to prevent). Now: over a rolling ~30 s, more than kFrontBehindSecPerMin of IQ dropped a minute
+     *  counts as behind (a depth step per LoadLadder::kStepSec; at the minimum the spotters' pause rule takes CW, then RTTY),
+     *  and while it lasts depth cannot come back (calm() needs kCalmSec without a behind). Shedding depth here frees CPU
+     *  across the box — the decoders' share goes back to the front ends (vibe-bgdsp ranks above them, vibe_thread.h).
+     *  Called every health tick (~2 s) whether or not a listener is on. Pure on its inputs: a test drives it with its own
+     *  clock through easeTick. */
+    static constexpr double kFrontBehindSecPerMin = 1.5;   ///< BG-EASE's allowance (2.5 % of the capture): slots start going
+    void frontEndWatch(int64_t nowMs, double utc, double busyPct = -1) {
+        if (p_.sampleRate <= 0) return;
+        const uint64_t d = dropped_.load(std::memory_order_relaxed);
+        frontHist_.push_back({ nowMs, d });
+        while (frontHist_.size() > 2 && nowMs - frontHist_[1].first >= 30000) frontHist_.pop_front();
+        while (frontHist_.size() > 64) frontHist_.pop_front();
+        const auto& a = frontHist_.front();
+        const double w = (double)(nowMs - a.first) / 1000.0;
+        if (w < 25.0) return;                                            // ★ judge over the whole window: one hiccup is not a trend
+        const double perMin = (double)(d >= a.second ? d - a.second : 0) / p_.sampleRate * 60.0 / w;
+        frontDropPerMin_.store(perMin, std::memory_order_relaxed);
+        if (perMin <= kFrontBehindSecPerMin) return;
+        // ★★ live 11-28: drops with CPU to spare are not cured by less depth (budget::kDropsNeedBusy, the same rule)
+        if (busyPct >= 0 && busyPct < budget::kDropsNeedBusy) return;
+        char why[120];
+        std::snprintf(why, sizeof why, "the channels fell behind the radio: %.1f s of IQ a minute dropped", perMin);
+        ladder_->behind(utc, why);   // ★ the ladder's own clock is UTC — the spotters' capture stamps
+    }
+    /** ★ b97: the front end's IQ drop rate, s a minute over the last ~30 s (admin, tests). */
+    double frontDropPerMin() const { return frontDropPerMin_.load(std::memory_order_relaxed); }
     /** ★★ ONE TICK OF THE GOVERNOR: at most one step taken or given back, said in the log in plain words. Never touches a
      *  listener's own decoders (it only ever reaches this runner's VFOs). Takes the slot lock and the channel lock, as
      *  retarget() does — the worker is between blocks when it runs. */
@@ -1685,7 +1764,7 @@ public:
         const double ref = std::isfinite(in.listenerHz) ? in.listenerHz : p_.centreHz;
         std::vector<ease::Candidate> cands;
         for (auto& c : chans_) {
-            if (c->eased || !c->inWindow || !c->blockWhy.empty() || !c->decoding) continue;
+            if (c->eased || c->budgeted || !c->inWindow || !c->blockWhy.empty() || !c->decoding) continue;
             const double at = c->band ? c->bandCentre
                             : c->fax ? (c->subs.empty() ? p_.centreHz : c->subs.front()->centreHz)
                             : c->ndb ? 0.5 * (c->ndbLo + c->ndbHi) : c->vfo.hz;
@@ -1704,6 +1783,7 @@ public:
                     cands.push_back(k);
                     break;
                 }
+        frontEndWatch(in.nowMs, std::isfinite(in.utc) ? in.utc : vibeUtcNow(), in.machineBusyPct);   // ★★★ b97: IQ the channeliser could not take is "behind" for the load ladder, listener or not
         bool canShed = false, canSafety = false;
         for (auto& k : cands) { if (k.tier == ease::kTierSafety) canSafety = true; else canShed = true; }
         ease::Signals sg;
@@ -1773,6 +1853,98 @@ public:
      *  while background decoding runs — its load is what they feel (sluggish, audio breaking up) until the easing has
      *  shed enough. The health pill's only reason to mention it (vibe_bg_ease.h PillWatch). */
     bool degradingListener() const { return running_.load() && degrading_.load(); }
+
+    // ── ★★★ b97-cpu-budget THE BOX'S BUDGET (vibe_bg_budget.h): this runner's side ─────────────────────────────────────
+    /** ★ One row's state for the ledger: its VFOs here, the budget's steps on it, the steps it could still take, its cost
+     *  (% of one core, over the easing's ~20 s window of each VFO's own thread clocks). */
+    budget::CatState budgetState(int cat) {
+        std::lock_guard<std::mutex> sl(slotMtx_);
+        std::lock_guard<std::mutex> cl(chanMtx_);
+        budget::CatState s;
+        if (cat < 0 || cat >= budget::kCatN) return s;
+        int canChips = 0, canPause = 0;
+        for (auto& c : chans_) {
+            if (budget::catOf(c->vfo.dec) != cat || !c->inWindow || !c->blockWhy.empty()) continue;
+            if (!c->decoding && !c->budgeted) continue;
+            ++s.vfos;
+            if (!c->decoding) continue;
+            const double k = costOfLocked(c->index);
+            if (k > 0) s.costPct += k;
+            if (cat == budget::kBand && c->hasChips && !c->chipsOff->load()) ++canChips;
+            if (!c->eased) ++canPause;
+        }
+        s.level = (int)budgetTaken_[(size_t)cat].size();
+        const int depthLeft = cat == budget::kBand && s.vfos > 0 ? digi::LoadLadder::kMin - ladder_->floor() : 0;
+        s.maxLevel = s.level + std::max(0, depthLeft) + canChips + canPause;
+        s.nextKind = depthLeft > 0 ? 0 : canChips > 0 ? 1 : 2;
+        return s;
+    }
+    /** ★★ ONE STEP for the box on `cat`, in Stuart's order inside it: depth (a Band row's five), then a band's extra modes
+     *  (CW, RTTY, wide PSK — the lowest row first), then a whole VFO (the lowest row first, idle before mid-picture).
+     *  @return false = nothing left on this row here. `what` says it in plain words. */
+    bool budgetShed(int cat, std::string& what) {
+        std::lock_guard<std::mutex> sl(slotMtx_);
+        std::lock_guard<std::mutex> cl(chanMtx_);
+        if (cat < 0 || cat >= budget::kCatN || !running_.load()) return false;
+        auto& st = budgetTaken_[(size_t)cat];
+        bool any = false;
+        for (auto& c : chans_) if (budget::catOf(c->vfo.dec) == cat && c->decoding) any = true;
+        if (!any) return false;
+        if (cat == budget::kBand && ladder_->floor() < digi::LoadLadder::kMin) {
+            ladder_->setFloor(ladder_->floor() + 1);
+            st.push_back({ 0, -1 });
+            what = std::string("decode depth on every band to ") + digi::LoadLadder::name(ladder_->depth()) + " (all bands keep decoding)";
+            return true;
+        }
+        if (cat == budget::kBand)
+            for (auto it = chans_.rbegin(); it != chans_.rend(); ++it) {
+                Chan& c = **it;
+                if (!c.band || !c.decoding || !c.hasChips || c.chipsOff->load()) continue;
+                c.chipsOff->store(true);
+                st.push_back({ 1, c.index });
+                what = "VFO " + name(c) + ": its extra modes (CW, RTTY, wide PSK) off, FT8/FT4/WSPR carry on";
+                return true;
+            }
+        Chan* low = nullptr; Chan* idle = nullptr;
+        for (auto& c : chans_) {
+            if (budget::catOf(c->vfo.dec) != cat || !c->decoding || c->eased) continue;
+            low = c.get(); if (!busy(*c)) idle = c.get();
+        }
+        Chan* pick = idle ? idle : low;
+        if (!pick) return false;
+        pauseOne(*pick, "paused by the box's CPU budget", false);
+        pick->budgeted = true;
+        st.push_back({ 2, pick->index });
+        what = "VFO " + name(*pick) + " paused";
+        publish();
+        return true;
+    }
+    /** ★ Give the last step on `cat` back. @return false = none taken. */
+    bool budgetRestore(int cat, std::string& what) {
+        std::lock_guard<std::mutex> sl(slotMtx_);
+        std::lock_guard<std::mutex> cl(chanMtx_);
+        if (cat < 0 || cat >= budget::kCatN) return false;
+        auto& st = budgetTaken_[(size_t)cat];
+        if (st.empty()) return false;
+        const BudgetStep b = st.back();
+        st.pop_back();
+        if (b.kind == 0) {
+            ladder_->setFloor(std::max(0, ladder_->floor() - 1));
+            what = std::string("decode depth back up to ") + digi::LoadLadder::name(ladder_->depth());
+            return true;
+        }
+        if (b.vfo < 0 || (size_t)b.vfo >= chans_.size()) return true;
+        Chan& c = *chans_[(size_t)b.vfo];
+        if (b.kind == 1) { c.chipsOff->store(false); what = "VFO " + name(c) + ": its extra modes back on"; return true; }
+        c.budgeted = false;
+        if (!c.decoding) c.pauseWhy = "back from the box's CPU budget \xe2\x80\x94 resuming";
+        lastResume_ = {};
+        what = "VFO " + name(c) + " resuming";
+        publish();
+        return true;
+    }
+    int budgetStepsForTest(int cat) { std::lock_guard<std::mutex> sl(slotMtx_); return cat >= 0 && cat < budget::kCatN ? (int)budgetTaken_[(size_t)cat].size() : 0; }
+    bool vfoBudgetedForTest(int i) { std::lock_guard<std::mutex> sl(slotMtx_); return i >= 0 && (size_t)i < chans_.size() && chans_[(size_t)i]->budgeted; }
 
     /** ★ The health card's line while eased, "" when not: "eased for listeners (3 of 9 paused)". Fixed words, no user text. */
     std::string easeNote() const {
@@ -1903,6 +2075,7 @@ private:
             std::unique_ptr<vibedsp::RxPipeline> rx;
             std::shared_ptr<DecoderHost> host;
             bool inWindow = false, running = false;
+            double gapCarry = 0;                 // ★ b98: the fraction of a sample bridgePicture still owes
         };
         bool fax = false;
         std::vector<std::unique_ptr<FaxSub>> subs;
@@ -1921,6 +2094,7 @@ private:
         // ★★ V12 2026-11-24 EASING (vibe_bg_ease.h): paused for listeners (comes back only by easeTick), and a Band VFO's
         //    extra chips off (read by its bandOverride wrapper on the decode thread — hence shared and atomic).
         bool eased = false;
+        bool budgeted = false;   // ★★★ b97: paused by the BOX's budget (vibe_bg_budget.h) — back only by budgetRestore
         bool hasChips = false;
         std::shared_ptr<std::atomic<bool>> chipsOff = std::make_shared<std::atomic<bool>>(false);
     };
@@ -2193,7 +2367,7 @@ private:
         std::vector<BgRegistry::Pub> v;
         // ★ out of the window (or switched off here) = not waiting; nor is a VFO EASED for a listener (vibe_bg_ease.h) — it
         //   comes back by easeTick alone, and would otherwise hold every lower-ranked VFO on the box back behind it
-        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty() && !c->eased) v.push_back({ c->index + 1, c->decoding, c->decoding && busy(*c) });
+        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty() && !c->eased && !c->budgeted) v.push_back({ c->index + 1, c->decoding, c->decoding && busy(*c) });
         p_.registry->publishState(v);
     }
     /** ★★ Part-way through a picture (a WEFAX chart, an SSTV frame) — see DecoderHost::midPicture. */
@@ -2223,7 +2397,8 @@ private:
         }
         /* ★★★ beta94: a listener came (or the machine got hot) — slots this runner took OVER the box's limit while nobody
          *  listened go back, the lowest VFO first, one a tick, until the box is within its limit again. */
-        if (bgSlots_ && !(p_.cpu && p_.cpu->full.load(std::memory_order_relaxed)) && bgSlots_->extraHeld() > 0 && bgSlots_->boxOver()) {
+        if (bgSlots_ && !(p_.cpu && (p_.cpu->full.load(std::memory_order_relaxed) || p_.cpu->boxBudget.load(std::memory_order_relaxed)))
+            && bgSlots_->extraHeld() > 0 && bgSlots_->boxOver()) {   // ★ b97: the box's budget, not the slot count, decides
             if (Chan* low = pausePick()) { pauseOne(*low, "background back to the normal budget"); changed = true; }
         }
         // ★★ An NDB skimmer that may not run now (a listener's own NDB mode has the band; the owner switched NDB off): paused,
@@ -2247,7 +2422,7 @@ private:
         else if (force || now - lastResume_ > std::chrono::seconds(3)) {
             lastResume_ = now;
             for (auto& c : chans_) {
-                if (c->decoding || !c->inWindow || !c->blockWhy.empty() || c->eased) continue;   // ★ eased: back only by easeTick
+                if (c->decoding || !c->inWindow || !c->blockWhy.empty() || c->eased || c->budgeted) continue;   // ★ eased: back only by easeTick; budgeted: by budgetRestore
                 if (c->ndb && p_.ndbWhyNot) {
                     if (!ndbWhyRead) { ndbWhy = p_.ndbWhyNot(); ndbWhyRead = true; }
                     if (!ndbWhy.empty()) { c->pauseWhy = ndbWhy; continue; }   // ★ not its turn — never blocks the VFOs below
@@ -2291,17 +2466,21 @@ private:
     }
     void say(const std::string& s) { if (p_.log) p_.log(s); }
     void loop() {
-        vibeBackgroundThread("vibe-bgdsp");   // ★★★ beta92: the back seat — below listener decoders (vibe_thread.h)
+        vibeBackgroundFrontThread("vibe-bgdsp");   // ★★★ beta92 the back seat; b97 one notch above its own decoders (vibe_thread.h)
         auto lastYieldCheck = std::chrono::steady_clock::now();
         for (;;) {
             std::vector<cf32> buf; bool gap = false; double bufUtc = 0; size_t gapN = 0;
+            bool isBlock = false, upGap = false; long long blockBi = 0; int blockHop = 0;
             {
                 std::unique_lock<std::mutex> lk(qm_);
                 qcv_.wait_for(lk, std::chrono::milliseconds(500), [this] { return !q_.empty() || !run_.load(); });
                 if (!run_.load()) return;
                 if (!q_.empty()) {
                     const size_t miss = q_.front().missBefore;   // ★ beta92: chunks feedIq could not hand over (busy)
-                    buf = std::move(q_.front().v); bufUtc = q_.front().utc; q_.pop_front(); qSamples_ -= buf.size();
+                    isBlock = q_.front().block; blockBi = q_.front().bi; upGap = q_.front().upGap;
+                    qSamples_ -= q_.front().worth();
+                    blockHop = q_.front().hopN;
+                    buf = std::move(q_.front().v); bufUtc = q_.front().utc; q_.pop_front();
                     gap = std::exchange(gap_, false) || miss > 0; gapN = std::exchange(gapSamples_, (size_t)0) + miss;
                 }
             }
@@ -2337,17 +2516,37 @@ private:
             }
             if (now - lastYieldCheck > std::chrono::milliseconds(500)) { lastYieldCheck = now; slotTick(); }
             if (buf.empty()) continue;
-            if (gap) for (auto& c : chans_) { if (c->rx) c->rx->noteInputGap(); for (auto& sb : c->subs) sb->rx->noteInputGap(); }
+            if (gap || upGap) for (auto& c : chans_) { if (c->rx) c->rx->noteInputGap(); for (auto& sb : c->subs) sb->rx->noteInputGap(); }
             std::lock_guard<std::mutex> cl(chanMtx_);
+            /* ★★ b97-cpu-budget: NOTHING decoding (every VFO paused — by listeners, the easing or the box's budget, or out of
+             *  the window) = no forward FFT either. It used to run for nobody: a fully paused runner still cost its whole
+             *  channeliser (the RSP1B's ~1 core at 8 MS/s). A VFO that resumes is told its input had a gap (slotTick). */
+            { bool any = false; for (auto& c : chans_) if (c->decoding) { any = true; break; }
+              if (!any) { idleSkipped_ = true; continue; } }   // ★ fedIn_ counts what chan_ was FED: not these
+            if (idleSkipped_) {   // ★ the first block after a skip: the channeliser's overlap holds stale input — every channel hears a gap
+                idleSkipped_ = false;
+                for (auto& c : chans_) { if (c->rx) c->rx->noteInputGap(); for (auto& sb : c->subs) sb->rx->noteInputGap(); }
+            }
             // ★ V12: a hole this queue dropped is BRIDGED in every Band VFO's engines (zeros of exactly its length, as the
             //   listener's tap does — DecoderHost::feedIq with no samples), so a slot with a hole in it still completes.
-            if (gapN > 0) for (auto& c : chans_) if (c->band && c->decoding) bridgeBand(*c, gapN, bufUtc - (double)buf.size() / p_.sampleRate);
+            if (gapN > 0) for (auto& c : chans_) if (c->band && c->decoding)
+                bridgeBand(*c, gapN, bufUtc - (double)(isBlock ? (size_t)blockHop : buf.size()) / p_.sampleRate);
+            // ★★ b98 …and in every PICTURE VFO (SSTV, WEFAX) — see bridgePicture: a hole left out shifts the rest of the picture.
+            if (gapN > 0) for (auto& c : chans_) {
+                if (!c->decoding) continue;
+                if (c->rx && isPictureDecoder(c->vfo.dec)) bridgePicture(*c->rx, c->rate, gapN, c->gapCarry);
+                for (auto& sb : c->subs) if (sb->running) bridgePicture(*sb->rx, sb->rate, gapN, sb->gapCarry);
+            }
             // ★ V12 beta 4: what this thread costs, on its OWN clock — the shared FFT, and each VFO's cut + demodulator.
             const uint64_t t0 = vibeThreadCpuNs();
             uint64_t perVfo = 0;
             /* ★ THE CAPTURE TIME OF EACH BLOCK (vibe_wide_tap.h's rule): the channeliser completes block j when its
              *  (j+1)·hop-th input sample is in, and this chunk's last sample was captured at bufUtc — so a block ending k
              *  samples before the chunk's end was captured k / rate earlier. Only a Band VFO reads it. */
+            if (isBlock) {
+                // ★★★ b97: the radio's own shared bank already transformed this block — no forward FFT here at all
+                processBlock(buf.data(), blockBi, bufUtc, perVfo);
+            } else {
             const long long inStart = fedIn_, inEnd = fedIn_ + (long long)buf.size();
             fedIn_ = inEnd;
             const long long hop = chan_->hop();
@@ -2355,38 +2554,43 @@ private:
                 const long long bi = chan_->blockIndex();
                 const long long endIdx = std::min(inEnd, std::max(inStart, (bi + 1) * hop));
                 const double utc = bufUtc - (double)(inEnd - endIdx) / p_.sampleRate;
-                for (auto& c : chans_) {
-                    if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
-                    const uint64_t a = vibeThreadCpuNs();
-                    if (c->band) feedBand(*c, bins, bi, utc);
-                    else if (c->fax) {
-                        // ★ V12: each ticked WEFAX frequency inside the window — its own cut and demodulator, as a VFO's
-                        for (auto& sb : c->subs) {
-                            if (!sb->running) continue;
-                            const int got = chan_->extract(bins, sb->centreBin, sb->bins, sb->slice.data(), sb->ectx, bi);
-                            if (got > 0) sb->rx->feed(sb->slice.data(), got);
-                        }
-                    }
-                    else if (c->ndb) {
-                        // ★ V12: the NDB skimmer's slice — the same cut and taper as the listener's NDB tap, to its own queue
-                        const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
-                        if (got > 0) if (auto f = c->feed()) f->feedSlice(c->slice.data(), got, c->rate, c->sliceRf);
-                    } else {
-                    const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
-                    if (got > 0) {
-                        if (c->rx) c->rx->feed(c->slice.data(), got);
-                        else if (c->host) c->host->feedIq(c->slice.data(), got, c->rate, c->sliceRf);
-                    }
-                    }
-                    const uint64_t d = vibeThreadCpuNs() - a;
-                    c->demodNs.fetch_add(d, std::memory_order_relaxed); perVfo += d;
-                }
+                processBlock(bins, bi, utc, perVfo);
             });
+            }
             const uint64_t all = vibeThreadCpuNs() - t0;
             sharedNs_.fetch_add(all > perVfo ? all - perVfo : 0, std::memory_order_relaxed);
         }
     }
 
+    /** ★ One transformed block (the runner's own channeliser's, or the radio's shared bank's): every decoding VFO's cut. */
+    void processBlock(const cf32* bins, long long bi, double utc, uint64_t& perVfo) {
+        for (auto& c : chans_) {
+            if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
+            const uint64_t a = vibeThreadCpuNs();
+            if (c->band) feedBand(*c, bins, bi, utc);
+            else if (c->fax) {
+                // ★ V12: each ticked WEFAX frequency inside the window — its own cut and demodulator, as a VFO's
+                for (auto& sb : c->subs) {
+                    if (!sb->running) continue;
+                    const int got = chan_->extract(bins, sb->centreBin, sb->bins, sb->slice.data(), sb->ectx, bi);
+                    if (got > 0) sb->rx->feed(sb->slice.data(), got);
+                }
+            }
+            else if (c->ndb) {
+                // ★ V12: the NDB skimmer's slice — the same cut and taper as the listener's NDB tap, to its own queue
+                const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
+                if (got > 0) if (auto f = c->feed()) f->feedSlice(c->slice.data(), got, c->rate, c->sliceRf);
+            } else {
+            const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
+            if (got > 0) {
+                if (c->rx) c->rx->feed(c->slice.data(), got);
+                else if (c->host) c->host->feedIq(c->slice.data(), got, c->rate, c->sliceRf);
+            }
+            }
+            const uint64_t d = vibeThreadCpuNs() - a;
+            c->demodNs.fetch_add(d, std::memory_order_relaxed); perVfo += d;
+        }
+    }
     /** ★★ A BAND VFO's block (V12 2026-10-27) — exactly what a listener's Band gets (local_sdr_shim.cpp feedOneClient):
      *  the main slice off this SAME forward FFT with a sixteenth's roll-off, its bins' power for the activity gate (one
      *  multiply-add a bin, no transform), then each extra slice the capture holds — one small inverse FFT each. */
@@ -2420,6 +2624,33 @@ private:
         }
     }
     /** ★ `n` capture samples this queue dropped, ending at `endUtc`: each slice told how many of ITS samples are missing. */
+    /** ★★ b98 (2026-11-28) A PICTURE'S GEOMETRY IS ITS CLOCK. SSTV and WEFAX place every pixel by the time since the
+     *  picture began, so a hole this queue dropped, simply left out, moves the whole rest of the picture left by the hole's
+     *  length: on the Pi 500 V4 (0.1-1 s of IQ dropped a minute, 2026-11-28 14:40-15:19) every Scottie came out torn into
+     *  bands, each shifted, a 100 ms hole being a third of an S2 line, i.e. one colour channel, so the cat turned red and
+     *  cyan. Replayed on a clean recording (tools/sstv_harness --all, 100 ms holes every ~15 s): PSNR against the clean
+     *  decode 6-8 dB with the holes left out, two of nine pictures lost; 21-28 dB with them bridged. So the hole is filled
+     *  with SILENCE of exactly its length, fed through the VFO's own demodulator (behind the blocks already queued in it,
+     *  so the order holds): the picture loses those lines' worth of pixels and keeps its shape.
+     *  ★ Capped: a hole longer than kPictureBridgeMaxSec is not bridged — that picture is lost anyway, and feeding
+     *    seconds of zeros through a demodulator on a box that just fell behind would only deepen the hole.
+     *  ★ FM pictures ignore level, so the AGC rising on the silence costs nothing the decoder reads. */
+    static constexpr double kPictureBridgeMaxSec = 3.0;
+    static bool isPictureDecoder(const std::string& d) { return d == "sstv" || d == "wefax"; }
+    void bridgePicture(vibedsp::RxPipeline& rx, double rate, size_t n, double& carry) {
+        if (rate <= 0 || p_.sampleRate <= 0) return;
+        if ((double)n / p_.sampleRate > kPictureBridgeMaxSec) { carry = 0; return; }
+        const double want = (double)n * rate / p_.sampleRate + carry;
+        long long k = (long long)std::floor(want);
+        carry = want - (double)k;
+        static const std::vector<cf32> zeros(4096, cf32{0.0f, 0.0f});
+        while (k > 0) {
+            const int m = (int)std::min<long long>(k, (long long)zeros.size());
+            rx.feed(zeros.data(), m);
+            k -= m;
+        }
+        bridgedPicture_.fetch_add(n, std::memory_order_relaxed);
+    }
     void bridgeBand(Chan& c, size_t n, double endUtc) {
         if (!c.host) return;
         const double binHz = p_.sampleRate / (double)p_.fftSize, hwC = p_.centreHz + p_.hwOffsetHz;
@@ -2447,10 +2678,18 @@ private:
     std::thread th_;
     std::mutex qm_;
     std::condition_variable qcv_;
-    struct QItem { std::vector<cf32> v; double utc = 0; size_t missBefore = 0; };   // ★ missBefore: see feedIq (beta92)
+    struct QItem {
+        std::vector<cf32> v; double utc = 0; size_t missBefore = 0;   // ★ missBefore: see feedIq (beta92)
+        bool block = false;      ///< ★ b97: v holds a transformed BLOCK from the radio's shared bank (feedBlock), not IQ
+        long long bi = 0;        ///< …its block index (the channel phase reference — Channelizer::blockIndex)
+        bool upGap = false;      ///< …a hole upstream of it (the radio's own IQ dropped)
+        size_t worth() const { return block ? (size_t)hopN : v.size(); }   ///< capture samples it stands for
+        int hopN = 0;
+    };
     std::atomic<size_t> missed_{0};          // ★ beta92: samples feedIq could not hand over since the last one it did
     std::atomic<uint64_t> busyDrops_{0};
     std::atomic<uint64_t> busyHeld_{0};      // ★ b94: chunks held for a busy queue (handed over late, not lost)
+    std::atomic<uint64_t> wrongBlocks_{0};   // ★ b97: shared-bank blocks of the wrong size (refused)
     std::mutex heldM_;                       // ★ b94: the DSP thread's side of the hand-over (feedIq; start/stop clear it)
     std::deque<QItem> held_;
     size_t heldSamples_ = 0;
@@ -2464,10 +2703,16 @@ private:
     std::chrono::steady_clock::time_point lastResume_{};
     std::mutex slotMtx_;
     std::unique_ptr<BgSlots> bgSlots_;   // ★ beta94: p_.slots points here while p_.cpu is set
+    bool idleSkipped_ = false;   // ★ b97: the worker skipped the channeliser while nothing decoded (loop)
+    struct BudgetStep { int kind = 0; int vfo = -1; };   // ★ b97: 0 depth, 1 a band's chips, 2 a VFO paused
+    std::array<std::vector<BudgetStep>, budget::kCatN> budgetTaken_;
+    std::deque<std::pair<int64_t, uint64_t>> frontHist_;   // ★ b97: (ms, dropped_) — frontEndWatch, under slotMtx_
+    std::atomic<double> frontDropPerMin_{0.0};
     std::shared_ptr<digi::LoadLadder> ladder_ = std::make_shared<digi::LoadLadder>();   // ★ beta94: every Band VFO's
     std::mutex chanMtx_;   // ★ the worker's channel cut vs retarget()
     std::shared_ptr<std::atomic<bool>> listenerOnFlag_ = std::make_shared<std::atomic<bool>>(false);   // ★ the worker's slotTick and a test's slotTickForTest
     std::atomic<uint64_t> dropped_{0};
+    std::atomic<uint64_t> bridgedPicture_{0};   // ★ b98: see bridgePicture
     std::chrono::steady_clock::time_point lastDropLog_{};
     uint64_t lastIqDrop_ = 0;
     std::time_t startedAt_ = 0;

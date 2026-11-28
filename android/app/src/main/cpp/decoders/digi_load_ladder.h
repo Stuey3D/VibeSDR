@@ -58,7 +58,11 @@ public:
         return "?";
     }
     /** The depth the engines decode at now (any thread). */
-    int depth() const { std::lock_guard<std::mutex> lk(m_); return force_ ? kMin : depth_; }
+    int depth() const { std::lock_guard<std::mutex> lk(m_); return force_ ? kMin : std::max(depth_, floor_); }
+    /** ★★ b97-cpu-budget: the BOX's budget (vibe_bg_budget.h) holds depth at least this low (0 = no hold). The ladder's own
+     *  steps and calm carry on beneath it; the budget gives it back one step at a time. */
+    void setFloor(int f) { std::lock_guard<std::mutex> lk(m_); floor_ = std::max(0, std::min(kMin, f)); }
+    int floor() const { std::lock_guard<std::mutex> lk(m_); return floor_; }
     int learnt() const { std::lock_guard<std::mutex> lk(m_); return depth_; }
     bool atMin() const { return depth() >= kMin; }
     void setLog(std::function<void(const std::string&)> f) { std::lock_guard<std::mutex> lk(m_); log_ = std::move(f); }
@@ -74,7 +78,7 @@ public:
         {
             std::lock_guard<std::mutex> lk(m_);
             lastBehind_ = utc;
-            if (force_ || depth_ >= kMin) { lastAtMin_ = utc; return true; }
+            if (force_ || depth_ >= kMin || floor_ >= kMin) { lastAtMin_ = utc; return true; }
             if (utc - stepAt_ < kStepSec) return false;
             ++depth_; stepAt_ = utc;
             line = std::string("Band: CPU behind (") + why + ") \xe2\x80\x94 decode depth reduced to " + name(depth_)
@@ -112,6 +116,7 @@ public:
 private:
     mutable std::mutex m_;
     int depth_ = kFull;
+    int floor_ = 0;
     bool force_ = false;
     double stepAt_ = -1e300, lastBehind_ = -1e300, lastAtMin_ = -1e300;
     std::map<const void*, int> paused_;

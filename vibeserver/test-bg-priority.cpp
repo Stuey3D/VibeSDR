@@ -487,7 +487,144 @@ static void fullCpu() {
     }
 }
 
+// ── ★★★ b97-cpu-budget: the FRONT END's drops are "behind" for the load ladder (the Pi 500's RSP1B, 2026-11-28) ─────────
+/* The RSP1B's channeliser dropped 30-43 s of IQ a minute while its decoders read "light"; the ladder heard nothing and put
+ * depth back to FULL. Now drops over 1.5 s/min (rolling 30 s) step depth down, one per LoadLadder::kStepSec, and keep it
+ * down while they last; a quiet front end lets depth come back by the ordinary calm path. */
+static void frontEnd() {
+    std::printf("── b97: background front-end drops step DEPTH down (listener or not); depth stays down while they last ──\n");
+    const std::string dir = tmpDir("front");
+    FileSlots sl(dir, [] { return 8; });
+    bg::BgRegistry reg; reg.open(dir, "R");
+    bg::BgRunner r;
+    bg::BgRunner::Params p; p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sl; p.registry = &reg;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{489500, "usb", "navtex"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    auto lad = r.ladderForTest();
+    std::vector<vibedsp::cf32> blk(8000, vibedsp::cf32{0.01f, 0.0f});
+    int64_t t = 0; double utc = 1.8e9;
+    double busy = 100;
+    auto tick = [&] { t += 2000; utc += 2.0; bg::BgRunner::EaseInputs in; in.nowMs = t; in.utc = utc; in.machineBusyPct = busy; in.cores = 4; r.easeTick(in); };
+    for (int i = 0; i < 10; i++) tick();
+    ok(lad->depth() == digi::LoadLadder::kFull && r.frontDropPerMin() < 0.01, "a front end that keeps up: depth stays FULL");
+    // the front end falls behind: ~0.5 s of IQ dropped per 2 s tick (15 s a minute; the Pi 500 dropped 30-43)
+    auto dropHalfSecond = [&] {
+        auto held = r.holdQueueForTest();
+        for (int i = 0; i < 24; i++) r.feedIq(blk.data(), (int)blk.size());   // 0.77 s offered, 0.25 s held: ~0.5 s dropped
+    };
+    int steps = 0;
+    for (int i = 0; i < 40; i++) {               // 80 s
+        dropHalfSecond();
+        const int before = lad->depth();
+        tick();
+        if (lad->depth() > before) ++steps;
+    }
+    ok(r.frontDropPerMin() > 1.5, "the rate is measured: " + std::to_string(r.frontDropPerMin()) + " s a minute");
+    ok(lad->depth() >= 4 && steps >= 4, "★★★ 80 s of front-end drops: depth stepped down " + std::to_string(steps) + " times (now "
+       + digi::LoadLadder::name(lad->depth()) + "), one per FT8 slot — depth BEFORE any band");
+    ok(logged("the channels fell behind the radio") && logged("decode depth reduced"), "...said in plain words");
+    ok(r.decodersRunning() == 1, "★ no VFO paused for it: every band keeps decoding");
+    for (int i = 0; i < 20; i++) tick();
+    ok(r.frontDropPerMin() < 0.01, "the front end keeps up again (the window forgets the drops)");
+    const int low = lad->depth();
+    for (int i = 0; i < 20; i++) { tick(); lad->calm(utc, &r, 0); }
+    ok(lad->depth() < low, "★ ...and depth comes back up once it is calm (" + std::string(digi::LoadLadder::name(lad->depth())) + ")");
+    // ★★ live 11-28: drops with CPU to spare step nothing (less depth cannot cure them)
+    {
+        busy = 35;
+        for (int i = 0; i < 20; i++) tick();
+        const int d0 = lad->depth();
+        for (int i = 0; i < 20; i++) { dropHalfSecond(); tick(); }
+        ok(lad->depth() == d0, "★★ the same drops with the box 35 % busy: depth not stepped down");
+        busy = 100;
+    }
+    dropHalfSecond(); tick();
+    const int d2 = lad->depth();
+    for (int i = 0; i < 20; i++) { dropHalfSecond(); tick(); lad->calm(utc, &r, 0); }
+    ok(lad->depth() >= d2, "★ drops continuing: depth never comes back up while the front end is behind");
+    r.stop();
+}
+
+// ── ★★★ b97-cpu-budget: ONE FRONT END PER RADIO — a shared bank's blocks, no second full-rate FFT ──────────────────
+static void sharedFront() {
+    std::printf("── b97: background decoding on a SHARED radio takes the radio's own blocks (no second channeliser) ──\n");
+    const std::string dir = tmpDir("shfront");
+    FileSlots sl(dir, [] { return 8; });
+    bg::BgRegistry reg; reg.open(dir, "H");
+    bg::BgRunner r;
+    bg::BgRunner::Params p; p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sl; p.registry = &reg;
+    p.sharedFront = true;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{489500, "usb", "navtex"}, bg::Vfo{505000, "usb", "rtty-weather"} };
+    p.log = [](const std::string&) {};
+    r.start(p);
+    ok(r.sharedFront(), "the runner knows it is fed by the radio's bank");
+    std::vector<vibedsp::cf32> iq(16384, vibedsp::cf32{0.01f, 0.0f});
+    r.feedIq(iq.data(), (int)iq.size());
+    ok(r.queuedForTest() == 0, "★ IQ is refused: it never transforms the full-rate stream itself");
+    // the radio's own bank: one Channelizer, its blocks handed over as the DSP thread does
+    vibedsp::Channelizer bank(8192);
+    std::vector<vibedsp::cf32> tone(8192 * 40);
+    for (size_t i = 0; i < tone.size(); ++i) { const double ph = 2 * M_PI * 5000.0 * (double)i / 250000.0; tone[i] = { (float)std::cos(ph) * 0.1f, (float)std::sin(ph) * 0.1f }; }
+    int blocks = 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (size_t off = 0; off < tone.size(); off += 4096) {
+        bank.feed(tone.data() + off, 4096, [&](const vibedsp::cf32* bins, int nb) { r.feedBlock(bins, nb, bank.blockIndex(), NAN, false); ++blocks; });
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+    ok(waitFor([&] { return r.queuedForTest() == 0; }, 3000), "the worker took every block (" + std::to_string(blocks) + ")");
+    ok(r.droppedSamples() == 0, "nothing dropped");
+    const std::string js = r.statusJson();
+    ok(js.find("\"cpu\"") != std::string::npos || js.size() > 10, "the admin JSON still reads");
+    (void)t0;
+    std::vector<vibedsp::cf32> wrong(4096);
+    r.feedBlock(wrong.data(), (int)wrong.size(), 0, NAN, false);
+    ok(r.wrongBlocks() == 1, "a block of another size (the bank was rebuilt) is refused and counted");
+    r.stop();
+    // a radio without a shared bank: as before
+    bg::BgRunner q; bg::BgRunner::Params p2 = p; p2.sharedFront = false; q.start(p2);
+    q.feedIq(iq.data(), (int)iq.size());
+    ok(waitFor([&] { return q.queuedForTest() == 0; }, 3000) && !q.sharedFront(), "a radio with no shared bank still runs its own channeliser (feedIq)");
+    q.stop();
+}
+
+// ── ★★★ b97: with the box-wide budget on, background takes its decoder slots AT ONCE (the Pi 500 V4, 11-28 17:25) ──
+static void boxBudgetSlots() {
+    std::printf("── b97: the box-wide budget on — every VFO gets its decoder at once, over the box's limit; a listener still gets one ──\n");
+    const std::string dir = tmpDir("boxslots");
+    FileSlots sa(dir, [] { return 2; }), lis(dir, [] { return 2; });
+    bg::BgRegistry reg; reg.open(dir, "X");
+    auto live = std::make_shared<bg::fullcpu::Live>();
+    live->boxBudget.store(true);   // ★ nobody listening yet NOT "full" (the calm period has not passed): the old ramp's wait
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sa; p.registry = &reg; p.cpu = live;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{490000, "usb", "navtex"}, bg::Vfo{505000, "usb", "rtty-weather"}, bg::Vfo{512000, "usb", "wefax"},
+                       bg::Vfo{518000, "usb", "navtex"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    ok(r.decodersRunning() == 4 && !logged("no decoder slot free"), "★★★ all 4 VFOs decode at once on a box limit of 2 — no \"waiting — no decoder slot free\"");
+    ok(lis.claim() < 0, "a listener's plain claim is refused (the box is over its limit)…");
+    const bool room = bg::BgRegistry::makeRoomForListener(lis, dir);
+    const int tok = room ? lis.claim() : -1;
+    ok(tok >= 0, "★ …but making room frees what the listener needs, at once (listeners first)");
+    for (int i = 0; i < 4; i++) r.slotTickForTest();
+    ok(r.decodersRunning() >= 1, "the rest carry on beside the listener (the budget, not the slot count, decides)");
+    lis.release(tok);
+    r.stop();
+}
+
 int main() {
+    boxBudgetSlots();
+    sharedFront();
+    frontEnd();
     fullCpu();
     eased();
     backSeat();

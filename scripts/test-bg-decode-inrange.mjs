@@ -130,7 +130,7 @@ try {
   ok(await until(() => /background decoding stopped — a listener arrived/.test(s.L()), 4000), '★ a listener arrives: stopped (switched off), the dial back');
   b.close(); s.stop(); s = null;
 
-  console.log('── a LOCKED radio: never moved, runs at once, listeners first for its user slots ──');
+  console.log('── a LOCKED radio (shared bank): never moved, runs at once, and alongside listeners ──');
   s = await run({ users: 3, rate: 2048000, mode: 'locked', lockFreq: 600000, bgDecode: JSON.stringify({ ...NICK,
     profiles: [{ ...NICK.profiles[0], vfos: [...NICK.profiles[0].vfos, { hz: 518500, mode: 'lsb', dec: 'navtex' }] }] }) },
     ['--users', '3'], { VIBESERVER_BG_WAIT_SEC: '300' }, 4);
@@ -139,8 +139,12 @@ try {
   ok(/3 VFO\(s\), 3 decoder\(s\) running/.test(s.L()), 'nobody here: all 3 VFOs run (3 user slots free, 4 decoder slots)');
   const l1 = ws(s.port, '/ws/user-spectrum?user_session_id=bgir0003&bins=256');
   ok(await until(() => cfgOf(l1) !== null, 4000), '★ a real listener connects normally — never refused for background');
-  ok(await until(() => /VFO 3 \(518\.5 kHz NAVTEX\) paused — a listener took this radio's last user slot/.test(s.L()), 6000),
-     '★ 3 user slots, 3 background VFOs: the listener takes one, the LOWEST VFO (3) gives up its channel');
+  // ★★★ b97 (Stuart 11-28, 1fa201714): a locked radio WITH the shared bank (this one) runs its background ALL THE TIME,
+  //   alongside listeners — no user-slot cap (a VFO is a slice of the bank everybody already pays for; the box's CPU budget
+  //   gives way instead). The cap stays only for a locked radio without the shared bank (per-client DSP).
+  await sleep(4000);
+  ok(!/VFO 3 \(518\.5 kHz NAVTEX\) paused/.test(s.L()),
+     '★ 3 user slots, 3 background VFOs, a listener on: a shared-bank locked radio pauses NO VFO (runs alongside listeners)');
   const info = await fetch(`http://127.0.0.1:${s.port}/vibeserver.json`).then((r) => r.json()).catch(() => ({}));
   const users = info.users ?? info.listeners ?? info.clients;
   ok(users === 1 || users === undefined, `★ the user count shows only the real listener (${JSON.stringify(users)})`);
@@ -149,7 +153,8 @@ try {
   //   purpose) is never held, so the user slot frees at once.
   l1.send({ type: 'leave' }); await sleep(200);
   l1.close();
-  ok(await until(() => /VFO 3 \(518\.5 kHz NAVTEX\) resumed/.test(s.L()), 8000), '★ the listener leaves: VFO 3 resumes');
+  await sleep(1500);
+  ok(!/VFO 3 \(518\.5 kHz NAVTEX\) (paused|resumed)/.test(s.L()), '★ the listener leaves: still no pause or resume — it never stopped');
   // ★ A VFO outside the locked range is refused at the save, in words.
   const nonce = (await fetch(`http://127.0.0.1:${s.port}/vibeserver/auth`).then((r) => r.json())).nonce;
   const q = `vs_admin_nonce=${nonce}&vs_admin_auth=${crypto.createHmac('sha256', ADMIN).update(nonce).digest('hex')}`;

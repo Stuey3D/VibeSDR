@@ -82,6 +82,12 @@ struct Live {
     std::atomic<int>  rttyWorkers{0};    ///< RTTY skimmer search workers now (0 = the floor, unchanged)
     std::atomic<int>  extraSlots{0};     ///< decoder slots over the box's limit, background only
     std::atomic<int>  spareMilli{-1};    ///< the machine's spare cores × 1000 (-1 = unknown)
+    /** ★★★ b97 (the Pi 500 V4, 11-28 17:25: its VFOs sat "waiting — no decoder slot free" for 7 minutes while this policy
+     *  ramped "up to 1 core", then 2): with the BOX-WIDE CPU budget on (vibe_bg_budget.h — the shim sets this where the
+     *  radios share a ledger), background decoding takes its decoder slots AT ONCE, over the box's limit, listener or not
+     *  — the budget sheds by the owner's priority if the box is short, and a listener still gets a slot at once
+     *  (BgRegistry::makeRoomForListener). The slot limit stays the listeners' own. */
+    std::atomic<bool> boxBudget{false};
     /** The Band governor's cap multiplier. */
     double budgetScale() const { return full.load(std::memory_order_relaxed) ? (double)std::max(1, cores.load(std::memory_order_relaxed)) : 1.0; }
     /** Does a skipped slot count for the pause rule (and the governor's "too heavy" cut)? NORMAL: always. FULL: only with

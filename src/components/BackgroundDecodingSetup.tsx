@@ -23,7 +23,7 @@ import { meaningText } from '../constants/decoderTokens';
 import {
   type BgCaps, type BgModel, type BgProfile, type BgVfo, BG_DEMODS, BG_ISM_WORDS, BG_WAIT_CHOICES,
   bgBandHint, bgBandReach, bgDecoderSetsFreq, bgFaxHint, bgFaxIn, bgFaxKhz, bgFaxDefault, BG_FAX_MAX, bgDscWatch, bgLocal, bgNdbHint, bgNewProfile, bgSpotBand, bgTime,
-  bgHalfWindow, BG_SAT_MIN_EL, bgSatBothFits, bgSatIsMeteor, bgSkimPointAt, bgSkimPoints, bgSkimPointLabel, bgSkimDecoderChange, bgSkimFits, bgSkimHint,
+  bgHalfWindow, BG_SAT_MIN_EL, bgSatBothFits, bgSatIsMeteor, bgSkimPointAt, bgSkimPoints, bgSkimPointLabel, bgSkimDecoderChange, bgSkimFits, bgSkimHint, bgUsbOnly, BG_HFDL_NOTE,
 } from '../services/bgDecode';
 
 type Props = {
@@ -215,9 +215,18 @@ export default function BackgroundDecodingSetup(p: Props) {
                 {v.dec === d.id && <Text style={{ color: C.keyAct, fontFamily: F }}>✓</Text>}
               </TouchableOpacity>
             ))}
+            {/* ★★ beta98 an LSB row lists the USB-only decoders GREYED, "USB only" — never silently missing (the Setup page's
+                bgUsbOnly; Stuart 11-28) */}
+            {bgUsbOnly(caps.decoders, v.mode).map((d) => (
+              <View key={d.id} accessibilityState={{ disabled: true }} style={[st.opt, { borderColor: C.border, opacity: 0.45 }]}>
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 13 }}>{d.label + ' — USB only'}</Text>
+              </View>
+            ))}
           </View>
         )}
         {h && <Text style={h.bad ? badHint : hint}>{h.text}</Text>}
+        {/* ★★ beta98 HFDL: what the frequency is and where the messages go (the Setup page's line) */}
+        {v.dec === 'hfdl' && <Text style={hint}>{BG_HFDL_NOTE}</Text>}
       </View>
     );
   };

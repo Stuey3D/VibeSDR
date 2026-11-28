@@ -51,6 +51,7 @@
       constexpr int kDecoder   = 10;
       constexpr int kDecoderLag = 12;  // a decoder's later stage that may lag its own first stage (vibe-ism2, vibe-ism3)
       constexpr int kBulk      = 15;
+      constexpr int kBackgroundFront = 16; // background decoding's FRONT END (vibe-bgdsp) — above its own decoders (b97)
       constexpr int kBackground = 19;  // the owner's BACKGROUND decoding — nobody is waiting on it (vibeBackgroundThread)
   }
 
@@ -149,6 +150,16 @@
    *     with the lock held. nice 19 still runs, just last; the DSP thread itself never waits on them at all (it
    *     try-locks their queue and drops — BgRunner::feedIq). */
   inline void vibeBackgroundThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kBackground); }
+  /* ★★★ BACKGROUND DECODING'S FRONT END — ONE NOTCH ABOVE ITS OWN DECODERS (b97-cpu-budget, 2026-11-28, the Pi 500).
+   *  The channeliser (vibe-bgdsp) feeds EVERY background VFO of its radio; IQ it fails to take is lost for all of them at
+   *  once — every band, every mode, every depth. At the same nice as the decoders it feeds, CFS gives each nice-19 thread
+   *  the same share whatever it needs: on the Pi 500 (four radios, load 20) the RSP1B's 8 MS/s channeliser got the same
+   *  ~28 % of a core as a 2.4 MS/s V4L's, needed ~3x that, and dropped 30-43 s of IQ a MINUTE from 11-26 14:09 (when the
+   *  20 m and 17 m profiles were added on two V4Ls) while its decoders sat "light" and the load ladder put depth back to
+   *  full. Nice 16 (CFS weight 36 against 15) lets the front end take the CPU first, so what gives way is a DECODER, which
+   *  reports itself behind and drops DEPTH (digi_load_ladder.h), then modes — Stuart's order (11-25: depth before bands).
+   *  Still below bulk HTTP (15) and every listener decoder (10): nobody waiting outranks it any less than before. */
+  inline void vibeBackgroundFrontThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kBackgroundFront); }
   /* ★★ IDLE — BELOW THE WHOLE ORDER, BELOW BULK HTTP (2026-11-20, the NAVTEX warm-up, vibe_navtex_warm.h). Work that
    *  nobody waits for at all — an index kept built in case somebody opens a map — runs only on a core nobody else wants:
    *  SCHED_IDLE for this thread (no privilege needed to step down to it), nice 19 as well (Android, or a kernel that
@@ -243,6 +254,12 @@
       vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, -15);
   }
+  // ★ Background decoding's front end (see the Linux note): a step above its own decoders within the same class.
+  inline void vibeBackgroundFrontThread(const char* name) {
+      pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
+      pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, -10);
+  }
   // ★ Idle (see the Linux note): BACKGROUND, the class macOS runs only when nothing else wants the core.
   inline void vibeIdleThread(const char* name) {
       pthread_setname_np(name);
@@ -289,6 +306,8 @@
   inline void vibeBulkThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
   inline void vibeIdleThread(const char* name)     { vibeWinPrio_(name, THREAD_PRIORITY_IDLE); }
   inline void vibeBackgroundThread(const char* name) { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
+  // ★ Windows has no rung between the decoders (BELOW_NORMAL) and LOWEST: the front end shares background's.
+  inline void vibeBackgroundFrontThread(const char* name) { vibe::vibeFlushDenormals(); vibeWinPrio_(name, THREAD_PRIORITY_LOWEST); }
   inline void vibeIqThread(const char* name) {
       vibe::vibeFlushDenormals();
       vibeWinName_(name);
@@ -310,5 +329,6 @@
   inline void vibeBulkThread(const char*) {}
   inline void vibeIdleThread(const char*) {}
   inline void vibeBackgroundThread(const char*) { vibe::vibeFlushDenormals(); }
+  inline void vibeBackgroundFrontThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeIqThread(const char*) { vibe::vibeFlushDenormals(); }
 #endif

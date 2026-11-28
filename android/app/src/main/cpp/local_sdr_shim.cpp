@@ -37723,6 +37723,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
     }
 
+    long long chanFedIn_ = 0;   // ★ b97: samples fed to chan_ since it was made (background blocks' capture times)
     void feedClientChannels(const cf32* iq, int n) {
         if (!perClientDsp() || n <= 0) return;
         std::vector<std::shared_ptr<ClientDsp>> cs;
@@ -37756,7 +37757,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //        fan-out, which is the part that scales — so an idle server does the cheap half.
         //     ★ The idle saver is a separate matter and still applies: when capture genuinely
         //       parks there is no IQ at all and this is never called.
-        if (!chan_ || chan_->fftSize() != fftSize) chan_.reset(new vibedsp::Channelizer(fftSize));
+        if (!chan_ || chan_->fftSize() != fftSize) { chan_.reset(new vibedsp::Channelizer(fftSize)); chanFedIn_ = 0; }
+        // ★★★ b97 background decoding's blocks: the capture time of each (the runner's own rule — vibe_bgdecode.h loop)
+        const bool bgBlocks = bgActive_.load(std::memory_order_relaxed) && bgRun_.sharedFront();
+        const long long bgInStart = chanFedIn_, bgInEnd = chanFedIn_ + n;
+        chanFedIn_ = bgInEnd;
+        const double bgChunkUtc = bgBlocks ? vibeUtcNow() : 0.0;
+        const long long bgHop = chan_->hop();
         // ★ Split the channelizer's own forward FFT from the per-listener work, because they
         //   scale completely differently: the FFT is fixed no matter how many listeners there
         //   are, the fan-out is proportional. Confusing the two is how "per-client cost" ends up
@@ -37776,7 +37783,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //       overwrites its buffer on the next block, so the data has to be taken, but it
             //       only has to be taken ONCE however many listeners there are.
             // ★ The first block out after a hole carries it — see chanGapPending_.
-            handBlockToListeners(cs, bins, nbins, std::exchange(chanGapPending_, false));
+            const bool blockGap = std::exchange(chanGapPending_, false);
+            handBlockToListeners(cs, bins, nbins, blockGap);
+            if (bgBlocks) {   // ★★★ b97: background decoding cuts its slices from THIS block (a copy, never a wait)
+                const long long bi = chan_->blockIndex();
+                const long long endIdx = std::min(bgInEnd, std::max(bgInStart, (bi + 1) * bgHop));
+                bgRun_.feedBlock(bins, nbins, bi, bgChunkUtc - (double)(bgInEnd - endIdx) / sampleRate, blockGap);
+            }
             // ★★ V12 the VARA HF tag, stage 2: ONE candidate's slice off this same forward FFT (one small inverse a block),
             //    only while stage 1 asks for it — two relaxed loads otherwise (vibe_varatag.h; identify only, never decoded)
             if (g_varaTagLive.load(std::memory_order_relaxed)) varaTagSlice(bins);
@@ -38328,7 +38341,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //       the phone and Mac paths are byte-for-byte what they were.
             feedClientChannels(buf.data(), (int)buf.size());
             // ★★ V12 background decoding: a COPY into its own bounded queue, nothing more on this thread.
-            if (bgActive_.load(std::memory_order_relaxed)) bgRun_.feedIq(buf.data(), (int)buf.size());
+            if (bgActive_.load(std::memory_order_relaxed) && !bgRun_.sharedFront()) bgRun_.feedIq(buf.data(), (int)buf.size());   // ★ b97: shared bank = feedClientChannels hands it blocks
             // ★★★ V12 the DX scanner's FM hop: the same — a copy into its own bounded queue (vibe_dxscan_fm.h)
             if (dxFmFeed_.load(std::memory_order_relaxed)) dxFm_.feed(buf.data(), (int)buf.size());
             // ★★ V12: a CW skimmer on a ONE-PIPELINE radio — its own slice, cut off this thread (vibe_wide_tap.h).
@@ -38959,6 +38972,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::shared_ptr<vibe::bg::fullcpu::Live> bgCpu_ = std::make_shared<vibe::bg::fullcpu::Live>();
     vibe::bg::fullcpu::Policy bgCpuPolicy_;
     vibe::bg::fullcpu::Board  bgCpuBoard_;
+    // ★★★ b97-cpu-budget ONE BUDGET FOR THE BOX (vibe_bg_budget.h): this radio's line in the ledger, and the shared decision
+    vibe::bg::budget::Board  bgBudgetBoard_;
+    vibe::bg::budget::Policy bgBudgetPolicy_;
+    uint64_t bgBudgetTapLast_ = 0;
     // ★ (b94-integrate) these three sit with bgReg_ above bgRun_, so they too outlive the runner
     vibe::bg::BgRunner bgRun_;
     /** ★★ V12 2026-10-25: a CW skimmer on a one-pipeline radio (no ClientDsp, no channeliser) — see vibe_wide_tap.h. Fed
@@ -39338,6 +39355,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         p.sampleRate = sampleRate; p.centreHz = rtlCenter.load(); p.hwOffsetHz = hwOffsetHz();
         int n = 4096; while (n < 65536 && n < sampleRate / 40.0) n <<= 1;   // ★ ~25 ms blocks, as a listener's channel
         p.fftSize = n;
+        /* ★★★ b97-cpu-budget ONE FRONT END PER RADIO. A SHARED / locked radio already runs one forward FFT for everybody
+         *  (feedClientChannels: the listeners' channels, the wide waterfall, the spectrogram). Background decoding used to
+         *  run a SECOND full-rate channeliser over the same IQ — on the Pi 500's RSP1B at 8 MS/s a whole core at nice 19,
+         *  starved, dropping 30-43 s of IQ a minute. Now it takes that bank's blocks and only cuts its own slices. */
+        p.sharedFront = perClientDsp();
+        if (p.sharedFront) p.fftSize = fftSize;
         p.slots = &vsDecoderSlots();
         p.store = vibe::gallery::shared().enabled() ? &vibe::gallery::shared() : nullptr;
         p.stations = &vsStations();   // ★ V12 beta90 the DIGI MODES MAP's station store (background spots too)
@@ -39352,7 +39375,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  idle radio"): background may run as many VFO channels as there are FREE listener slots — so a listener is never
          *  refused or told "full" because of it; the lowest VFO gives up its channel the moment one is needed. Read from
          *  the cached listener count: lock-free, safe on the runner's thread. */
-        if (bgLocked()) p.channelBudget = [] { return std::max(0, g_vsMaxUsers.load() - s_listenersCached.load(std::memory_order_relaxed)); };
+        /* ★★★ b97 (Stuart 11-28): a locked radio's background runs ALL THE TIME, alongside its listeners. The user-slot cap
+         *  (each free user slot = one VFO) stays only where a background VFO costs a channel of its own — a locked radio
+         *  WITHOUT the shared bank. With it (the RSP1B), a VFO is a slice of the bank everybody already pays for: no cap;
+         *  the box's CPU budget is what gives way (listeners first, then the owner's priority list). */
+        if (bgLocked() && !perClientDsp()) p.channelBudget = [] { return std::max(0, g_vsMaxUsers.load() - s_listenersCached.load(std::memory_order_relaxed)); };
         /* ★★ V12 2026-10-27 — A BAND DIGITAL-SPOTS VFO (Stuart: "Also full band digital modes too") runs behind the SAME
          *  governor a listener's Band does: the owner's word per mode, the benchmark's budget (shared between the
          *  profile's Band VFOs by the runner), engines told to go light when the server is loaded — and not at all where
@@ -39674,7 +39701,76 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         in.rttyFloor = LocalSdrShim::rttySkimWorkers();
         const fc::Budget b = bgCpuPolicy_.tick(in);
         fc::Policy::store(*bgCpu_, b);
+        /* ★★★ b97: the box-wide budget is on wherever the radios share a ledger (the slot dir) — background takes its slots at
+         *  once and the budget sheds by priority (vibe_bg_fullcpu.h Live::boxBudget). Said once when it changes. */
+        { const bool on = !dir.empty();
+          if (bgCpu_->boxBudget.exchange(on) != on && on && running)
+              LOGI("background decoding: decoders start at once — the box's CPU budget sheds by the owner's priority if the machine is short (listeners always first)"); }
         if (!bgCpuPolicy_.said().empty()) LOGI("%s", bgCpuPolicy_.said().c_str());
+    }
+    /** ★★★ b97-cpu-budget THE BOX'S BUDGET, every health tick (~2 s): this radio's line in the ledger — what it is doing (a
+     *  satellite pass, a listener, background only), its background CPU and front-end drops, each priority row's state —
+     *  then the SAME decision every radio process makes from the same ledger (vibe_bg_budget.h). Only the radio the
+     *  decision names acts: one step box-wide per FT8 slot, in the owner's order (the lowest row first; inside a row depth,
+     *  then extra modes, then whole VFOs), back the other way when the box has been calm for 3 minutes. Never waits: a
+     *  start/stop in progress, or a pass's lock held, skips this tick. */
+    void bgBudgetTick(int64_t nowMs, double machineBusyPct, int cores, bool throttled) {
+        namespace bb = vibe::bg::budget;
+        const std::string dir = vsDecoderSlotDir();
+        if (dir.empty()) return;
+        const std::string id = std::to_string((long long)::getpid());
+        if (!bgBudgetBoard_.isOpen()) bgBudgetBoard_.open(dir, id);
+        if (!bgBudgetBoard_.isOpen()) return;
+        bb::Entry me;
+        me.id = id;
+        me.name = !g_vsRadioLabel.empty() ? g_vsRadioLabel : std::string("radio ") + id;
+        // ★ a satellite pass on this radio: its line says so (never a victim), and its decoder's dropped input is URGENT
+        {
+            std::unique_lock<std::recursive_mutex> pl(satPassMtx_, std::try_to_lock);
+            if (pl.owns_lock() && satPass_.on) { me.cls = bb::kPass; me.passName = satPass_.name + (satPass_.label.empty() ? "" : " " + satPass_.label); }
+        }
+        const uint64_t tapD = skimTap_.droppedBlocks();
+        if (me.cls == bb::kPass && skimTap_.running() && tapD > bgBudgetTapLast_) me.urgentDrop = true;
+        bgBudgetTapLast_ = tapD;
+        if (me.cls != bb::kPass && s_streamingCached.load(std::memory_order_relaxed) > 0) me.cls = bb::kListener;
+        bool acting = false;
+        {
+            std::unique_lock<std::mutex> op(bgOpMtx_, std::try_to_lock);
+            if (!op.owns_lock()) return;
+            if (bgActive_.load() && bgRun_.running()) {
+                acting = true;
+                me.frontDropPerMin = bgRun_.frontDropPerMin();
+                double pct = 0;
+                for (int c = 0; c < bb::kCatN; ++c) { me.cat[(size_t)c] = bgRun_.budgetState(c); pct += me.cat[(size_t)c].costPct; }
+                me.bgCores = pct / 100.0;
+            }
+            bgBudgetBoard_.publish(me);
+            if (!acting) return;
+            bb::Box box;
+            box.nowMs = vibeUtcNow() * 1000.0 > 0 ? (int64_t)(vibeUtcNow() * 1000.0) : nowMs;   // ★ wall clock: shared by every process
+            box.cores = cores > 0 ? cores : (int)std::max(1u, std::thread::hardware_concurrency());
+            box.busyPct = machineBusyPct;
+            bb::readClock(box.curGHz, box.maxGHz);
+            box.clockFrac = box.maxGHz > 0 && box.curGHz > 0 ? box.curGHz / box.maxGHz : 1.0;
+            box.throttled = throttled;
+            box.lastStepMs = bb::Board::lastStep(dir);
+            std::string ord = bb::Board::readOrder(dir);
+            if (ord.empty()) ord = LocalSdrShim::bgPriority();
+            const bb::Order order = bb::parseOrder(ord);
+            const auto all = bb::Board::all(dir);
+            const bb::Decision d = bgBudgetPolicy_.tick(box, all, order);
+            (void)nowMs;
+            if (d.act == bb::Act::None || d.id != id) return;
+            std::string what;
+            const bool did = d.act == bb::Act::Shed ? bgRun_.budgetShed(d.cat, what) : bgRun_.budgetRestore(d.cat, what);
+            if (!did) return;
+            bb::Board::noteStep(dir, box.nowMs);
+            LOGI("background decoding on %s: %s %s \xe2\x80\x94 %s (%s, row %d of %d in the owner's priority list)", me.name.c_str(),
+                 d.act == bb::Act::Shed ? "shed" : "gave back", what.c_str(), d.why.c_str(), bb::catLabel(d.cat),
+                 order.rankOf(d.cat) + 1, bb::kCatN);
+            for (int c = 0; c < bb::kCatN; ++c) me.cat[(size_t)c] = bgRun_.budgetState(c);
+            bgBudgetBoard_.publish(me);
+        }
     }
     /** ★★ V12 2026-11-24 the admin line's honest CPU figure: the background threads counted, the busiest named, the cores. */
     std::string bgThreadsJson() {
@@ -45950,6 +46046,45 @@ void LocalSdrShim::setDmrIdLookup(bool on, std::function<std::string(const std::
     if (d.enabled() != on) LOGI("DMR ID lookup (RadioID.net): %s", on ? "on" : "off");
     d.setEnabled(on);
 }
+static std::mutex g_vsBgPriorityMtx;
+static std::string g_vsBgPriority;   // ★ b97 the config's copy (the live file in the slot dir wins)
+void LocalSdrShim::setBgPriority(const std::string& order, bool live) {
+    const vibe::bg::budget::Order o = vibe::bg::budget::parseOrder(order);
+    { std::lock_guard<std::mutex> lk(g_vsBgPriorityMtx); g_vsBgPriority = o.str(); }
+    if (live) {
+        const std::string dir = vsDecoderSlotDir();
+        if (!dir.empty() && !vibe::bg::budget::Board::writeOrder(dir, o)) LOGI("background priority: could not write the live copy in %s", dir.c_str());
+    }
+    LOGI("background priority (top first): %s", o.str().c_str());
+}
+std::string LocalSdrShim::bgPriority() { std::lock_guard<std::mutex> lk(g_vsBgPriorityMtx); return g_vsBgPriority; }
+std::string LocalSdrShim::bgPriorityJson() {
+    namespace bb = vibe::bg::budget;
+    const std::string dir = vsDecoderSlotDir();
+    std::string ord = bb::Board::readOrder(dir);
+    if (ord.empty()) ord = bgPriority();
+    const bb::Order o = bb::parseOrder(ord);
+    const auto all = bb::Board::all(dir);
+    bb::Box box; bb::readClock(box.curGHz, box.maxGHz);
+    box.clockFrac = box.maxGHz > 0 && box.curGHz > 0 ? box.curGHz / box.maxGHz : 1.0;
+    std::string j = "{\"order\":[";
+    for (int i = 0; i < bb::kCatN; ++i) j += std::string(i ? "," : "") + "\"" + bb::catId(o.top[(size_t)i]) + "\"";
+    j += "],\"rows\":[";
+    for (int i = 0; i < bb::kCatN; ++i) {
+        const int c = o.top[(size_t)i];
+        j += std::string(i ? "," : "") + "{\"id\":\"" + bb::catId(c) + "\",\"label\":\"" + vibe::gallery::jsonEsc(bb::catLabel(c))
+           + "\",\"state\":\"" + vibe::gallery::jsonEsc(bb::stateWords(c, all)) + "\"}";
+    }
+    j += "],\"radios\":[";
+    for (size_t i = 0; i < all.size(); ++i) {
+        char b[96]; std::snprintf(b, sizeof b, ",\"bgCores\":%.2f,\"frontDropPerMin\":%.1f,\"cls\":%d", all[i].bgCores, all[i].frontDropPerMin, all[i].cls);
+        j += std::string(i ? "," : "") + "{\"name\":\"" + vibe::gallery::jsonEsc(all[i].name) + "\"" + b
+           + (all[i].passName.empty() ? "" : ",\"pass\":\"" + vibe::gallery::jsonEsc(all[i].passName) + "\"") + "}";
+    }
+    const std::string pw = bb::powerWords(box);
+    j += "],\"power\":\"" + vibe::gallery::jsonEsc(pw) + "\"}";
+    return j;
+}
 int LocalSdrShim::rttySkimWorkers() {
     const int n = g_vsRttySkimWorkers.load(std::memory_order_relaxed);
     return n > 0 ? n : vibe::rttySkimDefaultWorkers();
@@ -45979,7 +46114,11 @@ bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& e
         g_bgCfg = c;
     }
     g_bgCfgGen.fetch_add(1);
-    LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
+    // ★★★ b97 (Stuart 11-28): a LOCKED radio never waits — say so, not "wait 300 s"
+    if (c.on && g_vsLockedCentre.load() > 0.0)
+        LOGI("background decoding: ON, %zu profile(s) — this radio's range is locked: it runs all the time, at once and "
+             "alongside listeners (listeners come first for the CPU)", c.profiles.size());
+    else LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
     return true;
 }
 /* ★★ V12 beta96 SHARE ADS-B WITH FLIGHT TRACKERS (vibe_beast.h, docs/v12/ADSB-FEED.md). Live. The decoder's sink is
@@ -49127,6 +49266,10 @@ void LocalSdrShim::healthTick() {
                             h.tempKind == vibehealth::TempKind::ThrottleThermal || h.tempKind == vibehealth::TempKind::ThrottlePower
                                 || h.tempKind == vibehealth::TempKind::ThrottleUnknown || h.temp >= vibehealth::HIGH,
                             h.batPresent && !h.batCharging);
+    // ★★★ b97-cpu-budget: the BOX's budget, in the owner's order, after this radio's own easing and full-CPU policy
+    if (p) p->bgBudgetTick(now, g_health.machineBusyPct, g_health.cores,
+                           h.tempKind == vibehealth::TempKind::ThrottleThermal || h.tempKind == vibehealth::TempKind::ThrottlePower
+                               || h.tempKind == vibehealth::TempKind::ThrottleUnknown);
     h.behind = decodersBehind(now);
     if (p) {
         /* ★★ beta95 THE PILL AUDIT: "Background decoding: eased for listeners" is the design working — nothing a listener
