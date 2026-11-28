@@ -274,5 +274,44 @@ console.log('== 3. an aircraft\'s route and track');
   ok(CM.ROUTE.api.startsWith('https://api.adsbdb.com/') && !/vibesdr/.test(CM.ROUTE.api), '★★★ the route source is called direct — never the Worker');
 }
 
+// ── 4. Stuart 11-28: each mode's FURTHEST from its own fixes; aviation in NM; MeshCore's colour is the map's ──
+console.log('== 4. furthest by fix source, units');
+{
+  const sandbox = {};
+  vm.runInNewContext(readFileSync(new URL('public/community-map.js', dir), 'utf8'), sandbox);
+  const CM = sandbox.CommunityMap;
+  const now = 1_800_000_000;
+  const sv = [{ id: 'uk', name: 'UK', lat: 52, lon: 0 }, { id: 'is', name: 'Iceland', lat: 64, lon: -22 }];
+  ok(CM.fixSrcOf(1 | 8, 8) === 'hfdl' && CM.fixSrcOf(1 | 8, 1) === 'adsb' && CM.fixSrcOf(8 | 16, 16) === 'hfdl' && CM.fixSrcOf(1 | 4 | 8 | 16, 16) === '',
+     'field 12 names the position’s source (ADS-C = its one datalink bearer, else nobody’s)');
+  ok(CM.fixSrcOf(1 | 8, undefined) === '' && CM.fixSrcOf(1, undefined) === 'adsb' && CM.fixSrcOf(8, null) === 'hfdl',
+     'an older server’s row (no field 12): the mask’s ONLY source, else nobody’s — a mixed mask is never ADS-B’s');
+  // EIN1: heard on ADS-B 30 NM from the UK receiver; minutes later its only position is an HFDL fix far out over the Atlantic
+  const early = CM.itemsOf({ on: true, now: now - 240, a: [['4CA123', 52.5, 0, 0, 35000, 270, 450, 1, 'EIN1', '', '', '', 1]] }, sv[0]);
+  const late = CM.itemsOf({ on: true, now, a: [['4CA123', 50, -40, 10, 37000, 270, 470, 1 | 8, 'EIN1', '', '', '', 8]] }, sv[0]);
+  const near = CM.itemsOf({ on: true, now, a: [['406A91', 51.8, 0, 2, 5000, 90, 200, 1, 'EZY47', '', '', '', 1]] }, sv[0]);
+  let it = CM.merge([early, late, near]);
+  const ein = it.find((x) => x.key === 'a:4CA123');
+  ok(ein.lat === 50 && ein.modes.join() === 'adsb,hfdl' && ein.fix.adsb.length === 1 && ein.fix.hfdl.length === 1, 'one aircraft: drawn at its newest (HFDL) fix, its ADS-B and HFDL fixes kept apart');
+  let far = CM.furthest(it, 'adsb', sv);
+  ok(far && far.it.key === 'a:4CA123' && Math.round(far.km / 1.852) === 30 && far.lat === 52.5,
+     `★★ ADS-B FURTHEST ignores the HFDL fix: EIN1 at its ADS-B fix, ${far && Math.round(far.km / 1.852)} NM (not ~1 650)`);
+  const fh = CM.furthest(it, 'hfdl', sv);
+  ok(fh && fh.it.key === 'a:4CA123' && fh.km > 2500, `…HFDL's FURTHEST is the HFDL fix (${fh && Math.round(fh.km)} km)`);
+  // the same hex: one server ADS-B only (old server, no field 12), another HFDL far away (field 12) — ADS-B never takes it
+  it = CM.merge([CM.itemsOf({ on: true, now, a: [['4CA999', 52.2, 0, 5, 30000, 0, 400, 1, 'RYR9']] }, sv[0]),
+                 CM.itemsOf({ on: true, now, a: [['4CA999', 40, -50, 1, 30000, 0, 400, 1 | 8, 'RYR9', '', '', '', 8]] }, sv[1])]);
+  far = CM.furthest(it, 'adsb', sv);
+  ok(far && Math.round(far.km / 1.852) === 12 && far.s.id === 'uk', `…across servers too: ADS-B ${far && Math.round(far.km / 1.852)} NM from UK, never the HFDL fix Iceland heard`);
+  ok(!CM.furthest(CM.merge([CM.itemsOf({ on: true, now, a: [['4CA777', 40, -50, 1, 30000, 0, 400, 1 | 8, 'X']] }, sv[0])]), 'adsb', sv),
+     'an older server’s mixed row (ADS-B + HFDL, no field 12) is no mode’s fix');
+  const mr = CM.mergeRadios([CM.itemsOf({ on: true, now: now - 60, a: [['4CA555', 52.3, 0, 0, 1, 0, 1, 1, 'A', '', '', '', 1]] }, sv[0]),
+                              CM.itemsOf({ on: true, now, a: [['4CA555', 45, -30, 0, 1, 0, 1, 1 | 8, 'A', '', '', '', 8]] }, sv[0])]);
+  ok(mr.length === 1 && mr[0].fix.adsb && mr[0].fix.hfdl, 'a multi-radio server’s copies keep each radio’s fix');
+  ok(CM.distWords(1852 * 1.5, 'adsb') === '1,500 NM' && CM.distWords(100, 'hfdl') === '54 NM' && CM.distWords(185.2, 'ndb') === '100 NM' && CM.distWords(100, 'ais') === '100 km' && CM.distWords(12, 'mesh') === '12 km',
+     '★★ aviation distances in NAUTICAL MILES (ADS-B, datalink, NDB, VOR); the rest in km');
+  ok(CM.MODE.mesh.colour === '#ff9f43', 'MeshCore’s colour is the map marker’s own orange (ism.ts MAP_COLOURS.meshcore), not a green');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

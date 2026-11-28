@@ -19,6 +19,7 @@ import { answers, rebase, contributors, answerFor, radioAnswer, PI500_RADIOS } f
 import { chromeLayoutExpr, setInsetsExpr, MAP_SIZES } from '../../scripts/lib/map-chrome-layout.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const CM_AVI = new Set(['adsb', 'acars', 'vdl2', 'hfdl', 'ndb', 'vor']);   // ★★ 11-28 the aviation group: distances in NM
 const PUB = path.join(here, '..', 'public');
 const SHOTS = process.argv[2] || '';
 const EDGE = process.env.EDGE || '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
@@ -155,6 +156,17 @@ try {
   ok(JSON.stringify(c.groups) === JSON.stringify(['aviation', 'maritime', 'misc']), 'AVIATION, MARITIME and MISC all on by default');
   ok(await js(`['aviation', 'maritime', 'misc'].map(g => document.querySelector('.trkCard2 [data-tgl="g:' + g + '"]')?.getAttribute('aria-pressed')).join()`) === 'true,true,true', 'three independent group toggles (in LAYERS)');
   ok(JSON.stringify(c.modes) === JSON.stringify(['adsb', 'hfdl', 'ndb', 'ais', 'dsc', 'navtex', 'sondes', 'aprs', 'mesh']), `a chip only for what is shared (${c.modes})`);
+  // ★★ 11-28 (Stuart: "the MeshCore layer is shown with a plain GREEN DOT") — its chip and its card row wear the map's own MeshCore marker
+  const mg = await js(`(() => { const mk = KIT.ismMapIcon({ kind: 'meshcore', ntype: 'repeater', seen: 0 }).html;
+    const les = [...document.querySelectorAll('.mDock[data-dock="layers"] .lsum .le')];
+    const le = les.find((e) => /MeshCore/.test(e.title || ''));
+    const row = document.querySelector('.trkCard2 [data-tgl="mesh"]');
+    const inner = (h) => { const d = document.createElement('div'); d.innerHTML = h; const g = d.querySelector('svg'); return g ? g.innerHTML : ''; };   // the DOM's own serialisation, both sides
+    return { chip: !!le && inner(le.querySelector('.lg').innerHTML) === inner(mk) && /#ff9f43/.test(le.innerHTML) && !le.querySelector('circle[r="6"]'),
+             row: !!row && !!row.querySelector('.lgm svg') && inner(row.querySelector('.lgm').innerHTML) === inner(mk) && !row.querySelector('.dot'),
+             air: !!document.querySelector('.trkCard2 [data-tgl="adsb"] .dot') }; })()`);
+  ok(mg.chip, '★★ MESHCORE in the LAYERS chip: the map’s own MeshCore marker (orange box + mast, the kit’s ismMapIcon), not a dot');
+  ok(mg.row && mg.air, '★★ …and its LAYERS card row wears that marker in the dot’s place (the aircraft rows keep their dots)');
   ok(await js(`CM.MODES.filter(m => window.__cm.modes.includes(m.id)).every(m => /shared for the last/.test(document.querySelector('.trkCard2 [data-tgl="' + m.id + '"]')?.title || ''))`), 'each LAYERS chip’s tooltip says its window');
   ok(c.heardBy['a:4CA000'] === 2 && Object.entries(c.heardBy).some(([k, n]) => k.startsWith('nw:') && n === 2) && c.heardBy['p:G4ABC-9'] === 2, '★ merged: BAW696, a NAVTEX warning and an APRS station each "heard by 2"');
   ok(['aircraft', 'ship', 'dsc', 'navst', 'navwarn', 'navmet', 'navmsg', 'ndb', 'sonde', 'aprs', 'mesh'].every((k) => c.byKind[k] > 0), `every kind drawn at once: ${JSON.stringify(c.byKind)}`);
@@ -349,6 +361,16 @@ try {
      `the LIST's facts give COMBINED totals, the chips their breakdown (${stl.slice(0, 120)}…)`);
   ok(await js(`(() => { const s = MC.view.root.querySelector('.trkCard2[data-card="stats"] .stBody').textContent; return /RECEIVERS/.test(s) && /3\\/3/.test(s) && /AIRCRAFT \\(ALL SOURCES COMBINED\\)/.test(s); })()`), 'STATS: NOW — the receivers sharing and the combined totals');
   ok(await js(`[...document.querySelectorAll('.trkCard2[data-card="stats"] .stTab')].map(b => b.textContent).join() .includes('ADS-B')`), '…and a tab per mode on the map (NEWEST, FURTHEST from the receiver that heard it)');
+  // ★★ 11-28 STATS FURTHEST: aviation in NAUTICAL MILES, each mode from its own fixes (an aircraft's ADS-B furthest is an ADS-B fix)
+  const st = await js(`(() => { const o = MC.stats; let got = null; MC.stats = (s, f) => { got = s; return o(s, f); };
+    try { drawStats(Math.floor(Date.now() / 1000)); } finally { MC.stats = o; }
+    return got.filter((x) => x.mode !== 'NOW').map((x) => { const r = x.rows.find((y) => y.label === 'FURTHEST'); const it = r && ITEM_BY_KEY.get(r.key);
+      const id = CM.MODES.find((m) => m.label === x.mode)?.id;
+      return { mode: x.mode, id, v: r ? r.value : '', own: !r || it.kind !== 'aircraft' || !!(it.fix && it.fix[id] && it.fix[id].some((f) => f.lat === r.lat && f.lon === r.lon)) }; }); })()`);
+  const avi = st.filter((x) => CM_AVI.has(x.id) && x.v);
+  ok(avi.length >= 1 && avi.every((x) => /^\d[\d,]* NM$/.test(x.v)) && st.filter((x) => !CM_AVI.has(x.id) && x.v).every((x) => / km$/.test(x.v)),
+     `★★ STATS FURTHEST: aviation in NM, the rest in km (${st.map((x) => x.mode + ' ' + x.v).join(' · ')})`);
+  ok(st.every((x) => x.own), '★★ …each aircraft mode’s FURTHEST is at one of ITS OWN fixes of that aircraft');
   ok(['adsb', 'acars', 'vdl2', 'hfdl'].reduce((a, m) => a + Number(pills[m] || 0), 0) === c.byKind.aircraft, `…the aviation pills add up to the aircraft on the map (${c.byKind.aircraft}) — each counted once`);
   const navp = await js(`Object.fromEntries([...document.querySelectorAll('.trkCard2 [data-navl]')].map(b => [b.dataset.navl, Number(b.querySelector('.n')?.textContent)]))`);
   ok(navp.stations === c.byKind.navst && navp.warnings === c.byKind.navwarn && navp.weather === c.byKind.navmet && navp.messages === c.byKind.navmsg, `…and in NAVTEX's own (${JSON.stringify(navp)})`);

@@ -829,7 +829,8 @@ function pick(id, open) {
  *  ══ */
 const KIND_WORDS = [['aircraft', 'aircraft'], ['ship', 'ships'], ['dsc', 'DSC'], ['navst', 'NAVTEX stations'], ['navwarn', 'warnings'], ['navmet', 'forecasts'],
   ['navmsg', 'messages'], ['ndb', 'NDB'], ['vor', 'VOR'], ['sonde', 'sondes'], ['aprs', 'APRS'], ['mesh', 'MeshCore']];
-const GLYPH = { adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', ais: 'ship', dsc: 'ship', navtex: 'navtex', sondes: 'balloon', ndb: 'beacon', vor: 'navaid' };
+const GLYPH = { adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', ais: 'ship', dsc: 'ship', navtex: 'navtex', sondes: 'balloon', ndb: 'beacon', vor: 'navaid',
+  mesh: 'mesh' };   // ★★ 11-28 MeshCore: the map's own marker (the orange box and mast), never a plain dot
 /** The status line (the old #status): receivers sharing, then the COMBINED totals (aircraft one per ICAO address; ships AIS +
  *  DSC by MMSI — CM.shipsCombined) — the LIST's facts and STATS' NOW. */
 function statusParts() {
@@ -985,12 +986,7 @@ function focusItem(key) {
   gl.once('moveend', () => showCard(key, ll));
 }
 /* ── STATS: the totals, and per mode its newest and its furthest (from the nearest receiver that heard it) ── */
-function rxKm(it) {
-  let best = null;
-  for (const h of it.heard) { const s = SERVERS.find((x) => x.id === h.sid); if (!s || typeof s.lat !== 'number') continue;
-    const km = CM.gcNm(s.lat, s.lon, it.lat, it.lon) * 1.852; if (best === null || km < best.km) best = { km, s }; }
-  return best;
-}
+function rxKm(it) { return CM.nearestRx(SERVERS, it.heard.map((h) => h.sid), it.lat, it.lon); }
 function drawStats(now) {
   const st = statusParts();
   const secs = [{ mode: 'NOW', rows: [{ key: '', label: 'RECEIVERS', value: `${st.up}/${SERVERS.length}`, name: 'sharing now' }]
@@ -1000,9 +996,12 @@ function drawStats(now) {
     if (!its.length) continue;
     const newest = its.reduce((a, b) => (b.t > a.t ? b : a));
     const rows = [{ key: newest.key, label: 'NEWEST', value: CM.ago(now - newest.t), name: newest.title, lat: newest.lat, lon: newest.lon }];
-    let far = null;
-    for (const it of its) { if (SUSPECT.has(it.key)) continue; const r = rxKm(it); if (r && (!far || r.km > far.km)) far = { km: r.km, it, s: r.s }; }   // ★★ b97 never a suspect
-    if (far && far.km >= 1) rows.push({ key: far.it.key, label: 'FURTHEST', value: `${Math.round(far.km).toLocaleString('en-GB')} km`, name: `${far.it.title} · from ${far.s.name}`, lat: far.it.lat, lon: far.it.lon });
+    // ★★ 11-28 each mode's FURTHEST from ITS OWN fixes only — an aircraft's ADS-B furthest never at a position HFDL / VDL2 /
+    //   ACARS gave the same hex (CM.furthest) — over every aircraft shown that this mode placed, whichever source draws it;
+    //   aviation in NAUTICAL MILES (CM.distWords). ★★ b97 never a suspect.
+    const cands = SHOWN.filter((i) => i.kind === 'aircraft' ? !!(i.fix && i.fix[id]) : its.includes(i));
+    const far = CM.furthest(cands, id, SERVERS, (i) => SUSPECT.has(i.key));
+    if (far && far.km >= 1) rows.push({ key: far.it.key, label: 'FURTHEST', value: CM.distWords(far.km, id), name: `${far.it.title} · from ${far.s.name}`, lat: far.lat, lon: far.lon });
     secs.push({ mode: CM.MODE[id].label, rows });
   }
   MC.stats(secs, (key) => { if (key) focusItem(key); });

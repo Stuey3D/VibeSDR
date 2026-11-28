@@ -37,10 +37,25 @@
     { id: 'navtex', label: 'NAVTEX', group: 'maritime', colour: '#4fc3f7', sec: 'n', win: 24 * H,  slow: true,  words: 'NAVTEX: the stations heard, warnings and their areas, forecasts, the messages' },
     { id: 'sondes', label: 'SONDES', group: 'misc',     colour: '#7fd4ff', sec: 'z', win: 12 * H,  slow: true,  words: 'Radiosondes: the current and the last flight, with tracks' },
     { id: 'aprs',   label: 'APRS',   group: 'misc',     colour: '#facc15', sec: 'p', win: 6 * H,   slow: false, words: 'APRS stations, objects and weather with a position' },
-    { id: 'mesh',   label: 'MESHCORE', group: 'misc',   colour: '#34d399', sec: 'm', win: 24 * H,  slow: false, words: 'MeshCore nodes, from their own public adverts (a person’s node rounded to ~1 km)' },
+    { id: 'mesh',   label: 'MESHCORE', group: 'misc',   colour: '#ff9f43', sec: 'm', win: 24 * H,  slow: false, words: 'MeshCore nodes, from their own public adverts (a person’s node rounded to ~1 km)' },
   ];
   const MODE = Object.fromEntries(MODES.map((m) => [m.id, m]));
   const SRC_BITS = [[1, 'adsb'], [2, 'acars'], [4, 'vdl2'], [8, 'hfdl']];   // ★ 16 = ADS-C: it rides a bearer
+  /** ★★ 11-28 WHICH SOURCE GAVE THE POSITION (Stuart: "ADS-B furthest 2540 km" — an aircraft first heard on ADS-B that
+   *  later moved to HFDL). The row's mask (field 7) is every source that has HEARD the aircraft; the position came from
+   *  ONE. Field 12 (vibe_community.h, b97-hotfix-furthest) says which, as a bit of the same mask (16 = ADS-C → the one
+   *  datalink bearer the mask names). A row without it (an older server): the mask's ONLY source, else nobody's — a fix
+   *  that cannot be pinned to a mode never counts for any mode's FURTHEST. '' = not known. */
+  function fixSrcOf(mask, posBit) {
+    const bearers = SRC_BITS.filter(([b]) => mask & b).map(([, m]) => m);
+    if (typeof posBit === 'number' && posBit > 0) {
+      const one = SRC_BITS.find(([b]) => b === posBit);
+      if (one) return one[1];
+      if (posBit === 16) { const dl = bearers.filter((m) => m !== 'adsb'); return dl.length === 1 ? dl[0] : ''; }
+      return '';
+    }
+    return bearers.length === 1 ? bearers[0] : '';
+  }
   const AGES = [{ s: 900, label: '15 MIN' }, { s: H, label: '1 H' }, { s: 6 * H, label: '6 H' }, { s: 24 * H, label: '24 H' }];
   const ADSB_STALE_SEC = 120;
   const winWords = (s) => (s < H ? `${Math.round(s / 60)} min` : s < 86400 ? `${s / H} h` : `${s / 86400} d`);
@@ -79,8 +94,9 @@
       if (!placed(lat, lon)) continue;
       const modes = SRC_BITS.filter(([b]) => mask & b).map(([, m]) => m);
       if (!modes.length) continue;
-      const k = str(r[0], 32), t = now - Math.max(0, num(r[3]) || 0);
+      const k = str(r[0], 32), t = now - Math.max(0, num(r[3]) || 0), fs = fixSrcOf(mask, num(r[12]));
       out.push({ key: 'a:' + k, kind: 'aircraft', modes, lat, lon, t, title: str(r[8], 10) || str(r[9], 10) || k,
+        fix: fs ? { [fs]: [{ sid: sv.id, lat, lon, t }] } : {},   // ★★ 11-28 the position, under the ONE source that gave it
         d: Object.assign({ icao: /^[0-9A-F]{6}$/.test(k) ? k : '', alt: num(r[4]), trk: num(r[5]), gs: num(r[6]), flight: str(r[8], 10), reg: str(r[9], 10), type: str(r[10], 8), adsc: !!(mask & 16) },
                          whatOf(r[11])),
         heard: [seen(t)] });
@@ -181,12 +197,22 @@
   /** An aircraft's fields without the empty strings (an empty type or flight never overwrites a known one; a null — no
    *  altitude in the newer fix — still does, as before). */
   function known(d) { const o = {}; for (const k in d) if (d[k] !== '' && d[k] !== undefined) o[k] = d[k]; return o; }
+  /** ★★ 11-28 an aircraft's fixes joined: per mode, the newest fix from each receiver (a fresh copy — the inputs untouched). */
+  function fixJoin(a, b) {
+    const o = {};
+    for (const src of [a || {}, b || {}]) for (const m in src) for (const f of src[m]) {
+      const l = o[m] || (o[m] = []), i = l.findIndex((x) => x.sid === f.sid);
+      if (i < 0) l.push(f); else if (f.t > l[i].t) l[i] = f;
+    }
+    return o;
+  }
   function merge(lists) {
     const by = new Map(), dsc = [];
     for (const list of lists) for (const it of list) {
       let have = by.get(it.key);
       if (!have && it.kind === 'dsc') have = dsc.find((x) => Math.abs(x.t - it.t) <= 120 && Math.abs(x.lat - it.lat) < 1e-3 && Math.abs(x.lon - it.lon) < 1e-3);
-      if (!have) { const c = Object.assign({}, it, { heard: it.heard.slice(), modes: it.modes.slice() }); by.set(it.key, c); if (it.kind === 'dsc') dsc.push(c); continue; }
+      if (!have) { const c = Object.assign({}, it, { heard: it.heard.slice(), modes: it.modes.slice() }, it.fix ? { fix: fixJoin(it.fix) } : {}); by.set(it.key, c); if (it.kind === 'dsc') dsc.push(c); continue; }
+      if (it.fix) have.fix = fixJoin(have.fix, it.fix);
       for (const h of it.heard) {
         const k = have.heard.findIndex((x) => x.sid === h.sid);
         if (k < 0) have.heard.push(h); else if (h.t > have.heard[k].t) have.heard[k] = h;
@@ -218,7 +244,12 @@
    *  Pi 500's three RTLs alike): one item per key, the newest copy wins; nothing summed (it is one receiver, not two). */
   function mergeRadios(lists) {
     const by = new Map();
-    for (const list of lists) for (const it of list) { const h = by.get(it.key); if (!h || it.t > h.t) by.set(it.key, it); }
+    for (const list of lists) for (const it of list) {
+      const h = by.get(it.key);
+      // ★★ 11-28 the newest copy wins, but an aircraft keeps every radio's fixes (one radio's ADS-B, another's HFDL)
+      if (!h || it.t > h.t) by.set(it.key, h && (h.fix || it.fix) ? Object.assign({}, it, { fix: fixJoin(h.fix, it.fix) }) : it);
+      else if (it.fix) by.set(it.key, Object.assign({}, h, { fix: fixJoin(h.fix, it.fix) }));
+    }
     return [...by.values()];
   }
 
@@ -629,10 +660,49 @@
     return rows.find((r) => r && r.key === k) || null;
   }
 
+  // ── FURTHEST, per mode (the STATS card) ──────────────────────────────────────────────────────────────────────────────
+  /** ★ km from the nearest receiver (of `sids`, else of every one that heard it) with a position to (lat, lon): {km, s}. */
+  function nearestRx(servers, sids, lat, lon) {
+    let best = null;
+    for (const sid of sids) {
+      const s = servers.find((x) => x.id === sid);
+      if (!s || typeof s.lat !== 'number' || typeof s.lon !== 'number') continue;
+      const km = gcNm(s.lat, s.lon, lat, lon) * 1.852;
+      if (!best || km < best.km) best = { km, s };
+    }
+    return best;
+  }
+  /** ★★ 11-28 THE FURTHEST item of mode `id` among `items` (those shown): {km, it, s, lat, lon} or null. Each mode uses ONLY
+   *  ITS OWN FIXES (Stuart: "ADS-B furthest 2540 km" was an aircraft's HFDL position): an aircraft counts at the fixes that
+   *  mode gave it (`it.fix[id]`, from the receiver that heard each — the nearest such), never at a position another source
+   *  of the same hex gave; an aircraft with no fix of that mode is not a candidate. Anything else (one mode each): its
+   *  position from the nearest receiver that heard it. `skip(it)`: never a candidate (a suspect mesh claim). */
+  function furthest(items, id, servers, skip) {
+    let far = null;
+    for (const it of items) {
+      if (skip && skip(it)) continue;
+      if (it.kind === 'aircraft') {
+        for (const f of (it.fix && it.fix[id]) || []) {
+          const r = nearestRx(servers, [f.sid], f.lat, f.lon);
+          if (r && (!far || r.km > far.km)) far = { km: r.km, it, s: r.s, lat: f.lat, lon: f.lon };
+        }
+        continue;
+      }
+      if (it.lat === null || !it.modes.includes(id)) continue;
+      const r = nearestRx(servers, it.heard.map((h) => h.sid), it.lat, it.lon);
+      if (r && (!far || r.km > far.km)) far = { km: r.km, it, s: r.s, lat: it.lat, lon: it.lon };
+    }
+    return far;
+  }
+  /** ★★ 11-28 a distance in the mode's own unit: NAUTICAL MILES for aviation (Stuart: "aviation distances in nm" — the
+   *  servers' aviation maps' NM), km for the rest. */
+  const distWords = (km, id) => (MODE[id] && MODE[id].group === 'aviation'
+    ? `${Math.round(km / 1.852).toLocaleString('en-GB')} NM` : `${Math.round(km).toLocaleString('en-GB')} km`);
+
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const api = { GROUPS, MODES, MODE, AGES, ADSB_STALE_SEC, FAST_SEC, SLOW_SEC, RETRY_SEC, RETRY_MAX_SEC, LIST_SEC, FETCH_TIMEOUT_MS, CONCURRENT,
-                itemsOf, merge, mergeRadios, modeCounts, primaryMode, shipsCombined, serverLayers, targets, askFor, textSource, filter, modesPresent, navtexFacets, perServer, listenUrl, dataBase, dataUrl, textUrl, stateOf,
+                itemsOf, merge, mergeRadios, fixSrcOf, fixJoin, nearestRx, furthest, distWords, modeCounts, primaryMode, shipsCombined, serverLayers, targets, askFor, textSource, filter, modesPresent, navtexFacets, perServer, listenUrl, dataBase, dataUrl, textUrl, stateOf,
                 dueLayers, noteResult, sectionsOf, ago, fade, esc, modeTip, ADDRESS_OK, SEA, seaSeverity, seaForecasts, seaShown, seaAttribution,
                 ROUTE, SERVER_AC_SEC, TRAIL_FETCH_MAX, TRAIL_CACHE_SEC, TRACK_MAX, TRACK_KEEP_SEC, TRACK_GAP_SEC, TRACK_AIRCRAFT_MAX,
                 callsignOf, parseAdsbdb, serverRoute, routeJudge, routeLine, airportWords, gcNm, trackNote, trackLines, parseTrail, trailUrls, aircraftTableUrl, tableRow };
