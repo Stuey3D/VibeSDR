@@ -32,7 +32,7 @@ const vsc = readFileSync(new URL('../src/services/VibeServerClient.ts', import.m
 ok(/setM17Cap\(m17Offered\(o\)\)/.test(scr) && /setM17Cap\(false\)/.test(scr), 'the per-radio answer (vibeserver.json) decides the key, reset per radio');
 ok(/withM17\(withFreeDv\(/.test(scr), 'the key is added to the VibeServer list only (after NFM)');
 ok(/getStatus\(\)\.mode === 'm17'\) setM17State/.test(scr), 'a report after leaving the mode is a ghost');
-ok((scr.match(/\(status\.mode === 'm17' && m17Cap\) (\|\| \(status\.mode === 'dvsig' && dvsigCap\) )?\? undefined : onFilterBoth/g) || []).length === 2, 'no width sliders in M17 (both places they are drawn)');
+ok((scr.match(/\(status\.mode === 'm17' && m17Cap\) (\|\| \(status\.mode === 'dvsig' && dvsigCap\) )?\? undefined : (askWrap\()?onFilterBoth/g) || []).length === 2, 'no width sliders in M17 (both places they are drawn)');
 ok(/m17Status\?\.\(\)/.test(scr) && /case 'm17': \{ const f = parseM17\(msg\)/.test(vsc), 'entering the mode and a reconnect ask for the report; the client parses it with parseM17');
 // ★ the tour's mode card is an overview now (Stuart 2026-11-16): it names no key's place, so it cannot misdirect — the About note says where M17 is
 ok(!/M17/.test((() => { const t = scr; const i = t.indexOf("{ id: 'mode', title:"); return i < 0 ? '' : t.slice(i, t.indexOf("{ id: '", i + 5)); })()) && /M17 DIGITAL VOICE[^']*a new mode beside NFM/.test(readFileSync(new URL('../src/components/AboutOverlay.tsx', import.meta.url), 'utf8')),

@@ -52,7 +52,7 @@ ok(eq(modeDefaultPassband('freedv', 7_177_000, 'usb'), [50, 2700]) && eq(modeDef
    'a chosen side is drawn whatever the band');
 ok(eq(modeDefaultPassband('freedv', 7_177_000, 'auto'), [-2700, -50]), 'AUTO keeps the convention');
 ok(/FREEDV SIDEBAND/.test(sel) && /FREEDV_SIDEBANDS\.map/.test(sel), 'the sideband row sits under the FreeDV sub-mode keys');
-ok(/onSb: onFreedvSb/.test(scr) && /freedvSub\?\.\(null, v\)/.test(scr), 'the screen sends the sideband choice (gated like the sub-mode)');
+ok(/onSb: (askWrap\()?onFreedvSb/.test(scr) && /freedvSub\?\.\(null, v\)/.test(scr), 'the screen sends the sideband choice (gated like the sub-mode)');
 ok(/sb: freedvState\?\.sbSel/.test(scr), 'the lit key is the server\'s report, not the tap');
 
 console.log(`\n${fail ? 'FAIL' : 'ok  '} freedv app: ${pass} passed, ${fail} failed`);

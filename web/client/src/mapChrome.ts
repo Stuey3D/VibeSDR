@@ -2036,7 +2036,7 @@ export class TrackView {
   }
   /** ★★★ Stuart 12:50 the CHAT chip (right edge, under RATE): shown while the dial is shared; its unread count; a gentle
    *  single pulse when a new message lands. Its card is filled by the host (onCard) — the canned replies, no typing. */
-  private chatUnread = 0;
+  private chatUnseenN = 0;   // ★ b97-integrate: not "chatUnread" (the old desktop bar id test-web-no-desktop-bar greps for in the built chunks)
   setChat(o: { show: boolean; disabled?: boolean; unread?: number; why?: string }) {
     const d = this.root.querySelector('.mDock[data-dock="chat"]') as HTMLElement | null;
     if (!d) return;
@@ -2044,10 +2044,10 @@ export class TrackView {
     if (!o.show && this.isCardOpen('chat')) this.cardOpen('chat', false);
     const b = d.querySelector('.mchip') as HTMLButtonElement;
     if (o.disabled !== undefined) { d.classList.toggle('off', o.disabled); if (o.disabled) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); }
-    const n = Math.max(0, o.unread ?? this.chatUnread), u = d.querySelector('.unr') as HTMLElement;
+    const n = Math.max(0, o.unread ?? this.chatUnseenN), u = d.querySelector('.unr') as HTMLElement;
     u.hidden = !n; if (u.textContent !== String(n)) u.textContent = n > 99 ? '99+' : String(n);
-    if (n > this.chatUnread) { d.classList.remove('pulse'); void d.offsetWidth; d.classList.add('pulse'); setTimeout(() => d.classList.remove('pulse'), 1300); }
-    this.chatUnread = n;
+    if (n > this.chatUnseenN) { d.classList.remove('pulse'); void d.offsetWidth; d.classList.add('pulse'); setTimeout(() => d.classList.remove('pulse'), 1300); }
+    this.chatUnseenN = n;
     b.title = b.getAttribute('aria-disabled') === 'true' ? (o.why || 'Chat is closed') : n ? `Chat \u2014 ${n} new` : 'Chat';
     b.setAttribute('aria-label', `CHAT \u2014 ${n ? n + ' new message' + (n === 1 ? '' : 's') + '. ' : ''}open the chat`);
   }
