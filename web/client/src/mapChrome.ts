@@ -27,6 +27,7 @@ import { layerCountText } from '../../../src/utils/mapChrome';   // ★★★ be
 import { wireEdgeDock as wireEdgeDockT, edgeDockSet as edgeDockSetT, edgeTabsLive } from './healthTuck';
 import { edgeDockSet, wireEdgeDock } from './healthTuck';
 import { TUNE_ICON_PATH } from '../../../src/services/airSeaTune';
+import { ismMapIcon } from '../../../src/services/ism';   // ★★ 11-28 the MeshCore layer's glyph IS the map's marker
 
 /** ★★ b96-rangefeed `approx`: words for a position that is not exact (the locator square's centre — rxPosition.ts) */
 export type LatLon = { lat: number; lon: number; approx?: string };
@@ -203,6 +204,9 @@ const CSS = `
 .trkCard2 .btn.chip[aria-pressed="true"]{background:#1e2a36;color:#e8eef5;border-color:#7fc8ff}
 .trkCard2 .btn.chip[aria-pressed="false"]{opacity:.45}
 .trkCard2 .btn.chip[aria-pressed="false"] .dot{background:transparent!important;border:1px solid currentColor}
+.trkCard2 .btn.chip .lgm{display:inline-flex;flex:none}
+.trkCard2 .btn.chip .lgm svg{display:block;width:14px;height:14px}
+.trkCard2 .btn.chip[aria-pressed="false"] .lgm{filter:grayscale(1);opacity:.55}
 .trkCard2 .btn.chip .n{font-size:10px;opacity:.75;font-variant-numeric:tabular-nums}
 .trkCard2 .btn.chip .n:empty{display:none}
 /* ★ Stuart 15:24 ("what is the red here all about … it looks like an error"): a layer this radio is decoding NOW wears the
@@ -861,18 +865,25 @@ const CARDS_KEY = 'vibesdr.mapCards';
 const CARD_SIDE_NOTE = 'mapCards.cardSide';
 /** ★★★ tweak 3 the LAYERS chip's glyphs — the shapes the map draws: the aircraft and ship silhouettes (airSeaTune's,
  *  as the TUNE list draws them), the NAVTEX station's disc and mast (navtexMap.ts navIcon), the balloon, the beacon. */
-export type LayerGlyph = 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid' | 'dot';
+export type LayerGlyph = 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon' | 'navaid' | 'mesh' | 'dot';
+/** ★★ 11-28 (Stuart, the community map: "the MeshCore layer is shown with a plain GREEN DOT"): the MeshCore layer wears the
+ *  map's own MeshCore marker — the orange box with the repeater mast (src/services/ism.ts ismMapIcon, ONE source) — at
+ *  16 px, in its OWN colours (never currentColor: the box is the marker). */
+const markerSvg16 = (html: string) => html.replace(/\swidth="[^"]*"/, ' width="16"').replace(/\sheight="[^"]*"/, ' height="16"').replace(/\sstyle="[^"]*"/, '');
+/** The glyphs that are a map marker in their own colours: in a LAYERS card row they take the colour dot's place. */
+const MARKER_GLYPHS: ReadonlySet<LayerGlyph> = new Set<LayerGlyph>(['mesh']);
 const P16 = (d: string) => `<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="${d}"/></svg>`;
 const LAYER_GLYPH: Record<LayerGlyph, string> = {
   aircraft: P16(TUNE_ICON_PATH.aircraft), ship: P16(TUNE_ICON_PATH.ship), balloon: P16(TUNE_ICON_PATH.balloon),
   beacon: P16(TUNE_ICON_PATH.beacon), navaid: P16(TUNE_ICON_PATH.navaid),
   navtex: modeIconSvg('navtex', 'lgI'),   // ★★★ Stuart's NAVTEX glyph (modeIcons.ts — one source)
+  mesh: markerSvg16(ismMapIcon({ kind: 'meshcore', ntype: 'repeater', seen: 0 } as Parameters<typeof ismMapIcon>[0]).html),
   dot: '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="currentColor"/></svg>',
 };
 /** A SHOW toggle's layer id → its glyph (the maps whose host gives no summary: the ISM maps). */
 function glyphOf(id: string): LayerGlyph {
   return /^(adsb|acars|vdl2|hfdl|adsc|aircraft)/.test(id) ? 'aircraft' : /^(ships|ais|dsc)/.test(id) ? 'ship' : /^(navst|navtex)/.test(id) ? 'navtex'
-    : /sonde/.test(id) ? 'balloon' : /^(ndb|beacon)/.test(id) ? 'beacon' : /^vor/.test(id) ? 'navaid' : 'dot';
+    : /sonde/.test(id) ? 'balloon' : /^(ndb|beacon)/.test(id) ? 'beacon' : /^vor/.test(id) ? 'navaid' : /^(mesh|meshcore)$/.test(id) ? 'mesh' : 'dot';
 }
 /** ★ the SERVERS and LIST chips' glyphs — the house set (modeIcons.ts): the servers glyph IS the app's ServersChip's */
 const SERVERS_SVG = modeIconSvg('servers', 'mIco');
@@ -2333,7 +2344,7 @@ export class TrackView {
   }
   private tglSig = '';
   /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
-  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; nPos?: number; colour?: string; others?: string[]; nMine?: number }>, toggled: Record<string, boolean>) {
+  setToggles(toggles: Array<{ id: string; label: string; words: string; group?: string; live?: boolean; n?: number; nPos?: number; colour?: string; others?: string[]; nMine?: number; glyph?: LayerGlyph }>, toggled: Record<string, boolean>) {
     const host = this.root.querySelector('.tgl') as HTMLElement;
     // ★★★ beta96 SHOW (Stuart 11-26): the counts change every second — written in place (below), never a redraw, so a poll
     //   cannot steal a focused chip
@@ -2355,8 +2366,8 @@ export class TrackView {
         if (nm) { const tm = sp ? String(x.nMine) : ''; if (nm.textContent !== tm) nm.textContent = tm; }
       }
     };
-    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|'), split(x)]), toggles.map((x) => toggled[x.id] !== false)]);
-    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` }))); return; }
+    const sig = JSON.stringify([toggles.map((x) => [x.id, x.group || '', !!x.live, x.n != null, x.colour || '', (x.others || []).join('|'), split(x), x.glyph || '']), toggles.map((x) => toggled[x.id] !== false)]);
+    if (sig === this.tglSig) { counts(); if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: x.glyph ?? glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` }))); return; }
     this.tglSig = sig;
     host.hidden = !toggles.length;
     this.viewSync();
@@ -2381,10 +2392,12 @@ export class TrackView {
     host.innerHTML = (toggles.length ? '<span class="lbl" title="What this map shows you — your own view, nothing changes on the radio">SHOW</span>' : '')
       + toggles.map((x) => (x.group ? `<span class="grp" aria-hidden="true">${esc(x.group)}</span>` : '')
       + `<button class="btn chip${x.live ? ' live' : ''}" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">`
-      + (x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
+      // ★★ 11-28 a layer whose glyph is a map marker in its own colours (MeshCore's box) wears it in the dot's place
+      + (x.glyph && MARKER_GLYPHS.has(x.glyph) ? `<span class="lgm" aria-hidden="true">${LAYER_GLYPH[x.glyph]}</span>`
+        : x.colour ? `<span class="dot" style="background:${esc(x.colour)};color:${esc(x.colour)}"></span>` : '')
       + `${esc(x.label)}${badge(x)}<span class="n"></span></button>`).join('');
     counts();
-    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` })));
+    if (!this.lsumHost) this.drawLayerSummary(toggles.filter((x) => x.n != null && toggled[x.id] !== false).map((x) => ({ glyph: x.glyph ?? glyphOf(x.id), n: x.n!, pos: x.nPos, colour: x.colour || '#9fb0c2', words: `${x.label} ${layerCountText(x.n!, x.nPos)}` })));
     for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
       b.onclick = () => {
         const on = b.getAttribute('aria-pressed') !== 'true';

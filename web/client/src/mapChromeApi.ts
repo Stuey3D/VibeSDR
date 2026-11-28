@@ -116,7 +116,7 @@ export function mountMapChrome(o: MapChromeHostOpts): MapChromeMore {
     card: (id, open) => v.cardOpen(id, open, true),
     layers: (layers, shown, onToggle) => {
       toggleCb = onToggle;
-      v.setToggles(layers.map(({ glyph: _g, ...l }) => l), shown);
+      v.setToggles(layers, shown);   // ★★ 11-28 the glyph rides along: a marker glyph (MeshCore) replaces its row's dot
       v.setLayerSummary(layers.filter((l) => shown[l.id] !== false && (l.n ?? 0) > 0)
         .map((l) => ({ glyph: l.glyph ?? 'dot', n: l.n ?? 0, colour: l.colour ?? '#5BE36B', words: `${l.n} ${l.words}` })));
     },
