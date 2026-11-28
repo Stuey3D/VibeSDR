@@ -142,8 +142,10 @@ try {
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^(SOLENT TRADER|ISLAND FERRY|NAB PILOT):/.test(e.getAttribute('aria-label') || '')).length === 3`, 10000), 'the three stored ships on the map');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(e => /^DSC DISTRESS from MMSI 232001234/.test(e.getAttribute('aria-label') || '') && e.innerHTML.includes('SOS'))`, 5000), 'the DSC distress pin, with SOS');
   // ★★ beta90 a scale bar on every map — NM beside km on the sea map (vibemapgl.js / vibemap.js, TrackView 'marine')
-  { const sc = await ev(`[...${view}.querySelectorAll('.maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
-    ok(/km/.test(sc || '') && /nm|NM/.test(sc || ''), `beta90: the scale bar, km and NM (${sc})`); }
+  // ★ map cards: the map's scale lines live in the SCALE chip now (scaleDock — .mChipsScale), not the map's own corner
+  { const sc = await ev(`[...${view}.querySelectorAll('.mChipsScale .vsLbl, .maplibregl-ctrl-scale, .leaflet-control-scale-line')].map(e => e.textContent).join(' | ')`);
+    // ★ map cards: the SCALE chip draws ONE line in the map's own unit — nautical miles on the sea map (scaleKind)
+    ok(/\bnm\b|NM/.test((sc || '').replace(/(\d)(nm)/g, '$1 $2')), `beta90: the scale bar, in nautical miles on the sea map (${sc})`); }
   const arrows = Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^Sea area/.test(e.getAttribute('aria-label') || '') && e.querySelector('.nvWind svg g[transform^="rotate("]')).length`));
   ok(arrows > 0, `the weather drawn as arrows (${arrows} sea areas)`);
   // ★★ beta96 the lists are TABS: NAVTEX (opened on it) and SHIPS (ships + DSC)
@@ -179,8 +181,11 @@ try {
   console.log('   screenshot', await shot('sea-areas-uk.png'));
   // one step closer: the forecasts' arrows inside their outlines (Humber's near gale in its amber area; Dogger's red area
   // runs off the top — its own arrow is there, giving way to the Cullercoats name at the step before)
+  const zb = await ev(`(() => { const m = window.__vibeTrkView?.vm?.map || window.__vibeTrkView?.lmap; return m ? Math.round(m.getZoom() * 100) / 100 : -1; })()`);
   await ev(`(() => { const v = ${view}; const b = [...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in')].find(x => v.contains(x)); b && b.click(); })()`);
   await sleep(2500);
+  const za = await ev(`(() => { const m = window.__vibeTrkView?.vm?.map || window.__vibeTrkView?.lmap; return m ? Math.round(m.getZoom() * 100) / 100 : -1; })()`);
+  console.log('   zoom', zb, '→', za);
   const gale = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk:not(.vtl-yhid):not(.vtl-clhid):not(.vtl-zhid)')].find(x => /^Sea area Humber/.test(x.getAttribute('aria-label') || '') && x.querySelector('.nvWind svg')); return e ? e.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`);
   ok(/HUMBER/i.test(gale) && /7/.test(gale), `Humber's near-gale arrow drawn inside its amber area: "${gale}"`);
   console.log('   screenshot', await shot('sea-areas-close.png'));
