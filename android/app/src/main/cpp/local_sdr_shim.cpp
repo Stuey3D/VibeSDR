@@ -35959,6 +35959,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  the default); off stops new slots, what is queued is still decoded. Anything else running ignores it. */
                 const bool on = payload.find("\"on\":true") != std::string::npos || payload.find("\"on\":1") != std::string::npos;
                 if (host) host->xpdrSkim(on);
+            } else if (type == "subscribe_digital_spots") {
+                /* ★★★ b97-integrate: this line was lost when b97-sat-skim (ec3aa188c) added xpdr_skim above it — the whole
+                 *  spots subscribe ran only on an xpdr_skim message, so NO listener could start digital spots (Single or
+                 *  Band, VFO A or B). Caught by test-server-vfo-ab (100/15) in the beta97 full run. */
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
                  *  the button, but an old client or a hand-rolled tool must meet the same wall.
                  * ★★ V12: "scope":"band" = Band mode (the band's IQ slice, every mode on its dial); absent = Single, the
