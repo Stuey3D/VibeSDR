@@ -592,7 +592,37 @@ static void sharedFront() {
     q.stop();
 }
 
+// ── ★★★ b97: with the box-wide budget on, background takes its decoder slots AT ONCE (the Pi 500 V4, 11-28 17:25) ──
+static void boxBudgetSlots() {
+    std::printf("── b97: the box-wide budget on — every VFO gets its decoder at once, over the box's limit; a listener still gets one ──\n");
+    const std::string dir = tmpDir("boxslots");
+    FileSlots sa(dir, [] { return 2; }), lis(dir, [] { return 2; });
+    bg::BgRegistry reg; reg.open(dir, "X");
+    auto live = std::make_shared<bg::fullcpu::Live>();
+    live->boxBudget.store(true);   // ★ nobody listening yet NOT "full" (the calm period has not passed): the old ramp's wait
+    bg::BgRunner r;
+    bg::BgRunner::Params p;
+    p.sampleRate = 250000; p.centreHz = 500000; p.fftSize = 8192; p.slots = &sa; p.registry = &reg; p.cpu = live;
+    p.profile.centreHz = 500000;
+    p.profile.vfos = { bg::Vfo{490000, "usb", "navtex"}, bg::Vfo{505000, "usb", "rtty-weather"}, bg::Vfo{512000, "usb", "wefax"},
+                       bg::Vfo{518000, "usb", "navtex"} };
+    std::vector<std::string> logs; std::mutex lm;
+    p.log = [&](const std::string& t) { std::lock_guard<std::mutex> lk(lm); logs.push_back(t); };
+    auto logged = [&](const std::string& k) { std::lock_guard<std::mutex> lk(lm); for (auto& l : logs) if (l.find(k) != std::string::npos) return true; return false; };
+    r.start(p);
+    ok(r.decodersRunning() == 4 && !logged("no decoder slot free"), "★★★ all 4 VFOs decode at once on a box limit of 2 — no \"waiting — no decoder slot free\"");
+    ok(lis.claim() < 0, "a listener's plain claim is refused (the box is over its limit)…");
+    const bool room = bg::BgRegistry::makeRoomForListener(lis, dir);
+    const int tok = room ? lis.claim() : -1;
+    ok(tok >= 0, "★ …but making room frees what the listener needs, at once (listeners first)");
+    for (int i = 0; i < 4; i++) r.slotTickForTest();
+    ok(r.decodersRunning() >= 1, "the rest carry on beside the listener (the budget, not the slot count, decides)");
+    lis.release(tok);
+    r.stop();
+}
+
 int main() {
+    boxBudgetSlots();
     sharedFront();
     frontEnd();
     fullCpu();

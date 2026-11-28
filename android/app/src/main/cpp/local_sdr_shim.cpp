@@ -39701,6 +39701,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         in.rttyFloor = LocalSdrShim::rttySkimWorkers();
         const fc::Budget b = bgCpuPolicy_.tick(in);
         fc::Policy::store(*bgCpu_, b);
+        /* ★★★ b97: the box-wide budget is on wherever the radios share a ledger (the slot dir) — background takes its slots at
+         *  once and the budget sheds by priority (vibe_bg_fullcpu.h Live::boxBudget). Said once when it changes. */
+        { const bool on = !dir.empty();
+          if (bgCpu_->boxBudget.exchange(on) != on && on && running)
+              LOGI("background decoding: decoders start at once â the box's CPU budget sheds by the owner's priority if the machine is short (listeners always first)"); }
         if (!bgCpuPolicy_.said().empty()) LOGI("%s", bgCpuPolicy_.said().c_str());
     }
     /** ★★★ b97-cpu-budget THE BOX'S BUDGET, every health tick (~2 s): this radio's line in the ledger — what it is doing (a

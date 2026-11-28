@@ -1229,7 +1229,12 @@ struct NdbStart { int profileIdx = 0; double rate = 0, hwCentreHz = 0, loHz = 0,
 class BgSlots : public DecoderSlots {
 public:
     BgSlots(DecoderSlots* inner, std::shared_ptr<const fullcpu::Live> live) : in_(inner), live_(std::move(live)) {}
-    int extra() const { return live_ && live_->full.load(std::memory_order_relaxed) ? std::max(0, live_->extraSlots.load(std::memory_order_relaxed)) : 0; }
+    /** ★★★ b97: with the box-wide budget on, as many as background asks for (kBoxBudgetExtra) — at once, not ramped. */
+    static constexpr int kBoxBudgetExtra = 64;
+    int extra() const {
+        if (live_ && live_->boxBudget.load(std::memory_order_relaxed)) return kBoxBudgetExtra;
+        return live_ && live_->full.load(std::memory_order_relaxed) ? std::max(0, live_->extraSlots.load(std::memory_order_relaxed)) : 0;
+    }
     int claim() override {
         const int t = in_->claim();
         if (t >= 0) return t;
@@ -2392,7 +2397,8 @@ private:
         }
         /* ★★★ beta94: a listener came (or the machine got hot) — slots this runner took OVER the box's limit while nobody
          *  listened go back, the lowest VFO first, one a tick, until the box is within its limit again. */
-        if (bgSlots_ && !(p_.cpu && p_.cpu->full.load(std::memory_order_relaxed)) && bgSlots_->extraHeld() > 0 && bgSlots_->boxOver()) {
+        if (bgSlots_ && !(p_.cpu && (p_.cpu->full.load(std::memory_order_relaxed) || p_.cpu->boxBudget.load(std::memory_order_relaxed)))
+            && bgSlots_->extraHeld() > 0 && bgSlots_->boxOver()) {   // ★ b97: the box's budget, not the slot count, decides
             if (Chan* low = pausePick()) { pauseOne(*low, "background back to the normal budget"); changed = true; }
         }
         // ★★ An NDB skimmer that may not run now (a listener's own NDB mode has the band; the owner switched NDB off): paused,
