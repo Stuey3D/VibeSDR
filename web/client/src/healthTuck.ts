@@ -48,8 +48,15 @@ export function edgeDockSet(d: HTMLElement, out: boolean): void {
   //   off the screen.
   card?.toggleAttribute('inert', !out);
   if (card) card.setAttribute('aria-hidden', String(!out));
-  tab?.toggleAttribute('inert', out);
-  if (tab) { tab.setAttribute('aria-hidden', String(out)); tab.tabIndex = out ? -1 : 0; }
+  // ★★ beta97 a map's short landscape keeps the tab IN the row while its card is out (the card drops below it, and the
+  //    tab tucks it again) — there the tab stays live (edgeTabLive)
+  const live = !out || (!!d.closest('.trkView[data-short]') && !d.classList.contains('mDock'));
+  tab?.toggleAttribute('inert', !live);
+  if (tab) { tab.setAttribute('aria-hidden', String(!live)); tab.tabIndex = live ? 0 : -1; }
+}
+/** ★★ beta97 the short-landscape switch: every edge dock's tab live again (or not) by the rule above. */
+export function edgeTabsLive(root: HTMLElement): void {
+  for (const d of Array.from(root.querySelectorAll<HTMLElement>('.edgeDock:not(.mDock)'))) edgeDockSet(d, !d.classList.contains('tucked'));
 }
 
 /** ★★ Stuart 15:09: lent to a full-screen map, the pill is a TAB until asked for — the map is centre stage, so neither

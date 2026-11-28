@@ -76,8 +76,14 @@ try {
   ok(await until(`(() => { const v = ${AS}; const n = v && v.querySelector(".trkTop .onlyModeNote"); return !!n && !n.hidden && n.offsetParent !== null && n.textContent === "ADS-B only on this receiver"; })()`, 8000),
      '★ the bar says "ADS-B only on this receiver"');
   await js(`document.activeElement && document.activeElement.blur(); 1`);
-  for (const type of ['keyDown', 'keyUp']) await call('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-  ok(await until(`/ADS-B only/.test(document.getElementById("vsPill")?.textContent || "")`, 4000), 'Escape (the way back) says why instead of leaving');
+  // ★ beta97 map cards: BACK shuts the map's top card first (the LIST on a wide window), THEN the way back — so up to
+  //   three presses, and the map is never left
+  let said = false;
+  for (let i = 0; i < 3 && !said; i++) {
+    for (const type of ['keyDown', 'keyUp']) await call('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    said = await until(`/ADS-B only/.test(document.getElementById("vsPill")?.textContent || "")`, 1500);
+  }
+  ok(said, 'Escape (the way back, once the map\'s cards are shut) says why instead of leaving');
   await sleep(2500);
   const sent = (await js(`window.__sent || []`)) || [];
   ok(!sent.some((m) => /"type":"adsb"/.test(m) && /"on":0/.test(m)), `★ no "ADS-B off" was sent (${sent.filter((m) => /adsb/.test(m)).slice(0, 3).join(' ')})`);

@@ -176,6 +176,18 @@ menus are standard type.
 - Screenshots (before / after, 390 / 820 / 1440, the viewer and the DATALINK map): the session scratchpad `mapcards/`
   (`before-*`, `after-*`, `after-mapcard-*` with the MAP card open).
 
+## The module (11-27, after Stuart's sign-off: "yes these are the maps")
+
+- `web/client/src/mapChrome.ts` — THE card system: `TrackView` (chips, cards, the LIST drawer + live waterfall, the
+  short-landscape top row and the safe rectangle, RATE, HELP, STATS, the pill, the bottom-right group), its CSS, `esc`,
+  `ago`, `LatLon`. Was the bottom of `tracks.ts` (git mv keeps its history); `tracks.ts` keeps the AIS / APRS looks
+  (icons, rows, cards) and re-exports the chrome, so its importers are unchanged.
+- `web/client/src/mapChromeApi.ts` — ★ THE STABLE SURFACE for new maps: `mountMapChrome(opts)` → `MapChrome` with
+  `chips()` (which chips / cards exist), `card()`, `layers()` (LAYERS + its counts), `list()` / `listTabs()` / `listSort()`
+  (the LIST source), `rate()` (RATE rows), `stats()`, `servers()`, `chat()`, `credit()`, `onRow` / `onSelect` / `onCard`,
+  `show` / `hide` / `destroy`, and `view` (the TrackView, an escape hatch). Add, never rename or remove. The amateur /
+  spots map and the directory's community map are ported onto it; the air & sea and ISM maps drive TrackView directly.
+
 ## The app port (after Stuart has seen the web page)
 
 Reuse `src/utils/mapCards.ts` as is (limits, columns, defaults, FIT trim and default, rate words) and ServersChip's

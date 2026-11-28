@@ -195,11 +195,17 @@ function scope(): HTMLElement {
 function candidates(root: HTMLElement): HTMLElement[] {
   // ★ [data-gpskip]: pointer-only chrome (the health pill's tuck › and its edge tab, 2026-11-12) is never a stop — the
   //   corner dock caught every route and the highlight could not get back to MENU (test-web-keyboard)
-  const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((e) => visible(e) && !e.closest('[data-gpskip]'));
+  // ★★ V12 maps: [data-gpkeep] inside a skipped part brings a corner back (the map's own zoom keys and credits — the
+  //    map itself, its markers and popups are never stops; the LIST and the cards are the way to an item)
+  const skipped = (e: HTMLElement) => { const s = e.closest('[data-gpskip]'); if (!s) return false; const k = e.closest('[data-gpkeep]'); return !(k && s.contains(k)); };
+  const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((e) => visible(e) && !skipped(e));
   if (root === grabbed) return all;
   // Outside a box, the box is ONE stop and what is inside it is not on the route.
   const boxes = [...root.querySelectorAll<HTMLElement>(NAVBOX)].filter(visible);
-  return [...all.filter((el) => !boxes.some((b) => b.contains(el))), ...boxes];
+  // ★★ V12 [data-navout] (the map's LIST, Stuart 11-27): the box's own controls — its maximise tab, its bar's keys — are
+  //    stops of their own in the walk, each with its ring; only the rows wait behind ENTER
+  const out = (el: HTMLElement, b: HTMLElement) => !!b.dataset.navout && el.matches(b.dataset.navout);
+  return [...all.filter((el) => !boxes.some((b) => b.contains(el) && !out(el, b))), ...boxes];
 }
 
 /** Enter on a box: it takes the D-pad, the highlight goes to its first list item (else its first key). */
@@ -247,7 +253,9 @@ function navBox(el: HTMLElement, from: Box | null, dir: Dir, fromWide: boolean):
   return b;
 }
 
+let hlSeq = 0;   // ★ every highlight() — so back() can tell whether a hook placed one (padHighlight)
 function highlight(el: HTMLElement | null) {
+  hlSeq++;
   current?.classList.remove('gpFocus', 'gpAdjust');
   current = el;
   adjusting = false;
@@ -257,6 +265,12 @@ function highlight(el: HTMLElement | null) {
 /** ★ A list that redraws itself under the highlight (the ADS-B list, once a second) hands over the new copy of the
  *  highlighted row, so the highlight stays lit on it rather than on the detached old one. Only while the old one
  *  is gone — never a way to move the highlight. */
+/** ★★ V12 the map's cards: a card opened with the pad or the keyboard takes the highlight onto its first control, and a
+ *  card shut with BACK puts it back on its chip — only while a pad or keyboard drives (a hand never sees a ring). */
+export function padHighlight(el: HTMLElement | null) {
+  if (!driven || !el || !visible(el)) return;
+  highlight(el);
+}
 export function padRehighlight(el: HTMLElement) {
   if (!current || current.isConnected) return;
   current = el;
@@ -412,7 +426,9 @@ function back() {
   const top = backStack.pop();
   if (top) { const to = top(); highlight(to instanceof HTMLElement && visible(to) ? to : null); return; }
   if (grabbed) { release(); return; }
-  if (hooks?.back()) highlight(null);
+  // ★ the hook may have put the highlight somewhere new (the map: a shut card's chip, padHighlight) — keep it then
+  const seq = hlSeq;
+  if (hooks?.back() && (hlSeq === seq || !current || !current.isConnected || !visible(current))) highlight(null);
 }
 
 /** [data-navlist]: the highlight is on one of its rows → onto the first key of the header its value names. */
@@ -501,7 +517,10 @@ function onKey(e: KeyboardEvent) {
   const focused = t instanceof HTMLElement && t !== document.body && t.matches(FOCUSABLE) ? t : null;
   // ★ A control holding real focus (reached with Tab) keeps the browser's own Enter — Tab users and screen readers
   //   press what they are on, and a control with its own Enter handler (the frequency box) is never pressed twice.
-  if (a === 'enter' && focused) return;
+  // ★ …unless the highlight stands somewhere else (a card shut by BACK hands real focus back to its chip while the ring
+  //   moved on): Enter presses what is HIGHLIGHTED (the map's LIST stop, found by test-web-map-pad)
+  if (a === 'enter' && focused && (!current || current === focused || !current.isConnected || !visible(current))) return;
+  if (a === 'enter' && focused && focused !== current) focused.blur();
   // ★ Arrows start from it, so Tab and the arrows share one place on the page…
   if (keyDir(a) && focused && focused !== current && visible(focused)) highlight(focused);
   e.preventDefault();

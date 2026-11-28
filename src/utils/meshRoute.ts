@@ -67,7 +67,7 @@ export function meshFurthest<T extends { lat?: number; lon?: number; hops?: numb
   let direct: MeshFar | null = null, mesh: MeshFar | null = null;
   if (!rx) return { direct, mesh };
   for (const d of nodes) {
-    if (d.lat === undefined || d.lon === undefined) continue;
+    if (d.lat === undefined || d.lon === undefined || (d as { _sus?: unknown })._sus) continue;   // ★ meshPlausible.ts: a suspect claim never counts
     const km = meshKm(rx, d.lat, d.lon);
     const dir = meshIsDirect(d);
     if (!meshPlausible(km, dir ? 0 : d.hops)) continue;

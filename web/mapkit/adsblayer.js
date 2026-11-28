@@ -1806,6 +1806,10 @@
         p.on('close', () => { if (popup === p) { popup = null; popupHex = null; selected = null; tellSel(); kick(); } });
         popup = p; p.addTo(gl);
         setTimeout(() => cardClear(p), 60);
+        // ★ again once the camera settles (a row's choice glides to the aircraft — the clear at 60 ms was mid-glide) and once
+        //   its pictures have loaded (the card grows): the avmap e2e at 390 px found it under the zoom keys after both
+        gl.once('moveend', () => setTimeout(() => cardClear(p), 30));
+        setTimeout(() => cardClear(p), 900);
       } else {
         const p = LL.popup({ className: 'vsadsb-pop-' + th, maxWidth: 280, offset: [0, -10], autoPan: false, closeOnClick: false })
           .setLatLng([s.disp.lat, s.disp.lon]).setContent(SC_OPEN + popupHtml + SC_CLOSE);
@@ -1946,7 +1950,16 @@
         const better = hd < bestH - 1 || (Math.abs(hd - bestH) <= 1 && (ar < bestA - 1 || (Math.abs(ar - bestA) <= 1 && best && Math.hypot(dx, dy) < Math.hypot(best[0], best[1]))));
         if (better) { best = [dx, dy]; bestH = hd; bestA = ar; }
       }
-      if (best && (best[0] || best[1])) gl.panBy([-best[0], -best[1]], { duration: 0 });
+      // ★ the CARD moves, not the map (its offset from the aircraft): a pan was undone by the camera following the chosen
+      //   aircraft (the avmap e2e at 390 px: the card back under the zoom keys after every clamp). The shift is kept on the
+      //   popup (setHTML keeps its offset) and added to the default 16 px for whichever side MapLibre anchors it on.
+      if (best && (best[0] || best[1])) {
+        const sh = p.__vsShift || [0, 0]; sh[0] += best[0]; sh[1] += best[1]; p.__vsShift = sh;
+        const d = 16, c = 11.3, base = { center: [0, 0], top: [0, d], bottom: [0, -d], left: [d, 0], right: [-d, 0],
+          'top-left': [c, c], 'top-right': [-c, c], 'bottom-left': [c, -c], 'bottom-right': [-c, -c] };
+        const off = {}; for (const k in base) off[k] = [base[k][0] + sh[0], base[k][1] + sh[1]];
+        try { p.setOffset(off); } catch (e) { gl.panBy([-best[0], -best[1]], { duration: 0 }); }
+      }
     }
     function llClamp() {
       if (gl || !popup || !lm) return;

@@ -259,10 +259,8 @@ async function radioDatalink(p, url) {
           }
           ok(ids.length >= 5 && !bad.length, `device ${DW}×${DH} (island ${island}): every top-row tab takes its own tap and opens its card, ≥ 8 px clear of the ✕ (${bad.join(', ') || ids.join(' ')})`);
         }
-        ok(al.every((d) => d <= 1), `device ${DW}×${DH} (island ${island}): each tab's arrow centred under its icon (offsets ${al.join(',')} px)`);
+        // ★ (Stuart 19:xx) the tabs carry no arrows now — their icon alone, centred (the sign-off block checks it)
         ok(hs.length >= 6 && Math.max(...hs) - Math.min(...hs) <= 2, `device ${DW}×${DH} (island ${island}): every top-hanging tab one height (${hs.join(',')})`);
-        const rot = await p.ev(`(() => { const c = document.querySelector('.trkView:not([hidden]) .mChipsR > .edgeDock:not(.mDock) .hTabChev'); return c ? getComputedStyle(c).transform : 'none'; })()`);
-        ok(/matrix\(\s*0|matrix\(-?[0-9.e-]+, -1/.test(rot) || /matrix\(6\.1/.test(rot) || rot !== 'none', `device ${DW}×${DH} (island ${island}): the tabs' arrows turned to the top edge (${rot})`);
         ok(D.pill && D.pill.b - D.pill.t <= 40 && D.pill.b <= DH - IB + 1, `device ${DW}×${DH} (island ${island}): the pill is the bar's height, above the home bar (${D.pill ? D.pill.b - D.pill.t : '-'} px)`);
       }
       ok(tops.length >= 3 && tops.every((e) => e.t <= 1), `device ${DW}×${DH} (island ${island}): CHAT, health, time and RATE hang from the top edge (${JSON.stringify(tops)})`);
@@ -374,6 +372,86 @@ async function radioDatalink(p, url) {
           ok(await p.ev(`document.getElementById('srvHealth').classList.contains('tucked')`), 'HEALTH: its tab, pressed again, tucks it'); }
         else console.log('   (no server health pill on this stack:', hx || 'none', ')');
       }
+    }
+    // ── ★★★ THE DESIGN SIGN-OFF RULES (Stuart 11-27 evening, batched): full borders on every card (past the edge it meets in
+    //    portrait, all four inside the safe rectangle in landscape); one × per card; arrowless health / time tabs; the
+    //    waterfall glyph A on the swap key; the collapsed LIST chip [☰ n ⌃ | ≋] one rounded rectangle past its two edges in
+    //    portrait; muted resting rims (bright green = focus only) and a gold open chip; one card out incl. health / time ──
+    for (const [w, h, ins, tag] of [[430, 932, { t: 59, b: 34, l: 0, r: 0 }, 'portrait 430×932'], [956, 376, { t: 0, b: 20, l: 62, r: 62 }, 'landscape 956×376']]) {
+      await p.size(w, h, true); await sleep(1200);
+      await p.ev(`(() => { const v = ${V}; v.style.setProperty('--sai-t', '${ins.t}px'); v.style.setProperty('--sai-b', '${ins.b}px'); v.style.setProperty('--sai-l', '${ins.l}px'); v.style.setProperty('--sai-r', '${ins.r}px'); window.dispatchEvent(new Event('resize')); return 1; })()`); await sleep(1500);
+      const land = w > h;
+      // ① every open card: four borders, ≥ 1 px; portrait: its edge side past the screen edge; landscape: inside the safe rectangle
+      for (const id of ['layers', 'map']) {
+        await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="${id}"]'); if (b && b.getAttribute('aria-expanded') !== 'true') b.click(); return 1; })()`); await sleep(700);
+        const c = JSON.parse(await p.ev(`JSON.stringify((() => { const e = ${V}.querySelector('.trkCards .trkCard2[data-card="${id}"]'); if (!e || !e.getClientRects().length) return null; const cs = getComputedStyle(e), b = e.getBoundingClientRect();
+          return { bw: ['Top', 'Right', 'Bottom', 'Left'].map((k) => parseFloat(cs['border' + k + 'Width'])), col: cs.borderTopColor, l: b.left, r: b.right, t: b.top, b: b.bottom, x: e.querySelectorAll(':scope > .ch .x').length, xt: e.querySelector(':scope > .ch .x')?.textContent }; })())`));
+        if (!c) { ok(false, `${tag}: the ${id.toUpperCase()} card opens`); continue; }
+        ok(c.bw.every((x) => x >= 1), `${tag}: ${id.toUpperCase()} has a border on all four sides (${c.bw.join(' ')})`);
+        ok(land ? c.l >= ins.l - 0.5 && c.r <= w - ins.r + 0.5 && c.b <= h - ins.b + 0.5 : (c.l < 0 || c.r > w), `${tag}: ${id.toUpperCase()} ${land ? 'inside the safe rectangle' : 'sits its border past the screen edge it meets'} (${Math.round(c.l)}–${Math.round(c.r)})`);
+        ok(c.x === 1 && c.xt === '×', `${tag}: ${id.toUpperCase()} closes with one × (${c.x} "${c.xt}")`);
+        ok(!/rgb\(91, 227, 107\)|rgb\(124, 255, 155\)/.test(c.col), `${tag}: ${id.toUpperCase()}'s resting rim is not the focus green (${c.col})`);
+        await p.ev(`${V}.querySelector('.trkCards .trkCard2[data-card="${id}"] > .ch .x')?.click(); 1`); await sleep(400);
+      }
+      // ② an OPEN chip: gold, its rim muted
+      await p.ev(`${V}.querySelector('[data-cbtn="layers"]')?.click(); 1`); await sleep(600);
+      const oc = JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${V}.querySelector('.mDock[data-dock="layers"]'); const hc = d.querySelector('.hCard'), m = d.querySelector('.mchip'); const a = getComputedStyle(hc), b = getComputedStyle(m); return { open: d.classList.contains('open'), rim: a.borderTopColor, bg: a.backgroundColor, ink: b.color }; })())`));
+      ok(oc.open && !/rgb\(91, 227, 107\)|rgb\(124, 255, 155\)/.test(oc.rim) && /255, 211, 77/.test(oc.ink + oc.bg), `${tag}: the open chip is gold, its rim muted (${JSON.stringify(oc)})`);
+      await p.ev(`${V}.querySelector('.trkCards .trkCard2[data-card="layers"] > .ch .x')?.click(); 1`); await sleep(400);
+      // ③ health / time tabs: no arrows, the icon centred
+      await p.ev(`(() => { for (const d of ${V}.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not(.tucked)')) d.querySelector('.hTuck')?.click(); return 1; })()`); await sleep(500);
+      const tb = JSON.parse(await p.ev(`JSON.stringify([...${V}.querySelectorAll('.mChipsR > .edgeDock:not(.mDock):not([hidden]) .hTab')].filter((t) => t.getClientRects().length).map((t) => { const ch = t.querySelector('.hTabChev'); const vis = ch && ch.getClientRects().length && getComputedStyle(ch).display !== 'none'; const ic = t.querySelector('.tIcon, .hTabPlus'); const a = t.getBoundingClientRect(), b = ic?.getBoundingClientRect(); return { chev: !!vis, off: b ? Math.round(Math.abs((a.left + a.right) / 2 - (b.left + b.right) / 2)) : -1, rim: getComputedStyle(t).borderTopColor }; }))`));
+      ok(tb.length >= 1 && tb.every((t) => !t.chev && t.off >= 0 && t.off <= 2), `${tag}: health / time tabs carry only their icon, centred (${JSON.stringify(tb)})`);
+      ok(tb.every((t) => !/rgb\(91, 227, 107\)|rgb\(124, 255, 155\)/.test(t.rim)), `${tag}: their rims are muted`);
+      // ④ the LIST: the swap key's glyph is A (a trace over a cut block); the collapsed chip [☰ n ⌃ | ≋]
+      const g = await p.ev(`(() => { const s = ${V}.querySelector('.lSwapC svg, .lSwap svg'); return s ? s.innerHTML : ''; })()`);
+      ok(/M3 10\.5H6\.5L8 3\.5/.test(g) && /fill="currentColor"/.test(g), `${tag}: the waterfall key is glyph A (trace + cut block)`);
+      await p.ev(`(() => { const b = ${V}.querySelector('[data-cbtn="list"]'); if (b.getAttribute('aria-expanded') === 'true') b.click(); return 1; })()`); await sleep(700);
+      const lc = JSON.parse(await p.ev(`JSON.stringify((() => { const d = ${V}.querySelector('.mDock[data-dock="list"]'); const hc = d.querySelector('.hCard'), s = hc.querySelector('.lSwapC'), b = hc.getBoundingClientRect(), cs = getComputedStyle(hc);
+        const sb = s && s.getClientRects().length ? s.getBoundingClientRect() : null, lb = d.querySelector('[data-cbtn="list"]').getBoundingClientRect();
+        return { l: b.left, r: b.right, t: b.top, b: b.bottom, radius: cs.borderTopLeftRadius + ' ' + cs.borderBottomRightRadius, bw: ['Top', 'Right', 'Bottom', 'Left'].map((k) => parseFloat(cs['border' + k + 'Width'])), swapInChip: !!sb && sb.left >= lb.right - 1 && sb.top >= b.top - 1 && sb.bottom <= b.bottom + 1, rim: cs.borderTopColor }; })())`));
+      ok(lc.swapInChip, `${tag}: the collapsed LIST chip holds ≋ beside ☰ (${JSON.stringify(lc)})`);
+      ok(lc.bw.every((x) => x >= 1) && /12px 12px/.test(lc.radius), `${tag}: …one rounded rectangle with a full border (${lc.radius} · ${lc.bw.join(' ')})`);
+      const lb = parseFloat(await p.ev(`getComputedStyle(${V}).getPropertyValue('--trk-list-bottom')`)) || 0;
+      ok(land ? lc.l >= ins.l - 0.5 && lc.b <= h - ins.b + 0.5 : lc.l <= -12 && lc.b >= h - lb + 12, `${tag}: …${land ? 'inside the safe rectangle' : 'its corners past the left and bottom edges'} (${Math.round(lc.l)}, ${Math.round(lc.b)} of ${h}; the attribution's line ${lb})`);
+      ok(!/rgb\(91, 227, 107\)|rgb\(124, 255, 155\)/.test(lc.rim), `${tag}: …its rim muted (${lc.rim})`);
+      // the ≋ part opens the waterfall, the ☰ part the list
+      await p.ev(`${V}.querySelector('.mDock[data-dock="list"] .lSwapC')?.click(); 1`); await sleep(900);
+      ok(await p.ev(`${V}.querySelector('.trkList')?.dataset.pane === 'wf' && ${V}.querySelector('[data-cbtn="list"]').getAttribute('aria-expanded') === 'true'`), `${tag}: ≋ on the chip opens the drawer on the waterfall`);
+      await p.ev(`(() => { if (${V}.querySelector('.trkList').dataset.pane === 'wf') ${V}.querySelector('.lSwap')?.click(); return 1; })()`); await sleep(500);
+      // ⑤ landscape: one transient out at a time — health / time too
+      if (land) {
+        // ★ a calmer stage first, then the urgent one (the TIME block above left it tucked by the listener — a new stage brings it out)
+        await p.ev(`window.__vibeSessionLeft(400); 1`); await sleep(1200); await p.ev(`window.__vibeSessionLeft(100); 1`); await sleep(1200);
+        const tOut = await p.ev(`!${V}.querySelector('[data-dock="time"]').classList.contains('tucked')`);
+        await p.ev(`${V}.querySelector('[data-cbtn="map"]')?.click(); 1`); await sleep(700);
+        const after = JSON.parse(await p.ev(`JSON.stringify({ time: !${V}.querySelector('[data-dock="time"]').classList.contains('tucked'), map: ${V}.querySelector('[data-cbtn="map"]').getAttribute('aria-expanded') })`));
+        ok(tOut && !after.time && after.map === 'true', `${tag}: opening a card tucks the TIME card (one out at a time) (${tOut} → ${JSON.stringify(after)})`);
+        await p.ev(`${V}.querySelector('.trkCards .trkCard2[data-card="map"] > .ch .x')?.click(); 1`); await sleep(300);
+      }
+      // ⑦ the shared-tuner pill is CENTRED on the map in every layout (Stuart: the app had it off-centre)
+      const pc = JSON.parse(await p.ev(`JSON.stringify((() => { const l = document.getElementById('mapShLine'); if (!l || !l.getClientRects().length) return null; const b = l.getBoundingClientRect(), m = ${V}.getBoundingClientRect(); return { off: Math.round(((b.left + b.right) / 2 - (m.left + m.right) / 2) * 10) / 10 }; })())`));
+      ok(!pc || Math.abs(pc.off) <= 2, `${tag}: the pill is centred on the map (${pc ? pc.off + ' px off' : 'no pill'})`);
+      // ⑧ LAYERS: a row live on THIS radio AND other sources shows both — [LIVE] green own count, [LIVE] outlined the rest
+      { const ex = await p.ev(`(() => { const v = window.__vibeTrkView; v.setToggles([{ id: 'adsb', label: 'ADS-B', words: 'ADS-B aircraft', live: true, n: 33, others: ['PiAware'], nMine: 0, colour: '#ffd34d' }, { id: 'vdl2', label: 'VDL2', words: 'VDL2 aircraft', live: true, n: 5, colour: '#5BE36B' }], { adsb: true, vdl2: true });
+          const row = (id) => ${V}.querySelector('.tgl [data-tgl="' + id + '"]'); const a = row('adsb'), b = row('vdl2');
+          return JSON.stringify({ aLv: a.querySelectorAll('.lv').length, aO: a.querySelectorAll('.lv.o').length, aMine: a.querySelector('.nm')?.textContent, aMineCol: a.querySelector('.nm') ? getComputedStyle(a.querySelector('.nm')).color : '', aN: a.querySelector('.n')?.textContent, bNm: b.querySelector('.nm')?.textContent ?? null, bN: b.querySelector('.n')?.textContent }); })()`);
+        const e = JSON.parse(ex);
+        ok(e.aLv === 2 && e.aO === 1 && e.aMine === '0' && /91, 227, 107/.test(e.aMineCol) && e.aN === '33' && e.bNm === null && e.bN === '5', `${tag}: a split LAYERS row reads "ADS-B [LIVE] 0 [LIVE] 33" (green own count), a single-source row its one count (${ex})`); }
+      // ⑥ map notices (Stuart, found in the app): a feed-lost banner and a view note sit UNDER the pill, clear of every chip
+      // ★ shown and measured in ONE turn (the page's own render re-hides the banner and clears notes on its next tick)
+      const nt = JSON.parse(await p.ev(`JSON.stringify((() => { const v0 = window.__vibeTrkView; const f = document.getElementById('adsbFeedWarn');
+        if (f) { if (!f.textContent.trim()) f.innerHTML = '<b>AIRCRAFT FEED</b><span>PiAware lost — reconnecting</span><button type="button">×</button>'; if (!${V}.contains(f)) ${V}.querySelector('.slot-over')?.appendChild(f); f.hidden = false; }
+        v0?.note('A note from the map'); v0?.noteTop?.();
+        const r = (e) => { if (!e || !e.getClientRects().length) return null; const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+        const pill = r(document.getElementById('mapShLine')), notes = [r(document.getElementById('adsbFeedWarn')), r(${V}.querySelector('.trkNote'))].filter(Boolean);
+        const chips = [...${V}.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard, .mChipsR > :not([hidden]) .hCard, .mChipsR > .edgeDock:not(.mDock):not([hidden]) .hTab, .trkTop .exit')].map(r).filter(Boolean);
+        const hit = (a, b) => a.l < b.r - 1 && a.r > b.l + 1 && a.t < b.b - 1 && a.b > b.t + 1;
+        return { n: notes.length, pill: notes.filter((x) => pill && hit(x, pill)).length, chips: notes.reduce((k, x) => k + chips.filter((c) => hit(x, c)).length, 0), notes, pillR: pill }; })())`));
+      ok(nt.n >= 1 && !nt.pill && !nt.chips, `${tag}: a feed-lost banner and a map note sit under the pill, over no chip (${JSON.stringify(nt).slice(0, 300)})`);
+      await p.ev(`(() => { const f = document.getElementById('adsbFeedWarn'); if (f) f.hidden = true; window.__vibeTrkView?.note(''); return 1; })()`);
+      await shot(`signoff-${w}x${h}.png`);
+      await p.ev(`(() => { const v = ${V}; for (const k of ['--sai-l', '--sai-r', '--sai-b', '--sai-t']) v.style.removeProperty(k); return 1; })()`);
     }
     // ── safe areas: a notch on the left (59 px), the corner on the right (20), the home bar (21) ──
     await p.size(932, 430, true); await sleep(1200);

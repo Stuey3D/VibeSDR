@@ -260,11 +260,12 @@ console.log('── b96-2 "Not at this site": an off-site feed\'s aircraft are d
 
 // ── ★★ Stuart 16:31: a fresh ADS-B fix is never replaced by a datalink report of the same aircraft (no bouncing) ──
 {
-  ok(!avFixBetter({ posSrc: 'ADS-C', posAge: 0 }, { posSrc: 'ADS-B', posAge: 1 }), 'an ADS-C report (0 s) does not replace a live ADS-B fix (1 s)');
-  ok(!avFixBetter({ posSrc: 'VDL2', posAge: 0 }, { posSrc: 'ADS-B', posAge: 30 }), 'nor an FMS / label-16 one');
-  ok(avFixBetter({ posSrc: 'ADS-B', posAge: 2 }, { posSrc: 'ADS-C', posAge: 0 }), 'a live ADS-B fix replaces a datalink report');
-  ok(avFixBetter({ posSrc: 'ADS-C', posAge: 5 }, { posSrc: 'ADS-B', posAge: 600 }), 'an ADS-B fix gone stale (10 min) gives way to a newer report');
-  ok(avFixBetter({ posSrc: 'ADS-B', posAge: 1 }, { posSrc: 'ADS-B', posAge: 4 }) && !avFixBetter({ posSrc: 'ADS-B', posAge: 4 }, { posSrc: 'ADS-B', posAge: 1 }), 'two ADS-B fixes: the newer');
+  const yes2 = (c: boolean, w: string) => yes(w, c);
+  yes2(!avFixBetter({ posSrc: 'ADS-C', posAge: 0 }, { posSrc: 'ADS-B', posAge: 1 }), 'an ADS-C report (0 s) does not replace a live ADS-B fix (1 s)');
+  yes2(!avFixBetter({ posSrc: 'VDL2', posAge: 0 }, { posSrc: 'ADS-B', posAge: 30 }), 'nor an FMS / label-16 one');
+  yes2(avFixBetter({ posSrc: 'ADS-B', posAge: 2 }, { posSrc: 'ADS-C', posAge: 0 }), 'a live ADS-B fix replaces a datalink report');
+  yes2(avFixBetter({ posSrc: 'ADS-C', posAge: 5 }, { posSrc: 'ADS-B', posAge: 600 }), 'an ADS-B fix gone stale (10 min) gives way to a newer report');
+  yes2(avFixBetter({ posSrc: 'ADS-B', posAge: 1 }, { posSrc: 'ADS-B', posAge: 4 }) && !avFixBetter({ posSrc: 'ADS-B', posAge: 4 }, { posSrc: 'ADS-B', posAge: 1 }), 'two ADS-B fixes: the newer');
   // interleaved: the track never flips back to the report while ADS-B is live
   let cur = { posSrc: 'ADS-B', posAge: 0, at: 'adsb' };
   let flips = 0;
@@ -272,7 +273,7 @@ console.log('── b96-2 "Not at this site": an off-site feed\'s aircraft are d
     const nxt = t % 3 === 0 ? { posSrc: 'ADS-C', posAge: 0, at: 'report' } : { posSrc: 'ADS-B', posAge: t % 2, at: 'adsb' };
     if (avFixBetter(nxt, cur)) { if (nxt.at !== cur.at) flips++; cur = nxt; } else cur = { ...cur, posAge: (cur.posAge ?? 0) + 1 };
   }
-  ok(flips === 0 && cur.at === 'adsb', `interleaved ADS-B and ADS-C reports: the position never leaves ADS-B (${flips} flips)`);
+  yes2(flips === 0 && cur.at === 'adsb', `interleaved ADS-B and ADS-C reports: the position never leaves ADS-B (${flips} flips)`);
 }
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

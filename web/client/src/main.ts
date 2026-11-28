@@ -45,21 +45,21 @@ import { rangeBearing as adsbRangeBearing, adsbStatus, adsbCaptureWarning, clean
 import { IsmBox, type IsmReport, type IsmBand, ismGainChip, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode,
-         ismPlotted, ismRouteKnown, ismRouteOf, ismMilesPref, ISM_UNITS_EVENT, type IsmDevice } from './ism';
+         ismPlotted, ismRouteKnown, ismRouteOf, ismMarkSuspects, ismMilesPref, ISM_UNITS_EVENT, type IsmDevice } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
-         navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
+         navMetStatus,  navFcGale, navBuilding,   type NavWarnReport, type NavMetReport } from '../../../src/services/navtexWarn';
 import { NAV_HAZARD_COLOURS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../../../src/services/navtexIcons';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
-import { SHIPPING_TITLE, shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+import {  shipLayersOf, shipLayersFor, shipToggle, shipLayersPresent,  shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          dscGalSummary, DSC_GAL_WORDS, DSC_SHIP_EMPTY,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { seaCompose, seaAreasFor, seaAreasInView, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { avStatus } from './avdata';   // ★ V12 the aircraft datalink
-import { AVIATION_TITLE, AV_EMPTY, avLayersOf, avCompose, avLegendHtml, avOn as avLayerOn, sharedSanitise,
+import {  AV_EMPTY,  avCompose, avLegendHtml,  sharedSanitise,
          type AvLayers, type AvFocus, type SharedAircraft, avCreditHtml } from '../../../src/services/aviationMap';   // ★ V12 2026-11-16 the AVIATION MAP
 // ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules
 import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProfile, liveTabs, liveTabPick, avLayersFrom, avLayerOf, shipLayerOf,
@@ -68,7 +68,7 @@ import { liveChrome, livePresent, liveChips, liveLayerOn, liveLayersOf, liveProf
 import { avMerge, avNowRule, avHave, avName, type AvLayerId } from '../../../src/services/aviationMap';
 import { parseAvBands, hfdlStatusText, HFDL_HINT, type AvBand, type AvReport } from '../../../src/services/aviation';
 import { parseLrptStatus, lrptStatusText, lrptAttachParams, LRPT_HINT } from '../../../src/services/lrpt';   // ★ V12 METEOR LRPT
-import { sondeCard, sondeIcon, sondeItems, sondeRanges, sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
+import { sondeCard, sondeIcon, sondeItems,  sondeRows, sondeStatus, sondeTrail } from './sondes';   // ★ V12 radiosondes
 import { parseSondeBands, type SondeBand, type SondeReport } from '../../../src/services/sondes';
 import { airSeaOffer, AirSeaViewer, type AirSeaOffer } from '../../../src/services/airSeaViewer';
 import { galleryOffer, type GalleryOffer } from '../../../src/services/galleryOffer';   // ★★★ beta96 the landing's GALLERY key
@@ -87,7 +87,7 @@ import { satSingleWatch, SAT_SINGLE_WHY, type SatHybridInfo } from '../../../src
 import { parseSatTelemetry, satCapFrom, satDopplerBadge, satMarkerShiftHz, satPacketBaud, SAT_BEACON_AUDIO_HALF_HZ, SAT_BEACON_SKIM_HZ, type SatDopBadge, type SatPicked, type SatTx, type SatVfoB } from '../../../src/services/satellites';
 import { fitDefault, rateWords } from '../../../src/utils/mapCards';
 import { acTagsFor, acTagHtml } from '../../../src/utils/acTags';   // ★★★ beta96 MIL / emergency tags, one source   // ★★★ beta96 the map control cards' shared rules
-import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsCard, aprsRows, aprsSanitise, type AisReport, type AprsList } from './tracks';
+import { TrackView, compass8 as adsbCompass, aisIcon, aisLabel, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon,   aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
 import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
@@ -104,7 +104,7 @@ import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeL
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
-import { initGamepad, pushBack, padAdjuster, activePadLayout, padRehighlight, driveInput, onDriveInput } from './gamepad';
+import { initGamepad, pushBack, padAdjuster, activePadLayout,  driveInput, onDriveInput } from './gamepad';
 import { padListRow, padListRebuild } from './padList';
 import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
@@ -1489,13 +1489,14 @@ async function sendAdminUnlock(pw: string) {
     // brute-force lockout rather than needing its own.
     const ch = await fetchAuthChallenge(httpBase(currentHost));
     const nonce = ch.nonce;
-    if (!nonce) { alert('This server did not offer a challenge.'); return; }
+    // ★ never a native alert(): it blocks the page (a map's gain-lock card hung the map-cards e2e for 25 min) and suspends audio in Safari
+    if (!nonce) { showPill('This server did not offer a challenge.', 4000); return; }
     adminPassword = pw;   // the admin page signs its own requests with it
     // ★ Bookmark writes are admin-gated on the server, so they need the same credential.
     setBookmarkAdminAuth(async () => resolveAdminOverride(httpBase(currentHost), adminPassword));
     spec?.send({ type: 'admin_unlock', nonce, token: vibeAuthToken(pw, nonce) });
   } catch (e) {
-    alert(`Could not reach the server to unlock: ${(e as Error).message}`);
+    showPill(`Could not reach the server to unlock: ${(e as Error).message}`, 4000);
   }
 }
 
@@ -2309,7 +2310,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (pwRow) pwRow.hidden = ok;    // wrong password: leave it open to try again
       if (!ok) setStatus('error', 'admin');
       refreshAdminRow();
-      if (!ok) { alert('That admin password was not accepted.'); revealServerUnlock(); }
+      // ★ an in-page message, never alert(): a native dialog blocks the page — the map's gain-lock card hung under it
+      //   (map-cards e2e, 25 min) — and suspends audio in Safari; the card says "Not accepted" itself
+      if (!ok) { showPill('That admin password was not accepted.', 4000); revealServerUnlock(); }
     },
     // ★★ THE SERVER'S WORD ON ITS OWN DSP. These controls are GLOBAL and sticky —
     // whatever the last listener left is what the radio is doing — so rendering our
@@ -4228,15 +4231,20 @@ function gainDriver(): GainDrv | null {
   };
   if (d === 'rtl' && hwGains.length) return { agc: 'gainAuto', slider: 'gain', name: nameOf('gainAuto', 'VIBE AGC'),
     val: () => { const on = document.getElementById('gainAuto')?.classList.contains('on'); const t = on && hwGainNow >= 0 ? hwGainNow : hwGains[Number((document.getElementById('gain') as HTMLInputElement | null)?.value ?? 0)] ?? 0; return `${(t / 10).toFixed(1)} dB`; } };
-  if (d === 'sdrplay' && document.getElementById('rspIfAgc')) return { agc: 'rspIfAgc', slider: 'rspIfGr', name: nameOf('rspIfAgc', 'IF AGC'),
-    val: () => (document.getElementById('rspSysGain')?.textContent || document.getElementById('rspIfGrVal')?.textContent || '').trim() };
+  /* ★★ Stuart 11-27 (SDRplay on the map): the row says "VibeAGC" and shows BOTH stages — RF (the LNA state / its gain
+   *  reduction) and IF (gain reduction) — read from the page's own RSP panel; ⌄ lends the rest of it */
+  if (d === 'sdrplay' && document.getElementById('rspIfAgc')) return { agc: 'rspIfAgc', slider: 'rspIfGr', name: 'VibeAGC',
+    val: () => { const t = (id: string) => (document.getElementById(id)?.textContent || '').trim();
+      const lna = (document.getElementById('rspLna') as HTMLInputElement | null)?.value ?? '', ifg = t('rspIfGrVal');
+      const ifv = ifg && ifg !== '—' ? (/dB/.test(ifg) ? ifg : `${ifg} dB`) : '';
+      return [lna !== '' ? `RF LNA ${lna}` : '', ifv ? `IF ${ifv}` : ''].filter(Boolean).join(' · ') || t('rspSysGain'); } };
   if (d === 'airspyhf' && document.getElementById('ahfAgc')) return { agc: 'ahfAgc', slider: 'ahfAtt', name: nameOf('ahfAgc', 'AGC'),
     val: () => `ATT ${(document.getElementById('ahfAttVal')?.textContent || '').trim()}` };
   return null;
 }
 /* ★ Stuart 15:35 ("no more gain options button yet"): the RTL's MORE is every hardware row the page has for it — the tuner
  *  bandwidth, PPM, bias-T, the RTL2832's digital AGC, direct sampling — each lent as its whole row (the element's .mrow) */
-const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw', 'ppm', 'biasT', 'agc', 'dsSeg'], sdrplay: ['rspCtls'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
+const MORE_IDS: Record<string, string[]> = { rtl: ['rowTunerBw', 'ppm', 'biasT', 'agc', 'dsSeg'], sdrplay: ['rspCtls', 'rowTunerBw', 'ppm'], airspyhf: ['ahfCtls'], hackrf: ['hrfCtls'], usrp: ['usrpCtls'], airspy: ['aspCtls'] };
 const gainHome = new Map<HTMLElement, { parent: Node; next: Node | null }>();
 let gainMoreOpen = false, gainPwOpen = false;
 function mapGainLend(on: boolean) {
@@ -4282,7 +4290,8 @@ function mapGainRender() {
     const val = '<span class="gVal" aria-live="off"></span>';
     const lock = locked ? `<button type="button" class="gLock" aria-label="Gain locked by the owner — enter the admin password" title="Locked by the owner — enter the admin password">\u{1F512}</button>`
       : adminUnlocked && hwGainLocked ? '<span class="gLock open" title="Unlocked with the admin password">\u{1F513}</span>' : '';
-    const moreB = hasMore ? `<button type="button" class="gMoreB" aria-expanded="${gainMoreOpen}" aria-label="More radio controls">⌄</button>` : '';
+    // ★ ⌄ is not offered while the owner's lock holds (🔒 unlocks inline first) or when the driver lends nothing
+    const moreB = hasMore && !locked ? `<button type="button" class="gMoreB" aria-expanded="${gainMoreOpen}" aria-label="More radio controls">⌄</button>` : '';
     const manual = g && sl && !agcOn && !locked;
     row.innerHTML = g ? (manual ? `<input type="range" class="gSl" min="${sl!.min}" max="${sl!.max}" step="${sl!.step || 1}" aria-label="Gain">${val}${agc}` : `${agc}${val}${lock}`) + moreB : moreB;
     row.hidden = !g && !hasMore;
@@ -4301,7 +4310,9 @@ function mapGainRender() {
   if (sv && sl && document.activeElement !== sv && sv.value !== sl.value) sv.value = sl.value;
   const vEl = row.querySelector('.gVal') as HTMLElement | null;
   if (vEl && g) { const t = g.val(); if (vEl.textContent !== t) vEl.textContent = t; }
-  more.hidden = !gainMoreOpen;
+  more.hidden = !gainMoreOpen || locked;
+  // ★★ locked by the owner: the lent controls show their values read-only (the 🔒 above unlocks them inline)
+  if (more.inert !== locked) { more.inert = locked; more.classList.toggle('gRo', locked); }
   if (!locked && gainPwOpen) { gainPwOpen = false; mapGainPw(pw); }
 }
 /** 🔒 → the page's own admin unlock (doAdminUnlock: the same request, ticket and rate limit), inline in the card. */
@@ -4327,7 +4338,7 @@ function mapChromeAdopt(on: boolean) {
   mapGainLend(on);
   for (const v of [asView, ismMapView, ismGalView]) if (v) {   // ★★★ V12 every live map over this radio offers the waterfall
     v.onWaterfall = mapWfShow;
-    if (on && v.open) v.setWaterfall(!!spec);
+    if (on && v.open) v.setWaterfall(!!spec && specPauseOk);   // ★★★ beta97 only where the server can pause the spectrum
   }
   if (!on && mapWfInst) { mapWfShow(null); mapWfEnd(); }
   const h = document.getElementById('srvHealth');
@@ -10027,7 +10038,7 @@ function adsbUiOff() {
  *  bar; NEWEST / FURTHEST / LONGEST TRACKED under the list's header (AIRCRAFT only); the antenna warning and the gain
  *  pop-over over the map. Idempotent (every render). Parked back in #adsbChrome (hidden) when ADS-B ends. */
 function adsbChromeMount(v: TrackView, tab: string) {
-  const top = v.slot('top'), head = v.slot('head'), over = v.slot('over');
+  const head = v.slot('head'), over = v.slot('over');
   // ★★★ beta96 map cards: GAIN and the capture warning are the TUNE card's (they set the radio); CHAT stays in the bar
   const tune = v.slot('tune');
   for (const id of ['adsbCapture', 'adsbGain']) { const el = $(id); if (el.parentElement !== tune) tune.appendChild(el); }
@@ -10593,7 +10604,6 @@ let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_K
  *  WEATHER. Opened from NAVTEX's MAP, a DSC call's MAP, the gallery's rows — each with its own layer first — and AIS
  *  mode's own map gains the other layers. A layer with no data here is absent (no toggle). */
 let shipLayers: ShipLayers = shipLayersOf(lsGet(SHIP_LAYERS_KEY), lsGet(NAV_LAYERS_KEY));
-let shipFocus: ShipFocus = 'navtex';
 let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null; ships: StoredShips | null; dscG: DscPin2[] } = { st: null, w: null, m: null, ships: null, dscG: [] };
 /** ★★★ beta96 the shipping layers' sources as the AIR & SEA map draws them — navLast and the live AIS report, or the same
  *  through the map's scope (airSeaScope.ts: OTHER RADIOS ON THIS SERVER, THIS SESSION). `dscOk` = this box's own calls. */
@@ -10889,6 +10899,7 @@ async function ismGalMapOpen(it0: GalleryItem) {
     const all = ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
     known = ismRouteKnown(all, rx);   // ★★ beta96 every day's repeaters may place a route
     const nodes = ismInRange(all, range).filter((d) => ismPlotted(d, rx));
+    ismMarkSuspects(nodes, known, rx);   // ★★ a suspect claimed position: "?", never the furthest or framed
     shown = nodes;
     const mi = ismMilesPref();
     ismGalView?.setSort(meshSortOffered(meshSort, rx), (v) => meshSortSet(v, draw), 'nodes');   // ★★ beta96 NEAREST | LATEST
@@ -10949,6 +10960,7 @@ function ismMapRender() {
   ismMapView.setScope(othersOk ? { label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS, on: mapOthers } : null, (on) => mapOthersSet(on, ismMapRender));
   ismMapView.setScopeNote(asScopeWords(isc, othersOk));
   const items = r ? r.devices.filter((d) => ismPlotted(d, myPos())) : [];   // ★★ beta96 an implausible fix is never drawn
+  ismMarkSuspects(items, ismKnown, myPos());   // ★★ a suspect claimed position: "?", never the furthest or framed
   ismMapDevs = items;
   const mi = ismMilesPref();
   ismMapView.setSort(meshSortOffered(meshSort, myPos()), (v) => meshSortSet(v, ismMapRender), 'nodes');   // ★★ beta96 NEAREST | LATEST
@@ -11051,7 +11063,14 @@ function avReadCap(j: any) {
     avCap = { ok: false, why: why || 'The aircraft datalink is not available on this receiver' };
   } else avCap = null;
   avBands = parseAvBands(j?.avdataBands);
+  // ★★★ beta97 the fly-over waterfall swap needs the server's spectrum pause (hwinfo specPause) — absent: no ≋ at all
+  const sp = j?.specPause === 1;
+  specPauseSet(sp);
 }
+let specPauseOk = false;
+function specPauseSet(sp: boolean) { if (sp === specPauseOk) return; specPauseOk = sp; if (mapShOpenView()) mapChromeAdopt(true); }
+/** ★ for the drivers (test-web-map-waterfall): an older server (no specPause) — the swap must go */
+(window as any).__vibeSpecPauseSet = (on: boolean) => { specPauseSet(!!on); };
 /* ★★★ V12 2026-11-16 THE AVIATION MAP (src/services/aviationMap.ts, docs/v12/AVIATION.md §The aviation map) — the shipping
  *  map's shape for aircraft: ADS-B, ACARS, VDL2, HFDL and ADS-C on ONE map, each aircraft once with the sources that heard
  *  it, from GET /vibeserver/aircraft.json (vibe_aircraft_share.h — every radio on this server writes it). The DATALINK
@@ -11213,6 +11232,8 @@ function asOpen(o: { by?: 'mode' | 'map'; box?: LiveMode; tab?: LiveTab | null; 
   if (!wasOpen) { asSessSt = sessionStart(null, asMode(), Math.floor(Date.now() / 1000), true); asSess = false; asFirst.clear(); }
   if (!asView) {
     asView = new TrackView(asViewOpts());
+    // ★★★ beta97 NDB's beacons are LIST rows (ndb:<id>): a tap chooses the beacon — its marker, its card
+    asView.onRow = (k) => { if (k.startsWith('ndb:') && !k.startsWith('ndb:tile:')) ndbView?.select(Number(k.slice(4)) || 0, true); };
     // ★★ tap an aircraft (its row or its icon) → MESSAGES shows its messages only; a message row finds its aircraft
     asView.onSel = (k) => { if (k.startsWith('a:') && k !== asMsgKey) { asMsgKey = k; if (asView?.tab === 'messages') asRender(); } };
   }
@@ -11251,10 +11272,6 @@ async function asStoredPoll() {
 function asStoredStart() {
   void asStoredPoll();
   if (!asStoredT) asStoredT = setInterval(() => { void asStoredPoll(); }, 120_000);
-}
-/** ★ beta96 ADS-B's chips (NEWEST / FURTHEST / LONGEST TRACKED): that aircraft on the map, its row lit. */
-function asFocusAircraft(hex: string) {
-  if (!asView?.focus(`adsb:${cleanHex(hex)}`)) showPill('No position heard from that aircraft yet — it is not on the map', 3500);
 }
 /** EXIT <MODE> leaves the mode (the map goes with it); CLOSE MAP puts the map away and the mode carries on. */
 function asExit() {
@@ -11489,11 +11506,13 @@ function asRender() {
   /* ★★ Stuart 15:31: which layers are live on ANOTHER of this server's radios or its feeds (the same table SOURCES and
    *  RATE read — no fetch): an aircraft heard in the last minute, by a radio that is not this one, on that layer's mode */
   const others = new Map<string, Set<string>>();
+  const nMine = new Map<string, number>();   // ★★ Stuart 11-27: this radio's own count beside the other sources' (split rows)
   { const SRC_LAYER: Record<string, string> = { 'ADS-B': 'adsb', VDL2: 'vdl2', ACARS: 'acars', HFDL: 'hfdl', 'ADS-C': 'adsc' };
     const feedName = (avShared?.feeds ?? []).map((f) => f.title).filter(Boolean)[0] || 'FEED';
     for (const p of avShared?.aircraft ?? []) {
       if (!(p.age < 60)) continue;
       const rs: string[] = Array.isArray((p as any).radios) ? (p as any).radios : [];
+      if (asOnRadio() && rs.includes(mapMine)) for (const s of p.src) { const id = SRC_LAYER[s]; if (id) nMine.set(id, (nMine.get(id) ?? 0) + 1); }
       for (const r of rs) {
         if (r === mapMine && asOnRadio()) continue;
         const name = r === 'feed' ? feedName : asRadioNames?.get(r) ?? 'SDR';
@@ -11502,7 +11521,8 @@ function asRender() {
     }
   }
   v.setToggles(liveChips(present, live).map((c) => ({ ...c, n: c.id === 'airports' || c.id === 'areas' ? undefined : have[c.id] ?? undefined, colour: AS_CHIP_COLOUR[c.id],
-                                                    others: others.has(c.id) ? [...others.get(c.id)!] : undefined })),
+                                                    others: others.has(c.id) ? [...others.get(c.id)!] : undefined,
+                                                    nMine: c.live && others.has(c.id) ? (c.id === 'adsb' && adsbOn && adsbR ? Math.max(nMine.get('adsb') ?? 0, (adsbR.aircraft as any[]).length) : nMine.get(c.id) ?? 0) : undefined })),
                Object.fromEntries(present.map((id) => [id, on(id)])));
   // ★★★ beta96 OTHER RADIOS ON THIS SERVER: a SHOW chip of its own (only with 2+ sources, only on a radio)
   v.setScope(null, () => { /* ★ tweak 3: SOURCES in MAP CONTROLS (asCardsSync) */ });
@@ -11564,8 +11584,8 @@ function asRender() {
   v.setTabs(tabs.map((t) => ({ id: t, label: TAB_LABEL[t], n: t === 'messages' ? msgFilter(asMsgs, asMsgKey).length : tabHave[t] ?? 0 })), tab, (t) => { asPicked = t as LiveTab; asRender(); });
   // ★★ ADS-B live: one list like every other (Stuart 16:53) — nearest / latest
   if (adsbOn) { adsbChromeMount(v, tab); adsbRender(); }
-  // ★★ beta96 stage 8 NDB live: its pieces in the map's slots (the list under NAVAIDS), its layer on the map
-  if (ndbOn && ndbView) { ndbView.mount(v); ndbView.setTab(tab === 'navaids'); ndbView.setShown(on('ndb')); }
+  // ★★ beta96 stage 8 NDB live: its controls in MAP CONTROLS, its layer on the map; beta97 its beacons in the ONE LIST
+  if (ndbOn && ndbView) { ndbView.mount(v); ndbView.setShown(on('ndb')); }
   v.setSort(tab === 'aircraft' ? asSort : null, (s) => { asSort = s === 'latest' ? 'latest' : 'nearest'; try { localStorage.setItem(AS_SORT_KEY, asSort); } catch { /* private */ } asRender(); });
   const msgWho = asMsgKey ? asMsgs.find((m) => m.key === asMsgKey)?.who || avc.planes.find((p) => `a:${p.key}` === asMsgKey)?.flight || asMsgKey.replace(/^a:/, '') : '';
   v.setFilter(tab === 'messages' && asMsgKey ? `Messages from ${msgWho}` : '', () => { asMsgKey = ''; asRender(); });
@@ -11606,8 +11626,9 @@ function asRender() {
     rows = shc.by(['stations', 'weather', 'warnings']);
   } else if (tab === 'navaids') {
     // ★ stage 8 the VOR map's list (the FIX's words first), keyed as its map items
-    rows = vmOn ? vorMapRows(vmR).replace(/data-key="/g, 'data-key="vor:')   // ★ NDB's list is its own (#ndbList, under the header)
-      : on('vor') && vmSt.length ? asSec('VOR STATIONS — REMEMBERED') + storedVorRows(vmSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
+    rows = vmOn ? vorMapRows(vmR).replace(/data-key="/g, 'data-key="vor:')
+      : (ndbOn && ndbView ? asSec('NDB — BEACONS HEARD') + ndbView.rowsHtml() : '')   // ★★★ beta97 the beacons are rows of the ONE LIST
+        + (on('vor') && vmSt.length ? asSec('VOR STATIONS — REMEMBERED') + storedVorRows(vmSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '');
   } else if (tab === 'sondes') {
     rows = sdOn ? sondeRows(sdR).replace(/data-key="/g, 'data-key="sd:')
       : on('sondes') ? storedSondeRows(sdSt, nowStored, rx).slice(0, LIVE_ROW_CAP).map(trkRowHtml).join('') : '';
@@ -11689,6 +11710,7 @@ function asStatsSync(v: TrackView, rx: { lat: number; lon: number } | null) {
     if (old) { const mins = Math.round((now - (old[1].first || asStatsOpened)) / 60000); if (mins >= 1) pick('LONGEST TRACKED', old, `${mins} min${old[1].first ? '' : '+'}`); }
     if (rows.length) sections.push({ mode, rows });
   }
+  { const ns = ndbOn ? ndbView?.statsSection() : null; if (ns && ns.rows.length) sections.push(ns); }   // ★★★ beta97 NDB's tiles
   v.setStats(sections);
 }
 /** ★★★ tweak 3 the SOURCES the viewer hid (this browser's own view, never sent) — radio ids and 'feed'. */
@@ -15794,11 +15816,6 @@ function renderDscKeys() {
     host.appendChild(b);
   }
   for (const ch of channels) host.appendChild(dscKey(ch, dscChannelOn(ch, dial, md)));
-}
-function openDscMap(calls: DscCall[]) {
-  const pins: DscPin[] = calls.filter((c) => c.lat !== null && c.lon !== null)
-    .map((c) => ({ lat: c.lat as number, lon: c.lon as number, label: c.line, level: c.level }));
-  openPinsMap(pins);
 }
 function openPinsMap(pins: DscPin[]) {
   if (!pins.length) return;
@@ -26225,15 +26242,22 @@ function initKeyboard() {
   // ★★ The controller keyboard listens first (capture): it needs to know whether a hand, a keyboard or a pad acted last.
   initPadKeyboard();
   initGamepad({
-    tune: (d) => { if (spec) nudge(d * step); },
+    // ★★★ V12 ON A MAP (Stuart's scheme): tune only where TUNE applies — a locked dial gives the ask pulse, never a tune;
+    //     zoom = the MAP's zoom (its own keys), never the spectrum under it
+    tune: (d) => {
+      const mv = mapShOpenView()?.v;
+      if (mv) { if (!mv.canTune) return; const lk = mv.dialLocked; if (lk.why) { mv.onDialLocked?.(lk.why); return; } }
+      if (spec) nudge(d * step);
+    },
     swapVfo: () => spec?.swapVfo(),   // ★★ V12 VFO A/B — V on a keyboard, △ / START tap on a pad (gamepad.ts)
     typeFreq: (digit) => { if (spec) openFreqEntry(digit); },   // ★★ a digit typed on the page opens the box with it
-    zoom: (d) => { if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
+    zoom: (d) => { const mv = mapShOpenView()?.v; if (mv) { mv.zoomBy(d); return; } if (spec) { spec.zoomBy(d > 0 ? 1.25 : 0.8); updateViewOverlays(); } },
     back: () => {
       // ★ The admin panel is not a .open panel (it is shown by `hidden`), so it is asked for by name; it sits above all.
       const admin = document.getElementById('adminPanel');
       if (admin && !admin.hidden) { closeAdmin(); return true; }
-      const anyOpen = !!document.querySelector('.open');
+      // ★ the map's own chips (the open LIST's .open) are not a panel over the map
+      const anyOpen = [...document.querySelectorAll('.open')].some((e) => !e.closest('.trkView'));
       // ★★★ beta96 map cards: with nothing over the map, BACK shuts the map's top card before anything leaves the mode
       if (!anyOpen) { const mv = mapShOpenView()?.v; if (mv?.closeTopCard()) return true; }
       closePanels();

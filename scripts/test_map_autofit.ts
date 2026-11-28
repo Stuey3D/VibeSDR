@@ -259,7 +259,7 @@ console.log('── the GPU map (the compat adapter): easeTo with ADS-B\'s easin
 console.log('── every map uses it ──');
 {
   const app = readFileSync('src/components/MapOverlay.tsx', 'utf8');
-  const tracksWeb = readFileSync('web/client/src/tracks.ts', 'utf8');
+  const tracksWeb = readFileSync('web/client/src/tracks.ts', 'utf8') + readFileSync('web/client/src/mapChrome.ts', 'utf8');   // ★ the card system moved to mapChrome.ts
   const main = readFileSync('web/client/src/main.ts', 'utf8');
   const dsc = readFileSync('web/client/src/dsc.ts', 'utf8');
   const ndbWeb = readFileSync('web/client/src/ndb.ts', 'utf8');
@@ -290,7 +290,7 @@ console.log('── every map uses it ──');
      && /else\{trkSelNow=null;if\(trkSelHeld\)\{trkSelHeld=false;if\(st\.on&&st\.paused\)af\.resume\(\);\}\}/.test(app)
      && /onSelect:function\(k\)\{trkPost\(\{t:'trkSel',key:k==null\?null:String\(k\)\}\);trkSelFit\(k\);/.test(app),
      'app: a selection (row or tap) pauses it until FIT or the selection is cleared');
-  ok(/if \(!w\.VibeAutoFit\) runSource\(MAP_AUTOFIT_JS\);/.test(tracksWeb) && /this\.af = w\.VibeAutoFit\.attach\(map, \{\s*points: \(\) => \{ const p = layer\.points\(\); const m = this\.morePoints\?\.\(\); return m\?\.length \? \[\.\.\.p, \.\.\.m\] : p; \}, receiver: \(\) => layer\.receiver\(\), button: this\.fitBtn/.test(tracksWeb),
+  ok(/if \(!w\.VibeAutoFit\) runSource\(MAP_AUTOFIT_JS\);/.test(tracksWeb) && /this\.af = w\.VibeAutoFit\.attach\(map, \{\s*points: \(\) => \{[\s\S]{0,240}?const p = layer\.points\(\); const m = this\.morePoints\?\.\(\); return m\?\.length \? \[\.\.\.p, \.\.\.m\] : p;\s*\},\s*receiver: \(\) => layer\.receiver\(\), button: this\.fitBtn/.test(tracksWeb),
      'web: every track view (AIS, APRS, DSC, ISM + gallery, NAVTEX, sondes, datalink) — the FIT key is the auto fit\'s, with the receiver');
   ok(!/this\.autoFit\b|fitKeys/.test(tracksWeb), 'web: the old per-view fit-on-new-item logic is gone (one implementation)');
   ok(/this\.fitBtn\.hidden = !!this\.acLayer;/.test(tracksWeb), 'web: the aviation map keeps the ADS-B layer\'s AUTO / FIT');

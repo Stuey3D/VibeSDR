@@ -27905,6 +27905,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *  on an older server and must treat <= -100 as off, or it would draw a gate
                        *  the server is not applying. */
                       + ",\"sqlOn\":true"
+                      /* ★★★ beta97 the spectrum pause (spec on:0 / on:1) and the map modes' 1 fps floor — the map's fly-over
+                       *  waterfall swap is offered only where this is present (also in vibeserver.json, vsTunableJson) */
+                      + ",\"specPause\":1"
                       /* ★ V12: this server sends the full-capture row (SPWB) to a spectrum socket that asks `wide=1`. */
                       + ",\"wide\":" + std::to_string(kWideVersion)
                       /* ★★ V12 VFO A/B: how many watch channels a listener may add here (0 = none — no toggle). */
@@ -48569,6 +48572,10 @@ static std::string vsTunableJson() {
      *  where the radio reaches neither band (HF-only radios, an Icom: AGENTS.md; the HF+ reaches both, since 2026-11-24).
      *  `avdataBands`: the bands THIS radio reaches AND may run, in step order — "ACARS + VDL2" only where the running capture
      *  holds it or the owner's 8 MS/s switch will raise it (vsAvdataReach; the report's rateNote says so while it is). `avdataText`: the owner switched message bodies on (shown to the owner only). */
+    /* ★★★ beta97 `specPause`: this server pauses and resumes a listener's spectrum on request (spec on:0 / on:1) and runs a
+     *  map mode's display at the 1 fps floor while no drawer waterfall is open — the map's fly-over WATERFALL swap needs it,
+     *  so a client offers ≋ only where this is present (a pre-beta97 server would keep the full rate under every map). */
+    j += ",\"specPause\":1";
     if (vsAvdataAnyBand()) {
         const std::string why = vsAvdataWhyNot(nullptr);
         j += std::string(",\"avdata\":") + (why.empty() ? "true" : "false");
