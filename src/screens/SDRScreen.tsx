@@ -17,7 +17,7 @@
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { hfdlStatusText, parseAvReport, type AvBand, type AvReport } from '../services/aviation';   // ★ V12 aviation
-import { AV_EMPTY, AV_SRC, avCompose, avHave, avLayersOf, avMerge, avNowRule, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';
+import { AV_EMPTY, AV_SRC, avCompose, avHave, avHavePos, avLayersOf, avMerge, avNowRule, sharedSanitise, type AvLayers, type SharedAircraft } from '../services/aviationMap';
 // ★★★ V12 beta96 THE TWO LIVE MAPS (docs/v12/ONE-MAP.md) — the AIR & SEA map's rules (the web's too)
 import { chipHex } from '../services/adsbList';   // ★ beta96 stage 6 the live ADS-B aircraft on the AIR & SEA map
 import { liveChrome, livePresent, liveChips, liveProfile, liveTabs, liveTabPick, aircraftOrder, msgFeedUpdate, msgFilter, avSnrByKey, avLayerOf, shipLayerOf,
@@ -294,7 +294,7 @@ import SpecRatioOverlay  from '../components/SpecRatioOverlay';
 import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMiniWaterfall';   // ★★★ beta97 the map drawer's waterfall
 import type { MapCardsIn } from '../components/MapChrome';
-import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers, layerOtherCounts } from '../utils/mapChrome';
+import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers, layerOtherCounts, layerPosWords } from '../utils/mapChrome';
 import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
 import { avBandFor, wfModelChannels, wfModelIsm, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
@@ -13104,7 +13104,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     const present = livePresent('airsea', have, live, aviationAny ? ['airports'] : []).filter((id) => have[id] || live.layers.includes(id) || id === 'airports');
     const navWin = present.some((id) => shipLayerOf(id) != null && id !== 'areas');   // ★ the maritime time window is drawn
     // ★★★ beta96 SHOW's counts (the web's asRender `have`): what each layer holds now, through the scope
-    const avhN = avHave(avNowRule(avMerge(avOn ? avReportS : null, avSharedS), avSharedS).planes, avSharedS?.stations ?? []);
+    const avPlanesNow = avNowRule(avMerge(avOn ? avReportS : null, avSharedS), avSharedS).planes;
+    const avhN = avHave(avPlanesNow, avSharedS?.stations ?? []);
+    /* ★★★ beta97 hotfix (Stuart: ✈ 28 with nothing drawn — none had a position) how many of each layer the map can DRAW */
+    const avhP = avHavePos(avPlanesNow);
+    const adsbPosN = adsbLiveHere && adsbReportS ? (adsbReportS.aircraft as unknown as Array<{ lat?: unknown; lon?: unknown }>).filter((a) => a.lat != null && a.lon != null).length : undefined;
+    const showPos: Partial<Record<LiveLayerId, number>> = { adsb: adsbLiveHere ? adsbPosN : avhP.adsb, acars: avhP.acars, vdl2: avhP.vdl2, hfdl: avhP.hfdl, adsc: avhP.adsc };
     const nowN = navWarnRepS?.now ?? navMetRepS?.now ?? navReportS?.now ?? Math.floor(Date.now() / 1000);
     const showN: Partial<Record<LiveLayerId, number>> = {
       adsb: adsbLiveHere ? (adsbReportS?.aircraft.length ?? 0) : avhN.adsb, acars: avhN.acars, vdl2: avhN.vdl2, hfdl: avhN.hfdl, adsc: avhN.adsc, hfdlst: avhN.stations,
@@ -13187,6 +13192,10 @@ export default function SDRScreen({ route, navigation }: Props) {
               ...adsbItems, ...(aviationAny ? (av.items as TrackItem[]).filter((it) => !isLiveAc((it._adsb as { hex?: unknown } | undefined)?.hex)) : []), ...ship.items],
       rows,
       status: [asOthersOffered && !mapOthers ? 'Only this radio\u2019s own decodes' : '',   // ★★★ beta96 what the scope hides, first
+               // ★★★ beta97 hotfix the aircraft in words where some cannot be drawn: "25 aircraft · 0 with position"
+               (() => { const n = (['adsb', 'acars', 'vdl2', 'hfdl', 'adsc'] as LiveLayerId[]).reduce((a, id) => Math.max(a, showN[id] ?? 0), 0);
+                        const pn = (['adsb', 'acars', 'vdl2', 'hfdl', 'adsc'] as LiveLayerId[]).reduce((a, id) => Math.max(a, showPos[id] ?? 0), 0);
+                        return n > 0 && pn < n ? layerPosWords(n, pn, 'aircraft', 'aircraft') : ''; })(),
                asSc.t0 ? `Only what was first heard since ${new Date(asSc.t0 * 1000).toISOString().slice(11, 16)} UTC (this session)` : '',
                adsbLiveHere ? adsbStatusLine : '', vmLive ? vmTrk.status : '', vmMem && on('vor') ? storedStatus('vormap', vmStoredS.length) : '', sdMem && on('sondes') ? storedStatus('sondes', sdStoredS.length) : '', ndbLive ? (ndbReportS ? `NDB ${ndbStatText(ndbReportS)}` : 'NDB \u2014 taking the receiver to the beacon band\u2026') : '', sdLive ? sdTrk.status : '', aviationAny ? av.status : '', ship.status].filter(Boolean).join(' \u00b7 '),
       empty: tab === 'navaids' ? (ndbLive ? '' : vmTrk.empty) : tab === 'sondes' ? sdTrk.empty : tab === 'aircraft' ? AV_EMPTY : tab === 'messages' ? 'No datalink messages yet. ACARS, VDL2 and HFDL each add theirs \u2014 on any radio of this server.' : ship.empty,
@@ -13198,7 +13207,8 @@ export default function SDRScreen({ route, navigation }: Props) {
                   /* ★★★ beta97 LAYERS' outlined LIVE: another of this server's radios or its feeds heard it in the last minute */
                   live: c.live, others: asOthersElsewhere[c.id],
                   /* ★★★ beta97 BOTH counts where this radio and others hold the layer (Stuart, build 587: "LIVE 0" with 33 from PiAware) */
-                  nOther: c.live && asOthersElsewhere[c.id]?.length ? asOthersN[c.id] ?? 0 : undefined })),
+                  nOther: c.live && asOthersElsewhere[c.id]?.length ? asOthersN[c.id] ?? 0 : undefined,
+                  nPos: showPos[c.id] })),
                 ...(asOthersOffered ? [{ id: OTHER_RADIOS_CHIP, label: OTHER_RADIOS_LABEL, words: OTHER_RADIOS_WORDS }] : [])],
       toggled: asOthersOffered ? { ...toggled, [OTHER_RADIOS_CHIP]: mapOthers } : toggled,
 

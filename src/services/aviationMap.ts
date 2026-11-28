@@ -288,6 +288,13 @@ export function avHave(planes: AvPlane[], stations: AvStation[]): AvHave {
   for (const p of planes) for (const s of p.src) { const id = SRC_LAYER[s]; if (id) h[id]++; }
   return h;
 }
+/** ★★★ beta97 hotfix (Stuart: the LAYERS chip said ✈ 28 with no aircraft drawn — none had sent a position) the same counts,
+ *  only the aircraft WITH a position (what the map can draw). Beside avHave: "0/25" and "25 aircraft · 0 with position". */
+export function avHavePos(planes: AvPlane[]): Omit<AvHave, 'stations'> {
+  const h = { adsb: 0, acars: 0, vdl2: 0, hfdl: 0, adsc: 0 };
+  for (const p of planes) if (p.lat != null && p.lon != null) for (const s of p.src) { const id = SRC_LAYER[s] as keyof typeof h | undefined; if (id && id in h) h[id]++; }
+  return h;
+}
 /** ★ Drawn while ANY source that heard it is shown. */
 export function avVisible(p: AvPlane, present: AvLayerId[], layers: AvLayers): boolean {
   return p.src.some((s) => { const id = SRC_LAYER[s]; return !!id && avOn(id, present, layers); });

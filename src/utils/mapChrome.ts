@@ -619,16 +619,28 @@ export const LAYER_FAMILY: Record<string, 'aircraft' | 'ship' | 'navtex' | 'ball
   adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', adsc: 'aircraft',
   ships: 'ship', dsc: 'ship', navst: 'navtex', sondes: 'balloon', vor: 'beacon', ndb: 'beacon',
 };
-export function layerFamilies(rows: Array<{ id: string; n?: number; nOther?: number; live?: boolean; others?: string[]; colour?: string }>, toggled: Record<string, boolean>): Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> {
-  const out: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string }> = [];
+export function layerFamilies(rows: Array<{ id: string; n?: number; nOther?: number; nPos?: number; live?: boolean; others?: string[]; colour?: string }>, toggled: Record<string, boolean>): Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string; pos?: number }> {
+  const out: Array<{ glyph: 'aircraft' | 'ship' | 'navtex' | 'balloon' | 'beacon'; n: number; colour: string; pos?: number }> = [];
   for (const r of rows) {
     const f = LAYER_FAMILY[r.id];
     const n = layerSplit(r).total;   // ★★★ beta97 the row's TOTAL (both sources), never only this radio's
     if (!f || toggled[r.id] === false || !(n && n > 0)) continue;
+    const pos = r.nPos != null ? Math.min(n, r.nPos) : n;   // ★★★ beta97 hotfix how many of them the map can draw
     const have = out.find((x) => x.glyph === f);
-    if (have) have.n += n; else out.push({ glyph: f, n, colour: r.colour || '#9fb0c2' });
+    if (have) { have.n += n; have.pos = (have.pos ?? 0) + pos; } else out.push({ glyph: f, n, colour: r.colour || '#9fb0c2', pos });
   }
   return out;
+}
+
+/** ★★★ beta97 hotfix (Stuart: "25 aircraft 0 position messages") A COUNT THAT SAYS HOW MANY ARE ON THE MAP: "0/25" (on the map /
+ *  heard) when they differ, else the one number — the LAYERS chip and its rows. */
+export function layerCountText(n: number, pos?: number | null): string {
+  return pos != null && pos !== n ? `${Math.max(0, Math.min(n, pos))}/${n}` : String(n);
+}
+/** …and in words, for the LIST's line and a screen reader: "25 aircraft · 0 with position" (one number when all are placed). */
+export function layerPosWords(n: number, pos: number | null | undefined, noun: string, plural = noun + 's'): string {
+  const what = `${n} ${n === 1 ? noun : plural}`;
+  return pos != null && pos !== n ? `${what} \u00b7 ${Math.max(0, Math.min(n, pos))} with position` : what;
 }
 
 /** The credits' (i) folds itself away this long after the map opens, or at the first touch (Stuart). */

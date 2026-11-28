@@ -5,8 +5,9 @@
 //   npx tsx scripts/test_map_chrome.ts
 import { readFileSync } from 'node:fs';
 import { adsbRowSizes } from '../src/services/adsbList';
+import { avHave, avHavePos } from '../src/services/aviationMap';
 import { chromeGeom, cardBox, listRowsFor, listWidthFor, liveBadges, rateRows, rateChip, gainRowFor, mapSpecWanted, mwfCrop, mwfDue, mwfDims, mwfX,
-         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, FTAB_H, LIST_CHIP_H, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillBox, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
+         pillWords, padOrder, listFlowStep, chromeScale, chromeGeomAt, cardBoxAt, CHIP_ORDER, TAB_H, serversRows, sourceRows, layerOthers, fitGroupOf, fitGroups, fitMainOf, BR_ROW_W, GAP, cardRise, itemCardArea, listStops, layerCountText, layerPosWords, FTAB_H, LIST_CHIP_H, layerOtherCounts, layerSplit, layerFamilies as layerFamiliesX, pillBox, feedNotice, type ChipId, type ChromeGeom } from '../src/utils/mapChrome';
 import { scopeRadioOk, scopeList } from '../src/services/mapScope';
 import { wfModelChannels, wfModelNdb } from '../src/utils/mapWfModel';
 import { revealScrollTarget } from '../src/utils/navReveal';
@@ -350,6 +351,27 @@ ok(mapSpecWanted({ mapUp: true, live: true, wfOpen: true }), 'a LIVE map with th
   ok(worst < 1, `|pill centre − window centre| < 1 pt on every size, RATE width and LIST state, never outside its band${where ? ' (worst ' + worst.toFixed(2) + ' at ' + where + ')' : ''}`);
   const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
   ok(/left: box\.left,/.test(mc) && !/pillLeft/.test(mc), 'the pill is placed by pillBox only (centred), never slid');
+}
+
+// ── ★★★ beta97 hotfix ON THE MAP / HEARD (Stuart: ✈ 28 with nothing drawn — "25 aircraft 0 position messages") ──
+{
+  const planes = (pos: boolean) => Array.from({ length: 25 }, (_, i) => ({ key: `A${i}`, src: ['VDL2'], ...(pos ? { lat: 51 + i / 100, lon: -1 } : {}) })) as never;
+  const none = avHavePos(planes(false)), all = avHavePos(planes(true));
+  const heard = avHave(planes(false), []);
+  ok(heard.vdl2 === 25 && none.vdl2 === 0 && all.vdl2 === 25, 'the same table counted twice: heard 25; with a position 0 (none) / 25 (all)');
+  ok(layerCountText(25, 0) === '0/25' && layerCountText(25, 25) === '25' && layerCountText(25, undefined) === '25', 'the count: "0/25" when they differ, else the one number');
+  ok(layerPosWords(25, 0, 'aircraft', 'aircraft') === '25 aircraft \u00b7 0 with position' && layerPosWords(25, 25, 'aircraft', 'aircraft') === '25 aircraft', 'in words: "25 aircraft · 0 with position"; all placed: "25 aircraft"');
+  const famNone = layerFamiliesX([{ id: 'vdl2', n: 25, nPos: 0, colour: '#7ee787' }, { id: 'navst', n: 46 }], {});
+  ok(famNone[0].glyph === 'aircraft' && famNone[0].n === 25 && famNone[0].pos === 0 && layerCountText(famNone[0].n, famNone[0].pos) === '0/25', 'the LAYERS chip: ✈ 0/25 (the family never vanishes)');
+  ok(famNone[1].pos === 46 && layerCountText(famNone[1].n, famNone[1].pos) === '46', 'a layer whose items all have places: its one number');
+  const famAll = layerFamiliesX([{ id: 'vdl2', n: 25, nPos: 25 }], {});
+  ok(layerCountText(famAll[0].n, famAll[0].pos) === '25', 'all positioned: a single number');
+  const mc = readFileSync(new URL('../src/components/MapChrome.tsx', import.meta.url), 'utf8');
+  const sdr = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
+  const sa = readFileSync(new URL('../src/services/airSeaStandalone.ts', import.meta.url), 'utf8');
+  ok(/const famCount = \(f: \{ n: number; pos\?: number \}\) => \(f\.n > 999 \? '999\+' : layerCountText\(f\.n, f\.pos\)\);/.test(mc) && /\{famCount\(f\)\}<\/Text>/.test(mc), 'the chip draws n/m in the family\'s slot (and sizes itself to it)');
+  ok(/\{layerCountText\(r\.n, r\.nPos\)\}/.test(mc) && /, \$\{r\.nPos\} with position/.test(mc), 'the LAYERS row: "0/25", its words say how many have a position');
+  ok(/nPos: showPos\[c\.id\] \}\)\),/.test(sdr) && /layerPosWords\(n, pn, 'aircraft', 'aircraft'\)/.test(sdr) && /nPos: avPos\[c\.id\]/.test(sa), 'the radio\'s map and the VIEWS viewer both carry it; the LIST\'s line says it in words');
 }
 
 // ── the pill's words ──
