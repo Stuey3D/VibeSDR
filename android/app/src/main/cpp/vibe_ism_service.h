@@ -732,6 +732,12 @@ public:
                           "\"mapped\":%zu,\"dropped\":%llu", loraChans_ - std::min(loraChans_, lora_.foundRun()), lora_.planSize(), lora_.detectors(), (unsigned long long)ok,
                           (unsigned long long)bc, (unsigned long long)mesh_.texts(), mesh_.nodesWithPosition(), (unsigned long long)lora_.dropped());
             o += b;
+            /* ★★ beta97 hotfix (Stuart, the MeshCore map's waterfall at 868.600 was the dial's 13 kHz — four flat bins): every
+             *  running channel's centre, width and network, so the map's waterfall fits the DECODER's channels */
+            { o += ",\"chs\":[";
+              bool f1 = true;
+              for (const auto& c : lora_.channelSpans()) { std::snprintf(b, sizeof b, "%s{\"hz\":%.0f,\"bw\":%.0f,\"net\":\"%s\"}", f1 ? "" : ",", c.hz, c.bw, c.net ? c.net : ""); o += b; f1 = false; }
+              o += "]"; }
             /* ★ V12 FOUND ON AIR, said honestly: `found` the found channels running, `foundKnown` those known on this band
              *  (more than `found` = the CPU budget holds the rest back), `foundList` each one — the clients say
              *  "LoRa: 3 plan channels + 2 found on air". `chans` above counts the plan channels only. */

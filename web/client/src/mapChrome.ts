@@ -269,6 +269,13 @@ const CSS = `
  *  card is the chips' own muted green (index.html .edgeDock .hCard); the bright green is focus (:focus-visible / gpFocus)
  *  and a chip's own lit / open state only */
 .trkView{--chip-rim:rgba(120,200,120,.45)}
+/* ★★★ beta97 hotfix: an item's card (track layer) in the chip-free rectangle (noteTop), a smaller max height, its body
+ *  scrolling and its × always reachable at the top (sticky) */
+.trkView .vtl-card{top:var(--trk-vtl-t,10px)!important;right:var(--trk-vtl-r,10px)!important;left:auto!important;
+  max-width:min(320px,calc(100% - var(--trk-vtl-l,10px) - var(--trk-vtl-r,10px)))!important;
+  max-height:min(46vh,calc(100% - var(--trk-vtl-t,10px) - var(--trk-vtl-b,10px)))!important;overscroll-behavior:contain}
+.trkView .vtl-card .vtl-x{position:sticky!important;float:right;top:-6px!important;right:auto!important;margin:-6px -8px 0 6px;z-index:2;
+  background:rgba(10,14,20,.94);border-radius:6px;min-width:30px;min-height:30px}
 /* ★★ map notices: a strip under the pill, between the chip columns (noteTop) — never over the pill or a chip */
 .trkView .trkMapHost .trkNote{top:var(--trk-note-top,12px)!important;max-width:calc(100% - var(--trk-note-l,12px) - var(--trk-note-r,12px))}
 .trkView #adsbFeedWarn,.trkView #adsbGainPop{top:var(--trk-note-top,8px)!important;left:var(--trk-note-l,12px)!important;right:var(--trk-note-r,12px)!important}
@@ -1371,6 +1378,34 @@ export class TrackView {
     const right = Math.max(12, R && R.bottom > m.top + top ? m.right - R.left + 8 : 12);
     const set = (k: string, v: string) => { if (st.getPropertyValue(k) !== v) st.setProperty(k, v); };
     set('--trk-note-top', `${Math.round(top)}px`); set('--trk-note-l', `${Math.round(left)}px`); set('--trk-note-r', `${Math.round(right)}px`);
+    /* ★★★ beta97 hotfix (Stuart, iPhone Safari: a MeshCore node's card stuck UNDER the chips, its × out of reach): an item's
+     *  card from the track layer (.vtl-card) stands in the same chip-free rectangle — under the pill / top row, between the
+     *  chip columns and the safe insets, above the LIST drawer and the bottom-right group — never under a chip */
+    const cs = getComputedStyle(this.root), px = (k: string) => parseFloat(cs.getPropertyValue(k)) || 0;
+    const B = short ? null : chipW('.trkCards .sideB'), BL = chipW('.mChipsBL'), BR = chipW('.mChipsScale') ?? chipW('.mHelp');
+    let bottom = 10 + px('--sai-b');
+    if (B && B.top > m.top + m.height / 3) bottom = Math.max(bottom, m.bottom - B.top + 8);
+    for (const g of [BL, BR]) if (g && g.top > m.top + m.height / 2) bottom = Math.max(bottom, m.bottom - g.top + 8);
+    /* the columns by what is DRAWN in them (a column's box can be wider than its chips), and the top row's exit / pill: the
+     *  card starts below whichever of those its width would reach */
+    const drawn = (sel: string) => { const col = this.root.querySelector(sel) as HTMLElement | null; if (!col) return null;
+      let u: { l: number; r: number; t: number; b: number } | null = null;
+      const add = (e: HTMLElement) => { const b = e.getBoundingClientRect(); if (!b.width || !b.height || getComputedStyle(e).visibility === 'hidden') return;
+        u = u ? { l: Math.min(u.l, b.left), r: Math.max(u.r, b.right), t: Math.min(u.t, b.top), b: Math.max(u.b, b.bottom) } : { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+      for (const c of Array.from(col.children) as HTMLElement[]) { if (c.hidden || !c.getClientRects().length) continue;
+        // a dock by its card and tab as drawn — a TUCKED dock's box keeps the hidden card's width, only its tab shows
+        const parts = Array.from(c.querySelectorAll(':scope > .hCard, :scope > .hTab, :scope .hCard, :scope .hTab')) as HTMLElement[];
+        if (parts.length) parts.forEach(add); else add(c); }
+      return u as { l: number; r: number; t: number; b: number } | null; };
+    const DL = drawn('.mChipsL'), DR = drawn('.mChipsR');
+    const vl = Math.max(10 + px('--sai-l'), P ? P.right - m.left + 8 : DL ? DL.r - m.left + 8 : 12);
+    const vr = Math.max(10 + px('--sai-r'), DR ? m.right - DR.l + 8 : 12);
+    let vt = top;
+    for (const e of Array.from(this.root.querySelectorAll('.trkTop .exit, .trkTop .slot-share .mapShLine, #mapShLine')) as HTMLElement[]) {
+      if (!e.getClientRects().length) continue; const b = e.getBoundingClientRect();
+      if (b.top < m.top + m.height / 3 && b.right > m.left + vl && b.left < m.right - vr) vt = Math.max(vt, b.bottom - m.top + 6); }
+    set('--trk-vtl-t', `${Math.round(vt)}px`); set('--trk-vtl-r', `${Math.round(vr)}px`);
+    set('--trk-vtl-l', `${Math.round(vl)}px`); set('--trk-vtl-b', `${Math.round(bottom)}px`);
   }
   private navScope() {
     if (!this.open) { this.root.removeAttribute('data-navscope'); return; }
@@ -1565,7 +1600,10 @@ export class TrackView {
     { /* ★★★ Stuart 11:48 "wrong layering": the LIST never grows over the chips on its edge — its top stops under the left
        *  column of chips (SERVERS, TUNE, LAYERS …), so every tab stays visible and pressable */
       const col = this.root.querySelector('.mChipsL') as HTMLElement | null, cb = col?.getBoundingClientRect();
-      const capTop = cb && cb.height ? Math.round(cb.bottom - m.top + 8) : 0;
+      /* ★★★ beta97 hotfix (found in the app): the drawer's TABS (maximise, list ↔ waterfall) stand 19 px proud of its top —
+       *  the cap is for the tabs too, so a tall LIST never puts its swap tab over the lowest left chip (MAP CONTROLS) */
+      const tabH = this.shortNow ? 0 : 19;
+      const capTop = cb && cb.height ? Math.round(cb.bottom - m.top + 8 + tabH) : 0;
       setv('--trk-cb-top', `${capTop}px`);
       /* ★★★ Stuart 11:59 "the list should be a fixed height and scrollable": its OWN height — about half the map, 240 to
        *  480 px, never more than the room under the chips — so it never jumps as rows come and go; only the rows scroll */

@@ -542,6 +542,9 @@ public:
     size_t planSize() const { return planSize_; }
     size_t detectors() const { return demods_.size(); }
     std::vector<std::string> channelNames() const { std::vector<std::string> v; for (auto* c : chosen_) v.push_back(c->name); return v; }
+    /** ★★ beta97 hotfix: each running channel's centre and width (Hz) and its network — the map drawer's waterfall fits them */
+    struct ChOut { double hz, bw; const char* net; };
+    std::vector<ChOut> channelSpans() const { std::vector<ChOut> v; for (auto* c : chosen_) v.push_back({ c->hz, c->bw, c->net }); return v; }
     /** Frames with a good CRC / headers that failed / CRCs that failed, across every detector (for the status). */
     void counts(uint64_t& ok, uint64_t& badHdr, uint64_t& badCrc) {
         std::lock_guard<std::mutex> lk(statMtx_); ok = okN_; badHdr = hdrN_; badCrc = crcN_;

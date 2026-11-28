@@ -102,11 +102,33 @@ export function wfModelChannels(band: { id: string; name: string; chans?: number
            info: `${band.name} · ${ch.length} channel${ch.length === 1 ? '' : 's'} · ${mhz3(a)}–${mhz3(z)} MHz` };
 }
 
+/** ★★★ beta97 hotfix (Stuart, the MeshCore map at 868.600: the waterfall was the dial's "USB 868.600 · 13 kHz" — four flat
+ *  bins of a 2.4 MHz capture): ISM / LoRa fits the DECODER's channels — the report's `lora.chs` (each running channel's centre,
+ *  width and network; beta97 hotfix server) with one labelled marker each; an older server (no list): the capture it
+ *  decodes (centre ± rate / 2), never the dial's passband. */
+const NET_NAME: Record<string, string> = { meshcore: 'MeshCore', meshtastic: 'Meshtastic', lorawan: 'LoRaWAN', loraaprs: 'LoRa APRS', fanet: 'FANET', meshcom: 'MeshCom' };
+export function wfModelIsm(r: { band?: string; bandName?: string; centre: number; rate?: number; lora?: { chs?: Array<{ hz: number; bw?: number; net?: string }> } }): MapWfModel | null {
+  const chs = (r.lora?.chs ?? []).filter((c) => c && c.hz > 0).sort((a, b) => a.hz - b.hz);
+  if (chs.length) {
+    const lo0 = Math.min(...chs.map((c) => c.hz - (c.bw ?? 125e3) / 2)), hi0 = Math.max(...chs.map((c) => c.hz + (c.bw ?? 125e3) / 2));
+    const pad = Math.max(25e3, (hi0 - lo0) * 0.08);
+    const marks = chs.map((c) => ({ hz: c.hz, label: `${NET_NAME[c.net ?? ''] ?? 'LoRa'} ${mhz3(c.hz)}`, active: true, loHz: c.hz - (c.bw ?? 125e3) / 2, hiHz: c.hz + (c.bw ?? 125e3) / 2 }));
+    return { lo: lo0 - pad, hi: hi0 + pad, marks, key: `ism${r.band ?? ''}${chs.length}`, stamps: [],
+             info: `${r.bandName ?? 'ISM'} · ${chs.length} LoRa channel${chs.length === 1 ? '' : 's'} · ${mhz3(lo0)}–${mhz3(hi0)} MHz` };
+  }
+  if (!(r.centre > 0) || !(r.rate && r.rate > 0)) return null;
+  const half = r.rate / 2;
+  return { lo: r.centre - half, hi: r.centre + half, marks: [], key: `ism${r.band ?? ''}`, stamps: [],
+           info: `${r.bandName ?? 'ISM'} · ${mhz3(r.centre - half)}–${mhz3(r.centre + half)} MHz (the capture)` };
+}
+
 export const WF_SPAN_MIN = 12e3, WF_SPAN_MAX = 1.2e6, WF_SPAN_X = 5;
-export function wfModelVfo(v: { frequency: number; mode: string; bandwidthLow: number; bandwidthHigh: number }): MapWfModel {
+/** `minSpan` (beta97 hotfix): never narrower than this — the caller passes 16 of the radio's spectrum bins, so a slice of
+ *  a wide capture is never a few flat bins drawn as blocks (the MeshCore map's "USB 868.600 · 13 kHz"). */
+export function wfModelVfo(v: { frequency: number; mode: string; bandwidthLow: number; bandwidthHigh: number }, minSpan = 0): MapWfModel {
   const pbLo = v.frequency + v.bandwidthLow, pbHi = v.frequency + v.bandwidthHigh;
   const bw = Math.max(500, pbHi - pbLo);
-  const span = Math.max(WF_SPAN_MIN, Math.min(WF_SPAN_MAX, bw * WF_SPAN_X));
+  const span = Math.max(WF_SPAN_MIN, Math.min(WF_SPAN_MAX, bw * WF_SPAN_X), minSpan > 0 ? minSpan : 0);
   const mode = String(v.mode || '').toUpperCase();
   return { lo: v.frequency - span / 2, hi: v.frequency + span / 2, key: 'vfo', stamps: [],
            marks: [{ hz: v.frequency, label: `${mode} ${mhz3(v.frequency)}`, active: true, loHz: pbLo, hiHz: pbHi }],

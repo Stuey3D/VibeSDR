@@ -530,13 +530,17 @@ if (PART.includes('A')) {
     { await rowsAt(390, 844, true);
       const g = async () => JSON.parse(await p.ev(`JSON.stringify((() => { const c = ${V}.querySelector('.trkCard2[data-card="list"]'), t = c.querySelector('.lMax'), m = ${V}.querySelector('.trkMapHost').getBoundingClientRect();
         const cb = c.getBoundingClientRect(), tb = t.getBoundingClientRect(), cap = parseFloat(${V}.style.getPropertyValue('--trk-cb-top')) || 0, lb = parseFloat(${V}.style.getPropertyValue('--trk-list-bottom')) || 0;
-        return { tabOn: tb.width > 0 && Math.abs(tb.bottom - cb.top) <= 1 && tb.right > cb.right - 80 && tb.right <= cb.right, h: Math.round(cb.height), want: Math.round(m.height - cap - lb), pressed: t.getAttribute('aria-pressed'), zoom: ${V}.querySelector('.mDock[data-dock="map"]').dataset.zoom || '' }; })())`));
+        return { tabOn: tb.width > 0 && Math.abs(tb.bottom - cb.top) <= 1 && tb.right > cb.right - 80 && tb.right <= cb.right, h: Math.round(cb.height), want: Math.round(m.height - cap - lb), pressed: t.getAttribute('aria-pressed'), zoom: ${V}.querySelector('.mDock[data-dock="map"]').dataset.zoom || '',
+          tabHits: [c, ...c.querySelectorAll('.lMax, .lSwap')].filter((e) => !e.hidden && e.getClientRects().length).flatMap((e) => { const b = e.getBoundingClientRect(); return [...${V}.querySelectorAll('.mChipsL .mDock:not([hidden]) .hCard')].filter((k) => { const q = k.getBoundingClientRect(); return q.width && b.right > q.left && b.left < q.right && b.bottom > q.top && b.top < q.bottom; }).map((k) => (e.className.baseVal ?? e.className).toString().split(' ')[0] + '/' + (k.closest('.mDock')?.dataset.dock || '?')); }) }; })())`));
       const g0 = await g();
       ok(g0.tabOn && g0.pressed === 'false', `the maximise tab sits on the drawer's top edge near its right corner (${JSON.stringify(g0)})`);
       await p.ev(`${V}.querySelector('.lMax').click(); 1`); await sleep(700);
       const g1 = await g();
       ok(Math.abs(g1.h - g1.want) <= 2 && g1.pressed === 'true', `…pressed: the LIST fills the map under the chips (${g1.h} of ${g1.want} px)`);
       ok(g1.zoom !== 'on', `…AUTO waits while it is maximised (${g1.zoom})`);
+      /* ★★★ beta97 hotfix (found in the app): with the LIST tall, its top tabs (maximise, list ↔ waterfall) stop below the lowest
+       *  left chip (MAP CONTROLS) — the drawer AND its tabs, at both heights */
+      ok(!g0.tabHits.length && !g1.tabHits.length, `…the drawer and its tabs clear every left chip, normal and maximised (${JSON.stringify([g0.tabHits, g1.tabHits])})`);
       await p.ev(`document.activeElement?.blur?.(); ${V}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); 1`); await sleep(700);
       const g2 = await g();
       ok(Math.abs(g2.h - g0.h) <= 1 && g2.pressed === 'false', `…Escape restores it first, the LIST still open (${g2.h} px)`);

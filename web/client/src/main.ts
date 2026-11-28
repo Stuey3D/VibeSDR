@@ -294,7 +294,7 @@ import { freedvOffered, freedvVts, freedvPassband, freedvSidebandAt, FREEDV_NAME
 import { m17Offered, m17Vts, m17Info, type M17State } from '../../../src/services/m17';
 // ★★ V12 digital-voice ID — DMR, D-STAR, YSF, NXDN, dPMR, never the voice (src/services/dvsig.ts — the app and the R36S share it)
 import { MapWf, type MapWfFrame } from './mapWf';
-import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, type MapWfModel } from '../../../src/utils/mapWfModel';   // ★★★ V12 the map drawer's live waterfall
+import { wfModelVor, wfModelNdb, wfModelChannels, wfModelVfo, wfModelIsm, avBandFor, type MapWfModel } from '../../../src/utils/mapWfModel';   // ★★★ V12 the map drawer's live waterfall
 import { rankCard } from '../../../src/utils/spotRanks';   // ★ V12 beta90 the gallery's ranking card
 import { dvsigOffered, dvsigVts, dvsigInfo, dvsigMapPoints, dvRow, dvTime, DV_PINS, DVSIG_NAME, DVSIG_HINT, type DvState } from '../../../src/services/dvsig';
 
@@ -4394,7 +4394,9 @@ function mapWfEnd() { mapWfOn = false; if (wf) wf.onProcessed = null; mapWfInst?
 let mapWfOn = false;
 (window as any).__vibeMapWf = () => (mapWfInst && mapWfOn ? { ...mapWfInst.stats, histRows: mapWfInst.history.rows, histCap: mapWfInst.history.cap, spec: !specOffSent } : null);
 (window as any).__vibeMapWfStrip = (y: number) => (mapWfInst ? mapWfInst.strip(y) : null);
+let mapWfBinHz = 0;   // ★ the radio's spectrum bin width (Hz), from the frames — the floor under any span (16 bins)
 function mapWfFeed(fr: MapWfFrame) {
+  if (fr.row.length) mapWfBinHz = fr.bwHz / fr.row.length;
   const m = mapWfModel(false);
   if (!m || !mapWfInst || !mapWfOn || !wf) return;
   mapWfInst.push(fr, wf.mapLook(), m);   // ★ the page's look read fresh each frame: a palette change shows on the next row
@@ -4406,8 +4408,13 @@ function mapWfFeed(fr: MapWfFrame) {
 function mapWfModel(prime: boolean): MapWfModel | null {
   if (vmOn && vmReport) return wfModelVor(vmReport, mapWfSeen, prime);
   if (ndbOn && ndbReport) return wfModelNdb(ndbReport, mapWfSeen, prime);
-  if (avOn && avReport) { const band = avBands.find((b) => b.id === avReport!.band); const m = band ? wfModelChannels(band) : null; if (m) return m; }
-  return spec ? wfModelVfo(spec.vfoA()) : null;
+  // ★★ beta97 hotfix: the live band by id, else name, else the frequency its channels hold (avBandFor — the app's rule)
+  if (avOn && avReport) { const band = avBandFor(avBands, avReport as any); const m = band ? wfModelChannels(band) : null; if (m) return m; }
+  // ★★★ beta97 hotfix: ISM / LoRa — the decoder's channels (or the capture), never the dial's 13 kHz
+  if (ismOn && ismReport) { const m = wfModelIsm(ismReport as any); if (m) return m; }
+  // ★ ADS-B: its one channel and the 2 MHz either side the capture holds (never a 13 kHz slice of 1090)
+  if (adsbOn) return { lo: 1089e6, hi: 1091e6, key: 'adsb', stamps: [], marks: [{ hz: 1090e6, label: 'ADS-B 1090.000', active: true, loHz: 1089e6, hiHz: 1091e6 }], info: 'ADS-B · 1090 MHz · 2 MHz shown' };
+  return spec ? wfModelVfo(spec.vfoA(), mapWfBinHz * 16) : null;   // ★★ never narrower than 16 of the radio's bins
 }
 function mapTimeSync() {
   const t = document.getElementById('rxTimeLeft');

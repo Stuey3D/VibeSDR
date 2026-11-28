@@ -191,6 +191,18 @@ export class MapWf {
     const f0 = centerHz - bwHz / 2;
     const cropInto = (src: ArrayLike<number>, out: Float32Array) => {
       const n = src.length, binHz = bwHz / n, W = out.length;
+      /* ★★★ beta97 hotfix (Stuart, the MeshCore map at 868.600: "4–5 giant flat steps, wide blocky columns") a column
+       *  NARROWER than a bin (a narrow span on a wide capture): the bins are INTERPOLATED, never one bin smeared over a block
+       *  of columns — the app's mwfCrop rule */
+      if ((hi - lo) / W < binHz) {
+        for (let x = 0; x < W; x++) {
+          const fx = (lo + (hi - lo) * ((x + 0.5) / W) - f0) / binHz - 0.5;
+          if (fx < -0.5 || fx > n - 0.5) { out[x] = NaN; continue; }
+          const i = Math.max(0, Math.min(n - 1, Math.floor(fx))), j = Math.min(n - 1, i + 1), t = Math.max(0, Math.min(1, fx - i));
+          out[x] = src[i] * (1 - t) + src[j] * t;
+        }
+        return;
+      }
       for (let x = 0; x < W; x++) {
         const a = lo + (hi - lo) * (x / W), b = lo + (hi - lo) * ((x + 1) / W);
         let i0 = Math.floor((a - f0) / binHz), i1 = Math.floor((b - f0) / binHz);
