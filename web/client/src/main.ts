@@ -11309,7 +11309,8 @@ async function avLogTick() {
     const want = avLogWant;
     const back = !avLogCur || want > avLogWin + 1;   // a backfill on open, and again when the window grows (1 H → 24 H)
     const r = await fetch(galUrl(avMsgsQuery({ windowS: want, since: back ? 0 : avLogCur, max: back ? Math.min(avLogCeil, 1500) : AV_MSGS_PAGE })), { cache: 'no-store' });
-    if (!r.ok) { if (r.status === 404) { avLogOk = false; if (asView?.open) asRender(); } return; }
+    if (!r.ok) { if (r.status === 404 || r.status === 501 || r.status === 503) { avLogOk = false;   // ★ no log here (an older server; a door page, whose radios keep the logs)
+      if (asView?.open) asRender(); } return; }
     const page = parseAvMsgs(await r.json());
     if (!page) { avLogOk = false; if (asView?.open) asRender(); return; }
     avLogOk = true;
