@@ -1098,6 +1098,10 @@
     const az = new AutoZoom();
     let labelled = new Set(), labelAt = 0;
     let rafId = 0, lastFlush = 0;
+    // ★ b97-integrate: declared HERE, not beside frame() — glSetup runs synchronously when the style is already loaded
+    //   (gl.isStyleLoaded) and its kick() / the GPU markers' onReady / onFail touched them before their let ran: a TDZ
+    //   ReferenceError ('Cannot access forceFlush before initialization') that killed the layer (test-web-ac-icons 0/92).
+    let waitT = 0, forceFlush = true;
     let firstCamera = true;
 
     /* ── the control: AUTO · FIT · RINGS · ⌖, inside the map ──────────────────────────────────── */
@@ -2133,7 +2137,6 @@
       return lm ? 500 : 33;   // ★ with the GPU drawing the icons this loop only moves the labels — only what is on screen, at the half-pixel rule
     }
     const MOVE_PX = 0.5, TURN_DEG = 2;
-    let waitT = 0, forceFlush = true;
     function kick() { if (!rafId && !waitT && !destroyed) rafId = requestAnimationFrame(frame); }
     let lastT = 0;
     function frame() {
