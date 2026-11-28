@@ -13,156 +13,59 @@
         clustered when zoomed out. The icons and cards are the server maps' own (community-kit.js). -->
 <link rel="stylesheet" href="/mapgl/vendor/maplibre-gl.css">
 <style>
-  :root {
-    --bg: #080601; --panel: #0d0a02; --line: rgba(255,176,0,.22);
-    --text: #ffcc88; --dim: rgba(255,160,0,.55); --accent: #ffb833;
-    --free: #28A745; --busy: #e05050; --temp: #4fc3f7; --down: #6b7785;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-               font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace; touch-action: manipulation; }
-  body { display: flex; flex-direction: column; }
+  /* ★★★ b97 THE MAP CARD SYSTEM (docs/v12/MAP-CONTROL-CARDS.md; map-chrome.js = web/client/src/mapChrome.ts, generated):
+   *  the map takes the screen; ✕ (back to the directory) top-left; LAYERS / STATS / RECEIVERS / MAP CONTROLS chips pop out
+   *  their cards; the LIST drawer (the NAVTEX messages and everything else on the map) bottom-left; HELP and the scale
+   *  bottom-right. The old header rows, bars, FIT / KEY buttons, status line and side panels are gone (not hidden). Only
+   *  what this page draws INSIDE the map and the cards is styled here: the cards (popups) and the receivers' rows. */
+  :root { --accent: #ffb833; --line: rgba(255,176,0,.22); --dim: rgba(255,160,0,.55); --text: #ffcc88; --panel: #0d0a02;
+          --free: #28A745; --busy: #e05050; --temp: #4fc3f7; --down: #6b7785; }
+  html, body { margin: 0; height: 100%; background: #0b1014; color: #dfe7ef; touch-action: manipulation; }
   a { color: var(--accent); }
-  header { display: flex; align-items: center; gap: 8px; padding: max(10px, env(safe-area-inset-top)) 14px 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  header h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 4px; white-space: nowrap; }
-  header .back { font-size: 11px; letter-spacing: .08em; text-decoration: none; white-space: nowrap; }
-  .grow { flex: 1; }
-  button { font: inherit; }
-  .grp, .btn, .chip { font-size: 11px; letter-spacing: .08em; color: var(--text); background: var(--panel); cursor: pointer; }
-  .grp { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
-  .grp[aria-pressed="true"] { background: var(--accent); color: #140d00; font-weight: 700; border-color: var(--accent); }
-  .btn { border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); padding: 6px 10px; }
-  .btn[aria-pressed="true"] { background: var(--accent); color: #140d00; font-weight: 700; }
-  .bar { display: flex; gap: 5px; padding: 5px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
-  .bar .lbl { font-size: 10px; color: var(--dim); letter-spacing: .1em; margin: 0 2px 0 6px; }
-  .bar .lbl:first-child { margin-left: 0; }
-  .bar .set { display: inline-flex; gap: 5px; flex-wrap: wrap; align-items: center; }
-  .bar .set.off { opacity: .35; }
-  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; display: inline-flex; align-items: center; gap: 6px; }
-  .chip .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-  .chip[aria-pressed="false"] { opacity: .45; }
-  .chip[aria-pressed="false"] .dot { background: transparent !important; border: 1px solid currentColor; }
-  .chip.only { border-color: var(--accent); color: var(--accent); }
-  /* ★ the pill's total: small and dim, so the pill keeps its look (0 dims the number, never hides the pill) */
-  .chip .n { font-size: 9.5px; opacity: .62; font-variant-numeric: tabular-nums; margin-left: -1px; }
-  .chip .n.z { opacity: .32; }
-  /* ★★ THE KEY (Stuart 11-25: "missing the legend for what the icons mean") — the server maps' KEY, bottom right: the
-   *    rows for the layers switched on, drawn with the servers' own glyphs (community-kit.js) */
-  #keyBtn { position: absolute; z-index: 6; right: 10px; bottom: 36px; font: inherit; font-size: 11px; letter-spacing: 1px; color: #ffb833;
-            background: rgba(8,6,2,0.94); border: 1px solid rgba(255,160,0,0.30); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
-  #keyBtn[aria-expanded="true"], #keyBtn:hover, #keyBtn:focus-visible { border-color: #ffb833; background: rgba(255,160,0,0.16); outline: none; }
-  #key { position: absolute; z-index: 7; right: 10px; bottom: 72px; width: 340px; max-width: calc(100% - 20px); max-height: calc(100% - 130px);
-         overflow: auto; background: rgba(10,14,20,.95); color: #dfe7ef; border: 1px solid #2c3a4a; border-radius: 8px; padding: 8px 10px 10px;
-         font-size: 11px; line-height: 1.35; box-shadow: 0 6px 24px rgba(0,0,0,.5); -webkit-overflow-scrolling: touch; }
-  #key[hidden] { display: none; }
-  #key .ks { color: var(--accent); font-weight: 700; letter-spacing: .1em; font-size: 10px; margin: 8px 0 3px; }
-  #key .ks:first-child { margin-top: 0; }
-  #key .kr { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
-  #key .kr > :first-child { flex: none; width: 24px; display: flex; justify-content: center; align-items: center; }
-  #key .kr > span:last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  #key .kr svg { max-width: 24px; max-height: 24px; }
-  #key .kr svg[viewBox="0 0 40 40"] { max-width: 28px; max-height: 28px; margin: -2px; }   /* ★ the aircraft glyphs' 40-unit box */
-  select.chip { padding: 3px 6px; }
-  main { position: relative; flex: 1; min-height: 0; }
-  #map { position: absolute; inset: 0; background: #123049; }
-  /* ★ FIT (Stuart 11-25: "community map is missing the fit button") — the server maps' own key, top right of the map */
-  #fitBtn { position: absolute; z-index: 6; right: 10px; top: 10px; font: inherit; font-size: 11px; letter-spacing: 1px; color: #ffb833;
-            background: rgba(8,6,2,0.94); border: 1px solid rgba(255,160,0,0.30); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
-  #fitBtn:hover, #fitBtn:focus-visible { border-color: #ffb833; background: rgba(255,160,0,0.16); outline: none; }
-  #status { position: absolute; left: 10px; bottom: 10px; z-index: 5; background: rgba(13,10,2,.88); border: 1px solid var(--line);
-            border-radius: 6px; padding: 6px 9px; font-size: 11px; max-width: calc(100% - 100px); pointer-events: none; line-height: 1.45; }
-  #status b { color: var(--accent); font-weight: 600; }
-  #empty { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); z-index: 5; background: rgba(13,10,2,.92);
-           border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 12px; max-width: min(420px, calc(100% - 32px)); text-align: center; line-height: 1.5; }
-  .panel { position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 100%; z-index: 8; background: rgba(13,10,2,.97);
-           border-left: 1px solid var(--line); display: flex; flex-direction: column; }
-  .panel[hidden] { display: none; }
-  .panel .head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .panel .head h2 { margin: 0; font-size: 13px; letter-spacing: .12em; font-weight: 600; flex: 1; }
-  .panel .list { overflow: auto; flex: 1; -webkit-overflow-scrolling: touch; }
-  .row { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; }
-  .row:hover, .row:focus-visible { background: rgba(255,176,0,.06); outline: none; }
-  .row.sel { background: rgba(255,176,0,.12); box-shadow: inset 3px 0 0 var(--accent); }
-  .row .nm { font-size: 13px; color: var(--accent); font-weight: 600; overflow-wrap: anywhere; }
-  .row .where, .row .now { font-size: 11px; color: var(--dim); }
-  .row .lays { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
-  .row .lay { font-size: 10px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; display: inline-flex; gap: 4px; align-items: center; }
-  .row .lay i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-  .row .st { font-size: 11px; }
-  .row .st.free { color: var(--free); } .row .st.busy { color: var(--busy); } .row .st.temp { color: var(--temp); } .row .st.down { color: var(--down); }
-  .row .acts { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-  .msg { padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 12px; }
-  .msg .mt { color: var(--accent); font-weight: 600; } .msg .md { color: var(--dim); font-size: 11px; margin-top: 2px; }
-  .msg pre { white-space: pre-wrap; margin: 6px 0 0; font-size: 11px; color: var(--text); max-height: 260px; overflow: auto; }
-  .listen { font-size: 11px; font-weight: 700; letter-spacing: .1em; padding: 6px 10px; border-radius: 6px; background: var(--accent); color: #140d00; text-decoration: none; white-space: nowrap; }
-  .row.down .listen { background: transparent; color: var(--dim); border: 1px solid var(--line); }
-  .onlyBtn { font-size: 10px; letter-spacing: .08em; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
-  .onlyBtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-  /* ★ an open card sits OVER the status line (it hid an aircraft card's track line and its receivers on a phone) */
+  /* the popups (the servers' own cards) */
   .maplibregl-popup { z-index: 6; }
   .maplibregl-popup-content { background: var(--panel); color: var(--text); border: 1px solid var(--line); font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 60vh; overflow: auto; }
   .maplibregl-popup-tip { border-top-color: var(--line) !important; border-bottom-color: var(--line) !important; }
   .maplibregl-popup-close-button { color: var(--dim); font-size: 16px; }
   .pc .t, .trkCard .t { font-weight: 700; color: var(--accent); margin-bottom: 4px; }
   .pc .r, .trkCard .r { display: flex; gap: 8px; } .pc .k, .trkCard .k { color: var(--dim); min-width: 70px; }
-  /* ★ the aircraft card's route and track lines: the words small and dim under them say where each came from */
   .pc .src { font-size: 10px; color: var(--dim); margin: 1px 0 3px; line-height: 1.35; }
   .pc .src a { color: var(--dim); }
   .pc .off { text-decoration: line-through; opacity: .7; }
   .pc .hb { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 5px; }
   .pc .hb div { display: flex; justify-content: space-between; gap: 10px; }
-  .maplibregl-ctrl-group { background: var(--panel); border: 1px solid var(--line); }
-  .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(0,0,0,0.6); color: var(--dim); font-size: 9px; }
-  .maplibregl-ctrl-attrib a { color: var(--dim); }
-  footer { color: var(--dim); font-size: 10px; padding: 6px 14px max(8px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); line-height: 1.5; }
-  @media (max-width: 600px) {
-    header { padding: max(8px, env(safe-area-inset-top)) 12px 6px; gap: 6px; }
-    header h1 { font-size: 14px; letter-spacing: 3px; }
-    /* ★ a phone: each bar one row that scrolls sideways (the map keeps the screen), NAVTEX types by their letter */
-    .bar { padding: 4px 12px; gap: 4px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-    .bar::-webkit-scrollbar { display: none; }
-    .bar > *, .bar .set { flex: none; } .bar .set { flex-wrap: nowrap; }
-    .chip .long { display: none; }
-    .grp, .btn { padding: 6px 8px; }
-    .chip { padding: 4px 7px; }
-    .panel { top: auto; left: 0; width: 100%; height: 62%; border-left: 0; border-top: 1px solid var(--accent); border-radius: 12px 12px 0 0; }
-    footer { display: none; }
-  }
+  .pc .sus { color: #ffcf7a; margin-top: 4px; }
+  .maplibregl-ctrl-attrib, .maplibregl-ctrl-attrib.maplibregl-compact { background: rgba(0,0,0,0.6); color: #9fb0c2; font-size: 9px; }
+  .maplibregl-ctrl-attrib a { color: #9fb0c2; }
+  /* the RECEIVERS card's rows (LISTEN, ONLY THIS) and the LIST's opened NAVTEX message */
+  .rxRow { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; padding: 9px 12px; border-bottom: 1px solid #151f29; cursor: pointer; }
+  .rxRow:hover, .rxRow:focus-visible { background: #1a2632; outline: none; }
+  .rxRow.sel { box-shadow: inset 3px 0 0 #ffd34d; background: #1a2632; }
+  .rxRow .nm { font-weight: 600; overflow-wrap: anywhere; }
+  .rxRow .where, .rxRow .now { font-size: 11px; color: #93a3b4; }
+  .rxRow .st { font-size: 11px; } .rxRow .st.free { color: var(--free); } .rxRow .st.busy { color: var(--busy); } .rxRow .st.temp { color: var(--temp); } .rxRow .st.down { color: var(--down); }
+  .rxRow .lays { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+  .rxRow .lay { font-size: 10px; border: 1px solid #33475a; border-radius: 999px; padding: 1px 7px; display: inline-flex; gap: 4px; align-items: center; }
+  .rxRow .lay i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .rxRow .acts { grid-row: 1 / span 2; grid-column: 2; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .rxRow .listen { font: 700 11px/1 system-ui, sans-serif; letter-spacing: .08em; padding: 7px 10px; border-radius: 6px; background: #ffd34d; color: #111; text-decoration: none; white-space: nowrap; }
+  .rxRow.down .listen { background: transparent; color: #8596a7; border: 1px solid #33475a; }
+  .rxEmpty { padding: 12px; color: #93a3b4; font-size: 12px; }
+  .trkRow .nvTx { grid-column: 1 / -1; white-space: pre-wrap; margin: 6px 0 2px; font: 11px/1.4 ui-monospace, Menlo, monospace; color: #dfe7ef; max-height: 260px; overflow: auto; cursor: text; }
+  .cmSel { display: flex; flex-wrap: wrap; gap: 4px; }
+  .cmSel select { background: #1e2a36; color: #e8eef5; border: 1px solid #33475a; border-radius: 6px; padding: 5px 8px; font: 600 12px system-ui, sans-serif; }
+  .kr { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+  .kr > :first-child { flex: none; width: 24px; display: flex; justify-content: center; align-items: center; }
+  .kr > span:last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+  .kr svg { max-width: 24px; max-height: 24px; }
+  .kr svg[viewBox="0 0 40 40"] { max-width: 28px; max-height: 28px; margin: -2px; }
+  .ks { color: #ffd34d; font-weight: 700; letter-spacing: .1em; font-size: 10px; margin: 8px 0 3px; }
+  .ks:first-child { margin-top: 0; }
 </style>
 </head>
 <body>
-<header>
-  <h1>COMMUNITY MAP</h1>
-  <a class="back" href="/">◂ DIRECTORY</a>
-  <span class="grow"></span>
-  <!-- ★★ THREE INDEPENDENT GROUPS (Stuart: "all layers can be on at once aviation/maritime/misc") — any combination -->
-  <span id="groups" role="group" aria-label="Show"></span>
-  <button type="button" class="btn" id="msgBtn" aria-pressed="false" aria-controls="msgs" hidden>MESSAGES</button>
-  <button type="button" class="btn" id="rxBtn" aria-pressed="false" aria-controls="rx">RECEIVERS</button>
-</header>
-<div class="bar" id="modes" aria-label="Modes"></div>
-<div class="bar" id="navbar" aria-label="NAVTEX" hidden></div>
-<div class="bar" id="ages" aria-label="Heard in the last"><span class="lbl">HEARD IN</span></div>
-<main>
-  <div id="map" role="region" aria-label="Map"></div>
-  <button type="button" id="fitBtn" title="Fit every item on the map now (the layers switched on, heard in the window chosen)">FIT</button>
-  <button type="button" id="keyBtn" aria-expanded="false" aria-controls="key" title="What the icons and colours mean">KEY</button>
-  <div id="key" role="region" aria-label="Key" hidden></div>
-  <div id="status" aria-live="polite">Finding the receivers that share…</div>
-  <div id="empty" hidden></div>
-  <aside id="rx" class="panel" hidden aria-label="Contributing receivers">
-    <div class="head"><h2 id="rxTitle">RECEIVERS</h2><button type="button" class="onlyBtn" data-close="rx">CLOSE ✕</button></div>
-    <div class="list" id="rxList"></div>
-  </aside>
-  <aside id="msgs" class="panel" hidden aria-label="NAVTEX messages">
-    <div class="head"><h2 id="msgTitle">NAVTEX MESSAGES</h2><button type="button" class="onlyBtn" data-close="msgs">CLOSE ✕</button></div>
-    <div class="list" id="msgList"></div>
-  </aside>
-</main>
-<footer>
-  Shared by VibeServer owners who switched on “Share to the VibeSDR community map”. What the stations themselves broadcast,
-  read straight from each receiver; a receiver is drawn at the centre of its four-character grid square, never its address.
-</footer>
+<!-- ★★★ b97: no header, bars or panels — map-chrome.js draws the chips and cards around the map (mountMapChrome, hostMap) -->
+<noscript>The community map needs JavaScript. <a href="/">Back to the directory</a>.</noscript>
 
 <script src="/mapgl/vendor/maplibre-gl.js"></script>
 <script src="/mapgl/vendor/pmtiles.js"></script>
@@ -171,6 +74,7 @@
 <script src="/mapgl/vibemap-water.js"></script>
 <script src="/community-kit.js"></script>
 <script src="/community-map.js"></script>
+<script src="/map-chrome.js"></script>
 <script>
 'use strict';
 const T0 = performance.now();
@@ -179,17 +83,28 @@ const $ = (id) => document.getElementById(id);
 const esc = CM.esc;
 const perf = { listDraw: 0, firstData: 0, firstDraw: 0, full: 0, bytes: {} };   // ★ ms from the page starting: the receivers listed, the first receiver's data in, the GPU map's first draw, every receiver in
 
-/* ══ THE MAP — the directory's GPU map (VibeMapGL), drawn with MapLibre layers directly ══ */
+/* ══ THE MAP — the directory's GPU map (VibeMapGL), drawn with MapLibre layers directly. ★★★ b97: made in the card system's
+ *  holder (map-chrome.js — mountMapChrome's hostMap), which keeps its scale chip, the credits' fold and the shared AUTO / FIT
+ *  (mapAutoFit.ts, as every server map) on it ══ */
 let gl = null, GLVM = null;
-try {
-  const load = (p, kind) => fetch(p).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
-  GLVM = VibeMapGL.createNow($('map'), { style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/', profile: 'aero', center: [0, 40], zoom: 1.4 });
-  gl = GLVM && GLVM.map;
-  // ★★ the wide rivers, canals and docks as WATER, so ships sit on it (Stuart 11-25) — mapgl/vibemap-water.js
-  if (GLVM && window.VibeWater) VibeWater.attach(GLVM, location.origin + '/mapgl/vibemap-water.pmtiles');
-  if (gl) gl.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
-} catch (e) { console.error('GPU map unavailable: ' + e); }
-if (!gl) { $('empty').hidden = false; $('empty').textContent = 'This map needs WebGL 2, which this browser does not offer.'; }
+function makeMap(holder) {
+  try {
+    const load = (p, kind) => fetch(p).then((r) => (r.ok ? (kind === 'text' ? r.text() : r.arrayBuffer()) : null)).catch(() => null);
+    GLVM = VibeMapGL.createNow(holder, { style: window.VM_STYLE, load, base: '/mapgl/', rangeBase: location.origin + '/mapgl/', profile: 'aero', center: [0, 40], zoom: 1.4, scale: false });
+    gl = GLVM && GLVM.map;
+    // ★★ the wide rivers, canals and docks as WATER, so ships sit on it (Stuart 11-25) — mapgl/vibemap-water.js
+    if (GLVM && window.VibeWater) VibeWater.attach(GLVM, location.origin + '/mapgl/vibemap-water.pmtiles');
+    if (gl) gl.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+  } catch (e) { console.error('GPU map unavailable: ' + e); }
+  if (!gl) { MC.view.note('This map needs WebGL 2, which this browser does not offer.'); return null; }
+  gl.on('zoomend', metZoom);
+  gl.on('load', scheduleRender);
+  // ★ the scale chip reads a Leaflet-zoom map (MapLibre's zoom + 1 — 512 px tiles)
+  const scaleMap = { getCenter: () => gl.getCenter(), getZoom: () => gl.getZoom() + 1,
+    on: (evs, f) => { for (const e of String(evs).split(/\s+/)) if (e) gl.on(e === 'zoomend' ? 'zoom' : e === 'moveend' ? 'move' : e, f); } };
+  return { map: scaleMap, fitMap: gl, gl: GLVM, points: () => fitPoints().map(([lo, la]) => [la, lo]), receiver: () => null,
+           maxZoom: 10, what: 'item shown', destroy: () => {} };
+}
 
 /* ══ STATE (remembered per viewer, try/catch) ══ */
 const PREF_KEY = 'vibesdr.communityMap.v2';
@@ -221,7 +136,7 @@ async function loadList() {
     SERVERS = (Array.isArray(j.servers) ? j.servers : []).filter((s) => s && typeof s.id === 'string').map((s) => Object.assign(keep.get(s.id) || {}, s));
     for (const id of [...DATA.keys()]) if (!SERVERS.some((s) => s.id === id)) DATA.delete(id);
     listAt = Date.now();
-  } catch { if (!SERVERS.length) $('status').textContent = 'The directory could not be reached. Trying again shortly.'; }
+  } catch { if (!SERVERS.length) MC.view.note('The directory could not be reached. Trying again shortly.'); }
 }
 let inFlight = 0; const queue = [];
 function pump() {
@@ -277,7 +192,7 @@ async function tick(force, only) {
   if (busy && !only) return;
   busy = true;
   try {
-    if (!listAt || Date.now() - listAt >= CM.LIST_SEC * 1000) { await loadList(); PRESENT = CM.modesPresent(SERVERS, ITEMS); drawBars(); render(); }
+    if (!listAt || Date.now() - listAt >= CM.LIST_SEC * 1000) { await loadList(); PRESENT = CM.modesPresent(SERVERS, ITEMS); render(); }
     const all = wantedLayers(), nowMs = Date.now();
     const jobs = [];
     for (const s of SERVERS) for (const t of CM.targets(s)) {
@@ -359,13 +274,54 @@ function iconOf(it) {
 }
 
 /* ══ DRAWING (GPU) ══ */
+/* ★★★ b97 ZOOMED OUT STAYS RICH (Stuart's recording 11-27: "the map starts looking barren as you zoom out" — one step out and
+ *  ~150 MeshCore squares round London became a few plain yellow discs, aircraft and mesh merged into one):
+ *   1. EACH DENSE LAYER CLUSTERS ON ITS OWN (a source per kind: mesh with mesh, aircraft with aircraft) — the same rule as
+ *      before (clusterMaxZoom 5, radius 22), so one busy layer never swallows the others;
+ *   2. A CLUSTER IS DRAWN AS ITS CONTENTS: the glyph of its commonest sub-kind (the MeshCore repeater square, the aircraft in
+ *      its mode's colour, the ship …) with a small count badge — never a blank disc;
+ *   3. ABOVE THE CLUSTERS, COLLISION THINS: individual icons use MapLibre's own placement (no overlap, the newest / the
+ *      repeaters first — symbol-sort-key) up to zoom 9, everything drawn from zoom 9 — the map thins, it never collapses;
+ *   4. LABELS FADE FIRST: names from zoom 7 (fading in to 8), always optional — a label never hides an icon. */
 const DENSE = new Set(['aircraft', 'ship', 'aprs', 'mesh']);
+const DENSE_KINDS = ['mesh', 'aprs', 'ship', 'aircraft'];   // ★ drawn bottom → top (aircraft placed first in a collision)
+const ALL_ZOOM = 9;                                         // ★ from here every icon is drawn, overlaps and all
+const MESH_TYPES = ['repeater', 'room server', 'companion', 'sensor'];
+/** Each dense kind's cluster glyphs: sub-kind id → the glyph (its own image), the commonest one draws the cluster. */
+function clusterGlyphs(kind) {
+  if (kind === 'aircraft') return ['adsb', 'acars', 'vdl2', 'hfdl'].map((m) => [m, acGlyph('jet', CM.MODE[m].colour, 30)]);
+  if (kind === 'mesh') return MESH_TYPES.map((t) => [t, KIT ? KIT.ismMapIcon({ kind: 'meshcore', ntype: t, seen: 0 }).html : `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="2" fill="${CM.MODE.mesh.colour}" stroke="#000"/></svg>`]);
+  if (kind === 'ship') return [['ship', KIT ? KIT.aisIcon({ kind: 'vessel', family: 'cargo', sog: 10, cog: 0, mmsi: '0' }).html : `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1 L13 14 L3 14 Z" fill="${CM.MODE.ais.colour}" stroke="#000"/></svg>`]];
+  return [['aprs', `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8.5" fill="${CM.MODE.aprs.colour}" stroke="#0b1014" stroke-width="1.4"/><text x="10" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-size="11" font-weight="800" fill="#111">A</text></svg>`]];
+}
+/** A dense item's sub-kind (its cluster vote) — the mode an aircraft is drawn in, a mesh node's type. */
+function subKind(it) {
+  if (it.kind === 'aircraft') return CM.primaryMode(it, F.off);
+  if (it.kind === 'mesh') { const t = String(it.d.ntype || '').toLowerCase(); return MESH_TYPES.find((x) => t.includes(x.split(' ')[0])) || 'repeater'; }
+  return it.kind === 'ship' ? 'ship' : 'aprs';
+}
+/** Placement priority (symbol-sort-key: lower is placed first): repeaters / room servers over companions; then the newest. */
+function sortKey(it, now) {
+  const rank = it.kind === 'mesh' ? Math.max(0, MESH_TYPES.indexOf(subKind(it))) : 0;
+  return rank * 1e6 + Math.max(0, Math.min(999999, now - it.t));
+}
+/** A dense item's label (fades in from zoom 7): the flight / reg, the ship's name, the call, the node's name. */
+function labelOf(it) {
+  const d = it.d || {};
+  return String(it.kind === 'aircraft' ? d.flight || d.reg || '' : it.kind === 'ship' ? d.name || d.call || '' : it.kind === 'aprs' ? d.from || it.title || '' : it.title || '').trim().slice(0, 16);
+}
+const clusterLayers = () => DENSE_KINDS.map((k) => 'cm-cl-' + k);
+const densePtLayers = () => DENSE_KINDS.flatMap((k) => ['cm-dp-' + k, 'cm-dpa-' + k]);
 let layersReady = false;
 function ensureLayers() {
   if (!gl || layersReady || !gl.isStyleLoaded()) return layersReady;
   const empty = { type: 'FeatureCollection', features: [] };
   gl.addSource('cm-shapes', { type: 'geojson', data: empty });
-  gl.addSource('cm-dense', { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 5, clusterRadius: 22 });
+  for (const k of DENSE_KINDS) {
+    // ★ the cluster's votes: how many of each sub-kind it holds (the commonest draws it)
+    const props = Object.fromEntries(clusterGlyphs(k).map(([id], i) => ['v' + i, ['+', ['case', ['==', ['get', 'g'], id], 1, 0]]]));
+    gl.addSource('cm-d-' + k, { type: 'geojson', data: empty, cluster: true, clusterMaxZoom: 5, clusterRadius: 22, clusterProperties: props });
+  }
   gl.addSource('cm-pts', { type: 'geojson', data: empty });
   gl.addSource('cm-rx', { type: 'geojson', data: empty });
   gl.addLayer({ id: 'cm-area', type: 'fill', source: 'cm-shapes', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': ['get', 'c'], 'fill-opacity': 0.16 } });
@@ -379,22 +335,43 @@ function ensureLayers() {
     paint: { 'line-color': ['get', 'c'], 'line-width': 2.6, 'line-opacity': 0.95 } });
   gl.addLayer({ id: 'cm-trail-gap', type: 'line', source: 'cm-trail', filter: ['==', ['get', 'gap'], 1],
     paint: { 'line-color': ['get', 'c'], 'line-width': 2, 'line-opacity': 0.8, 'line-dasharray': [2, 2.5] } });
-  gl.addLayer({ id: 'cm-clusters', type: 'circle', source: 'cm-dense', filter: ['has', 'point_count'],
-    paint: { 'circle-color': 'rgba(255,184,51,0.78)', 'circle-stroke-color': '#140d00', 'circle-stroke-width': 1.5,
-             'circle-radius': ['step', ['get', 'point_count'], 12, 20, 16, 100, 21, 500, 26] } });
-  gl.addLayer({ id: 'cm-cluster-n', type: 'symbol', source: 'cm-dense', filter: ['has', 'point_count'],
-    layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 11, 'text-allow-overlap': true },
-    paint: { 'text-color': '#140d00' } });
   const sym = (id, src, extra) => gl.addLayer(Object.assign({ id, type: 'symbol', source: src,
     layout: { 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true },
     paint: { 'icon-opacity': ['get', 'op'] } }, extra || {}));
-  sym('cm-dense-pts', 'cm-dense', { filter: ['!', ['has', 'point_count']] });
+  const LABEL = { 'text-field': ['step', ['zoom'], '', 7, ['get', 'lb']], 'text-font': ['JetBrains Mono Bold'], 'text-size': 10, 'text-offset': [0, 1.25], 'text-anchor': 'top',
+                  'text-optional': true, 'text-max-width': 12 };
+  const LABEL_PAINT = { 'text-color': '#e8eef5', 'text-halo-color': 'rgba(8,10,12,0.85)', 'text-halo-width': 1.4, 'text-opacity': ['interpolate', ['linear'], ['zoom'], 7, 0, 8, 1] };
+  for (const k of DENSE_KINDS) {
+    const src = 'cm-d-' + k, single = ['!', ['has', 'point_count']];
+    // the individuals: collision-thinned below ALL_ZOOM (the newest / repeaters first), all of them from there
+    gl.addLayer({ id: 'cm-dp-' + k, type: 'symbol', source: src, filter: single, maxzoom: ALL_ZOOM,
+      layout: Object.assign({ 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': false, 'icon-padding': 0, 'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 0.72, 8, 1],   // ★ a touch smaller zoomed out: more of them fit
+                              'symbol-sort-key': ['get', 'sk'] }, LABEL), paint: Object.assign({ 'icon-opacity': ['get', 'op'] }, LABEL_PAINT) });
+    gl.addLayer({ id: 'cm-dpa-' + k, type: 'symbol', source: src, filter: single, minzoom: ALL_ZOOM,
+      layout: Object.assign({ 'icon-image': ['get', 'ic'], 'icon-rotate': ['get', 'rot'], 'icon-rotation-alignment': 'map', 'icon-allow-overlap': true, 'icon-ignore-placement': true,
+                              'symbol-sort-key': ['get', 'sk'] }, LABEL), paint: Object.assign({ 'icon-opacity': ['get', 'op'] }, LABEL_PAINT) });
+  }
+  for (const k of DENSE_KINDS) {
+    // ★ the cluster drawn as its contents: the commonest sub-kind's glyph, a count badge at its top right
+    const gs = clusterGlyphs(k), names = gs.map(([, h]) => icon(h));
+    const v = (i) => ['get', 'v' + i];
+    const pick = gs.length === 1 ? names[0] : ['case'].concat(...gs.map((_, i) => [['all'].concat(gs.map((__, j) => (j === i ? true : [i < j ? '>=' : '>', v(i), v(j)]))), names[i]]), [names[0]]);
+    const src = 'cm-d-' + k, many = ['has', 'point_count'];
+    gl.addLayer({ id: 'cm-cl-' + k, type: 'symbol', source: src, filter: many,
+      layout: { 'icon-image': pick, 'icon-size': ['step', ['get', 'point_count'], 1.05, 10, 1.2, 50, 1.35], 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
+    gl.addLayer({ id: 'cm-clb-' + k, type: 'circle', source: src, filter: many,
+      paint: { 'circle-color': CM.MODE[k === 'aircraft' ? 'adsb' : k === 'ship' ? 'ais' : k].colour, 'circle-stroke-color': '#0b1014', 'circle-stroke-width': 1.2,
+               'circle-radius': ['step', ['get', 'point_count'], 7, 10, 8, 100, 9.5], 'circle-translate': [11, -10] } });
+    gl.addLayer({ id: 'cm-cln-' + k, type: 'symbol', source: src, filter: many,
+      layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-font': ['JetBrains Mono Bold'], 'text-size': 9.5, 'text-allow-overlap': true, 'text-ignore-placement': true },
+      paint: { 'text-color': '#111', 'text-translate': [11, -10] } });
+  }
   sym('cm-pts', 'cm-pts');
   sym('cm-rx', 'cm-rx');
   // ★★ ONE click handler, in PRIORITY order (Stuart 11-26: an aircraft over a NAVTEX area opened the area's card — each layer's
   //    own handler fired and the area's, registered last, replaced the aircraft's). Receivers, then points (aircraft, ships,
   //    stations…) with a few px of slack so a small glyph is easy to hit, then lines, and areas only when nothing else is there.
-  const PICK_ORDER = [['cm-rx', 6], ['cm-pts', 6], ['cm-dense-pts', 6], ['cm-line', 3], ['cm-area', 0]];
+  const PICK_ORDER = [['cm-rx', 6], ['cm-pts', 6]].concat(densePtLayers().map((l) => [l, 6]), [['cm-line', 3], ['cm-area', 0]]);
   const pickAt = (pt) => {
     for (const [id, pad] of PICK_ORDER) {
       if (!gl.getLayer(id)) continue;
@@ -405,14 +382,14 @@ function ensureLayers() {
     return null;
   };
   gl.on('click', (e) => {
-    if (gl.queryRenderedFeatures(e.point, { layers: ['cm-clusters'].filter((l) => gl.getLayer(l)) }).length) return;   // the cluster's own handler
+    if (gl.queryRenderedFeatures([[e.point.x - 4, e.point.y - 4], [e.point.x + 4, e.point.y + 4]], { layers: clusterLayers().filter((l) => gl.getLayer(l)) }).length) return;   // the cluster's own handler
     const f = pickAt(e.point);
     if (f) openCard({ features: [f], lngLat: e.lngLat });
   });
   gl.on('mousemove', (e) => { gl.getCanvas().style.cursor = pickAt(e.point) ? 'pointer' : ''; });
-  gl.on('click', 'cm-clusters', (e) => {
+  for (const k of DENSE_KINDS) gl.on('click', 'cm-cl-' + k, (e) => {
     const f = e.features[0];
-    gl.getSource('cm-dense').getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
+    gl.getSource('cm-d-' + k).getClusterExpansionZoom(f.properties.cluster_id).then((z) => gl.easeTo({ center: f.geometry.coordinates, zoom: z }));
   });
   layersReady = true;
   return true;
@@ -490,9 +467,9 @@ async function render() {
   ITEMS = CM.merge([...DATA.values()].map((d) => d.items || []));
   CM.trackNote(TRACKS, ITEMS, now);   // ★ every aircraft's fixes since the page opened (bounded) — the track when no server has one
   PRESENT = CM.modesPresent(SERVERS, ITEMS);
-  drawBars();
   SHOWN = CM.filter(ITEMS, { groups: F.groups, modes: new Set(layersOn()), maxAge: F.maxAge, server: F.server, nav: F.nav }, now);
-  drawList(); drawMessages(now); drawStatus(); drawCounts(now); if (!$('key').hidden) drawKey();
+  susNote(SHOWN);
+  chromeSync(now);
   if (!perf.listDraw && SERVERS.length) perf.listDraw = Math.round(performance.now() - T0);
   if (!perf.firstData && DATA.size) perf.firstData = Math.round(performance.now() - T0);
   if (!ensureLayers()) { if (gl) gl.once('idle', scheduleRender); return; }
@@ -516,14 +493,16 @@ async function render() {
       continue;
     }
     const { ic, rot } = iconOf(it);
-    const f = { type: 'Feature', properties: { id: it.key, ic, rot, op }, geometry: { type: 'Point', coordinates: [it.lon, it.lat] } };
-    (DENSE.has(it.kind) ? dense : pts).push(f);
+    const sus = it.kind === 'mesh' && SUSPECT.has(it.key);   // ★★ b97 an implausible self-reported position: "?" and dimmed
+    const f = { type: 'Feature', properties: { id: it.key, ic: sus ? icon(susSvg(it)) : ic, rot, op: sus ? op * 0.5 : op }, geometry: { type: 'Point', coordinates: [it.lon, it.lat] } };
+    if (DENSE.has(it.kind)) { Object.assign(f.properties, { k: it.kind, g: subKind(it), sk: sortKey(it, now), lb: labelOf(it) }); dense.push(f); }
+    else pts.push(f);
     if (it.kind === 'sonde' && it.d.track.length > 1) shapes.push({ type: 'Feature', properties: { id: it.key, c: it.d.climb < -2 ? '#ff8a4d' : '#7fd4ff', w: 2, op }, geometry: { type: 'LineString', coordinates: it.d.track.map((p) => [p[1], p[0]]) } });
   }
   for (const s of SERVERS) if (typeof s.lat === 'number') rx.push({ type: 'Feature', properties: { id: 'rx:' + s.id, ic: icon(RX_SVG(s, s.id === selected)), rot: 0, op: 1 }, geometry: { type: 'Point', coordinates: [s.lon, s.lat] } });
   ITEM_BY_KEY = byKey;
   await Promise.all(iconWaits.splice(0));
-  gl.getSource('cm-dense').setData({ type: 'FeatureCollection', features: dense });
+  for (const k of DENSE_KINDS) gl.getSource('cm-d-' + k).setData({ type: 'FeatureCollection', features: dense.filter((f) => f.properties.k === k) });   // ★ b97 a source per kind
   gl.getSource('cm-pts').setData({ type: 'FeatureCollection', features: pts });
   gl.getSource('cm-shapes').setData({ type: 'FeatureCollection', features: shapes });
   window.__cmShapes = shapes.map((f) => ({ id: f.properties.id, type: f.geometry.type }));
@@ -546,7 +525,7 @@ async function render() {
   for (const [k, mk] of metMarkers) if (!keep.has(k)) { mk.remove(); metMarkers.delete(k); }
   metZoom();
   if (!perf.firstDraw && rx.length) perf.firstDraw = Math.round(performance.now() - T0);
-  if (!fitted && (SHOWN.length || rx.length)) { fitted = true; fitTo(SHOWN.filter((i) => i.lat !== null), SERVERS); }
+  if (!fitted && (SHOWN.length || rx.length)) { fitted = true; MC.fitPoke(); }   // ★ the auto fit's first framing
   if (OPEN) trailRefresh();
   window.__cm = { servers: SERVERS.length, up: SERVERS.filter((s) => DATA.has(s.id)).length, items: ITEMS.length, shown: SHOWN.length,
     byKind: SHOWN.reduce((a, i) => (a[i.kind] = (a[i.kind] || 0) + 1, a), {}), modes: PRESENT, on: layersOn(),
@@ -557,7 +536,6 @@ let ITEM_BY_KEY = new Map();
 /* ★ The forecast pills give way when zoomed out (the NAVTEX map's rule: the weather labels yield first) — from zoom 4. */
 const MET_MIN_ZOOM = 4;
 function metZoom() { if (!gl) return; const on = gl.getZoom() >= MET_MIN_ZOOM; for (const mk of metMarkers.values()) mk.getElement().style.display = on ? '' : 'none'; }
-if (gl) gl.on('zoomend', metZoom);
 /** ★ FIT: every item drawn now — the groups, chips and NAVTEX layers switched on, the HEARD IN window, ONLY THIS — where it is
  *  drawn (a forecast's arrow at its area's label point); a warning's area or route by all its points. The sea areas are the
  *  chart, never fitted (the server map's _nofit). Nothing drawn: the receivers (just the one under ONLY THIS). */
@@ -565,6 +543,7 @@ function fitPoints() {
   const pts = [];
   for (const it of SHOWN) {
     if (it.lat === null || it.lon === null) continue;
+    if (it.kind === 'mesh' && SUSPECT.has(it.key)) continue;   // ★★ b97 never framed: an implausible self-reported position
     if (it.kind === 'navmet') { const mk = metMarkers.get(it.key); pts.push(mk ? mk.getLngLat().toArray() : [it.lon, it.lat]); continue; }
     pts.push([it.lon, it.lat]);
     if (it.kind === 'navwarn' && Array.isArray(it.d.pts)) for (const p of it.d.pts) if (Array.isArray(p)) pts.push([p[1], p[0]]);
@@ -572,25 +551,6 @@ function fitPoints() {
   if (!pts.length) for (const x of SERVERS) if (typeof x.lat === 'number' && (!F.server || x.id === F.server)) pts.push([x.lon, x.lat]);
   return pts.filter(([lo, la]) => isFinite(lo) && isFinite(la));
 }
-function fitNow() {
-  const pts = fitPoints();
-  if (!pts.length || !gl) return false;
-  let w = 180, s = 90, e = -180, n = -90;
-  for (const [lo, la] of pts) { w = Math.min(w, lo); e = Math.max(e, lo); s = Math.min(s, la); n = Math.max(n, la); }
-  const reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  try { gl.fitBounds([[w, s], [e, n]], { padding: { top: 50, bottom: 50, left: 50, right: 50 }, maxZoom: 9, duration: reduce ? 0 : 600 }); } catch { return false; }
-  window.__cmFit = { n: pts.length, box: [w, s, e, n] };
-  return true;
-}
-$('fitBtn').addEventListener('click', () => { if (popup) popup.remove(); fitNow(); });
-function fitTo(items, servers) {
-  const pts = items.map((i) => [i.lon, i.lat]).concat(servers.filter((x) => typeof x.lat === 'number').map((x) => [x.lon, x.lat]));
-  if (!pts.length || !gl) return;
-  let w = 180, s = 90, e = -180, n = -90;
-  for (const [lo, la] of pts) { w = Math.min(w, lo); e = Math.max(e, lo); s = Math.min(s, la); n = Math.max(n, la); }
-  try { gl.fitBounds([[w, s], [e, n]], { padding: 50, maxZoom: 6, duration: 0 }); } catch { /* keeps its view */ }
-}
-
 /* ══ CARDS — the servers' own where they have one, then who heard it ══ */
 function heardBlock(it, now) {
   const n = it.heard.length;
@@ -619,7 +579,8 @@ function cardOf(it, now) {
     if (d.climb !== null) add('Climb', `${d.climb > 0 ? '+' : ''}${d.climb} m/s`); if (d.climb !== null && d.climb < -2 && d.maxAlt) add('Burst', `near ${Math.round(d.maxAlt).toLocaleString('en-GB')} m — descending`);
     if (d.temp !== null) add('Temp', d.temp + ' °C'); add('Last', CM.ago(now - it.t) + ' ago'); }
   else if (it.kind === 'aprs') { add('From', d.from); add('Kind', d.akind); add('Last', CM.ago(now - it.t) + ' ago'); if (d.line) rows.push(`<div style="white-space:pre-wrap;margin-top:4px">${esc(d.line)}</div>`); }
-  else if (it.kind === 'mesh') { add('Node', d.node ? d.node + '…' : ''); add('Type', d.ntype); add('Heard', `${d.count} times · last ${CM.ago(now - it.t)} ago`); if (d.approx) add('Position', 'approximate (~1 km): a companion node is a person'); }
+  else if (it.kind === 'mesh') { add('Node', d.node ? d.node + '…' : ''); add('Type', d.ntype); add('Heard', `${d.count} times · last ${CM.ago(now - it.t)} ago`); if (d.approx) add('Position', 'approximate (~1 km): a companion node is a person');
+    const sus = SUSPECT.get(it.key); if (sus) rows.push(`<div class="sus">${esc(sus)}</div>`); }
   return `<div class="pc"><div class="t">${esc(it.title)}</div>${rows.join('')}</div>`;
 }
 let popup = null;
@@ -803,145 +764,288 @@ function openCard(e) {
   showCard(id, e.lngLat);
 }
 
-/* ══ THE RECEIVERS LIST (Stuart: "a button to show the contributing servers as a list then a user can select it to listen to") ══ */
-function drawList() {
+/* ══ THE RECEIVERS CARD (Stuart: "a button to show the contributing servers as a list then a user can select it to listen to") —
+ *  ★★★ b97 the card system's SERVERS card, called RECEIVERS here (map-chrome.js retitle / cardBody): a row per receiver, its
+ *  LISTEN link and ONLY THIS; a row chosen flies the map to it ══ */
+let rxSig = '';
+function drawReceivers() {
   const n = CM.perServer(SHOWN);
   const rows = SERVERS.slice().sort((a, b) => (n.get(b.id) || 0) - (n.get(a.id) || 0) || String(a.name).localeCompare(b.name));
-  $('rxTitle').textContent = `RECEIVERS · ${SERVERS.length}`;
-  $('rxBtn').textContent = `RECEIVERS (${SERVERS.length})`;
-  $('rxList').innerHTML = rows.map((s) => {
+  const html = rows.map((s) => {
     const st = CM.stateOf(s), u = CM.listenUrl(s), c = n.get(s.id) || 0;
     const bz = s.maxListeners > 0 ? `${s.listeners}/${s.maxListeners} listening` : '';
     const lays = CM.serverLayers(s).map((l) => `<span class="lay"><i style="background:${CM.MODE[l].colour}"></i>${esc(CM.MODE[l].label)}</span>`).join('');
     // ★ a server sharing no layer right now is never asked (nothing to fetch), so it is not "loading…" (Stuart 11-26, the Sony)
     const loading = !DATA.has(s.id) && !s.unreachable && CM.serverLayers(s).length > 0;
-    return `<div class="row${s.id === selected ? ' sel' : ''}${s.unreachable ? ' down' : ''}" role="button" tabindex="0" data-id="${esc(s.id)}">`
+    return `<div class="rxRow${s.id === selected ? ' sel' : ''}${s.unreachable ? ' down' : ''}" role="button" tabindex="0" data-navrow data-id="${esc(s.id)}">`
       + `<div><div class="nm">${s.pin ? '🔒 ' : ''}${esc(s.name)}</div><div class="where">${esc(s.country || '')}${s.grid ? ' · ' + esc(s.grid) : ''}</div></div>`
       + `<div class="acts">${u ? `<a class="listen" href="${esc(u)}" target="_blank" rel="noopener noreferrer">LISTEN</a>` : ''}`
-      + `<button type="button" class="onlyBtn" data-only="${esc(s.id)}" aria-pressed="${F.server === s.id}">ONLY THIS</button></div>`
+      + `<button type="button" class="btn chip" data-only="${esc(s.id)}" aria-pressed="${F.server === s.id}" title="Show only what this receiver heard">ONLY THIS</button></div>`
       + `<div class="now">${s.unreachable ? esc(s.why || 'not responding') : loading ? 'loading…' : c ? `${c} on the map now` : 'nothing on the map right now'}</div>`
       + `<div class="st ${st.cls}">${esc(st.label)}${bz ? ' · ' + esc(bz) : ''}</div><div class="lays">${lays}</div></div>`;
-  }).join('') || '<div class="row"><div class="now">No receiver shares yet.</div></div>';
+  }).join('') || '<div class="rxEmpty">No receiver shares yet. A VibeServer owner turns on <b>Share to the VibeSDR community map</b> in Setup (or in the app’s Server mode) to add theirs.</div>';
+  const body = MC.cardBody('servers', true);
+  if (html === rxSig && body.firstChild) return;
+  rxSig = html;
+  // ★ written in place: the row with the focus (keyboard / controller) found again by its id
+  const fid = document.activeElement && body.contains(document.activeElement) ? (document.activeElement.closest('[data-id]') || {}).dataset?.id : '';
+  body.innerHTML = `<div class="rxList" role="list" aria-label="Receivers sharing">${html}</div>`;
+  if (fid) { const r = body.querySelector(`.rxRow[data-id="${CSS.escape(fid)}"]`); if (r) r.focus({ preventScroll: true }); }
+  MC.retitle('servers', `RECEIVERS · ${SERVERS.length}`);
 }
-$('rxList').addEventListener('click', (e) => {
-  if (e.target.closest('a')) return;
-  const only = e.target.closest('[data-only]');
-  if (only) { const id = only.dataset.only; F.server = F.server === id ? '' : id; selected = id; render().then(() => { if (F.server) fitTo(SHOWN.filter((i) => i.lat !== null), SERVERS.filter((x) => x.id === id)); }); return; }
-  const row = e.target.closest('.row[data-id]'); if (row) pick(row.dataset.id);
-});
-$('rxList').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[data-id]')) { e.preventDefault(); pick(e.target.dataset.id); } });
+function rxWire() {
+  const body = MC.cardBody('servers', true);
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('a')) return;
+    const only = e.target.closest('[data-only]');
+    if (only) { e.stopPropagation(); onlyThis(only.dataset.only); return; }
+    const row = e.target.closest('.rxRow[data-id]'); if (row) pick(row.dataset.id);
+  });
+  body.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.rxRow[data-id]')) { e.preventDefault(); pick(e.target.dataset.id); } });
+}
+/** ONLY THIS: what one receiver heard (again: everyone's) — the map frames it. */
+function onlyThis(id) {
+  F.server = F.server === id ? '' : id; selected = F.server || selected;
+  render().then(() => MC.fitNow());
+}
 function pick(id, open) {
   selected = selected === id && !open ? '' : id;
   const s = SERVERS.find((x) => x.id === id);
   if (selected && s && typeof s.lat === 'number' && gl) gl.flyTo({ center: [s.lon, s.lat], zoom: Math.max(gl.getZoom(), 5), duration: 800 });
-  if (open) setPanel('rx', true);
+  if (open) MC.card('servers', true);
   render();
 }
 
-/* ══ NAVTEX MESSAGES — every message in the filter, by type, its station and time, the text when opened ══ */
-function drawMessages(now) {
-  const navOn = layersOn().includes('navtex');
-  $('msgBtn').hidden = !navOn;
-  const msgs = SHOWN.filter((i) => i.kind === 'navmsg').sort((a, b) => b.t - a.t);
-  $('msgBtn').textContent = `MESSAGES (${msgs.length})`;
-  $('msgTitle').textContent = `NAVTEX MESSAGES · ${msgs.length}`;
-  const open = new Set([...document.querySelectorAll('#msgList .msg[data-open="1"]')].map((e) => e.dataset.key));
-  $('msgList').innerHTML = msgs.slice(0, 400).map((m) => {
-    const subj = m.b2 && KIT ? KIT.navtexSubject(m.b2) : '';
-    const st = m.d.st ? (KIT ? KIT.navName(m.d.st, m.d.sc) : m.d.st) : 'station not placed';
-    return `<div class="msg" role="button" tabindex="0" data-key="${esc(m.key)}"${open.has(m.key) ? ' data-open="1"' : ''}><div class="mt">${esc(m.d.id || '—')} · ${esc(subj || 'message')}</div>`
-      + `<div>${esc(m.title)}</div><div class="md">${esc(st)} · ${m.d.khz} kHz · ${esc(CM.ago(now - m.t))} ago · heard ${m.d.n}× by ${m.heard.length} receiver${m.heard.length === 1 ? '' : 's'}${m.d.lost ? ` · best copy ${m.d.lost} lost` : ''}</div>`
-      + `${open.has(m.key) ? '<pre class="nvTx">Loading the message…</pre>' : ''}</div>`;
-  }).join('') || '<div class="msg"><div class="md">No NAVTEX message in this filter.</div></div>';
-  for (const el of document.querySelectorAll('#msgList .msg[data-open="1"] pre')) { const it = SHOWN.find((i) => i.key === el.parentElement.dataset.key); if (it) fillText(el, CM.textSource(it)); }
+/* ══ ★★★ b97 THE CHROME — the card system (map-chrome.js, docs/v12/MAP-CONTROL-CARDS.md) in place of the old header rows:
+ *   LAYERS        the groups and their modes, each with its count, and SEA AREAS (the header's AVIATION / MARITIME / MISC
+ *                 buttons and the modes bar)
+ *   MAP CONTROLS  HEARD IN (the time filter), NAVTEX's own filters (its layers, message TYPE, STATION), ONLY THIS, AUTO / FIT,
+ *                 the KEY
+ *   RECEIVERS     the receivers sharing (the SERVERS card, retitled)
+ *   LIST          the NAVTEX MESSAGES (opened in place: the text from the receiver with the cleanest copy) and, in tabs,
+ *                 everything else on the map, newest first
+ *   STATS         the status line's totals, and per mode the NEWEST and the FURTHEST from the receiver that heard it
+ *   RATE          none: this page polls stored rows a minute apart — there is no live message rate to read (so no chip)
+ *  ══ */
+const KIND_WORDS = [['aircraft', 'aircraft'], ['ship', 'ships'], ['dsc', 'DSC'], ['navst', 'NAVTEX stations'], ['navwarn', 'warnings'], ['navmet', 'forecasts'],
+  ['navmsg', 'messages'], ['ndb', 'NDB'], ['vor', 'VOR'], ['sonde', 'sondes'], ['aprs', 'APRS'], ['mesh', 'MeshCore']];
+const GLYPH = { adsb: 'aircraft', acars: 'aircraft', vdl2: 'aircraft', hfdl: 'aircraft', ais: 'ship', dsc: 'ship', navtex: 'navtex', sondes: 'balloon', ndb: 'beacon', vor: 'navaid' };
+/** The status line (the old #status): receivers sharing, then the COMBINED totals (aircraft one per ICAO address; ships AIS +
+ *  DSC by MMSI — CM.shipsCombined) — the LIST's facts and STATS' NOW. */
+function statusParts() {
+  const by = {}; for (const it of SHOWN) by[it.kind] = (by[it.kind] || 0) + 1;
+  const up = SERVERS.filter((s) => DATA.has(s.id)).length;
+  const sc = CM.shipsCombined(SHOWN, true);
+  if (sc.ships) { by.ship = sc.ships; delete by.dsc; }
+  const shipWords = by.dsc === undefined && SHOWN.some((i) => i.kind === 'dsc') && SHOWN.some((i) => i.kind === 'ship') ? 'ships (AIS + DSC combined)'
+    : SHOWN.some((i) => i.kind === 'dsc') && !SHOWN.some((i) => i.kind === 'ship') ? 'ships (DSC)' : 'ships';
+  const air = new Set(SHOWN.filter((i) => i.kind === 'aircraft').flatMap((i) => i.modes)).size > 1 ? 'aircraft (all sources combined)' : 'aircraft';
+  const rows = KIND_WORDS.filter(([k]) => by[k]).map(([k, w]) => [k, by[k], k === 'aircraft' ? air : k === 'ship' ? shipWords : w]);
+  const only = F.server ? (SERVERS.find((s) => s.id === F.server) || {}).name || '' : '';
+  const text = `${up} of ${SERVERS.length} receiver${SERVERS.length === 1 ? '' : 's'} sharing · ${rows.map(([, n, w]) => `${n} ${w}`).join(' · ') || (up ? 'nothing in this filter' : 'loading…')}`
+    + (only ? ` · only ${only}` : '');
+  return { up, rows, text };
 }
-$('msgList').addEventListener('click', (e) => {
-  const el = e.target.closest('.msg[data-key]'); if (!el || e.target.closest('pre')) return;
-  if (el.dataset.open === '1') { el.dataset.open = ''; el.querySelector('pre')?.remove(); return; }
-  el.dataset.open = '1'; const pre = document.createElement('pre'); pre.className = 'nvTx'; pre.textContent = 'Loading the message…'; el.appendChild(pre);
-  const it = SHOWN.find((i) => i.key === el.dataset.key); fillText(pre, it && CM.textSource(it));
-});
-function setPanel(id, open) {
-  for (const p of ['rx', 'msgs']) { const on = p === id ? open : false; $(p).hidden = !on; $(p === 'rx' ? 'rxBtn' : 'msgBtn').setAttribute('aria-pressed', String(on)); }
-}
-$('rxBtn').addEventListener('click', () => setPanel('rx', $('rx').hidden));
-$('msgBtn').addEventListener('click', () => setPanel('msgs', $('msgs').hidden));
-document.addEventListener('click', (e) => { const c = e.target.closest('[data-close]'); if (c) setPanel(c.dataset.close, false); });
-
-/* ══ THE BARS: three groups, their chips, NAVTEX's own filters, the age ══ */
-let barsKey = '';
-function drawBars() {
-  const facets = CM.navtexFacets(ITEMS);
-  const key = JSON.stringify([PRESENT, [...F.groups], [...F.off], F.server, facets, F.nav.types && [...F.nav.types], F.nav.station, [...F.nav.layers], prefs.seaAreas !== false]);
-  if (key === barsKey) return;
-  barsKey = key;
-  $('groups').innerHTML = CM.GROUPS.map((g) => `<button type="button" class="grp" data-group="${g.id}" aria-pressed="${F.groups.has(g.id)}">${g.label}</button>`).join(' ');
-  $('modes').innerHTML = CM.GROUPS.map((g) => {
+/* ── LAYERS ── */
+function drawLayers(now) {
+  const c = CM.modeCounts(ITEMS, { maxAge: F.maxAge, server: F.server, nav: F.nav, off: F.off }, now);
+  window.__cmCounts = c;
+  const layers = [], shown = {};
+  for (const g of CM.GROUPS) {
     const ms = PRESENT.filter((id) => CM.MODE[id].group === g.id);
-    if (!ms.length) return '';
-    return `<span class="lbl">${g.label}</span><span class="set${F.groups.has(g.id) ? '' : ' off'}">` + ms.map((id) => {
+    if (!ms.length) continue;
+    layers.push({ id: 'g:' + g.id, label: g.label, words: `${g.label}: show or hide the whole group (its modes keep their own switches)` });
+    shown['g:' + g.id] = F.groups.has(g.id);
+    for (const id of ms) {
       const m = CM.MODE[id];
-      return `<button type="button" class="chip" data-mode="${id}" aria-pressed="${!F.off.has(id)}" title="${esc(CM.modeTip(m))}"><span class="dot" style="background:${m.colour};color:${m.colour}"></span>${esc(m.label)}<span class="n" data-n="${id}"></span></button>`;
-    }).join('')
-      // ★ SEA AREAS: the chart, not something heard — its own toggle in MARITIME (on by default), as on the server's map
-      + (g.id === 'maritime' ? `<button type="button" class="chip" data-sea="1" aria-pressed="${prefs.seaAreas !== false}" title="Sea areas: the shipping and marine forecast areas, outlined and named (tinted amber at force 7, red at a gale, while a NAVTEX forecast for them is on the map)"><span class="dot" style="background:${CM.SEA.colours.line};color:${CM.SEA.colours.line}"></span>SEA AREAS</button>` : '')
-      + '</span>';
-  }).join('') + (F.server ? `<button type="button" class="chip only" id="onlyChip">ONLY ${esc((SERVERS.find((s) => s.id === F.server) || {}).name || '')} ✕</button>` : '')
-    || '<span class="lbl">MODES — waiting for the receivers…</span>';
-  // ★ NAVTEX's own filters (the NAVTEX map's): its layers, the message types (B2), a station — under MARITIME → NAVTEX
+      layers.push({ id, label: m.label, words: CM.modeTip(m), n: c.by[id] || 0, colour: m.colour, glyph: GLYPH[id] || 'dot' });
+      shown[id] = !F.off.has(id) && F.groups.has(g.id);
+    }
+    // ★ SEA AREAS: the chart, not something heard — its own switch in MARITIME (on by default), as on the server's map
+    if (g.id === 'maritime') {
+      layers.push({ id: 'sea', label: 'SEA AREAS', words: 'Sea areas: the shipping and marine forecast areas, outlined and named (tinted amber at force 7, red at a gale, while a NAVTEX forecast for them is on the map)', colour: CM.SEA.colours.line });
+      shown.sea = prefs.seaAreas !== false;
+    }
+  }
+  MC.layers(layers, shown, layerToggle);
+}
+function layerToggle(id, on) {
+  if (id.startsWith('g:')) {
+    const g = id.slice(2);
+    if (on) F.groups.add(g); else F.groups.delete(g);
+    prefs.groups = [...F.groups]; savePrefs(); render();
+    tick(true, layersOn().filter((l) => CM.MODE[l].group === g && !anyData(l)));
+    return;
+  }
+  if (id === 'sea') { prefs.seaAreas = on; savePrefs(); render(); return; }
+  if (!CM.MODE[id]) return;
+  if (on) { F.off.delete(id); F.groups.add(CM.MODE[id].group); prefs.groups = [...F.groups]; } else F.off.add(id);
+  prefs.off = [...F.off]; savePrefs(); render();
+  if (on && !anyData(id)) tick(true, [id]);   // ★ switched on: fetch it then
+}
+const anyData = (layer) => [...DATA.values()].some((d) => [...d.radios.values()].some((x) => CM.sectionsOf([layer]).some((k) => k in (x.sections || {}))));
+/* ── MAP CONTROLS: HEARD IN, then NAVTEX's own filters and ONLY THIS (one section of ours) ── */
+let ctlSig = '';
+function drawControls() {
+  MC.ranges(CM.AGES.map((a) => ({ id: String(a.s), label: a.label, words: `Heard in the last ${a.label.toLowerCase()}` })), String(F.maxAge),
+    (id) => { F.maxAge = Number(id); prefs.maxAge = F.maxAge; savePrefs(); render(); }, 'Heard in the last…');
   const navOn = layersOn().includes('navtex');
-  $('navbar').hidden = !navOn;
-  if (navOn) {
-    const L = [['stations', 'STATIONS'], ['warnings', 'WARNINGS'], ['weather', 'WEATHER'], ['messages', 'MESSAGES']];
-    $('navbar').innerHTML = '<span class="lbl">NAVTEX</span>' + L.map(([id, w]) => `<button type="button" class="chip" data-navl="${id}" aria-pressed="${F.nav.layers.has(id)}">${w}<span class="n" data-nn="${id}"></span></button>`).join('')
-      + (facets.types.length ? '<span class="lbl">TYPE</span>' + facets.types.map((b) => `<button type="button" class="chip" data-navt="${b}" aria-pressed="${!F.nav.types || F.nav.types.has(b)}" title="${esc(KIT ? KIT.navtexSubject(b) : b)}">${b}<span class="long"> ${esc(KIT ? KIT.navtexSubject(b) : '')}</span></button>`).join('') : '')
-      + (facets.stations.length ? `<span class="lbl">STATION</span><select class="chip" id="navSt"><option value="">all ${facets.stations.length}</option>${facets.stations.map((s) => `<option${s === F.nav.station ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select>` : '');
+  const facets = CM.navtexFacets(ITEMS);
+  const sig = JSON.stringify([navOn, facets, F.nav.types && [...F.nav.types], F.nav.station, [...F.nav.layers], F.server]);
+  const host = MC.controls();
+  const sect = MC.root.querySelector('.ctlSect');
+  if (sig !== ctlSig) {
+    ctlSig = sig;
+    const NL = [['stations', 'STATIONS'], ['warnings', 'WARNINGS'], ['weather', 'WEATHER'], ['messages', 'MESSAGES']];
+    const only = F.server ? (SERVERS.find((s) => s.id === F.server) || {}).name || '' : '';
+    host.innerHTML = (only ? `<div class="sh">RECEIVER</div><div class="cmSel" data-navrow><button type="button" class="btn chip" id="onlyChip" aria-pressed="true" title="Show every receiver again">ONLY ${esc(only)} ✕</button></div>` : '')
+      + (navOn ? `<div class="sh" style="margin-top:8px">NAVTEX</div><div class="cmSel" data-navrow role="group" aria-label="NAVTEX layers">`
+        + NL.map(([id, w]) => `<button type="button" class="btn chip" data-navl="${id}" aria-pressed="${F.nav.layers.has(id)}">${w}<span class="n" data-nn="${id}"></span></button>`).join('') + '</div>'
+        + (facets.types.length ? `<div class="sh" style="margin-top:8px">TYPE</div><div class="cmSel" data-navrow role="group" aria-label="NAVTEX message types">` + facets.types.map((b) => `<button type="button" class="btn chip" data-navt="${b}" aria-pressed="${!F.nav.types || F.nav.types.has(b)}" title="${esc(KIT ? KIT.navtexSubject(b) : b)}">${b}</button>`).join('') + '</div>' : '')
+        + (facets.stations.length ? `<div class="sh" style="margin-top:8px">STATION</div><div class="cmSel"><select id="navSt" aria-label="NAVTEX station"><option value="">all ${facets.stations.length}</option>${facets.stations.map((s) => `<option${s === F.nav.station ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></div>` : '')
+      : '');
+  }
+  if (sect) sect.hidden = !host.innerHTML;
+  const c = window.__cmCounts || { nav: {} };
+  for (const el of host.querySelectorAll('[data-nn]')) { const n = String(c.nav[el.dataset.nn] || 0); if (el.textContent !== n) el.textContent = n; }
+}
+function ctlWire() {
+  const host = MC.controls();
+  host.addEventListener('click', (e) => {
+    const l = e.target.closest('[data-navl]'), t = e.target.closest('[data-navt]');
+    if (e.target.closest('#onlyChip')) { F.server = ''; render(); return; }
+    if (l) { const id = l.dataset.navl; if (F.nav.layers.has(id)) F.nav.layers.delete(id); else F.nav.layers.add(id); prefs.navLayers = [...F.nav.layers]; }
+    else if (t) { const all = CM.navtexFacets(ITEMS).types; if (!F.nav.types) F.nav.types = new Set(all); const b = t.dataset.navt;
+                  if (F.nav.types.has(b)) F.nav.types.delete(b); else F.nav.types.add(b); if (all.every((x) => F.nav.types.has(x))) F.nav.types = null; prefs.navTypes = F.nav.types ? [...F.nav.types] : null; }
+    else return;
+    savePrefs(); render();
+  });
+  host.addEventListener('change', (e) => { if (e.target.id === 'navSt') { F.nav.station = e.target.value; render(); } });
+}
+/* ── THE LIST: NAVTEX MESSAGES first (Stuart's MESSAGES button), then a tab per kind on the map ── */
+const LIST_TABS = [
+  { id: 'msgs', label: 'MESSAGES', kinds: ['navmsg'] },
+  { id: 'air', label: 'AIRCRAFT', kinds: ['aircraft'] },
+  { id: 'sea', label: 'SHIPS', kinds: ['ship', 'dsc'] },
+  { id: 'navtex', label: 'NAVTEX', kinds: ['navst', 'navwarn', 'navmet'] },
+  { id: 'other', label: 'OTHER', kinds: ['ndb', 'vor', 'sonde', 'aprs', 'mesh'] },
+];
+let listTab = '';
+const MSG_OPEN = new Set(), MSG_TEXT = new Map();
+function drawListCard(now) {
+  const of = (t) => SHOWN.filter((i) => t.kinds.includes(i.kind));
+  const tabs = LIST_TABS.map((t) => ({ t, items: of(t) })).filter((x) => x.items.length);
+  const cur = tabs.find((x) => x.t.id === listTab) || tabs[0];
+  MC.listTabs(tabs.length > 1 ? tabs.map((x) => ({ id: x.t.id, label: x.t.label, n: x.items.length })) : [], cur ? cur.t.id : '', (id) => { listTab = id; render(); });
+  const items = cur ? cur.items.slice().sort((a, b) => b.t - a.t).slice(0, 300) : [];
+  const rows = items.map((it) => {
+    if (it.kind === 'navmsg') {
+      const subj = it.b2 && KIT ? KIT.navtexSubject(it.b2) : '';
+      const st = it.d.st ? (KIT ? KIT.navName(it.d.st, it.d.sc) : it.d.st) : 'station not placed';
+      const open = MSG_OPEN.has(it.key);
+      return VibeMapChrome.mapRowHtml({ key: it.key, colour: CM.MODE.navtex.colour, name: `${it.d.id || '—'} · ${subj || 'message'}`,
+        second: `${it.title} — ${st} · ${it.d.khz} kHz · heard ${it.d.n}× by ${it.heard.length} receiver${it.heard.length === 1 ? '' : 's'}${it.d.lost ? ` · best copy ${it.d.lost} lost` : ''}`,
+        age: CM.ago(now - it.t), extra: open ? `<pre class="nvTx">${esc(MSG_TEXT.has(it.key) ? MSG_TEXT.get(it.key) : 'Loading the message…')}</pre>` : '' });
+    }
+    const m = CM.MODE[CM.primaryMode(it, F.off)] || { colour: '#9fb0c2', label: '' };
+    const sus = SUSPECT.has(it.key);
+    return VibeMapChrome.mapRowHtml({ key: it.key, colour: m.colour, name: it.title + (sus ? ' ?' : ''), dim: sus,
+      second: [it.modes.map((x) => CM.MODE[x].label).join(', '), it.heard[0] ? `heard by ${it.heard[0].name}${it.heard.length > 1 ? ` +${it.heard.length - 1}` : ''}` : ''].filter(Boolean).join(' · '),
+      age: CM.ago(now - it.t) });
+  }).join('') || `<div class="rxEmpty">${esc(SERVERS.length ? 'Nothing on the map in this filter.' : 'Finding the receivers that share…')}</div>`;
+  const st = statusParts();
+  MC.list({ items: [], rowsHtml: rows, status: st.text, count: items.length });
+  for (const k of MSG_OPEN) if (!MSG_TEXT.has(k)) msgText(k);
+}
+async function msgText(key) {
+  if (MSG_TEXT.has(key)) return;
+  MSG_TEXT.set(key, 'Loading the message…');
+  const it = SHOWN.find((i) => i.key === key) || ITEMS.find((i) => i.key === key);
+  const src = it && CM.textSource(it);
+  const s = src && SERVERS.find((x) => x.id === src.sid);
+  const u = s ? CM.textUrl(s, location.protocol, src.f, src.rid) : '';
+  let t = 'The message is not available.';
+  if (u) { try { const j = await (await fetch(u, { credentials: 'omit' })).json(); if (typeof j.txt === 'string') t = j.txt; } catch { t = 'The receiver did not answer.'; } }
+  MSG_TEXT.set(key, t);
+  if (MSG_TEXT.size > 60) MSG_TEXT.delete(MSG_TEXT.keys().next().value);
+  scheduleRender();
+}
+/** A LIST row pressed: a message opens / folds its text; anything else is shown on the map with its card. */
+function listRow(key) {
+  const it = ITEM_BY_KEY.get(key) || SHOWN.find((i) => i.key === key);
+  if (it && it.kind === 'navmsg') { if (MSG_OPEN.has(key)) MSG_OPEN.delete(key); else { MSG_OPEN.add(key); MSG_TEXT.delete(key); } render(); return; }
+  focusItem(key);
+}
+function focusItem(key) {
+  const it = ITEM_BY_KEY.get(key);
+  if (!it || it.lat === null || !gl) { MC.view.note('Not on the map — no position heard yet.', 2500); return; }
+  MC.fitPause();   // ★ a chosen item is where the person wants the map (mapAutoFit's rule) — FIT brings AUTO back
+  const ll = it.kind === 'navmet' && metMarkers.get(key) ? metMarkers.get(key).getLngLat().toArray() : [it.lon, it.lat];
+  gl.easeTo({ center: ll, zoom: Math.max(gl.getZoom(), 7), duration: 700 });
+  gl.once('moveend', () => showCard(key, ll));
+}
+/* ── STATS: the totals, and per mode its newest and its furthest (from the nearest receiver that heard it) ── */
+function rxKm(it) {
+  let best = null;
+  for (const h of it.heard) { const s = SERVERS.find((x) => x.id === h.sid); if (!s || typeof s.lat !== 'number') continue;
+    const km = CM.gcNm(s.lat, s.lon, it.lat, it.lon) * 1.852; if (best === null || km < best.km) best = { km, s }; }
+  return best;
+}
+function drawStats(now) {
+  const st = statusParts();
+  const secs = [{ mode: 'NOW', rows: [{ key: '', label: 'RECEIVERS', value: `${st.up}/${SERVERS.length}`, name: 'sharing now' }]
+    .concat(st.rows.map(([k, n, w]) => ({ key: '', label: w.toUpperCase(), value: String(n), name: '' }))) }];
+  for (const id of layersOn()) {
+    const its = SHOWN.filter((i) => i.lat !== null && i.kind !== 'navmsg' && CM.primaryMode(i, F.off) === id);
+    if (!its.length) continue;
+    const newest = its.reduce((a, b) => (b.t > a.t ? b : a));
+    const rows = [{ key: newest.key, label: 'NEWEST', value: CM.ago(now - newest.t), name: newest.title, lat: newest.lat, lon: newest.lon }];
+    let far = null;
+    for (const it of its) { if (SUSPECT.has(it.key)) continue; const r = rxKm(it); if (r && (!far || r.km > far.km)) far = { km: r.km, it, s: r.s }; }   // ★★ b97 never a suspect
+    if (far && far.km >= 1) rows.push({ key: far.it.key, label: 'FURTHEST', value: `${Math.round(far.km).toLocaleString('en-GB')} km`, name: `${far.it.title} · from ${far.s.name}`, lat: far.it.lat, lon: far.it.lon });
+    secs.push({ mode: CM.MODE[id].label, rows });
+  }
+  MC.stats(secs, (key) => { if (key) focusItem(key); });
+}
+/* ── MESH: implausible self-reported positions (src/utils/meshPlausible.ts via the kit — the ISM maps' own rule) ── */
+const SUSPECT = new Map();   // item key → the card's words
+/** ★★ b97 judged on every render from what is shown: a node's claim against the first placed repeater on its route (or the
+ *  receiver, heard first-hand). ★ HOOK: a server's community mesh row carries no route yet (vibe_community.h `m`: id, name,
+ *  type, lat, lon, last, count, approx) — until it does (relays / hops on the row → it.d.relays / it.d.hops), meshSuspect has
+ *  no evidence and nothing is suspect. */
+function susNote(shown) {
+  SUSPECT.clear();
+  if (!KIT || !KIT.meshSuspect) return;
+  const mesh = shown.filter((i) => i.kind === 'mesh' && i.lat !== null);
+  if (!mesh.some((i) => Array.isArray(i.d.relays) || i.d.hops === 0)) return;
+  const known = mesh.filter((i) => /repeater|room/i.test(i.d.ntype || '') && i.d.node).map((i) => ({ id: String(i.d.node).toLowerCase(), name: i.title, lat: i.lat, lon: i.lon }));
+  for (const it of mesh) {
+    const r = rxKm(it), rx = r ? { lat: r.s.lat, lon: r.s.lon } : null;
+    const v = KIT.meshSuspect({ lat: it.lat, lon: it.lon, relays: it.d.relays, node: it.d.node, hops: it.d.hops }, known, rx);
+    if (v) SUSPECT.set(it.key, KIT.meshSuspectWords(v, r ? r.km : null, false));
   }
 }
-$('groups').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-group]'); if (!b) return;
-  const g = b.dataset.group; if (F.groups.has(g)) F.groups.delete(g); else F.groups.add(g);
-  prefs.groups = [...F.groups]; savePrefs(); render(); tick(true, layersOn().filter((l) => CM.MODE[l].group === g && !anyData(l)));
-});
-$('modes').addEventListener('click', (e) => {
-  const c = e.target.closest('[data-mode]');
-  if (c) { const id = c.dataset.mode; if (F.off.has(id)) F.off.delete(id); else F.off.add(id); prefs.off = [...F.off]; savePrefs(); render();
-           if (!F.off.has(id) && !anyData(id)) tick(true, [id]); return; }   // ★ switched on: fetch it then
-  if (e.target.closest('[data-sea]')) { prefs.seaAreas = prefs.seaAreas === false; savePrefs(); render(); return; }
-  if (e.target.closest('#onlyChip')) { F.server = ''; render(); }
-});
-$('navbar').addEventListener('click', (e) => {
-  const l = e.target.closest('[data-navl]'), t = e.target.closest('[data-navt]');
-  if (l) { const id = l.dataset.navl; if (F.nav.layers.has(id)) F.nav.layers.delete(id); else F.nav.layers.add(id); prefs.navLayers = [...F.nav.layers]; }
-  else if (t) { const all = CM.navtexFacets(ITEMS).types; if (!F.nav.types) F.nav.types = new Set(all); const b = t.dataset.navt;
-                if (F.nav.types.has(b)) F.nav.types.delete(b); else F.nav.types.add(b); if (all.every((x) => F.nav.types.has(x))) F.nav.types = null; prefs.navTypes = F.nav.types ? [...F.nav.types] : null; }
-  else return;
-  savePrefs(); render();
-});
-$('navbar').addEventListener('change', (e) => { if (e.target.id === 'navSt') { F.nav.station = e.target.value; render(); } });
-$('ages').innerHTML += CM.AGES.map((a) => `<button type="button" class="chip" data-age="${a.s}" aria-pressed="${a.s === F.maxAge}">${a.label}</button>`).join('');
-$('ages').addEventListener('click', (e) => {
-  const c = e.target.closest('[data-age]'); if (!c) return;
-  F.maxAge = Number(c.dataset.age); prefs.maxAge = F.maxAge; savePrefs();
-  for (const x of $('ages').querySelectorAll('[data-age]')) x.setAttribute('aria-pressed', String(Number(x.dataset.age) === F.maxAge));
-  render();
-});
-const anyData = (layer) => [...DATA.values()].some((d) => [...d.radios.values()].some((x) => CM.sectionsOf([layer]).some((k) => k in (x.sections || {}))));
-
-/** ★ The pills' totals (CM.modeCounts) — written into the pills in place, so the bars are not rebuilt every render. */
-function drawCounts(now) {
-  const c = CM.modeCounts(ITEMS, { maxAge: F.maxAge, server: F.server, nav: F.nav, off: F.off }, now);
-  for (const el of document.querySelectorAll('[data-n]')) { const n = c.by[el.dataset.n] || 0; el.textContent = String(n); el.classList.toggle('z', !n); }
-  for (const el of document.querySelectorAll('[data-nn]')) { const n = c.nav[el.dataset.nn] || 0; el.textContent = String(n); el.classList.toggle('z', !n); }
-  window.__cmCounts = c;
+/** The node's own icon with a "?" badge (drawn dimmed — the ISM maps' look). */
+function susSvg(it) {
+  const h = KIT.ismMapIcon({ kind: 'meshcore', ntype: it.d.ntype, approx: it.d.approx ? 1 : undefined, seen: 0 }).html.replace(/\sstyle="[^"]*"/, '');
+  const w = Number((/width="(\d+(?:\.\d+)?)"/.exec(h) || [])[1]) || 24, ht = Number((/height="(\d+(?:\.\d+)?)"/.exec(h) || [])[1]) || 24;
+  const inner = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(h.includes('xmlns=') ? h : h.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" '));
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w + 8}" height="${ht + 8}" viewBox="0 0 ${w + 8} ${ht + 8}"><image href="${inner}" x="0" y="8" width="${w}" height="${ht}"/>`
+    + `<circle cx="${w + 1}" cy="7" r="6.5" fill="#ffcf7a" stroke="#0b1014" stroke-width="1.2"/><text x="${w + 1}" y="10.5" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" font-weight="800" fill="#111">?</text></svg>`;
 }
-
+/** Everything the cards show, from what is shown now (render calls it). */
+function chromeSync(now) {
+  drawLayers(now); drawControls(); drawReceivers(); drawListCard(now); drawStats(now);
+  MC.legend(keyHtml());
+  const empty = gl && !SERVERS.length && listAt;
+  if (empty !== chromeSync.empty) { chromeSync.empty = empty; MC.view.note(empty ? 'No receiver shares to the community map yet — a VibeServer owner turns on “Share to the VibeSDR community map” in Setup (or the app’s Server mode) to add theirs.' : ''); }
+}
 /* ══ THE KEY — the server maps' own rows and glyphs (KIT: shipLegendRows, the hazards and marks, windLegendRows,
  *  seaLegendRows, the aircraft glyphs and their names), plus what this page draws itself (the receivers' radio, the NDB / VOR diamond);
  *  a section only for a layer switched on ══ */
 const kr = (g, w) => `<div class="kr"><span>${g}</span><span>${esc(w)}</span></div>`;
 const krh = (rows) => rows.map(([g, w]) => kr(g, w)).join('');
-function drawKey() {
+function keyHtml() {
   const on = new Set(layersOn()), nav = on.has('navtex') ? F.nav.layers : new Set();
   const sec = (t) => `<div class="ks">${esc(t)}</div>`;
   let h = sec('RECEIVERS') + kr(RX_SVG({ listeners: 0, maxListeners: 4 }, false), 'A receiver sharing to this map, at the centre of its grid square — green: a free slot')
@@ -957,7 +1061,7 @@ function drawKey() {
       + kr(`<svg width="24" height="12" viewBox="0 0 24 12"><path d="M1 9 L9 4 L14 6" fill="none" stroke="${kc}" stroke-width="2.4" stroke-linecap="round"/><path d="M15 6 L23 2" fill="none" stroke="${kc}" stroke-width="2" stroke-dasharray="2 2.5"/></svg>`,
            'A clicked aircraft’s track: solid where flown, dashed across a gap of over five minutes with no position')
       + kr(`<span style="opacity:.45;display:flex">${acGlyph('jet', CM.MODE.adsb.colour, 28)}</span>`, 'Faded: a datalink position (ACARS, VDL2, HFDL) over five minutes old, fading until it is dropped at 30 minutes — ADS-B positions are dropped at five')
-      + kr(`<svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(255,184,51,0.78)" stroke="#140d00" stroke-width="1.5"/><text x="12" y="16" text-anchor="middle" font-size="10" font-weight="700" fill="#140d00">12</text></svg>`, 'A number: aircraft, ships, APRS or MeshCore gathered when zoomed out — click to zoom in');
+      + kr(`<span style="position:relative;display:inline-flex">${acGlyph('jet', kc, 24)}<b style="position:absolute;right:-5px;top:-5px;min-width:13px;height:13px;border-radius:7px;background:${kc};color:#111;font:800 8px/13px system-ui,sans-serif;text-align:center">12</b></span>`, 'Zoomed out, where icons would sit on top of each other: one icon of what is there (aircraft with aircraft, MeshCore with MeshCore) and how many — click to zoom in');
   }
   const dia = (c) => `<svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1 L13 7 L7 13 L1 7 Z" fill="${c}" stroke="#0b1014" stroke-width="1.2"/></svg>`;
   if (on.has('ndb')) h += sec('NDB') + kr(dia(CM.MODE.ndb.colour), 'A non-directional beacon heard, placed from the published list');
@@ -987,40 +1091,30 @@ function drawKey() {
   if (KIT && on.has('mesh')) h += sec('MESHCORE') + ['repeater', 'companion', 'room server', 'sensor'].map((t) => kr(KIT.ismMapIcon({ kind: 'meshcore', ntype: t, seen: 0 }).html, `A MeshCore ${t}`)).join('')
     + kr(KIT.ismMapIcon({ kind: 'meshcore', ntype: 'companion', approx: 1, seen: 0 }).html, 'Approximate (~1 km): a companion node is a person');
   h += `<div class="kr" style="opacity:.75"><span>◐</span><span>Anything faded was heard longer ago, within its mode’s window (HEARD IN)</span></div>`;
-  $('key').innerHTML = h;
+  return h;
 }
-$('keyBtn').addEventListener('click', () => {
-  const open = $('key').hidden;
-  $('key').hidden = !open; $('keyBtn').setAttribute('aria-expanded', String(open));
-  if (open) drawKey();
+/* ══ ★★★ b97 THE CARD SYSTEM — mounted once; the map is made in its holder (makeMap) when it shows ══ */
+const MC = VibeMapChrome.mountMapChrome({
+  title: 'COMMUNITY MAP', exitLabel: 'Back to the directory', listTitle: 'MESSAGES', profile: 'aero',
+  onExit: () => { location.href = '/'; },
+  // the item drawing is this page's own (MapLibre layers, the servers' cards) — the chrome draws none
+  icon: () => ({ html: '', w: 0, h: 0 }), label: () => '', card: () => '',
+  hostMap: makeMap,
 });
-for (const ev of ['wheel', 'touchstart', 'pointerdown']) $('key').addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
-
-function drawStatus() {
-  const by = {}; for (const it of SHOWN) by[it.kind] = (by[it.kind] || 0) + 1;
-  const up = SERVERS.filter((s) => DATA.has(s.id)).length;
-  // ★★ COMBINED totals (Stuart 11-25): aircraft are one per ICAO address whichever sources heard them (the merge); ships are
-  //    AIS and DSC together by MMSI (CM.shipsCombined) — the pills under them are the breakdown, each counted once
-  const sc = CM.shipsCombined(SHOWN, true);
-  if (sc.ships) { by.ship = sc.ships; delete by.dsc; }
-  const shipWords = by.dsc === undefined && SHOWN.some((i) => i.kind === 'dsc') && SHOWN.some((i) => i.kind === 'ship') ? 'ships (AIS + DSC combined)'
-    : SHOWN.some((i) => i.kind === 'dsc') && !SHOWN.some((i) => i.kind === 'ship') ? 'ships (DSC)' : 'ships';
-  const words = [['aircraft', new Set(SHOWN.filter((i) => i.kind === 'aircraft').flatMap((i) => i.modes)).size > 1 ? 'aircraft (all sources combined)' : 'aircraft'], ['ship', shipWords], ['dsc', 'DSC'], ['navst', 'NAVTEX stations'], ['navwarn', 'warnings'], ['navmet', 'forecasts'],
-    ['navmsg', 'messages'], ['ndb', 'NDB'], ['vor', 'VOR'], ['sonde', 'sondes'], ['aprs', 'APRS'], ['mesh', 'MeshCore']].filter(([k]) => by[k]).map(([k, w]) => `<b>${by[k]}</b> ${w}`);
-  $('status').innerHTML = `<b>${up}</b> of ${SERVERS.length} receiver${SERVERS.length === 1 ? '' : 's'} sharing · ${words.join(' · ') || (up ? 'nothing in this filter' : 'loading…')}`
-    + (F.server ? ` · only <b>${esc((SERVERS.find((s) => s.id === F.server) || {}).name || '')}</b>` : '');
-  const empty = $('empty');
-  if (gl && !SERVERS.length && listAt) { empty.hidden = false; empty.innerHTML = 'No receiver shares to the community map yet.<br>A VibeServer owner turns on <b>Share to the VibeSDR community map</b> in Setup (or in the app’s Server mode) to add theirs.'; }
-  else if (gl) empty.hidden = true;
-}
+MC.chips({ layers: true, stats: true });
+MC.retitle('servers', 'RECEIVERS');
+// ★ the old footer's words (privacy: where a receiver is drawn) — HELP's credit line now
+MC.credit('Shared by VibeServer owners who switched on “Share to the VibeSDR community map”. What the stations themselves broadcast, read straight from each receiver; a receiver is drawn at the centre of its four-character grid square, never its address.');
+MC.onRow(listRow);
+rxWire(); ctlWire();
+MC.show(null);
 
 /* ══ THE CLOCK — a floor on every fetch, nothing while hidden ══ */
-if (gl) gl.on('load', scheduleRender);
 tick(true);
 setInterval(() => tick(false), 15000);   // ★ wakes every 15 s; each receiver is asked only when its layers are due (60 s / 5 min)
 setInterval(() => { if (!document.hidden) scheduleRender(); }, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(false); });
-if (new URLSearchParams(location.search).get('receivers') === '1') setPanel('rx', true);
+if (new URLSearchParams(location.search).get('receivers') === '1') MC.card('servers', true);
 </script>
 </body>
 </html>
