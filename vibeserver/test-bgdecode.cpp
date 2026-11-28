@@ -655,6 +655,13 @@ static void phase2() {
     ok(bg::validate(c, 2048000, err) && std::fabs(bg::signalHz(iss.vfos[0]) - 145800000) < 1, "SSTV on NFM (the ISS, 145.800) validates");
     c.profiles[0].vfos[0].dec = "navtex";
     ok(!bg::validate(c, 2048000, err), "NAVTEX on NFM is refused: " + err);
+    // ★★ beta98 (Stuart 11-28): 7171 kHz LSB is 40 m's SSTV calling frequency — SSTV's tones decode the same from an LSB
+    //    demodulation of an LSB station (the runner's LSB audio path is proven end to end by the NAVTEX LSB VFO above)
+    bg::Profile sstv40; sstv40.centreHz = 7100000; sstv40.vfos = { bg::Vfo{7171000, "lsb", "sstv"} };
+    c.profiles = { sstv40 };
+    ok(bg::validate(c, 2048000, err) && bg::decoderFitsDemod("sstv", "lsb") && std::fabs(bg::signalHz(sstv40.vfos[0]) - 7171000) < 1,
+       "★ SSTV on LSB (7171 kHz) validates, its dial is the frequency: " + err);
+    ok(!bg::decoderFitsDemod("ft8", "lsb") && !bg::decoderFitsDemod("wefax", "lsb"), "FT8 and WEFAX stay USB only");
 
     std::printf("── WEFAX and SSTV pictures: complete, PARTIAL, and noise not kept ──\n");
     gallery::Store s; s.setDir(tmpDir("pics"));

@@ -52,11 +52,35 @@ const [md, dc] = row2.children.filter((e) => e.tag === 'select');
 ok(dc.children.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,wefax,sstv,ft8,cw-skim-24,cw-skim-48,cw-skim-96,psk-skim-6,psk-skim-12,rtty-skim-24,rtty-skim-48,rtty-skim-96,aprs-hf,dsc,sitora,spots-band,ndb-skim',
    'USB offers NAVTEX, RTTY, WEFAX, SSTV, FT8, the CW skimmers (24/48/96 kHz), the PSK skimmers (6/12 kHz), the RTTY skimmers (24/48/96 kHz, beta90), HF APRS, DSC, SITOR-A, Band digital spots and — the HF+ reaches LF — the NDB skimmer (V12 2026-10-27; SITOR-A 2026-10-29)');
 md.value = 'lsb'; md.onchange();
-ok(!dc.children.some((o) => o.value === 'wefax' || o.value === 'sstv' || o.value === 'ft8' || o.value.startsWith('cw-skim') || o.value.startsWith('psk-skim')) && dc.value === 'navtex',
-   'LSB offers only NAVTEX and RTTY (no negative charts), and keeps NAVTEX');
+// ★★ beta98 (Stuart 11-28: 7171 kHz LSB is 40 m's SSTV calling frequency) — SSTV on LSB; the USB-only ones greyed, said
+{
+  const live = dc.children.filter((o) => !('disabled' in o.attrs)), grey = dc.children.filter((o) => 'disabled' in o.attrs);
+  ok(live.map((o) => o.value).join() === 'navtex,rtty,rtty-ham,rtty-weather,sstv,aprs-hf,dsc,sitora' && dc.value === 'navtex',
+     `LSB offers NAVTEX, RTTY, SSTV, HF APRS, DSC, SITOR-A — and keeps NAVTEX (${live.map((o) => o.value).join()})`);
+  ok(grey.some((o) => o.value === 'wefax') && grey.some((o) => o.value === 'ft8') && grey.every((o) => / \u2014 USB only$/.test(o.textContent)),
+     `…WEFAX, FT8/FT4 and the skimmers listed greyed, "USB only" — never silently missing (${grey.map((o) => o.textContent).join(' | ')})`);
+  ok(!grey.some((o) => o.value === 'sstv' || o.value === 'navtex'), '…and nothing that runs on LSB is greyed');
+}
 ok(api.model().profiles[0].vfos[1].mode === 'lsb' && !row2.text().includes('Listening for'), '...the VFO is LSB now, and still no hint line');
-md.value = 'nfm'; md.onchange();
-ok(dc.children.map((o) => o.value).join() === 'sstv,aprs,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV, APRS and DSC (VHF channel 70), and the VFO becomes SSTV');
+// the LSB SSTV VFO saves and loads back as it was (7171 kHz LSB)
+{
+  dc.value = 'sstv'; dc.onchange && dc.onchange();
+  const v = api.model().profiles[0].vfos[1]; v.hz = 7171000;
+  const saved = api.bgCollect();
+  ok(/"hz":7171000,"mode":"lsb","dec":"sstv"/.test(saved), `an LSB SSTV VFO is saved (${saved})`);
+  api.bgLoad({ driver: 'airspyhf', bgDecode: saved });
+  ok(api.bgCollect() === saved && api.model().profiles[0].vfos[1].dec === 'sstv' && api.model().profiles[0].vfos[1].mode === 'lsb', '…and loads back unchanged');
+  api.bgLoad({ driver: 'airspyhf', bgDecode: JSON.stringify(NICK) });
+}
+{
+  const row = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
+  const [md2] = row.children.filter((e) => e.tag === 'select');
+  md2.value = 'lsb'; md2.onchange();
+}
+const row2b = box.children.filter((c) => c.attrs.class === 'bgProf')[0].children.filter((e) => e.attrs.class === 'bgVfo')[1];
+const [mdN, dcN] = row2b.children.filter((e) => e.tag === 'select');
+mdN.value = 'nfm'; mdN.onchange();
+ok(dcN.children.map((o) => o.value).join() === 'sstv,aprs,dsc-vhf' && api.model().profiles[0].vfos[1].dec === 'sstv', 'NFM offers SSTV, APRS and DSC (VHF channel 70), and the VFO becomes SSTV');
 
 // ★ V12 CW: the page's decoder list mirrors the server's (vibe_bgdecode_config.h decoders()) — id, label, demodulators
 {

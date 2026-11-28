@@ -1,11 +1,12 @@
 // test_bg_decode_model.ts — the model behind the Android server screen's Background Decoding editor
 // (src/services/bgDecode.ts): RadioConfig::bgDecode's JSON read and written exactly as the Setup page's bgLoad /
 // bgCollect do, the engine's caps read, and the window / NDB / Band / DSC rules the editor's lines come from.
+import { readFileSync } from 'node:fs';
 import {
   parseBg, collectBg, parseBgCaps, bgNewProfile, bgHalfWindow, bgNdbSegment, bgNdbHint, bgBandReach, bgBandHint,
   bgDscWatch, bgLocal, bgTime, bgReach, bgDecoderSetsFreq, type BgSpotBand,
   bgSkimPoints, bgSkimPointAt, bgSkimPointLabel, bgSkimFits, bgSkimFirstFit, bgSkimHint, bgSkimDecoderChange, parseSkimBands, type BgVfo,
-  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX, bgSatBothFits,
+  bgFaxIn, bgFaxKhz, bgFaxDefault, bgFaxHint, BG_FAX_MAX, bgSatBothFits, bgUsbOnly, type BgDecoderDef,
 } from '../src/services/bgDecode.ts';
 
 let pass = 0, fail = 0;
@@ -168,5 +169,18 @@ console.log('── ★★★ beta97 the satellite digital-mode skimmer in satPa
   ok(parseBg(JSON.stringify({ satPasses: { skimMode: 'warp' } })).sat.skimMode === 'auto', 'an unknown speed reads as auto');
 }
 
+// ── ★★ beta98 SSTV ON LSB (Stuart 11-28: 7171 kHz LSB is 40 m's SSTV calling frequency) — the engine's own list ──
+{
+  const cfgH = readFileSync(new URL('../android/app/src/main/cpp/vibe_bgdecode_config.h', import.meta.url), 'utf8');
+  const decs: BgDecoderDef[] = [...cfgH.matchAll(/\{ "([a-z0-9-]+)",\s+"([^"]+)",\s+"[^"]*",\s+"[^"]*",\s+"([a-z,]+)"/g)]
+    .map((x) => ({ id: x[1], label: x[2], modes: x[3].split(','), tone: 0 }));
+  const lsbRuns = decs.filter((d) => d.modes.includes('lsb')).map((d) => d.id);
+  ok(lsbRuns.includes('sstv') && decs.find((d) => d.id === 'sstv')!.modes.join() === 'usb,lsb,nfm', `the engine offers SSTV on USB, LSB and NFM (LSB: ${lsbRuns.join(' ')})`);
+  const grey = bgUsbOnly(decs, 'lsb').map((d) => d.id);
+  ok(grey.includes('wefax') && grey.includes('ft8') && !grey.includes('sstv') && !grey.includes('navtex'), `an LSB row greys the USB-only ones, "USB only" (${grey.join(' ')})`);
+  ok(bgUsbOnly(decs, 'usb').length === 0 && bgUsbOnly(decs, 'nfm').length === 0, '…and only on an LSB row');
+  const j = '{"on":true,"waitMin":5,"profiles":[{"centre":7100000,"from":"00:00","to":"00:00","vfos":[{"hz":7171000,"mode":"lsb","dec":"sstv"}]}]}';
+  ok(collectBg(parseBg(j)) === j, 'a 7171 kHz LSB SSTV VFO round-trips byte for byte');
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

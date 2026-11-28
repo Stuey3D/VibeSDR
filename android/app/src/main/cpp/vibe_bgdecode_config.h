@@ -109,8 +109,18 @@ constexpr size_t kMaxVfos = 16;   // ★ a sensible ceiling; a SINGLE-radio serv
  *  518.5 LSB; a WEFAX carrier is the dial + 1.9 kHz; SSTV and FT8 frequencies are quoted as the dial itself (tone 0).
  *  `inverted` is the preset's polarity on USB — LSB mirrors the audio, so the decoder is told the OPPOSITE there
  *  (★★ NickB, 2026-10-22: LSB to dodge local interference; the mark/space swap is ours to make).
- *  ★ `modes` lists only what works: WEFAX and SSTV are NOT offered on LSB — mirrored audio is a negative chart and a
- *    scrambled picture, and neither decoder can be told otherwise — and SSTV on NFM is the ISS on 145.800.
+ *  ★ `modes` lists only what works. The rule is whether the PROTOCOL cares which sideband the receiver demodulates:
+ *    · SSTV on USB, LSB and NFM (★★ beta98, Stuart 11-28: 7171 kHz is 40 m's SSTV calling frequency and it is LSB) —
+ *      plain audio tones (1100–2300 Hz) sent on whichever sideband the station chose; an LSB VFO demodulates an LSB
+ *      transmission the right way round, so the decoder hears the same audio as USB on a USB one. NFM is the ISS on 145.800.
+ *    · NAVTEX / RTTY / DSC / SITOR-A / HF APRS on both: the decoders are told the sense (or find it themselves).
+ *    · WEFAX: USB only — the stations send on the USB convention, and LSB mirrors the 1500–2300 Hz grey scale into a
+ *      negative chart the decoder cannot be told to invert.
+ *    · FT8 / FT4 (and the Band skimmer's WSPR / JS8 …): USB only — the whole world transmits them on USB and the tones'
+ *      order IS the data; LSB reverses it.
+ *    · The skimmers (CW / PSK / RTTY / NDB / Band / WEFAX stations): fed the radio's IQ, no demodulator — "usb" is a
+ *      placeholder for the row's demodulator, which the page greys out.
+ *    On an LSB row the page and the app list the USB-only ones greyed, "USB only" — never silently missing.
  *  ★ `ext` "" = the FT8/FT4 spotter (DecoderHost::startSpots), kept as a run's SUMMARY, not as spots. */
 struct DecoderDef { const char* id; const char* label; const char* ext; const char* kind; const char* modes;
                     double toneHz; double shift; double baud; bool inverted; bool autoRtty;
@@ -124,7 +134,7 @@ inline const std::vector<DecoderDef>& decoders() {
         { "rtty-ham",     "RTTY 45.45 Bd 170 Hz",        "fsk",    "rtty",   "usb,lsb", 1000, 170, 45.45, false, false, 0 },
         { "rtty-weather", "RTTY 50 Bd 450 Hz (weather)", "fsk",    "rtty",   "usb,lsb", 1000, 450, 50,    true,  false, 0 },
         { "wefax",        "WEFAX (120 LPM)",             "wefax",  "wefax",  "usb",     1900, 0,   0,     false, false, 0 },
-        { "sstv",         "SSTV",                        "sstv",   "sstv",   "usb,nfm", 0,    0,   0,     false, false, 0 },
+        { "sstv",         "SSTV",                        "sstv",   "sstv",   "usb,lsb,nfm", 0,    0,   0,     false, false, 0 },
         { "ft8",          "FT8 / FT4 (summary)",         "",       "ft8",    "usb",     0,    0,   0,     false, false, 0 },
         // ★★ CW SKIMMERS (Stuart, 2026-10-25: "CW skimming … lightweight") — one FFT over the segment, a decoder per signal
         //    found; kept as a SUMMARY of the spots, as FT8 is. The VFO is the segment's centre (e.g. 7.020 MHz for

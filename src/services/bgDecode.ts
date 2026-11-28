@@ -72,6 +72,11 @@ export type BgWefaxStation = { id: string; call: string; name: string; country: 
 /** ★ At most this many ticks on one WEFAX stations row (the engine's kMaxFaxFreqs — it refuses more, in words). */
 export const BG_FAX_MAX = 8;
 
+/** ★★ beta98 the decoders an LSB row cannot run but a USB one can (WEFAX, FT8/FT4, the skimmers) — the editor lists them
+ *  greyed with "USB only" (the Setup page's bgUsbOnly). SSTV runs on LSB (Stuart 11-28: 7171 kHz LSB). */
+export function bgUsbOnly(decoders: BgDecoderDef[], mode: string): BgDecoderDef[] {
+  return mode !== 'lsb' ? [] : decoders.filter((d) => d.modes.includes('usb') && !d.modes.includes('lsb'));
+}
 /** The editor's demodulators — only those some background decoder works on (the Setup page's BG_DEMODS). */
 export const BG_DEMODS: Record<string, string> = { usb: 'USB', lsb: 'LSB', nfm: 'NFM' };
 /** ★ Words for the ISM band ids the ENGINE lists (vibe_ism_bands.h) — the Setup page's labels. An id the engine adds

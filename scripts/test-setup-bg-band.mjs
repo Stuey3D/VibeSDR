@@ -57,7 +57,7 @@ ok(vfoRows().length === 2, 'the Lenovo-style profile: NAVTEX + 160 m FT8, two ro
 ok(decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), 'a USB row offers "Band skimmer (summary)"');
 ok(api.bgCollect() === JSON.stringify(LENOVO), 'an ordinary profile still saves back byte for byte');
 modeSel(vfoRows()[1]).value = 'lsb'; modeSel(vfoRows()[1]).onchange();
-ok(!decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), '…but not on LSB (no demodulator runs; Band is USB dials)');
+ok(!decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band' && !('disabled' in o.attrs)) && decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band' && 'disabled' in o.attrs && /USB only/.test(o.textContent)), '…but not on LSB (no demodulator runs; Band is USB dials) — listed greyed, "USB only" (beta98)');
 modeSel(vfoRows()[1]).value = 'usb'; modeSel(vfoRows()[1]).onchange();
 // 160 m FT8 → 160 m Band
 decSel(vfoRows()[1]).value = 'spots-band'; decSel(vfoRows()[1]).onchange();

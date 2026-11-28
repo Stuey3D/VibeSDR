@@ -8990,15 +8990,17 @@ function addr() {
 // ★ The model lives in bgModel and the DOM is redrawn from it; the inputs write straight back into the model, so a
 //   redraw (a row added or removed) never loses what was typed.
 // ★ Mirrors vibe_bgdecode_config.h: the decoders, their audio tone (USB: signal = dial + tone; LSB: dial − tone).
-// ★ `modes`: only what works — WEFAX and SSTV are not offered on LSB (a mirrored chart is a negative), SSTV on NFM is
-//   the ISS on 145.800. FT8/FT4 is kept as a SUMMARY (the last 10 minutes, and each UTC hour), not as spots.
+// ★ `modes`: only what works — vibe_bgdecode_config.h says why for each. ★★ beta98 (Stuart 11-28, 7171 kHz LSB): SSTV on
+//   USB, LSB and NFM (audio tones on the station's own sideband; NFM is the ISS on 145.800); WEFAX and FT8/FT4 USB only
+//   (a mirrored chart is a negative; FT8's tone order is its data) — on an LSB row they are listed greyed, "USB only".
+//   FT8/FT4 is kept as a SUMMARY (the last 10 minutes, and each UTC hour), not as spots.
 const BG_DECODERS = [
   { id: "navtex",       label: "NAVTEX",                       tone: 500,  modes: ["usb", "lsb"] },
   { id: "rtty",         label: "RTTY (auto)",                  tone: 1000, modes: ["usb", "lsb"] },
   { id: "rtty-ham",     label: "RTTY 45.45 Bd 170 Hz",         tone: 1000, modes: ["usb", "lsb"] },
   { id: "rtty-weather", label: "RTTY 50 Bd 450 Hz (weather)",  tone: 1000, modes: ["usb", "lsb"] },
   { id: "wefax",        label: "WEFAX (120 LPM)",              tone: 1900, modes: ["usb"] },
-  { id: "sstv",         label: "SSTV",                         tone: 0,    modes: ["usb", "nfm"] },
+  { id: "sstv",         label: "SSTV",                         tone: 0,    modes: ["usb", "lsb", "nfm"] },
   { id: "ft8",          label: "FT8 / FT4 (summary)",          tone: 0,    modes: ["usb"] },
   // ★★ V12 2026-10-25: CW SKIMMERS — every CW signal in a segment CENTRED on the VFO's frequency, kept as a summary of
   //    the spots (as FT8 is). "usb" because a VFO row has a demodulator; none runs for a skimmer (it is fed IQ).
@@ -9039,6 +9041,10 @@ const BG_DECODERS = [
   //    every ticked one inside the window runs its own WEFAX decoder, all in ONE decoder slot. Its row has no frequency box.
   { id: "wefax-stations", label: "WEFAX stations (several in one slot)", tone: 1900, modes: ["usb"], fax: true },
 ];
+/** ★★ beta98 the decoders an LSB row cannot run but a USB one can — listed greyed with "USB only" (bgdecode_config.h). */
+function bgUsbOnly(mode) {
+  return mode !== "lsb" ? [] : BG_DECODERS.filter(function (d) { return d.modes.indexOf("usb") >= 0 && d.modes.indexOf("lsb") < 0; });
+}
 /** ★ V12 2026-10-27 (Stuart): a row whose DECODER sets the frequency — its frequency box and demodulator are greyed out. */
 function bgDecoderSetsFreq(dec) { return dec === "spots-band" || dec === "ndb-skim" || dec === "wefax-stations"; }
 /* ★★ V12 2026-11-22 — THE WEFAX STATIONS a "WEFAX stations" row ticks: the server's list (GET /vibeserver/hardware
@@ -10306,6 +10312,8 @@ function bgRender() {
           && (!d.skim || bgSkimOk(d.skim) || v.dec === d.id)    // ★ V12 beta90: a skimmer only where it can run here
           && (!d.fax || bgFaxList() || v.dec === d.id); });     // ★ WEFAX stations only where this radio reaches one
         fit.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
+        // ★★ beta98 an LSB row lists the USB-only decoders GREYED, "USB only" — never silently missing (Stuart 11-28)
+        bgUsbOnly(md.value).forEach(function (d) { dc.appendChild(el("option", { value: d.id, disabled: "" }, d.label + " \u2014 USB only")); });
         if (!fit.some(function (d) { return d.id === v.dec; })) v.dec = fit.length ? fit[0].id : "";
         dc.value = v.dec;
       };
