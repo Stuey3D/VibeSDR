@@ -20,6 +20,20 @@ export function nmBetween(a: { lat: number; lon: number }, b: { lat: number; lon
   return (2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(h)))) / 1.852;
 }
 
+/** ★★ 11-28 EACH MODE ITS OWN FIXES (Stuart, the community map: "ADS-B furthest 2540 km" — an aircraft first heard on
+ *  ADS-B that later moved to HFDL kept counting for ADS-B at its HFDL position). A shared aircraft's `src` is every source
+ *  that has heard it (the server's srcMask), its position came from ONE of them (`posSrc`, vibe_aircraft_share.h): the
+ *  position is a sighting for THAT mode only — never ADS-B's furthest from an HFDL / VDL2 / ACARS / ADS-C fix, nor the
+ *  other way round. No posSrc (an older server's row) = nobody's fix. */
+export function statsObsOfShared(aircraft: ReadonlyArray<{ key: string; lat?: number; lon?: number; posSrc?: string; flight?: string; reg?: string; icao?: string }> | null | undefined): StatsObs[] {
+  const out: StatsObs[] = [];
+  for (const pl of aircraft ?? []) {
+    if (pl.lat == null || pl.lon == null || !pl.posSrc) continue;
+    out.push({ mode: pl.posSrc, key: `a:${pl.key}`, lat: pl.lat, lon: pl.lon, name: pl.flight || pl.reg || pl.icao || '' });
+  }
+  return out;
+}
+
 /** Fold one batch of sightings in. `firstPass` (the store was empty — the map just opened): nothing counts as NEWEST. */
 export function statsSeen(store: StatsStore, obs: StatsObs[], now: number): void {
   const firstPass = store.size === 0;

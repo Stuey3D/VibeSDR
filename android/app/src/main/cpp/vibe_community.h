@@ -195,7 +195,11 @@ inline std::string ndbRows(std::vector<NdbRow> rows, int64_t now, size_t maxRows
 }
 
 /** ★ Compact aircraft rows — [key, lat, lon, position age s, alt ft|null, track|null, speed kt|null, sources (bit mask: 1 ADS-B,
- *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type, what]. The rows as aircraftRows() chose them.
+ *  2 ACARS, 4 VDL2, 8 HFDL, 16 ADS-C), flight, reg, type, what, position source]. The rows as aircraftRows() chose them.
+ *  ★★ 11-28 `position source` (field 12; Stuart, the community map: "ADS-B furthest 2540 km"): the ONE source the position
+ *  came from, as a bit of the same mask (posSrc — 1 ADS-B … 16 ADS-C; 0 = not known). The sources field is every source
+ *  that has HEARD the aircraft, so an aircraft first heard on ADS-B that later moved to HFDL still has ADS-B's bit; a
+ *  page's per-mode FURTHEST must read this, never the mask. Older pages ignore the extra field.
  *  ★★ beta96 `what` (field 11; Stuart 11-26: "the correct icon for the aircraft type like the ADS-B map") — what the aircraft
  *  data says the glyph needs, "wake|description letter|engines|m" (e.g. "H|L|4J|", "L|H|1T|", "M|L|2J|m" military), "" when
  *  nothing is known. The page picks the glyph with the ADS-B map's own rule (iconClassOf, adsblayer.js) — the rule lives
@@ -228,7 +232,7 @@ inline std::string aircraftCompact(const std::vector<vibeavshare::Row>& rows, in
         if (extra) extra(w, ex);
         const std::string& type = w.type.empty() ? ex.type : w.type;
         o += jsonEsc(w.flight.substr(0, 10)) + "\",\"" + jsonEsc(w.reg.substr(0, 10)) + "\",\"" + jsonEsc(type.substr(0, 8)) + "\",\""
-           + jsonEsc(aircraftWhat(ex)) + "\"]";
+           + jsonEsc(aircraftWhat(ex)) + "\"," + std::to_string(w.posSrc >= 0 && w.posSrc < vibeavshare::kNSrc ? 1u << w.posSrc : 0u) + "]";
     }
     return o;
 }

@@ -295,7 +295,7 @@ import MapOverlay, { type MapKind } from '../components/MapOverlay';
 import { mwfStoreNew, type MwfFrame, type MwfStore } from '../components/MapMiniWaterfall';   // ★★★ beta97 the map drawer's waterfall
 import type { MapCardsIn } from '../components/MapChrome';
 import { gainRowFor, rateRows, rateChip, mapSpecWanted, serversRows, sourceRows, layerOthers, layerOtherCounts, layerPosWords } from '../utils/mapChrome';
-import { statsSeen, statsSections, type StatsStore } from '../utils/mapStats';
+import { statsSeen, statsSections, statsObsOfShared, type StatsStore } from '../utils/mapStats';
 import { avBandFor, wfModelChannels, wfModelNdb, wfModelVfo, wfModelVor, type MapWfModel, type WfSeen } from '../utils/mapWfModel';
 import PanelBoundary from '../components/PanelBoundary';
 import CityPickerModal from '../components/CityPickerModal';
@@ -16165,8 +16165,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!trackMapUp) return [];
     const now = Date.now();
     if (!mapStatsOpened.current) mapStatsOpened.current = now;
-    const obs: Array<{ mode: string; key: string; lat: number; lon: number; name: string; trackedNm?: number }> = [];
-    for (const pl of avShared?.aircraft ?? []) if (pl.lat != null && pl.lon != null) for (const m of pl.src) obs.push({ mode: m, key: `a:${pl.key}`, lat: pl.lat, lon: pl.lon, name: pl.flight || pl.reg || pl.icao || '' });
+    const obs: Array<{ mode: string; key: string; lat: number; lon: number; name: string; trackedNm?: number }> = statsObsOfShared(avShared?.aircraft);   // ★★ 11-28 posSrc only
     if (adsbLiveHere && adsbReport) for (const a of adsbReport.aircraft as unknown as Array<Record<string, unknown>>) {
       const lat = Number(a.lat), lon = Number(a.lon), hex = String(a.hex ?? '').toLowerCase();
       if (a.lat == null || a.lon == null || !Number.isFinite(lat) || !Number.isFinite(lon) || !hex) continue;

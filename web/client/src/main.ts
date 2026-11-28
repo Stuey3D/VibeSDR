@@ -11751,9 +11751,11 @@ function asStatsSync(v: TrackView, rx: { lat: number; lon: number } | null) {
     e.lat = lat; e.lon = lon; e.at = now; if (name) e.name = name;
     if (trackedNm != null && trackedNm > e.nm) e.nm = trackedNm;
   };
+  // ★★ 11-28 a shared aircraft's position is a sighting for the source that GAVE it (posSrc) — never for every source that
+  //   has heard it: an aircraft heard on ADS-B that later moved to HFDL kept ADS-B's FURTHEST at its HFDL fix (statsObsOfShared)
   for (const p of avShared?.aircraft ?? []) {
-    if (p.lat == null || p.lon == null) continue;
-    for (const s of p.src) seen(s, `a:${p.key}`, p.lat, p.lon, avName(p));
+    if (p.lat == null || p.lon == null || !p.posSrc) continue;
+    seen(p.posSrc, `a:${p.key}`, p.lat, p.lon, avName(p));
   }
   if (adsbOn && adsbReport) for (const a of adsbReport.aircraft as any[]) {
     const lat = Number(a.lat), lon = Number(a.lon), hex = String(a.hex || '').toLowerCase();
